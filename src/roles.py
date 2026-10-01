@@ -12,8 +12,8 @@ Every role call goes through :func:`run_role`, which
 
 Roles have no approval authority. Their only effect is a bounded score
 adjustment per player, applied by the explicit policy in ``lead_packages``.
-The orchestration layer depends only on this module, not on a vendor agent
-library; see docs/ROLE_AGENTS.md for the status of a Swarms backend.
+The orchestration layer depends only on :func:`get_role_runner`; the backend
+is chosen by ROLE_BACKEND (``native`` or ``swarms``, see src/swarms_backend.py).
 """
 from __future__ import annotations
 
@@ -110,3 +110,20 @@ def run_role(role: str, data: dict[str, Any], *, registry: ModelRegistry | None 
     except (ValidationError, ValueError) as exc:
         return RoleResult(role=role, valid=False, error=f"invalid structured output: {type(exc).__name__}", **meta)
     return RoleResult(role=role, valid=True, output=output, **meta)
+
+
+def get_role_runner():
+    """Return the configured role runner. Unknown values fail at startup."""
+    import os
+
+    backend = os.getenv("ROLE_BACKEND", "native").strip().lower()
+    if backend == "native":
+        return run_role
+    if backend == "swarms":
+        from .swarms_backend import _swarms, run_role_swarms
+
+        _swarms()  # fail fast if the package is missing, wrong version or telemetry is on
+        return run_role_swarms
+    from .settings import ConfigError
+
+    raise ConfigError("ROLE_BACKEND must be 'native' or 'swarms'")

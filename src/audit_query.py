@@ -1,256 +1,118 @@
+"""Audit trail for one FC27 graph run.
+
+    python -m src.audit_query fc27-330323-run-20261001-001 [--json]
+
+Combines two sources:
+  * LangGraph PostgresSaver checkpoints (node progression, interrupt, metadata)
+  * graph_threads / approval_audit (the authoritative committed decision)
+
+Output never includes credentials, signatures or the raw dashboard. Requires
+POSTGRES_URI (only available inside graph-api or on the operator host).
 """
-audit_query.py
-==============
-FC27 Pro Clubs — Audit Trail Query Helpers
-East Coasters FC Intelligence Platform
-
-Queries the LangGraph PostgresSaver checkpoint store for:
-- Full audit log per thread
-- Time-travel replay to any checkpoint
-- Compliance CSV export
-- Tilt + Fair Play violation summaries
-
-Run against the same Postgres instance as graph.py.
-"""
-
 from __future__ import annotations
 
-import csv
-import io
+import argparse
 import json
-import logging
 import os
-from datetime import datetime
+import sys
 from typing import Any
 
-from langgraph.checkpoint.postgres import PostgresSaver
+import psycopg
+from psycopg.rows import dict_row
 
-log = logging.getLogger("fc27.audit")
+from .graph import GraphDeps, GraphRunner
+from .thread_ids import parse_thread_id
 
-DB_URI     = os.getenv("POSTGRES_URI", "postgresql://fc27:fc27pass@postgres:5432/fc27_audit")
-FC_VERSION = "27"
-PLATFORM   = os.getenv("FC_PLATFORM", "common-gen5")
-
-# ── Core Query Helpers ─────────────────────────────────────────────────────────
-
-def get_full_audit(thread_id: str) -> list[dict]:
-    """
-    Return the complete audit log for a graph run by thread_id.
-    Each entry has: node, ts, fc_version, platform, club_id, summary, data.
-
-    Usage:
-        entries = get_full_audit("your-thread-uuid")
-        for e in entries:
-            print(f"[{e['ts']}] {e['node']}: {e['summary']}")
-    """
-    with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
-        config = {"configurable": {"thread_id": thread_id}}
-        state  = checkpointer.get(config)
-
-    if state is None:
-        log.warning("No checkpoint found for thread_id=%s", thread_id)
-        return []
-
-    channel_values = state.channel_values if hasattr(state, "channel_values") else {}
-    audit_log      = channel_values.get("audit_log", [])
-
-    # Ensure fc_version and platform are on every entry
-    for entry in audit_log:
-        entry.setdefault("fc_version", FC_VERSION)
-        entry.setdefault("platform",   PLATFORM)
-
-    return audit_log
+SAFE_METADATA_KEYS = ("fc_version", "platform", "club_id", "step", "source")
+REDACT_PAYLOAD_KEYS = {"signature", "signature_sha256"}
 
 
-def get_all_checkpoints(thread_id: str) -> list[dict]:
-    """
-    Return all checkpoint snapshots for a thread — enables time travel.
-    Each snapshot includes: checkpoint_id, ts, channel_values summary.
+class ThreadNotFound(LookupError):
+    pass
 
-    Usage:
-        checkpoints = get_all_checkpoints("your-thread-uuid")
-        # checkpoints[0] is earliest, checkpoints[-1] is latest
-    """
-    with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
-        config  = {"configurable": {"thread_id": thread_id}}
-        history = list(checkpointer.list(config))
 
-    snapshots = []
-    for i, snapshot in enumerate(history):
-        cv = snapshot.channel_values if hasattr(snapshot, "channel_values") else {}
-        snapshots.append({
-            "index":         i,
-            "checkpoint_id": snapshot.config.get("configurable", {}).get("checkpoint_id", ""),
-            "ts":            snapshot.metadata.get("created_at", "") if hasattr(snapshot, "metadata") else "",
-            "node":          cv.get("next", "unknown"),
-            "audit_entries": len(cv.get("audit_log", [])),
-            "approved":      cv.get("approved", None),
-            "errors":        cv.get("errors", []),
+def _decision(conn, thread_id: str) -> tuple[dict | None, dict | None]:
+    thread = conn.execute(
+        "SELECT thread_id, status, package_version, approved_by, approved_at, created_at FROM graph_threads WHERE thread_id=%s",
+        (thread_id,)).fetchone()
+    audit = conn.execute(
+        """SELECT decision, approved_by, owner, selection, candidate_id, player_id, notes, package_version, decided_at
+             FROM approval_audit WHERE thread_id=%s""", (thread_id,)).fetchone()
+    return thread, audit
+
+
+def get_audit(conninfo: str, thread_id: str, runner: GraphRunner | None = None) -> dict[str, Any]:
+    if not parse_thread_id(thread_id):
+        raise ValueError("thread_id must match fc27-<clubId>-run-<YYYYMMDD>-<seq>")
+    with psycopg.connect(conninfo, row_factory=dict_row) as conn:
+        thread, audit = _decision(conn, thread_id)
+    owned = runner is None
+    runner = runner or GraphRunner.from_conninfo(conninfo, GraphDeps(), max_pool=2)
+    try:
+        history = runner.history(thread_id)
+    finally:
+        if owned:
+            runner.pool.close()
+    if thread is None and not history:
+        raise ThreadNotFound(f"no thread or checkpoints for {thread_id}")
+
+    checkpoints = []
+    for snap in reversed(history):  # oldest first
+        md = snap.metadata or {}
+        checkpoints.append({
+            "checkpoint_id": snap.config["configurable"].get("checkpoint_id"),
+            "created_at": snap.created_at,
+            **{k: md.get(k) for k in SAFE_METADATA_KEYS},
+            "next": list(snap.next),
+            "interrupted": any(t.interrupts for t in snap.tasks),
+            "status": (snap.values or {}).get("status"),
         })
-
-    return snapshots
-
-
-def time_travel_example(thread_id: str, index: int) -> dict:
-    """
-    Replay state at a specific checkpoint index.
-    Use this to inspect what the graph knew at any point during the run.
-
-    Args:
-        thread_id: The graph run thread ID
-        index:     Checkpoint index (0 = start, -1 = latest)
-
-    Returns:
-        State snapshot at that checkpoint with full audit log up to that point.
-
-    Usage:
-        snapshot = time_travel_example("your-thread-uuid", index=2)
-        print(snapshot["audit_log"])
-    """
-    with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
-        config   = {"configurable": {"thread_id": thread_id}}
-        history  = list(checkpointer.list(config))
-
-    if not history:
-        return {"error": f"No checkpoints found for thread_id={thread_id}"}
-
-    # Clamp index
-    index   = max(-len(history), min(index, len(history) - 1))
-    snapshot = history[index]
-    cv       = snapshot.channel_values if hasattr(snapshot, "channel_values") else {}
-
+    final = dict(history[0].values) if history else {}
     return {
-        "thread_id":     thread_id,
-        "index":         index,
-        "checkpoint_id": snapshot.config.get("configurable", {}).get("checkpoint_id", ""),
-        "fc_version":    FC_VERSION,
-        "platform":      PLATFORM,
-        "club_id":       cv.get("club_id", ""),
-        "audit_log":     cv.get("audit_log", []),
-        "approved":      cv.get("approved", None),
-        "errors":        cv.get("errors", []),
-        "scout_report":  cv.get("scout_report", {}).get("narrative", "")[:300] if cv.get("scout_report") else "",
-        "analyst_report":cv.get("analyst_report", {}).get("narrative", "")[:300] if cv.get("analyst_report") else "",
+        "thread_id": thread_id,
+        "fc_version": final.get("fc_version", "27"),
+        "platform": final.get("platform", "common-gen5"),
+        "db_status": thread["status"] if thread else None,
+        "package_version": thread["package_version"] if thread else None,
+        "node_progression": [e.get("node") for e in final.get("audit_log", [])],
+        "audit_log": final.get("audit_log", []),
+        "approval_request": final.get("approval_request"),
+        "graph_decision": {k: v for k, v in (final.get("approval_decision") or {}).items() if k not in REDACT_PAYLOAD_KEYS} or None,
+        "committed_decision": {k: (str(v) if k == "decided_at" else v) for k, v in audit.items()} if audit else None,
+        "model_ids": final.get("model_ids"),
+        "prompt_version": final.get("prompt_version"),
+        "policy_version": final.get("policy_version"),
+        "errors": final.get("errors", []),
+        "checkpoints": checkpoints,
     }
 
 
-def export_compliance_csv(thread_id: str) -> str:
-    """
-    Export the full audit trail for a thread as a CSV string.
-    Suitable for compliance reporting or copy-paste into spreadsheet.
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description="Show the audit trail for one FC27 graph run")
+    p.add_argument("thread_id")
+    p.add_argument("--json", action="store_true")
+    args = p.parse_args(argv)
+    conninfo = os.getenv("POSTGRES_URI")
+    if not conninfo:
+        print("POSTGRES_URI is not set", file=sys.stderr)
+        return 2
+    try:
+        report = get_audit(conninfo, args.thread_id)
+    except (ThreadNotFound, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+        return 0
+    print(f"{report['thread_id']}  fc_version={report['fc_version']} platform={report['platform']} status={report['db_status']}")
+    print("nodes: " + " -> ".join(n for n in report["node_progression"] if n))
+    for cp in report["checkpoints"]:
+        flag = " [INTERRUPT: awaiting Commissioner]" if cp["interrupted"] else ""
+        print(f"  step {cp['step']:>3} {cp['source']:6} next={','.join(cp['next']) or '-':18} status={cp['status']}{flag}")
+    d = report["committed_decision"]
+    print(f"decision: {d['decision']} by {d['approved_by']} at {d['decided_at']} ({d.get('owner')}/{d.get('selection')} {d.get('player_id')})" if d else "decision: none committed")
+    return 0
 
-    Columns:
-        thread_id, checkpoint_node, ts, fc_version, platform,
-        club_id, summary, approved, errors
-
-    Usage:
-        csv_text = export_compliance_csv("your-thread-uuid")
-        with open("audit.csv", "w") as f:
-            f.write(csv_text)
-    """
-    audit_log   = get_full_audit(thread_id)
-    checkpoints = get_all_checkpoints(thread_id)
-
-    # Merge approval status from latest checkpoint
-    latest   = checkpoints[-1] if checkpoints else {}
-    approved = latest.get("approved", None)
-    errors   = latest.get("errors", [])
-
-    output  = io.StringIO()
-    writer  = csv.DictWriter(output, fieldnames=[
-        "thread_id", "node", "ts", "fc_version", "platform",
-        "club_id", "summary", "approved", "has_data", "errors",
-    ])
-    writer.writeheader()
-
-    for entry in audit_log:
-        writer.writerow({
-            "thread_id":  thread_id,
-            "node":       entry.get("node", ""),
-            "ts":         entry.get("ts", ""),
-            "fc_version": entry.get("fc_version", FC_VERSION),
-            "platform":   entry.get("platform", PLATFORM),
-            "club_id":    entry.get("club_id", ""),
-            "summary":    entry.get("summary", ""),
-            "approved":   approved,
-            "has_data":   bool(entry.get("data")),
-            "errors":     "; ".join(errors),
-        })
-
-    return output.getvalue()
-
-
-def get_tilt_history(club_id: str, limit: int = 10) -> list[dict]:
-    """
-    Query all thread runs for a club and return ones that triggered
-    tilt detection (3+ consecutive losses).
-
-    Usage:
-        tilts = get_tilt_history("330323")
-        for t in tilts:
-            print(t["thread_id"], t["form"])
-    """
-    # NOTE: Requires a threads metadata table or Langfuse for cross-thread queries.
-    # This implementation queries Langfuse trace API for tilt-flagged runs.
-    # Without Langfuse, iterate known thread_ids from your own tracking store.
-    log.warning(
-        "get_tilt_history requires either a thread registry or Langfuse integration. "
-        "Pass known thread_ids to get_full_audit() individually for now."
-    )
-    return [{"note": "Implement with thread registry or Langfuse trace search."}]
-
-
-def get_fair_play_violations(thread_id: str) -> list[dict]:
-    """
-    Extract any Fair Play violation entries from a thread's audit log.
-
-    Returns:
-        List of audit entries where summary contains 'fair play' or 'violation'.
-    """
-    audit = get_full_audit(thread_id)
-    return [
-        e for e in audit
-        if any(kw in e.get("summary", "").lower()
-               for kw in ("fair play", "violation", "exploit", "anomaly", "flag"))
-    ]
-
-
-def print_audit_summary(thread_id: str) -> None:
-    """Pretty-print a one-page audit summary for a run."""
-    audit  = get_full_audit(thread_id)
-    checks = get_all_checkpoints(thread_id)
-    latest = checks[-1] if checks else {}
-
-    print(f"\n{'='*60}")
-    print(f"  FC27 AUDIT SUMMARY")
-    print(f"  Thread  : {thread_id}")
-    print(f"  Club ID : {latest.get('club_id', 'N/A')}")
-    print(f"  Platform: {PLATFORM}  |  FC Version: {FC_VERSION}")
-    print(f"  Approved: {latest.get('approved', 'N/A')}")
-    print(f"  Errors  : {latest.get('errors', [])}")
-    print(f"  Entries : {len(audit)}")
-    print(f"{'='*60}")
-    for e in audit:
-        print(f"  [{e.get('ts','')}] {e.get('node','').upper():12s} {e.get('summary','')[:80]}")
-    print(f"{'='*60}\n")
-
-
-# ── Entry ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python audit_query.py <thread_id> [--csv] [--time-travel <index>]")
-        sys.exit(1)
-
-    tid = sys.argv[1]
-
-    if "--csv" in sys.argv:
-        print(export_compliance_csv(tid))
-    elif "--time-travel" in sys.argv:
-        idx = int(sys.argv[sys.argv.index("--time-travel") + 1])
-        snap = time_travel_example(tid, idx)
-        print(json.dumps(snap, indent=2))
-    else:
-        print_audit_summary(tid)
+    raise SystemExit(main())

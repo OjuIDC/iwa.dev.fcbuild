@@ -1,6 +1,8 @@
 """Phase 2: real LangGraph StateGraph + PostgresSaver, interrupt/resume, role-driven ranking."""
 from __future__ import annotations
 
+import json
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -220,3 +222,22 @@ def test_search_failure_ends_run_as_failed(wired):
     with TestClient(app) as c:
         state = run(c)
     assert state["status"] == "failed" and runner.values(state["thread_id"])["graph_next"] == []
+
+
+def test_audit_query_shows_progression_interrupt_and_decision(wired, pg_uri):
+    from src.audit_query import ThreadNotFound, get_audit
+    runner, app = wired()
+    with TestClient(app) as c:
+        tid = run(c)["thread_id"]
+        pending = get_audit(pg_uri, tid, runner=runner)
+        assert pending["db_status"] == "awaiting_approval" and pending["committed_decision"] is None
+        assert pending["checkpoints"][-1]["interrupted"] is True
+        approve(c, tid)
+    report = get_audit(pg_uri, tid, runner=runner)
+    assert report["node_progression"][-2:] == ["approval", "finalize_decision"]
+    assert report["committed_decision"]["approved_by"] == "batmanL8"
+    assert all(cp["fc_version"] == "27" and cp["platform"] == "common-gen5" for cp in report["checkpoints"])
+    blob = json.dumps(report, default=str)
+    assert "\"signature\"" not in blob and "\"signature_sha256\"" not in blob and "\"dashboard\":" not in blob
+    with pytest.raises(ThreadNotFound):
+        get_audit(pg_uri, "fc27-330323-run-20200101-999", runner=runner)

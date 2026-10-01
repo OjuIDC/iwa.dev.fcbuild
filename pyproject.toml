@@ -3,13 +3,38 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fc27-model-routing"
-version = "1.0.0"
+name = "fc27-pro-clubs-platform"
+version = "2.0.0"
+description = "Local-first EA FC27 Pro Clubs analysis platform: MCP proxy, LangGraph orchestration, Commissioner approval"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.8"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "httpx>=0.27,<1",
+    "redis>=5,<7",
+    "pydantic>=2.8,<3",
+    "aiohttp>=3.10,<4",
+    "websockets>=13,<15",
+    "numpy>=1.26,<3",
+    "opencv-python-headless>=4.10,<5",
+    "pytesseract>=0.3.13,<1",
+    "Pillow>=10.4,<12",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
+    "python-multipart>=0.0.12,<1",
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-postgres==3.1.2",
+]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+dev = ["pytest>=8,<9", "pyyaml>=6,<7"]
+voice = ["faster-whisper>=1.0,<2"]
+
+[tool.setuptools]
+packages = ["src", "voice"]
+
+[tool.setuptools.package-data]
+src = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
