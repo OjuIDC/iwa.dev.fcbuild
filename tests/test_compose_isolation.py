@@ -83,3 +83,39 @@ def test_dockerfiles_pin_base_images():
     for path in ROOT.glob("Dockerfile.*"):
         first = next(l for l in path.read_text().splitlines() if l.startswith("FROM"))
         assert "@sha256:" in first, path.name
+
+
+@pytest.fixture(scope="module")
+def lf_model(tmp_path_factory):
+    env = _env_file(tmp_path_factory.mktemp("lfenv"))
+    out = _config(env, "-f", "docker-compose.yml", "-f", "docker-compose.langfuse.yml", "--profile", "langfuse")
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_langfuse_disabled_without_overlay(model):
+    env = model["services"]["graph-api"]["environment"]
+    assert env["LANGFUSE_ENABLED"] == "false" and "LANGFUSE_SECRET_KEY" not in env
+    assert not any(n.startswith("langfuse") for n in model["services"])
+
+
+def test_langfuse_profile_isolation_and_pinning(lf_model):
+    services = lf_model["services"]
+    assert services["graph-api"]["environment"]["LANGFUSE_ENABLED"] == "true"
+    assert lf_model["networks"]["fc27_obs"].get("internal") is True
+    for name, svc in services.items():
+        for port in svc.get("ports") or []:
+            assert port.get("host_ip") == "127.0.0.1", f"{name} publishes {port}"
+        if name.startswith("langfuse"):
+            assert "@sha256:" in svc["image"]
+            assert not ({"GRAPH_SERVICE_TOKEN", "APPROVAL_SIGNING_SECRET", "POSTGRES_URI"} & set(svc.get("environment") or {}))
+        elif name != "graph-api":
+            assert "LANGFUSE_SECRET_KEY" not in (svc.get("environment") or {})
+    assert services["langfuse-web"]["environment"]["TELEMETRY_ENABLED"] == "false"
+
+
+@pytest.mark.parametrize("missing", ["LANGFUSE_SECRET_KEY", "LANGFUSE_ENCRYPTION_KEY", "LANGFUSE_DB_PASSWORD"])
+def test_langfuse_missing_secret_fails_closed(tmp_path, missing):
+    out = _config(_env_file(tmp_path, drop=(missing,)), "-f", "docker-compose.yml", "-f", "docker-compose.langfuse.yml",
+                  "--profile", "langfuse")
+    assert out.returncode != 0 and missing in out.stderr

@@ -149,6 +149,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.graph
+      args:
+        WITH_SWARMS: "true"
+        WITH_LANGFUSE: "true"
     <<: *app-security
     command: ["uvicorn", "src.graph_api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
     environment:
@@ -166,6 +169,9 @@ services:
       MODEL_BENCHMARK_RESULTS: /app/reports/model_benchmark_results.json
       LM_STUDIO_FALLBACK_ENABLED: ${LM_STUDIO_FALLBACK_ENABLED:-false}
       LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      ROLE_BACKEND: ${ROLE_BACKEND:-swarms}
+      SWARMS_TELEMETRY_ON: "false"
+      LANGFUSE_ENABLED: "false"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -145,9 +145,11 @@ def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None
             from .graph import GraphDeps, GraphRunner
 
             from .roles import get_role_runner
+            from .tracing import tracer_from_env
 
             graph["runner"] = GraphRunner.from_conninfo(
-                settings.postgres_uri, GraphDeps(role_runner=get_role_runner(), decision_reader=store.load))
+                settings.postgres_uri,
+                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=tracer_from_env()))
             graph["owned"] = True
         if graph["runner"] is not None:
             for thread_id in store.terminal_thread_ids():

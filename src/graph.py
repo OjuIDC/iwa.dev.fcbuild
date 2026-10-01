@@ -35,6 +35,7 @@ from .model_selection import ModelRegistry
 from .roles import PROMPT_VERSION, RoleResult, run_role
 from .settings import DEFAULT_PLATFORM, FC_VERSION
 from .thread_ids import parse_thread_id
+from .tracing import NullTracer
 
 log = logging.getLogger("fc27.graph")
 ROLE_NODES = ("scout", "analyst", "coach", "tactics", "director")
@@ -97,6 +98,7 @@ class GraphDeps:
     registry_factory: Callable[[], ModelRegistry] = ModelRegistry
     # Returns the committed DB row for a thread: {"status", "approved_by", "approved_at", "decision_payload"}.
     decision_reader: Callable[[str], dict | None] = field(default=lambda thread_id: None)
+    tracer: Any = field(default_factory=NullTracer)
 
 
 def build_graph(deps: GraphDeps) -> StateGraph:
@@ -154,13 +156,39 @@ def build_graph(deps: GraphDeps) -> StateGraph:
     def finalize_decision(state: FC27State) -> dict:
         return {"audit_log": _audit("finalize_decision", state, f"run finalized as {state['status']}")}
 
+    tracer = deps.tracer
+
+    def traced(name: str, fn, as_type: str = "span"):
+        def wrapper(state: FC27State) -> dict:
+            tid = state.get("thread_id", "unknown")
+            with tracer.span(f"node:{name}", tid, {"node": name, "club_id": state.get("club_id")}, as_type=as_type):
+                try:
+                    update = fn(state)
+                except ApprovalNotCommitted as exc:
+                    tracer.event("approval_resume_rejected", tid, {"reason": str(exc)}, level="WARNING")
+                    raise
+            for err in update.get("errors", []) or []:
+                tracer.event("validation_failure", tid, {"node": name, "error": err}, level="WARNING")
+            if name == "prepare_approval":
+                tracer.event("approval_interrupt", tid, {"package_version": update.get("package_version"),
+                                                         "approvable_owners": update["approval_request"]["approvable_owners"]})
+            if name == "approval":
+                tracer.event("approval_resumed", tid, {"status": update.get("status")})
+            if name in ROLE_NODES:
+                report = update["role_reports"][name]
+                tracer.event("role_call", tid, {"role": name, "valid": report["valid"], "model": update["model_ids"][name],
+                                                 "prompt_version": report.get("prompt_version"), "fallback_used": report.get("fallback_used")})
+            return update
+        wrapper.__name__ = name
+        return wrapper
+
     g = StateGraph(FC27State)
-    g.add_node("search", search)
+    g.add_node("search", traced("search", search, "tool"))
     for role in ROLE_NODES:
-        g.add_node(role, role_node(role))
-    g.add_node("prepare_approval", prepare_approval)
-    g.add_node("approval", approval)
-    g.add_node("finalize_decision", finalize_decision)
+        g.add_node(role, traced(role, role_node(role), "agent"))
+    g.add_node("prepare_approval", traced("prepare_approval", prepare_approval))
+    g.add_node("approval", traced("approval", approval, "guardrail"))
+    g.add_node("finalize_decision", traced("finalize_decision", finalize_decision))
     g.add_edge(START, "search")
     g.add_conditional_edges("search", lambda s: END if s.get("status") == "failed" else "scout", ["scout", END])
     for a, b in zip(ROLE_NODES, ROLE_NODES[1:]):
@@ -182,6 +210,7 @@ class GraphRunner:
 
     def __init__(self, checkpointer, deps: GraphDeps):
         self.checkpointer = checkpointer
+        self.tracer = deps.tracer
         self.app = build_graph(deps).compile(checkpointer=checkpointer)
 
     @classmethod
@@ -205,7 +234,10 @@ class GraphRunner:
                  "code_revision": os.getenv("FC27_CODE_REVISION", "unknown"), "status": "running",
                  "errors": [], "audit_log": []}
         cfg = run_config(state["thread_id"], state["club_id"], state.get("platform", DEFAULT_PLATFORM))
-        self.app.invoke(state, cfg, durability="sync")
+        try:
+            self.app.invoke(state, cfg, durability="sync")
+        finally:
+            self.tracer.flush()
         return self.values(state["thread_id"])
 
     def resume(self, thread_id: str) -> dict:
@@ -213,8 +245,11 @@ class GraphRunner:
         if not self._approval_pending(snap):
             return dict(snap.values)  # nothing pending: terminal threads never re-enter approval
         v = snap.values
-        self.app.invoke(Command(resume={"thread_id": thread_id}), run_config(thread_id, v["club_id"], v.get("platform", DEFAULT_PLATFORM)),
-                        durability="sync")
+        try:
+            self.app.invoke(Command(resume={"thread_id": thread_id}),
+                            run_config(thread_id, v["club_id"], v.get("platform", DEFAULT_PLATFORM)), durability="sync")
+        finally:
+            self.tracer.flush()
         return self.values(thread_id)
 
     @staticmethod
