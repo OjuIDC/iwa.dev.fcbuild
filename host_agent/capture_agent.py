@@ -2,7 +2,7 @@
 capture_agent.py
 ================
 FC27 Pro Clubs — Windows Host Capture Agent (Tier 3)
-East Coasters FC | Club ID: 330323
+Club: FC27_CLUB_ID / FC27_CLUB_NAME (env)
 
 RUNS ON: Windows 11 host machine (NOT inside Docker)
 REQUIRES: Xbox Remote Play open and full-screen in Xbox app
@@ -12,7 +12,9 @@ REQUIRES: Xbox Remote Play open and full-screen in Xbox app
 HOW IT WORKS:
   1. dxcam (fastest Windows screen capture, GPU-accelerated) grabs frames
      from the Xbox Remote Play window at 2fps
-  2. Same ROI + OCR logic as rtsp_frame_analyzer.py
+  2. Same ROI + OCR logic as rtsp_frame_analyzer.py; event decisions
+     (debounce, confidence, plausibility, kickoff reset, orientation) come
+     from the shared pure module src/ocr_parsing.py
   3. Publishes events to Redis running inside Docker
      (Redis port 6379 exposed to Windows host via docker-compose)
   4. No Xbox Developer Mode required — works on any retail Xbox Series X/S
@@ -43,8 +45,6 @@ import os
 import sys
 from pathlib import Path
 import time
-import re
-from dataclasses import dataclass, field
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -67,6 +67,20 @@ import cv2
 import numpy as np
 import pytesseract
 import redis.asyncio as aioredis
+
+# Shared pure OCR/debounce logic lives in <repo>/src/ocr_parsing.py (stdlib-only,
+# also used by src/rtsp_frame_analyzer.py). The agent is run from a full repo
+# checkout (install.ps1: `python host_agent\capture_agent.py`), so put the
+# repository root on sys.path and import it as src.ocr_parsing. If you copy the
+# agent elsewhere, copy src/__init__.py and src/ocr_parsing.py alongside it in a
+# src/ folder one level above this file.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from src.ocr_parsing import (  # noqa: E402
+    SCORE_OCR_CONFIG, TIMER_OCR_CONFIG, LiveMatchTracker, TrackerConfig, event_channel,
+    parse_clock, parse_score, resolve_orientation, text_and_confidence,
+)
 
 log = logging.getLogger("fc27.capture")
 logging.basicConfig(
@@ -108,26 +122,16 @@ CH_FAIR_PLAY = "fc27:fairplay:flag"
 
 # ── Match State ────────────────────────────────────────────────────────────────
 
-@dataclass
-class MatchState:
-    home_score:    int  = 0
-    away_score:    int  = 0
-    timer_str:     str  = "00:00"
-    timer_minutes: int  = 0
-    home_team:     str  = "East Coasters FC"
-    away_team:     str  = "Opponent"
-    in_match:      bool = False
-    match_ended:   bool = False
-    events:        list = field(default_factory=list)
-    last_state_pub: int = 0
+HOME_AWAY_MODE = os.getenv("FC27_HOME_AWAY", "auto")   # home | away | auto
+CLUB_NAME      = os.getenv("FC27_CLUB_NAME", "")
+ORIENTATION_RETRY_FRAMES = int(os.getenv("OCR_ORIENTATION_RETRY_FRAMES", "10"))
 
-    def score_str(self) -> str:
-        return f"{self.home_score} - {self.away_score}"
+MatchState = LiveMatchTracker   # backwards-compatible name
 
-    def result(self) -> str:
-        if self.home_score > self.away_score:   return "win"
-        elif self.home_score < self.away_score: return "loss"
-        return "tie"
+
+def new_state() -> LiveMatchTracker:
+    return LiveMatchTracker(config=TrackerConfig.from_env(),
+                            orientation=resolve_orientation(HOME_AWAY_MODE))
 
 # ── Screen Capture ─────────────────────────────────────────────────────────────
 
@@ -204,25 +208,26 @@ def _ocr(region: np.ndarray, config: str = "--psm 7") -> str:
     processed = _preprocess(region)
     return pytesseract.image_to_string(processed, config=config).strip()
 
-def _parse_score(text: str) -> Optional[tuple[int, int]]:
-    m = re.search(r"(\d+)\s*[-–]\s*(\d+)", text)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    parts = [p for p in text.split() if p.isdigit()]
-    if len(parts) == 2:
-        return int(parts[0]), int(parts[1])
-    return None
+def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
+    """OCR with per-word confidences (min over words). Confidence None if unavailable."""
+    processed = _preprocess(region)
+    try:
+        data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
+        return text_and_confidence(data)
+    except Exception:
+        return pytesseract.image_to_string(processed, config=config).strip(), None
 
-def _parse_timer(text: str) -> Optional[tuple[str, int]]:
-    m = re.search(r"(\d{1,3})[:\s+](\d{2})", text)
-    if m:
-        mins = int(m.group(1))
-        return f"{mins}:{m.group(2)}", mins
-    m2 = re.search(r"(\d{1,3})", text)
-    if m2:
-        mins = int(m2.group(1))
-        return f"{mins}:00", mins
-    return None
+def _refresh_orientation(frame: np.ndarray, state: LiveMatchTracker) -> None:
+    if HOME_AWAY_MODE in ("home", "away"):
+        state.set_orientation(HOME_AWAY_MODE)
+        return
+    home = _ocr(_crop(frame, HOME_ROI), "--psm 7")
+    away = _ocr(_crop(frame, AWAY_ROI), "--psm 7")
+    if home:
+        state.home_team = home[:64]
+    if away:
+        state.away_team = away[:64]
+    state.set_orientation(resolve_orientation(HOME_AWAY_MODE, CLUB_NAME, home, away))
 
 def _hud_active(frame: np.ndarray) -> bool:
     """FC27 match HUD: dark bar at top-center."""
@@ -269,88 +274,61 @@ def run_calibration(frame: np.ndarray) -> None:
 
 async def process_frame(
     frame: np.ndarray,
-    state: MatchState,
+    state: LiveMatchTracker,
     redis: aioredis.Redis,
-) -> MatchState:
+) -> LiveMatchTracker:
 
-    def _pub(channel, payload):
-        payload.update({
-            "fc_version": FC_VERSION,
-            "platform":   PLATFORM,
-            "club_id":    CLUB_ID,
-            "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "source":     "capture_agent_tier3",
-        })
-        return redis.publish(channel, json.dumps(payload))
+    async def _pub_all(events: list[dict]) -> None:
+        for ev in events:
+            event_type = ev["event"]
+            payload = {k: v for k, v in ev.items() if k != "event"}
+            payload.update({
+                "type":       event_type,
+                "fc_version": FC_VERSION,
+                "platform":   PLATFORM,
+                "club_id":    CLUB_ID,
+                "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "source":     "capture_agent_tier3",
+            })
+            await redis.publish(event_channel(event_type), json.dumps(payload))
+            log.info("EVENT [%s] %s-%s @ %s", event_type, payload.get("home_score", "?"),
+                     payload.get("away_score", "?"), payload.get("timer", ""))
 
     active = _hud_active(frame)
 
     if active and not state.in_match:
-        state.in_match = True
-        state.events   = []
-        log.info("⚽ MATCH START detected via screen capture")
-        await _pub(CH_START, {"home_team": state.home_team, "away_team": state.away_team})
+        _refresh_orientation(frame, state)
+        log.info("MATCH START detected via screen capture (orientation=%s)", state.orientation)
+        await _pub_all(state.start_match())
 
     if not active and state.in_match:
         if _postmatch_screen(frame):
-            state.in_match   = False
-            state.match_ended = True
-            result            = state.result()
-            log.info("🏁 MATCH END — %s | result=%s", state.score_str(), result)
-            await _pub(CH_END, {
-                "score":  state.score_str(),
-                "result": result,
-                "events": state.events,
-                "timer":  state.timer_str,
-            })
+            await _pub_all(state.end_match())
+            log.info("MATCH END — %s | result=%s", state.score_str(), state.result()["result"])
         return state
 
     if not state.in_match:
         return state
 
-    # OCR score
-    score_text   = _ocr(_crop(frame, SCORE_ROI), "--psm 7")
-    parsed_score = _parse_score(score_text)
-    if parsed_score:
-        nh, na = parsed_score
-        if nh > state.home_score:
-            for _ in range(nh - state.home_score):
-                ev = {"team": "home", "score": f"{nh}-{na}", "timer": state.timer_str}
-                state.events.append(ev)
-                await _pub(CH_GOAL, ev)
-                log.info("⚽ GOAL — Home! %d-%d @ %s", nh, na, state.timer_str)
-        if na > state.away_score:
-            for _ in range(na - state.away_score):
-                ev = {"team": "away", "score": f"{nh}-{na}", "timer": state.timer_str}
-                state.events.append(ev)
-                await _pub(CH_GOAL, ev)
-                log.info("⚽ GOAL — Away! %d-%d @ %s", nh, na, state.timer_str)
-        state.home_score, state.away_score = nh, na
+    if state.orientation == "unknown" and CLUB_NAME:
+        state.frames_since_orientation += 1
+        if state.frames_since_orientation >= ORIENTATION_RETRY_FRAMES:
+            state.frames_since_orientation = 0
+            _refresh_orientation(frame, state)
 
-    # OCR timer
-    timer_text   = _ocr(_crop(frame, TIMER_ROI), "--psm 7 digits")
-    parsed_timer = _parse_timer(timer_text)
-    if parsed_timer:
-        state.timer_str, state.timer_minutes = parsed_timer
-
-    # Publish state every 5 match-minutes
-    now = int(time.time())
-    if state.timer_minutes > 0 and state.timer_minutes % 5 == 0 \
-            and now - state.last_state_pub > 200:
-        await _pub(CH_STATE, {
-            "score": state.score_str(), "timer": state.timer_str,
-            "events_count": len(state.events),
-        })
-        state.last_state_pub = now
-
+    score_text, score_conf = _ocr_conf(_crop(frame, SCORE_ROI), SCORE_OCR_CONFIG)
+    timer_text, timer_conf = _ocr_conf(_crop(frame, TIMER_ROI), TIMER_OCR_CONFIG)
+    await _pub_all(state.observe(parse_score(score_text), score_conf,
+                                 parse_clock(timer_text), timer_conf))
     return state
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
     log.info("FC27 Windows Host Capture Agent (Tier 3)")
-    log.info("Display : %dx%d | FPS: %d | Redis: %s",
-             DISPLAY_W, DISPLAY_H, CAPTURE_FPS, REDIS_URL)
+    log.info("Display : %dx%d | FPS: %d | Redis: configured (URL not logged)",
+             DISPLAY_W, DISPLAY_H, CAPTURE_FPS)
+    log.info("Orientation mode: %s | club name set: %s", HOME_AWAY_MODE, bool(CLUB_NAME))
     log.info("Club ID : %s | Platform: %s", CLUB_ID, PLATFORM)
 
     if CALIBRATE:
@@ -362,7 +340,7 @@ async def main() -> None:
     log.info("Redis connected ✅")
     log.info("Watching for FC27 match HUD... (keep Xbox Remote Play full-screen)")
 
-    state    = MatchState()
+    state    = new_state()
     interval = 1.0 / CAPTURE_FPS
 
     try:
@@ -378,7 +356,10 @@ async def main() -> None:
                 run_calibration(frame)
                 break
 
-            state = await process_frame(frame, state, redis)
+            try:
+                state = await process_frame(frame, state, redis)
+            except Exception as exc:   # one bad frame must not stop the agent
+                log.error("Frame processing error: %s", type(exc).__name__)
             elapsed = time.monotonic() - t0
             await asyncio.sleep(max(0.0, interval - elapsed))
 
