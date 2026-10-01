@@ -68,6 +68,11 @@ import numpy as np
 import pytesseract
 import redis.asyncio as aioredis
 
+# install.ps1 writes TESSERACT_CMD into host_agent/.env (PATH changes are not
+# visible to already-open sessions).
+if os.getenv("TESSERACT_CMD"):
+    pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
+
 # Shared pure OCR/debounce logic lives in <repo>/src/ocr_parsing.py (stdlib-only,
 # also used by src/rtsp_frame_analyzer.py). The agent is run from a full repo
 # checkout (install.ps1: `python host_agent\capture_agent.py`), so put the

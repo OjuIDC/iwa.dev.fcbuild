@@ -137,7 +137,7 @@ def _validate_platform(platform: str) -> str:
 
 
 def _validate_match_type(match_type: str) -> str:
-    allowed = {"leagueMatch", "cup", "clubFriendly"}
+    allowed = {"leagueMatch", "playoffMatch", "cup", "clubFriendly"}
     if match_type not in allowed:
         raise ValueError(f"Invalid matchType. Allowed: {sorted(allowed)}")
     return match_type
@@ -503,7 +503,7 @@ SCHEMA: list[dict] = [
                 "club_id":    {"type": "string"},
                 "match_type": {
                     "type":        "string",
-                    "enum":        ["leagueMatch", "cup", "clubFriendly"],
+                    "enum":        ["leagueMatch", "playoffMatch", "cup", "clubFriendly"],
                     "description": "Default: leagueMatch",
                 },
                 "platform":   {"type": "string"},

@@ -22,7 +22,7 @@ MODULE_TO_PACKAGE = {
 
 
 def _third_party_modules() -> set[str]:
-    stdlib = set(sys.stdlib_module_names) | {"__future__"}
+    stdlib = set(sys.stdlib_module_names) | {"__future__", "src"}  # src = first-party repo package
     mods: set[str] = set()
     for node in ast.walk(ast.parse(AGENT)):
         if isinstance(node, ast.Import):
