@@ -1,3 +1,6 @@
+> **HISTORICAL. Superseded on 2026-10-01** by IMPLEMENTATION_REPORT.md and SECURITY_CHANGES.md at the repository root.
+> Statements below describe earlier revisions. Several are now false: the shared GRAPH_API_TOKEN, the in-memory nonce store, "voice not enabled", and missing services.
+
 # Bundle audit
 
 ## Corrected blockers

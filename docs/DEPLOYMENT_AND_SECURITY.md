@@ -1,75 +1,57 @@
 # Deployment and security hardening
 
+This page describes the implemented stack. The approval model is covered in [APPROVAL_SECURITY.md](APPROVAL_SECURITY.md)
+and the full change list is in `../SECURITY_CHANGES.md`.
+
 ## 1. Host preparation
-1. Update the OS, Docker Engine/Desktop, Compose plugin, GPU driver, and container runtime.
-2. For NVIDIA, install the NVIDIA Container Toolkit and validate `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
-3. Keep the host firewall enabled. Do not expose Ollama, PostgreSQL, Redis, or ClickHouse to the public internet.
-4. Create an unprivileged deployment account. Do not run the stack from an administrator shell routinely.
+1. Update the OS, Docker Engine/Desktop, the Compose v2 plugin, the GPU driver and the container runtime.
+2. For NVIDIA GPUs, install the NVIDIA Container Toolkit and validate it with `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
+3. Keep the host firewall enabled. Every host-published port binds to `127.0.0.1` (a test enforces this).
 
 ## 2. Secrets
-1. Copy `.env.models.example` to `.env.models`.
-2. Generate a signing secret with `python -c "import secrets; print(secrets.token_hex(32))"`.
-3. Store production secrets in Docker secrets or a vault, not committed `.env` files.
-4. Rotate the approval signing secret after suspected disclosure. Pending approvals must become invalid.
+1. Copy `config.example.env` to `.env` and replace every `replace_with_*` value with an independently generated random value.
+2. Store the Commissioner token in a password manager. Put only its SHA-256 in `.env`: `python scripts/commissioner_decide.py hash-token`.
+3. In this lab deployment, secrets reach containers as environment variables. `src/settings.read_secret` also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
+4. Compose fails closed: `docker compose config` errors if any required secret is missing.
 
-## 3. GPU sizing and profiles
-1. Start with one GPU, two loaded models, and two parallel requests.
-2. If VRAM pressure or model eviction occurs, set `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PARALLEL=1`.
-3. Use `docker-compose.cpu.yml` only for CPU fallback. Expect much lower throughput.
-4. Keep player observers on the smaller model and serialize expensive lead deliberations when hardware is limited.
+## 3. Credential placement (enforced by `tests/test_compose_isolation.py`)
 
-## 4. Start local inference
+| Credential | Held by |
+|---|---|
+| `POSTGRES_URI`, `GRAPH_COMMISSIONER_TOKEN_SHA256`, `APPROVAL_SIGNING_SECRET` | graph-api only |
+| Commissioner token (plaintext), `APPROVAL_SIGNING_SECRET` | the Commissioner's workstation (`scripts/commissioner_decide.py`) |
+| `GRAPH_SERVICE_TOKEN` | graph-api (to verify it), live-watcher, voice-gateway |
+| `MCP_API_TOKEN` | fc27-mcp, graph-api, live-watcher, post-match-rundown |
+| `WS_AUTH_TOKEN` | ws-server and its clients |
+| `VOICE_API_TOKEN` | voice-gateway and its clients |
+
+PostgreSQL sits on the internal `fc27_data` network, which only graph-api joins.
+
+## 4. Start
 ```bash
-docker compose --env-file .env.models -f docker-compose.yml -f docker-compose.ollama.yml up -d ollama
-docker compose --env-file .env.models -f docker-compose.yml -f docker-compose.ollama.yml run --rm ollama-init
-docker compose --env-file .env.models -f docker-compose.yml -f docker-compose.ollama.yml up -d model-health
+cp config.example.env .env   # then fill in every value
+docker compose --env-file .env config --quiet
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # or docker-compose.cpu.yml
+docker compose --env-file .env ps
+curl -fsS http://127.0.0.1:8001/health
 ```
+graph-api applies the SQL migrations (`migrations/`) and the LangGraph checkpoint schema at startup.
+To disable this, set `GRAPH_RUN_MIGRATIONS=false` and run `python -m src.db_migrate` yourself.
 
-## 5. Validate inference
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ollama.yml ps
-docker compose -f docker-compose.yml -f docker-compose.ollama.yml exec ollama ollama list
-docker compose -f docker-compose.yml -f docker-compose.ollama.yml logs model-health
-```
-The health sidecar verifies model presence and performs a deterministic short generation against every required model.
+## 5. GPU sizing
+Start with `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_NUM_PARALLEL=2`. If you see out-of-memory errors or model eviction, reduce both to 1.
 
-## 6. Start the FC27 services
-```bash
-docker compose --env-file .env.models -f docker-compose.yml -f docker-compose.ollama.yml up --build -d postgres redis fc27-mcp graph ws-server post-match-rundown
-```
-Start the live watcher only after MCP, graph, model-health, PostgreSQL, and Redis are healthy.
+## 6. Network hardening
+- Ollama, MCP and PostgreSQL publish no host ports.
+- Redis is published on `127.0.0.1:6379` for the Windows capture agent only.
+- Put any remote access behind a VPN or a TLS reverse proxy with authentication. Do not change the bindings to `0.0.0.0`.
+- MCP is the only component that calls `proclubs.ea.com`.
 
-## 7. Human approval boundary
-1. Swarm outputs are recommendations only.
-2. The lead package contains exactly six selections: best, best runner-up, middle, middle runner-up, lowest, and ignore.
-3. Approval is scoped to one request, thread, owner swarm, candidate, player, time window, and nonce.
-4. Sign approval server-side. Never put the signing secret in a browser or agent prompt.
-5. Persist consumed nonces in Redis or PostgreSQL with a uniqueness constraint. The in-memory test store is not production storage.
-6. Dispatch must verify the signature and exact candidate/player match, then write an immutable audit receipt before notifying the player agent.
+## 7. Container hardening
+- Application containers run with `no-new-privileges`, `cap_drop: ALL`, an init process and non-root users.
+- Base images are pinned by tag and digest. The digests were resolved from the registries on 2026-10-01; re-verify them with `docker buildx imagetools inspect <image>`.
+- Never mount the Docker socket into any container.
 
-## 8. Network hardening
-1. Keep Ollama on an internal Docker network with `expose`, not `ports`.
-2. Bind Graph API, MCP, WebSocket, Langfuse, Redis, and PostgreSQL to localhost or a management VLAN where possible.
-3. Put external UI traffic behind TLS and an authenticated reverse proxy.
-4. Add service-to-service authentication for Graph API, approval endpoints, and MCP. Do not rely on network location alone.
-5. Restrict EA API egress to the MCP container. Other agent containers should not have unrestricted outbound internet.
-
-## 9. Container hardening
-1. Run with `no-new-privileges`, dropped capabilities, read-only filesystems, PID limits, memory limits, and CPU limits where compatible.
-2. Pin images by digest after validation.
-3. Scan images and Python dependencies in CI.
-4. Mount only required files and volumes. Never mount the Docker socket into an agent container.
-
-## 10. Application safeguards
-1. Validate all LLM output with Pydantic schemas before ranking or dispatch.
-2. Use deterministic statistical scoring as evidence. Treat model prose as advisory.
-3. Reject missing evidence references, duplicate candidates, cross-swarm ownership, stale approvals, replayed nonces, and candidate tampering.
-4. Redact secrets and authorization headers from logs and traces.
-5. Place size limits on prompts, JSON payloads, WebSocket messages, and audit metadata.
-
-## 11. Test and recovery
-```bash
-pytest -q tests/test_workflow.py
-python scripts/model_health.py
-```
-Back up PostgreSQL and model configuration. Model weights can be re-pulled; approval audits and checkpoint history are the critical state.
+## 8. Backups
+The critical state is in PostgreSQL: `graph_threads`, `approval_audit`, `approval_nonces` and the LangGraph `checkpoint*` tables.
+Back them up regularly. Model weights can be pulled again.

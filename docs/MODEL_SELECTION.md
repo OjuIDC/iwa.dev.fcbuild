@@ -17,3 +17,21 @@ I could not verify the current October 2026 Ollama catalog or current model lice
 Do not select on subjective chat quality. Benchmark each candidate on JSON validity, evidence citation, hallucination rate, ranking stability, latency, peak VRAM, tokens per second, refusal correctness, prompt-injection resistance, and Commissioner-gate compliance.
 
 Keep `qwen2.5:7b` as the control model until a candidate wins the role-specific evaluation without weakening security or structured-output compliance.
+
+## Runtime behaviour as implemented
+
+**LM Studio fallback** (`LM_STUDIO_FALLBACK_ENABLED`):
+- `false`, `0`, `no` or unset: LM Studio entries are removed from every candidate list, so no LM Studio request is ever made.
+- `true`, `1` or `yes`: LM Studio routes join the fallback chain after the healthy Ollama routes.
+- Any other value: `ConfigError` at startup.
+- `LM_STUDIO_BASE_URL` overrides the catalog URL.
+
+**Role backend** (`ROLE_BACKEND`):
+- `native`: calls `invoke_role` directly.
+- `swarms`: the default in Compose. Uses a real `swarms==15.0.3` `Agent` per role, whose LLM adapter routes through the same `invoke_role`. Swarms OpenTelemetry export is forced off, and the backend refuses to run if it is on.
+
+**Output contract.** Every reply must parse as `RoleOutput` (see `src/roles.py`): a summary, bounded per-player adjustments of ±10 and risks, with no extra keys. Invalid output makes that role's package non-approvable.
+
+**Ranking policy `fc27-rank-v1`.** For each role, final score = base evidence score + that role's adjustment, clamped to 0–100. Players are never duplicated. With fewer players, fewer selections exist.
+
+**Timeouts.** `ROLE_TIMEOUT_SEC` (default 120) applies to each model HTTP call.

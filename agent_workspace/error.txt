@@ -63,3 +63,44 @@ MCP_API_TOKEN must be set to at least 32 characters; refusing to start.
 Match 401 failed 3/3 attempts (graph trigger failed: HTTPStatusError); marked dead
 Poll failed for leagueMatch: RuntimeError
 WS_AUTH_TOKEN must be at least 32 characters; refusing to start.
+pipeline failed for fc27-330323-run-20261001-001
+Traceback (most recent call last):
+  File "/home/claude/work/repo/src/graph_api.py", line 193, in run
+    result = run_pipeline(state)
+  File "/home/claude/work/repo/src/graph_api.py", line 127, in run_pipeline
+    return pipeline(state)
+  File "/home/claude/work/repo/tests/test_approval_security.py", line 308, in boom
+    raise RuntimeError("model offline")
+RuntimeError: model offline
+MCP_API_TOKEN must be set to at least 32 characters; refusing to start.
+Match 401 failed 3/3 attempts (graph trigger failed: HTTPStatusError); marked dead
+Poll failed for leagueMatch: RuntimeError
+WS_AUTH_TOKEN must be at least 32 characters; refusing to start.
+pipeline failed for fc27-330323-run-20261001-001
+Traceback (most recent call last):
+  File "/home/claude/work/repo/src/graph_api.py", line 193, in run
+    result = run_pipeline(state)
+  File "/home/claude/work/repo/src/graph_api.py", line 127, in run_pipeline
+    return pipeline(state)
+  File "/home/claude/work/repo/tests/test_approval_security.py", line 308, in boom
+    raise RuntimeError("model offline")
+RuntimeError: model offline
+MCP_API_TOKEN must be set to at least 32 characters; refusing to start.
+Match 401 failed 3/3 attempts (graph trigger failed: HTTPStatusError); marked dead
+Poll failed for leagueMatch: RuntimeError
+WS_AUTH_TOKEN must be at least 32 characters; refusing to start.
+pipeline failed for fc27-330323-run-20261001-001
+Traceback (most recent call last):
+  File "/home/claude/work/repo/src/graph_api.py", line 193, in run
+    result = run_pipeline(state)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/claude/work/repo/src/graph_api.py", line 127, in run_pipeline
+    return pipeline(state)
+           ^^^^^^^^^^^^^^^
+  File "/home/claude/work/repo/tests/test_approval_security.py", line 308, in boom
+    raise RuntimeError("model offline")
+RuntimeError: model offline
+MCP_API_TOKEN must be set to at least 32 characters; refusing to start.
+Match 401 failed 3/3 attempts (graph trigger failed: HTTPStatusError); marked dead
+Poll failed for leagueMatch: RuntimeError
+WS_AUTH_TOKEN must be at least 32 characters; refusing to start.

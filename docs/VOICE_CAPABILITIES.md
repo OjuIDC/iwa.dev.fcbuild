@@ -1,6 +1,18 @@
 # Optional voice capabilities
 
-Voice is not too much for this architecture if it remains a separate, optional profile.
+## What exists today (`--profile voice`)
+
+- **stt** (`voice/stt_service.py`): Faster Whisper speech-to-text. Internal only; audio is capped at 10 MB.
+- **tts** (`voice/tts_service.py`): eSpeak NG text-to-speech.
+  - User text is always passed after the `--` option terminator, with no shell.
+  - Voice profiles are restricted to an allowlist.
+  - Synthesis has a 30 s timeout.
+- **voice-gateway** (`src/voice_gateway.py`, `127.0.0.1:9000`, `X-Voice-Token`): read-only thread status, spoken summaries and TTS.
+  - Spoken approve, reject, authorize, execute, deploy or activate commands are blocked. They publish `fc27:voice:confirmation_required` instead.
+
+**Voice cannot authorize decisions.** The gateway holds only `GRAPH_SERVICE_TOKEN`, a read-only service role. Decision routes refuse that role with 403. The gateway has no commissioner token, no signing secret and no database access, and `tests/test_compose_isolation.py` enforces all three.
+
+The sections below are design guidance for future work.
 
 ## Recommended components
 
