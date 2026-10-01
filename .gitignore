@@ -4,3 +4,5 @@
 __pycache__/
 .pytest_cache/
 reports/model_benchmark_results.json
+agent_workspace/
+*.egg-info/

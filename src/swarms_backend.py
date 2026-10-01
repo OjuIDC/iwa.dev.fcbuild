@@ -16,6 +16,13 @@ import os
 
 os.environ["SWARMS_TELEMETRY_ON"] = "false"  # must precede any swarms import
 os.environ.setdefault("SWARMS_VERBOSE_GLOBAL", "False")
+# On import, swarms replaces the root logging handlers and writes ERROR logs to
+# ./agent_workspace/error.txt. Keep that out of the working tree (private temp
+# dir) and restore our logging configuration afterwards (see _swarms()).
+if not os.getenv("WORKSPACE_DIR"):
+    import tempfile as _tempfile
+
+    os.environ["WORKSPACE_DIR"] = _tempfile.mkdtemp(prefix="fc27-swarms-")
 
 from typing import Any  # noqa: E402
 
@@ -30,12 +37,19 @@ class SwarmsUnavailable(RuntimeError):
 
 
 def _swarms():
+    import logging
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = list(root.handlers), root.level
     try:
         import swarms
         from swarms import Agent
         from swarms.telemetry.otel import swarm_telemetry
     except ImportError as exc:  # pragma: no cover - exercised when the extra is missing
         raise SwarmsUnavailable("ROLE_BACKEND=swarms requires the 'swarms' package (requirements-swarms.txt)") from exc
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
     version = getattr(swarms, "__version__", None)
     if version is None:
         from importlib.metadata import version as _v
