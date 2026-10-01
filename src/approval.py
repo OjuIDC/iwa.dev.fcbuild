@@ -1,24 +1,71 @@
+"""Canonical serialisation and HMAC-SHA256 signing of Commissioner decisions.
+
+Nonce storage is NOT handled here: nonces are issued, bound and consumed in
+PostgreSQL by :mod:`src.approval_store`. There is intentionally no in-memory
+nonce store.
+"""
 from __future__ import annotations
-import hashlib,hmac,json,os,time
-from .schemas import ApprovalRequest,DispatchReceipt,LeadPackage
-class NonceStore:
-    def __init__(self):self.used=set()
-    def consume(self,nonce):
-        if nonce in self.used:raise PermissionError("approval replay detected")
-        self.used.add(nonce)
-def canonical(a:ApprovalRequest):return a.model_dump(exclude={"signature"})
-def sign(a:ApprovalRequest,secret=None):
-    key=(secret or os.environ["APPROVAL_SIGNING_SECRET"]).encode();body=json.dumps(canonical(a),sort_keys=True,separators=(",",":")).encode()
-    return hmac.new(key,body,hashlib.sha256).hexdigest()
-def verify(a:ApprovalRequest,nonce_store:NonceStore,secret=None,now=None):
-    now=int(time.time() if now is None else now)
-    if not (a.issued_at <= now <= a.expires_at):raise PermissionError("approval expired or not active")
-    expected=sign(a,secret)
-    if not hmac.compare_digest(a.signature,expected):raise PermissionError("invalid approval signature")
-    nonce_store.consume(a.nonce)
-def dispatch(packages:dict,approval:ApprovalRequest,nonce_store:NonceStore,secret=None,now=None):
-    verify(approval,nonce_store,secret,now)
-    package=LeadPackage.model_validate(packages[approval.owner.value]);candidate=getattr(package,approval.selection.value)
-    if candidate.candidate_id!=approval.candidate_id or candidate.player_id!=approval.player_id:raise PermissionError("approval does not match selected recommendation")
-    stamp=int(time.time() if now is None else now);digest=hashlib.sha256(candidate.action.encode()).hexdigest()
-    return DispatchReceipt(request_id=approval.request_id,candidate_id=candidate.candidate_id,player_id=candidate.player_id,owner=approval.owner,approved_by=approval.commissioner,dispatched_at=stamp,instruction_hash=digest)
+
+import hashlib
+import hmac
+import json
+from typing import Any, Mapping
+
+# Every field the Commissioner's signature covers. Order is irrelevant because
+# serialisation sorts keys, but the set is fixed: adding a field is a breaking
+# change for signing clients.
+SIGNED_FIELDS: tuple[str, ...] = (
+    "thread_id",
+    "decision",
+    "owner",
+    "selection",
+    "candidate_id",
+    "player_id",
+    "notes",
+    "package_version",
+    "nonce",
+    "issued_at",
+    "expires_at",
+)
+
+MIN_SECRET_LENGTH = 32
+
+
+class ApprovalSignatureError(PermissionError):
+    """The decision signature is missing, malformed or does not verify."""
+
+
+def _normalise(value: Any) -> Any:
+    # Enums (SwarmRole, Selection, DecisionKind) serialise as their value.
+    return getattr(value, "value", value)
+
+
+def signed_view(payload: Mapping[str, Any]) -> dict[str, Any]:
+    missing = [f for f in SIGNED_FIELDS if f not in payload]
+    if missing:
+        raise ApprovalSignatureError(f"signed payload is missing fields: {', '.join(missing)}")
+    return {f: _normalise(payload[f]) for f in SIGNED_FIELDS}
+
+
+def canonical_bytes(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(signed_view(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def payload_sha256(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+
+
+def _key(secret: str) -> bytes:
+    if not secret or len(secret) < MIN_SECRET_LENGTH:
+        raise ApprovalSignatureError("approval signing secret is not configured correctly")
+    return secret.encode("utf-8")
+
+
+def sign(payload: Mapping[str, Any], secret: str) -> str:
+    return hmac.new(_key(secret), canonical_bytes(payload), hashlib.sha256).hexdigest()
+
+
+def verify_signature(payload: Mapping[str, Any], signature: str, secret: str) -> None:
+    expected = sign(payload, secret)
+    if not isinstance(signature, str) or not hmac.compare_digest(signature.encode(), expected.encode()):
+        raise ApprovalSignatureError("invalid approval signature")

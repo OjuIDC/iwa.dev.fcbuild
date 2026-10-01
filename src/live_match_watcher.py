@@ -54,7 +54,8 @@ FC_VERSION   = "27"
 MCP_BASE     = os.getenv("FC27_MCP_URL",   "http://fc27-mcp:8000")
 REDIS_URL    = os.getenv("REDIS_URL",      "redis://redis:6379")
 GRAPH_URL    = os.getenv("GRAPH_URL",      "http://graph-api:8001")
-GRAPH_API_TOKEN = os.getenv("GRAPH_API_TOKEN", "")
+# Service credential: may start runs and read state; it can never approve.
+GRAPH_SERVICE_TOKEN = os.getenv("GRAPH_SERVICE_TOKEN", "")
 POLL_INTERVAL= int(os.getenv("POLL_INTERVAL_SEC", "30"))   # EA rate limit safe at 30s
 MATCH_TYPES  = ["leagueMatch", "cup", "clubFriendly"]
 
@@ -192,24 +193,26 @@ async def trigger_swarm_analysis(match: dict) -> Optional[str]:
     Trigger the LangGraph swarm pipeline for a completed match.
     Returns thread_id if successful.
     """
-    thread_id = str(uuid.uuid4())
     payload   = {
         "club_id":    CLUB_ID,
         "platform":   PLATFORM,
         "fc_version": FC_VERSION,
-        "thread_id":  thread_id,
         "trigger":    "live_match_watcher",
         "match":      match,
     }
+    if not GRAPH_SERVICE_TOKEN:
+        log.warning("GRAPH_SERVICE_TOKEN is not set; cannot trigger the graph")
+        return None
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            headers = {"X-API-Key": GRAPH_API_TOKEN} if GRAPH_API_TOKEN else {}
-            resp = await client.post(f"{GRAPH_URL}/run", json=payload, headers=headers)
+        # The Graph API allocates the thread id (fc27-<clubId>-run-<YYYYMMDD>-<seq>).
+        async with httpx.AsyncClient(timeout=float(os.getenv("GRAPH_RUN_TIMEOUT_SEC", "900"))) as client:
+            resp = await client.post(f"{GRAPH_URL}/run", json=payload, headers={"X-API-Key": GRAPH_SERVICE_TOKEN})
             resp.raise_for_status()
+            thread_id = resp.json().get("thread_id")
             log.info("Swarm pipeline triggered. thread_id=%s", thread_id)
             return thread_id
     except Exception as exc:
-        log.warning("Could not trigger swarm (graph service may not be running): %s", exc)
+        log.warning("Could not trigger swarm: %s", type(exc).__name__)
         return None
 
 # ── Match Processor ────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import os
-os.environ.setdefault('VOICE_API_TOKEN','voice-secret');os.environ.setdefault('GRAPH_API_TOKEN','graph-secret');os.environ.setdefault('REDIS_URL','redis://localhost:6379')
+os.environ.setdefault('VOICE_API_TOKEN','voice-secret');os.environ.setdefault('GRAPH_SERVICE_TOKEN','graph-service-secret');os.environ.setdefault('REDIS_URL','redis://localhost:6379')
 from fastapi.testclient import TestClient
 import src.voice_gateway as vg
 class FakeRedis:

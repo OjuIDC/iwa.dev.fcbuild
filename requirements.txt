@@ -10,5 +10,4 @@ opencv-python-headless>=4.10,<5
 pytesseract>=0.3.13,<1
 Pillow>=10.4,<12
 psycopg[binary]>=3.2,<4
-pytest>=8,<9
 python-multipart>=0.0.12,<1

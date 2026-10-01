@@ -1,16 +1,16 @@
 from __future__ import annotations
-import hashlib,json,os,re,time
+import hashlib,hmac,json,os,re,time
 import httpx
 import redis
 from fastapi import FastAPI,File,Header,HTTPException,UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel,Field
 app=FastAPI(title="FC27 Voice Gateway")
-TOKEN=os.environ["VOICE_API_TOKEN"];GRAPH=os.getenv("GRAPH_URL","http://graph-api:8001");GRAPH_TOKEN=os.environ["GRAPH_API_TOKEN"]
+TOKEN=os.environ["VOICE_API_TOKEN"];GRAPH=os.getenv("GRAPH_URL","http://graph-api:8001");GRAPH_TOKEN=os.environ["GRAPH_SERVICE_TOKEN"]  # read-only service role; cannot approve
 STT=os.getenv("STT_URL","http://stt:9001");TTS=os.getenv("TTS_URL","http://tts:9002")
 EVENTS=redis.Redis.from_url(os.getenv("REDIS_URL","redis://redis:6379"),decode_responses=True)
 def auth(value):
- if not value or value!=TOKEN:raise HTTPException(401,"invalid voice token")
+ if not value or not hmac.compare_digest(value.encode(),TOKEN.encode()):raise HTTPException(401,"invalid voice token")
 class Transcript(BaseModel): transcript:str=Field(min_length=1,max_length=2000)
 class Speak(BaseModel): text:str=Field(min_length=1,max_length=4000);voice:str="default"
 def parse_command(text):

@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+os.chdir(Path(__file__).resolve().parents[1])
 
 def test_required_files_exist():
     required = [
@@ -18,5 +20,5 @@ def test_readme_references_existing_documents():
 
 def test_watcher_sends_graph_api_token():
     text = Path("src/live_match_watcher.py").read_text()
-    assert "GRAPH_API_TOKEN" in text
-    assert '"X-API-Key"' in text
+    assert "GRAPH_SERVICE_TOKEN" in text and '"X-API-Key"' in text
+    assert "GRAPH_API_TOKEN" not in text and "COMMISSIONER_TOKEN" not in text

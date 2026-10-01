@@ -1,127 +1,205 @@
+"""FC27 Graph API.
+
+Run with:  uvicorn src.graph_api:create_app --factory --host 0.0.0.0 --port 8001
+
+Authorisation (header ``X-API-Key``):
+  service token       POST /run, GET /threads/{id}
+  commissioner token  POST /threads/{id}/decision-challenge, POST /threads/{id}/decision
+Any other combination returns 403; a missing or unknown key returns 401.
+"""
 from __future__ import annotations
+
 import json
+import logging
 import os
-from contextlib import contextmanager
-from typing import Any
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any, Callable
 
 import psycopg
-import redis
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, Header, HTTPException, Path
+from pydantic import BaseModel, ConfigDict, Field
 
-from .graph import decide, initial_state, run_pipeline
-from .schemas import HumanDecision
+from .approval_store import ApprovalStore, StoreError, request_hash
+from .db_migrate import migrate
+from .schemas import DecisionIntent, SignedDecision
+from .security import Authenticator, Principal, Role, require_role
+from .settings import DEFAULT_PLATFORM, FC_VERSION, ConfigError, env_bool, read_secret
 
-app = FastAPI(title="FC27 Graph API", version="27")
-REDIS_URL = os.environ["REDIS_URL"]
-POSTGRES_URI = os.environ["POSTGRES_URI"]
-TOKEN = os.environ["GRAPH_API_TOKEN"]
-r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+log = logging.getLogger("fc27.graph_api")
 
-@contextmanager
-def db():
-    with psycopg.connect(POSTGRES_URI) as conn:
-        yield conn
+ThreadIdPath = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9-]+$")
 
-def ensure_schema() -> None:
-    with db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS graph_threads (
-                thread_id text PRIMARY KEY,
-                state jsonb NOT NULL,
-                status text NOT NULL,
-                updated_at timestamptz NOT NULL DEFAULT now()
+
+@dataclass
+class ApiSettings:
+    postgres_uri: str
+    authenticator: Authenticator
+    signing_secret: str
+    approval_ttl_seconds: int = 120
+    redis_url: str | None = None
+    run_migrations: bool = True
+
+    @classmethod
+    def from_env(cls) -> "ApiSettings":
+        try:
+            auth = Authenticator(
+                read_secret("GRAPH_SERVICE_TOKEN", min_length=32),
+                read_secret("GRAPH_COMMISSIONER_TOKEN_SHA256"),
+                read_secret("COMMISSIONER_ID"),
             )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS approval_audit (
-                id bigserial PRIMARY KEY,
-                thread_id text NOT NULL REFERENCES graph_threads(thread_id),
-                commissioner text NOT NULL,
-                decision text NOT NULL CHECK (decision IN ('APPROVE','REJECT')),
-                notes text NOT NULL DEFAULT '',
-                owner text NOT NULL,
-                selection text NOT NULL,
-                candidate_id text NOT NULL,
-                player_id text NOT NULL,
-                decided_at timestamptz NOT NULL DEFAULT now()
+            return cls(
+                postgres_uri=read_secret("POSTGRES_URI"),
+                authenticator=auth,
+                signing_secret=read_secret("APPROVAL_SIGNING_SECRET", min_length=32),
+                approval_ttl_seconds=int(os.getenv("APPROVAL_TTL_SECONDS", "120")),
+                redis_url=read_secret("REDIS_URL", required=False),
+                run_migrations=env_bool("GRAPH_RUN_MIGRATIONS", True),
             )
-        """)
-        conn.commit()
+        except ValueError as exc:  # ConfigError is a RuntimeError; Authenticator raises ValueError
+            raise ConfigError(str(exc)) from exc
 
-@app.on_event("startup")
-def startup() -> None:
-    ensure_schema()
-
-def auth(x_api_key: str | None) -> None:
-    if not x_api_key or x_api_key != TOKEN:
-        raise HTTPException(401, "invalid API key")
-
-def save_state(state: dict[str, Any]) -> None:
-    with db() as conn:
-        conn.execute(
-            """INSERT INTO graph_threads(thread_id,state,status) VALUES (%s,%s::jsonb,%s)
-               ON CONFLICT(thread_id) DO UPDATE SET state=EXCLUDED.state,status=EXCLUDED.status,updated_at=now()""",
-            (state["thread_id"], json.dumps(state), state["status"]),
-        )
-        conn.commit()
-
-def load_state(thread_id: str) -> dict[str, Any] | None:
-    with db() as conn:
-        row = conn.execute("SELECT state FROM graph_threads WHERE thread_id=%s", (thread_id,)).fetchone()
-    return row[0] if row and isinstance(row[0], dict) else (json.loads(row[0]) if row else None)
 
 class RunRequest(BaseModel):
-    thread_id: str | None = None
-    club_id: str = Field(default="330323", pattern=r"^\d{1,12}$")
-    platform: str = "common-gen5"
+    model_config = ConfigDict(extra="forbid")
+    thread_id: str | None = Field(default=None, max_length=128)
+    club_id: str = Field(default_factory=lambda: os.getenv("FC27_CLUB_ID", "330323"), pattern=r"^[0-9]{1,12}$")
+    platform: str = Field(default=DEFAULT_PLATFORM, pattern=r"^common-gen5$")
+    fc_version: str = Field(default=FC_VERSION, pattern=r"^27$")
     match: dict | None = None
-    trigger: str = "api"
+    trigger: str = Field(default="api", pattern=r"^[a-z_]{1,32}$")
 
-Decision = HumanDecision
 
-@app.get("/health")
-def health() -> dict:
-    r.ping()
-    with db() as conn:
-        conn.execute("SELECT 1").fetchone()
-    return {"status": "ok", "redis": "ok", "postgres": "ok"}
+Pipeline = Callable[[dict[str, Any]], dict[str, Any]]
+Publisher = Callable[[str, dict[str, Any]], None]
 
-@app.post("/run", status_code=202)
-def run(req: RunRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    auth(x_api_key)
-    state = run_pipeline(initial_state(req.thread_id, req.club_id, req.match))
-    save_state(state)
-    r.publish("fc27:approval:requested", json.dumps({"thread_id": state["thread_id"], "status": state["status"]}))
-    return state
 
-@app.get("/threads/{thread_id}")
-def get_thread(thread_id: str, x_api_key: str | None = Header(default=None)) -> dict:
-    auth(x_api_key)
-    state = load_state(thread_id)
-    if not state:
-        raise HTTPException(404, "thread not found")
-    return state
+def _default_pipeline(state: dict[str, Any]) -> dict[str, Any]:
+    from .graph import run_pipeline
 
-@app.post("/threads/{thread_id}/decision")
-def decision(thread_id: str, body: Decision, x_api_key: str | None = Header(default=None)) -> dict:
-    auth(x_api_key)
-    state = load_state(thread_id)
-    if not state:
-        raise HTTPException(404, "thread not found")
-    expected = os.getenv("COMMISSIONER", "batmanL8")
-    if body.commissioner != expected:
-        raise HTTPException(403, "commissioner identity mismatch")
-    try:
-        state = decide(state, body.decision, body.notes, body.owner.value, body.selection.value, body.candidate_id, body.player_id)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    save_state(state)
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO approval_audit(thread_id,commissioner,decision,notes,owner,selection,candidate_id,player_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            (thread_id, body.commissioner, body.decision, body.notes, body.owner.value, body.selection.value, body.candidate_id, body.player_id),
-        )
-        conn.commit()
-    r.publish("fc27:approval:decided", json.dumps({"thread_id": thread_id, "status": state["status"]}))
-    return state
+    return run_pipeline(state)
+
+
+def _make_initial_state(req: RunRequest) -> Callable[[str], dict[str, Any]]:
+    def build(thread_id: str) -> dict[str, Any]:
+        return {
+            "thread_id": thread_id,
+            "club_id": req.club_id,
+            "platform": req.platform,
+            "fc_version": FC_VERSION,
+            "trigger": req.trigger,
+            "match": req.match,
+            "status": "running",
+            "approved": None,
+            "audit_log": [],
+            "errors": [],
+        }
+
+    return build
+
+
+def _redis_publisher(redis_url: str | None) -> Publisher:
+    if not redis_url:
+        return lambda channel, payload: None
+    import redis
+
+    client = redis.Redis.from_url(redis_url, decode_responses=True)
+
+    def publish(channel: str, payload: dict[str, Any]) -> None:
+        try:
+            client.publish(channel, json.dumps(payload))
+        except Exception:  # notifications are best-effort; the DB is the source of truth
+            log.warning("redis publish failed for channel %s", channel)
+
+    return publish
+
+
+def _store_error(exc: StoreError) -> HTTPException:
+    return HTTPException(exc.status_code, exc.detail)
+
+
+def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None = None,
+               publisher: Publisher | None = None) -> FastAPI:
+    settings = settings or ApiSettings.from_env()
+    store = ApprovalStore(settings.postgres_uri)
+    run_pipeline = pipeline or _default_pipeline
+    publish = publisher or _redis_publisher(settings.redis_url)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if settings.run_migrations:
+            migrate(settings.postgres_uri)
+        yield
+
+    app = FastAPI(title="FC27 Graph API", version=FC_VERSION, lifespan=lifespan)
+
+    def principal(x_api_key: str | None = Header(default=None)) -> Principal:
+        return settings.authenticator.authenticate(x_api_key)
+
+    def service(p: Principal = Depends(principal)) -> Principal:
+        return require_role(p, Role.service)
+
+    def commissioner(p: Principal = Depends(principal)) -> Principal:
+        return require_role(p, Role.commissioner)
+
+    @app.get("/health")
+    def health() -> dict:
+        try:
+            with psycopg.connect(settings.postgres_uri, connect_timeout=3) as conn:
+                conn.execute("SELECT 1").fetchone()
+        except Exception as exc:
+            raise HTTPException(503, "postgres unavailable") from exc
+        return {"status": "ok", "postgres": "ok", "fc_version": FC_VERSION}
+
+    @app.post("/run", status_code=201)
+    def run(req: RunRequest, _p: Principal = Depends(service)) -> dict:
+        try:
+            state = store.create_run(
+                club_id=req.club_id,
+                thread_id=req.thread_id,
+                initial_state=_make_initial_state(req),
+                req_hash=request_hash(req.model_dump(mode="json")),
+            )
+        except StoreError as exc:
+            raise _store_error(exc) from exc
+        try:
+            result = run_pipeline(state)
+        except Exception as exc:  # pipeline failure is recorded, never left as running
+            log.exception("pipeline failed for %s", state["thread_id"])
+            result = {**state, "status": "failed", "errors": list(state.get("errors", [])) + [type(exc).__name__]}
+        result = {**result, "thread_id": state["thread_id"]}
+        try:
+            final = store.complete_run(state["thread_id"], result)
+        except StoreError as exc:
+            raise _store_error(exc) from exc
+        if final["status"] == "awaiting_approval":
+            publish("fc27:approval:requested", {"thread_id": final["thread_id"], "status": final["status"]})
+        return final
+
+    @app.get("/threads/{thread_id}")
+    def get_thread(thread_id: str = ThreadIdPath, _p: Principal = Depends(service)) -> dict:
+        row = store.load(thread_id)
+        if row is None:
+            raise HTTPException(404, "thread not found")
+        state = dict(row["state"])
+        state.update(status=row["status"], package_version=row["package_version"], approved_by=row["approved_by"])
+        return state
+
+    @app.post("/threads/{thread_id}/decision-challenge")
+    def decision_challenge(intent: DecisionIntent, thread_id: str = ThreadIdPath,
+                           p: Principal = Depends(commissioner)) -> dict:
+        try:
+            return store.issue_challenge(thread_id, intent, p, settings.approval_ttl_seconds)
+        except StoreError as exc:
+            raise _store_error(exc) from exc
+
+    @app.post("/threads/{thread_id}/decision")
+    def decision(body: SignedDecision, thread_id: str = ThreadIdPath, p: Principal = Depends(commissioner)) -> dict:
+        try:
+            state = store.apply_decision(thread_id, body, p, settings.signing_secret)
+        except StoreError as exc:
+            raise _store_error(exc) from exc
+        publish("fc27:approval:decided", {"thread_id": thread_id, "status": state["status"]})
+        return state
+
+    return app

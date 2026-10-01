@@ -1,10 +1,10 @@
 from __future__ import annotations
-import json, os, time, uuid
+import json, os, time
 from typing import Any
 import httpx
 from .model_selection import ModelRegistry, invoke_role
 from .lead_packages import build_lead_packages
-CLUB_ID=os.getenv("FC27_CLUB_ID","330323"); PLATFORM=os.getenv("FC_PLATFORM","common-gen5"); COMMISSIONER=os.getenv("COMMISSIONER","batmanL8"); MCP=os.getenv("FC27_MCP_URL","http://fc27-mcp:8000")
+CLUB_ID=os.getenv("FC27_CLUB_ID","330323"); PLATFORM=os.getenv("FC_PLATFORM","common-gen5"); MCP=os.getenv("FC27_MCP_URL","http://fc27-mcp:8000")
 def now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())
 def mcp_call(tool,args):
  r=httpx.post(MCP,json={"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}},timeout=30);r.raise_for_status();d=r.json()
@@ -12,8 +12,9 @@ def mcp_call(tool,args):
  return json.loads(d["result"]["content"][0]["text"])
 def ask(role,system,data,registry=None):
  return invoke_role(role,[{"role":"system","content":system},{"role":"user","content":json.dumps(data) }],registry or ModelRegistry())["content"]
-def initial_state(thread_id=None,club_id=CLUB_ID,match=None):
- return {"thread_id":thread_id or str(uuid.uuid4()),"club_id":club_id,"platform":PLATFORM,"commissioner":COMMISSIONER,"match":match,"status":"new","approved":None,"audit_log":[],"errors":[]}
+def initial_state(thread_id,club_id=CLUB_ID,match=None):
+ if not thread_id: raise ValueError("thread_id is allocated by the Graph API")
+ return {"thread_id":thread_id,"club_id":club_id,"platform":PLATFORM,"fc_version":"27","match":match,"status":"running","approved":None,"audit_log":[],"errors":[]}
 def run_pipeline(state:dict, registry=None, dashboard=None):
  reg=registry or ModelRegistry(); state=dict(state); state["status"]="running"
  try:
@@ -30,14 +31,4 @@ def run_pipeline(state:dict, registry=None, dashboard=None):
   state["audit_log"].append({"node":"recommendation","ts":now(),"summary":"reports complete; Commissioner approval required"})
  except Exception as exc: state["status"]="failed";state["errors"].append(str(exc))
  return state
-def decide(state,decision,notes="",owner=None,selection=None,candidate_id=None,player_id=None):
- if state.get("status")!="awaiting_approval": raise ValueError("thread is not awaiting approval")
- approved=str(decision).upper()=="APPROVE"; state=dict(state)
- if approved:
-  if not all((owner,selection,candidate_id,player_id)): raise ValueError("typed owner, selection, candidate_id, and player_id are required")
-  selected=state["lead_packages"][owner][selection]
-  if selected["candidate_id"]!=candidate_id or selected["player_id"]!=player_id: raise ValueError("decision does not match typed lead package")
-  state["dispatch"]={"owner":owner,"selection":selection,"candidate":selected,"dispatched_to_player_agent":player_id}
- state.update(approved=approved,status="approved" if approved else "rejected",commissioner_input=notes)
- state["audit_log"]=state.get("audit_log",[])+[{"node":"approval","ts":now(),"summary":"APPROVED" if approved else "REJECTED","commissioner":COMMISSIONER}]
- return state
+# Decisions are applied only by src.approval_store (signed, nonce-bound, atomic).
