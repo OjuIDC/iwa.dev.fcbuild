@@ -13,19 +13,41 @@ def test_benchmark_and_selection(tmp_path):
     reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
     assert reg.select('player').model=='llama3.2:3b'
     assert reg.select('analyst').model=='qwen2.5:7b'
-def test_ollama_to_lm_studio_fallback(tmp_path):
-    reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
+def test_ollama_to_lm_studio_fallback(tmp_path,monkeypatch):
+    monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED','true');reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
     client=FakeClient({('ollama','qwen2.5:7b')});response=invoke_role('coach',[{'role':'user','content':'test'}],reg,client)
     assert response['fallback_used'] is True and response['route'].provider=='lm_studio'
-def test_all_routes_fail(tmp_path):
-    reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
+def test_all_routes_fail(tmp_path,monkeypatch):
+    monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED','true');reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
     with pytest.raises(RuntimeError):invoke_role('player',[],reg,FakeClient({('ollama','llama3.2:3b'),('lm_studio','llama3.2:3b')}))
 
-def test_disabled_candidates_are_not_selected():
-    reg=ModelRegistry()
-    assert all(m.get('enabled',True) for m in reg.candidates('player'))
+def test_disabled_catalog_entries_are_excluded(tmp_path):
+    cat=json.loads(Path('config/model_catalog.json').read_text())
+    for m in cat['models']:
+        if 'coach' in m['roles'] and m['provider']=='ollama': m['enabled']=False
+    p=tmp_path/'cat.json';p.write_text(json.dumps(cat))
+    reg=ModelRegistry(catalog_path=p)
+    assert all(m['provider']!='ollama' for m in reg.candidates('coach'))
 
 def test_unhealthy_forced_model_does_not_beat_healthy(tmp_path,monkeypatch):
-    reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
-    monkeypatch.setenv('COACH_MODEL','not-configured')
+    monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED','true')
+    reg=ModelRegistry();client=FakeClient({('lm_studio','qwen2.5:7b')})
+    # lm_studio::qwen2.5:7b fails its benchmark (unhealthy); forcing it must not beat healthy ollama.
+    result=run(reg,client);p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
+    assert not reg.healthy(next(m for m in reg.candidates('coach') if m['provider']=='lm_studio'),'coach')
+    monkeypatch.setenv('COACH_MODEL','qwen2.5:7b')
     assert reg.select('coach').provider=='ollama'
+
+def test_lm_studio_is_not_called_when_disabled(tmp_path,monkeypatch):
+    monkeypatch.delenv('LM_STUDIO_FALLBACK_ENABLED',raising=False)
+    reg=ModelRegistry();result=run(reg,FakeClient());p=tmp_path/'r.json';p.write_text(json.dumps(result));reg.load_results(p)
+    client=FakeClient({('ollama','qwen2.5:7b')})
+    with pytest.raises(RuntimeError):invoke_role('coach',[{'role':'user','content':'x'}],reg,client)
+    assert all(provider!='lm_studio' for provider,_ in client.calls)
+    for value in ('false','0','no'):
+        monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED',value);assert not ModelRegistry().lm_studio_enabled
+
+def test_invalid_lm_studio_flag_fails_clearly(monkeypatch):
+    from src.settings import ConfigError
+    monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED','maybe')
+    with pytest.raises(ConfigError):ModelRegistry()

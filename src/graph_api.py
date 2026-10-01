@@ -74,12 +74,6 @@ Pipeline = Callable[[dict[str, Any]], dict[str, Any]]
 Publisher = Callable[[str, dict[str, Any]], None]
 
 
-def _default_pipeline(state: dict[str, Any]) -> dict[str, Any]:
-    from .graph import run_pipeline
-
-    return run_pipeline(state)
-
-
 def _make_initial_state(req: RunRequest) -> Callable[[str], dict[str, Any]]:
     def build(thread_id: str) -> dict[str, Any]:
         return {
@@ -119,17 +113,45 @@ def _store_error(exc: StoreError) -> HTTPException:
 
 
 def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None = None,
-               publisher: Publisher | None = None) -> FastAPI:
+               publisher: Publisher | None = None, runner=None) -> FastAPI:
+    """``runner`` is a :class:`src.graph.GraphRunner`. When neither ``pipeline``
+    nor ``runner`` is given, a LangGraph runner with a PostgresSaver is built
+    at startup. ``pipeline`` (without runner) is for tests of the API layer."""
     settings = settings or ApiSettings.from_env()
     store = ApprovalStore(settings.postgres_uri)
-    run_pipeline = pipeline or _default_pipeline
     publish = publisher or _redis_publisher(settings.redis_url)
+    graph = {"runner": runner}
+
+    def run_pipeline(state: dict[str, Any]) -> dict[str, Any]:
+        if pipeline is not None:
+            return pipeline(state)
+        return graph["runner"].start(state)
+
+    def resume_graph(thread_id: str) -> str:
+        if graph["runner"] is None:
+            return "not-configured"
+        try:
+            graph["runner"].resume(thread_id)
+            return "resumed"
+        except Exception:  # decision is committed in PostgreSQL; graph resume is retried at startup
+            log.exception("graph resume failed for %s; will retry on next startup", thread_id)
+            return "pending"
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
             migrate(settings.postgres_uri)
+        if graph["runner"] is None and pipeline is None:
+            from .graph import GraphDeps, GraphRunner
+
+            graph["runner"] = GraphRunner.from_conninfo(settings.postgres_uri, GraphDeps(decision_reader=store.load))
+            graph["owned"] = True
+        if graph["runner"] is not None:
+            for thread_id in store.terminal_thread_ids():
+                resume_graph(thread_id)  # reconcile decisions committed while the graph was not resumed
         yield
+        if graph.get("owned"):
+            graph["runner"].pool.close()
 
     app = FastAPI(title="FC27 Graph API", version=FC_VERSION, lifespan=lifespan)
 
@@ -200,6 +222,6 @@ def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None
         except StoreError as exc:
             raise _store_error(exc) from exc
         publish("fc27:approval:decided", {"thread_id": thread_id, "status": state["status"]})
-        return state
+        return {**state, "graph_resume": resume_graph(thread_id)}
 
     return app

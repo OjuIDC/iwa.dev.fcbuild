@@ -114,6 +114,14 @@ class ApprovalStore:
                 (thread_id,),
             ).fetchone()
 
+    def terminal_thread_ids(self, days: int = 14) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT thread_id FROM graph_threads
+                    WHERE status IN ('approved','rejected') AND approved_at > now() - make_interval(days => %s)
+                    ORDER BY approved_at""", (days,)).fetchall()
+        return [r["thread_id"] for r in rows]
+
     # ------------------------------------------------------------- decisions
     def issue_challenge(self, thread_id: str, intent: DecisionIntent, principal: Principal, ttl_seconds: int) -> dict[str, Any]:
         if principal.role is not Role.commissioner:
