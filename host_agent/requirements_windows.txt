@@ -1,9 +1,13 @@
-dxcam>=0.0.5
-mss>=9
-opencv-python>=4.10
-numpy>=1.26
-pytesseract>=0.3.13
-Pillow>=10.4
-redis>=5
-websockets>=13
-python-dotenv>=1
+# Third-party imports of host_agent/capture_agent.py (module -> package):
+#   dotenv -> python-dotenv, cv2 -> opencv-python, numpy, pytesseract,
+#   redis -> redis, dxcam / mss (screen capture; mss is the fallback)
+# install.ps1 retries without the dxcam line if the full list fails.
+dxcam>=0.0.5,<1
+mss>=9,<11
+opencv-python>=4.10,<5
+numpy>=1.26,<3
+pytesseract>=0.3.13,<0.4
+Pillow>=10.4,<12
+redis>=5,<7
+websockets>=13,<16
+python-dotenv>=1,<2
