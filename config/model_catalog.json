@@ -1,0 +1,139 @@
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://ollama:11434",
+      "priority": 10
+    },
+    "lm_studio": {
+      "base_url": "http://host.docker.internal:1234/v1",
+      "priority": 20
+    }
+  },
+  "models": [
+    {
+      "name": "llama3.2:3b",
+      "provider": "ollama",
+      "estimated_vram_gb": 3.0,
+      "roles": [
+        "player"
+      ],
+      "fallback_rank": 10,
+      "enabled": true
+    },
+    {
+      "name": "qwen2.5:7b",
+      "provider": "ollama",
+      "estimated_vram_gb": 6.0,
+      "roles": [
+        "scout",
+        "analyst",
+        "coach",
+        "tactics",
+        "director",
+        "reviewer"
+      ],
+      "fallback_rank": 10,
+      "enabled": true
+    },
+    {
+      "name": "qwen2.5:7b",
+      "provider": "lm_studio",
+      "estimated_vram_gb": 6.0,
+      "roles": [
+        "scout",
+        "analyst",
+        "coach",
+        "tactics",
+        "director",
+        "reviewer"
+      ],
+      "fallback_rank": 50,
+      "enabled": true
+    },
+    {
+      "name": "llama3.2:3b",
+      "provider": "lm_studio",
+      "estimated_vram_gb": 3.0,
+      "roles": [
+        "player"
+      ],
+      "fallback_rank": 50,
+      "enabled": true
+    },
+    {
+      "name": "qwen3:4b",
+      "provider": "ollama",
+      "estimated_vram_gb": 4.0,
+      "roles": [
+        "player"
+      ],
+      "fallback_rank": 20,
+      "enabled": false,
+      "notes": "candidate compact observer"
+    },
+    {
+      "name": "qwen3:8b",
+      "provider": "ollama",
+      "estimated_vram_gb": 7.0,
+      "roles": [
+        "scout",
+        "coach",
+        "reviewer"
+      ],
+      "fallback_rank": 20,
+      "enabled": false,
+      "notes": "candidate instruction and structured output"
+    },
+    {
+      "name": "deepseek-r1:8b",
+      "provider": "ollama",
+      "estimated_vram_gb": 7.0,
+      "roles": [
+        "analyst",
+        "tactics"
+      ],
+      "fallback_rank": 20,
+      "enabled": false,
+      "notes": "candidate reasoning model; enforce concise structured output"
+    },
+    {
+      "name": "qwen2.5:14b",
+      "provider": "ollama",
+      "estimated_vram_gb": 11.0,
+      "roles": [
+        "analyst",
+        "tactics",
+        "director"
+      ],
+      "fallback_rank": 25,
+      "enabled": false,
+      "notes": "larger control-family candidate"
+    },
+    {
+      "name": "gemma3:4b",
+      "provider": "ollama",
+      "estimated_vram_gb": 4.0,
+      "roles": [
+        "player",
+        "coach",
+        "reviewer"
+      ],
+      "fallback_rank": 25,
+      "enabled": false,
+      "notes": "candidate compact instruction model"
+    },
+    {
+      "name": "mistral-small:24b",
+      "provider": "ollama",
+      "estimated_vram_gb": 18.0,
+      "roles": [
+        "director",
+        "tactics",
+        "reviewer"
+      ],
+      "fallback_rank": 30,
+      "enabled": false,
+      "notes": "high-memory synthesis candidate"
+    }
+  ]
+}

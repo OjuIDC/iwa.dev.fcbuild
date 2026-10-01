@@ -1,0 +1,8 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends espeak-ng && rm -rf /var/lib/apt/lists/* && useradd -r -u 10001 voice && chown -R voice:voice /app
+RUN pip install --no-cache-dir fastapi uvicorn[standard]
+COPY --chown=voice:voice voice/tts_service.py /app/tts_service.py
+USER voice
+EXPOSE 9002
+CMD ["uvicorn","tts_service:app","--host","0.0.0.0","--port","9002"]

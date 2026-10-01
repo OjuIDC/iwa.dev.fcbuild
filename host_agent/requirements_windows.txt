@@ -1,0 +1,9 @@
+dxcam>=0.0.5
+mss>=9
+opencv-python>=4.10
+numpy>=1.26
+pytesseract>=0.3.13
+Pillow>=10.4
+redis>=5
+websockets>=13
+python-dotenv>=1

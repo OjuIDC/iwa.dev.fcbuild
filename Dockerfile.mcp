@@ -1,0 +1,8 @@
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+RUN useradd -r -u 10001 app
+COPY src /app/src
+USER app
+EXPOSE 8000
+CMD ["python","-m","src.fc27_mcp_server"]

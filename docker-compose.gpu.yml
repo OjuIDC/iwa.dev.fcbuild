@@ -1,0 +1,5 @@
+services:
+  ollama:
+    gpus: ${OLLAMA_GPUS:-all}
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}

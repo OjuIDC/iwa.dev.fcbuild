@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/* && useradd -r -u 10001 voice && mkdir -p /home/voice/.cache && chown -R voice:voice /home/voice /app
+RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart faster-whisper
+COPY --chown=voice:voice voice/stt_service.py /app/stt_service.py
+ENV HOME=/home/voice
+USER voice
+EXPOSE 9001
+CMD ["uvicorn","stt_service:app","--host","0.0.0.0","--port","9001"]

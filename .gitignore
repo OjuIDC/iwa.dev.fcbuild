@@ -1,0 +1,6 @@
+.env
+.env.models
+*.log
+__pycache__/
+.pytest_cache/
+reports/model_benchmark_results.json

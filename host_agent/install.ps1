@@ -1,0 +1,186 @@
+# =============================================================================
+# install.ps1
+# FC27 Pro Clubs — Windows Host Capture Agent Installer
+# East Coasters FC | Club ID: 330323
+#
+# Run this ONCE on your Windows 11 machine to set up the capture agent.
+# Prerequisites: Python 3.11+, Git, Docker Desktop for Windows
+#
+# Usage (run as Administrator):
+#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+#   .\host_agent\install.ps1
+# =============================================================================
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"
+
+Write-Host ""
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "  FC27 East Coasters FC — Windows Host Capture Agent Installer" -ForegroundColor Cyan
+Write-Host "  Club ID: 330323 | batmanL8 (Commissioner)" -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ── Step 1: Python version check ──────────────────────────────────────────────
+Write-Host "[1/7] Checking Python version..." -ForegroundColor Yellow
+$pyVersion = python --version 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Python not found. Install Python 3.11+ from https://python.org"
+    exit 1
+}
+Write-Host "      Found: $pyVersion" -ForegroundColor Green
+
+# ── Step 2: Tesseract OCR ─────────────────────────────────────────────────────
+Write-Host "[2/7] Checking Tesseract OCR..." -ForegroundColor Yellow
+$tessPath = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+if (-Not (Test-Path $tessPath)) {
+    Write-Host "      Tesseract not found. Downloading installer..." -ForegroundColor Yellow
+    $tessInstaller = "$env:TEMP\tesseract-installer.exe"
+    $tessUrl       = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+
+    try {
+        Invoke-WebRequest -Uri $tessUrl -OutFile $tessInstaller -UseBasicParsing
+        Write-Host "      Running Tesseract installer (silent)..." -ForegroundColor Yellow
+        Start-Process -FilePath $tessInstaller -ArgumentList "/S" -Wait
+        Write-Host "      Tesseract installed ✅" -ForegroundColor Green
+    } catch {
+        Write-Host "      ⚠️  Auto-install failed. Please install manually:" -ForegroundColor Red
+        Write-Host "         https://github.com/UB-Mannheim/tesseract/wiki" -ForegroundColor Red
+        Write-Host "      Then re-run this script." -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "      Tesseract already installed ✅" -ForegroundColor Green
+}
+
+# Add Tesseract to PATH for this session
+$env:PATH += ";C:\Program Files\Tesseract-OCR"
+
+# ── Step 3: Visual C++ Redistributable (required by dxcam/OpenCV) ─────────────
+Write-Host "[3/7] Checking Visual C++ Redistributable..." -ForegroundColor Yellow
+$vcRedist = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* `
+    | Where-Object { $_.DisplayName -like "*Visual C++*2022*" } 2>$null
+
+if (-Not $vcRedist) {
+    Write-Host "      Downloading VC++ Redistributable..." -ForegroundColor Yellow
+    $vcUrl  = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    $vcFile = "$env:TEMP\vc_redist.x64.exe"
+    Invoke-WebRequest -Uri $vcUrl -OutFile $vcFile -UseBasicParsing
+    Start-Process -FilePath $vcFile -ArgumentList "/quiet /norestart" -Wait
+    Write-Host "      VC++ Redistributable installed ✅" -ForegroundColor Green
+} else {
+    Write-Host "      VC++ Redistributable already installed ✅" -ForegroundColor Green
+}
+
+# ── Step 4: Python virtual environment ────────────────────────────────────────
+Write-Host "[4/7] Creating Python virtual environment..." -ForegroundColor Yellow
+$venvPath = ".\host_agent\.venv"
+
+if (-Not (Test-Path $venvPath)) {
+    python -m venv $venvPath
+    Write-Host "      Virtual environment created ✅" -ForegroundColor Green
+} else {
+    Write-Host "      Virtual environment already exists ✅" -ForegroundColor Green
+}
+
+# Activate venv
+& "$venvPath\Scripts\Activate.ps1"
+
+# ── Step 5: Install Python packages ───────────────────────────────────────────
+Write-Host "[5/7] Installing Python packages (dxcam, OpenCV, Tesseract, Redis)..." -ForegroundColor Yellow
+python -m pip install --upgrade pip --quiet
+python -m pip install -r .\host_agent\requirements_windows.txt --quiet
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "      ⚠️  Some packages failed. Trying without dxcam (mss fallback)..." -ForegroundColor Yellow
+    python -m pip install mss opencv-python numpy pytesseract Pillow redis websockets httpx --quiet
+}
+
+Write-Host "      Python packages installed ✅" -ForegroundColor Green
+
+# ── Step 6: Create .env file ───────────────────────────────────────────────────
+Write-Host "[6/7] Creating host agent .env file..." -ForegroundColor Yellow
+$envFile = ".\host_agent\.env"
+
+if (-Not (Test-Path $envFile)) {
+    @"
+# FC27 East Coasters FC — Windows Host Capture Agent Config
+# Generated by install.ps1
+
+FC27_CLUB_ID=330323
+FC_PLATFORM=common-gen5
+REDIS_URL=redis://:CHANGE_ME_REDIS_PASSWORD@localhost:6379/0
+CAPTURE_FPS=2
+DISPLAY_W=1920
+DISPLAY_H=1080
+LOG_LEVEL=INFO
+
+# Tesseract path (if not in PATH)
+TESSDATA_PREFIX=C:\Program Files\Tesseract-OCR\tessdata
+"@ | Out-File -FilePath $envFile -Encoding UTF8
+    Write-Host "      .env created at $envFile ✅" -ForegroundColor Green
+} else {
+    Write-Host "      .env already exists — skipping ✅" -ForegroundColor Green
+}
+
+# ── Step 7: Create launch scripts ─────────────────────────────────────────────
+Write-Host "[7/7] Creating launch scripts..." -ForegroundColor Yellow
+
+# Launcher batch file (double-click to run)
+@"
+@echo off
+title FC27 East Coasters FC — Capture Agent
+cd /d "%~dp0.."
+call host_agent\.venv\Scripts\activate.bat
+echo.
+echo ================================================================
+echo   FC27 Capture Agent — East Coasters FC (batmanL8)
+echo   Keep Xbox Remote Play open and FULL SCREEN before starting
+echo ================================================================
+echo.
+python host_agent\capture_agent.py %*
+pause
+"@ | Out-File -FilePath ".\start_capture_agent.bat" -Encoding ASCII
+
+# Calibration launcher
+@"
+@echo off
+title FC27 Capture Agent — ROI Calibration
+cd /d "%~dp0"
+call host_agent\.venv\Scripts\activate.bat
+echo Running calibration mode — ROI overlays will appear on screen...
+python host_agent\capture_agent.py --calibrate
+pause
+"@ | Out-File -FilePath ".\calibrate_capture.bat" -Encoding ASCII
+
+Write-Host "      Launch scripts created ✅" -ForegroundColor Green
+
+# ── Summary ────────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "================================================================" -ForegroundColor Green
+Write-Host "  Installation Complete!" -ForegroundColor Green
+Write-Host "================================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "  NEXT STEPS:" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  1. Start Docker stack first:" -ForegroundColor White
+Write-Host "     docker compose --env-file .env up -d redis fc27-mcp" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  2. Open Xbox app → Remote Play → Your Xbox" -ForegroundColor White
+Write-Host "     Press Win+Shift+Enter to go full-screen" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  3. Calibrate ROIs (first time only):" -ForegroundColor White
+Write-Host "     Double-click: calibrate_capture.bat" -ForegroundColor Gray
+Write-Host "     Adjust SCORE_ROI, TIMER_ROI in capture_agent.py if needed" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  4. Start capture agent:" -ForegroundColor White
+Write-Host "     Double-click: start_capture_agent.bat" -ForegroundColor Gray
+Write-Host "     OR run: .\host_agent\.venv\Scripts\python host_agent\capture_agent.py" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  5. Watch live events in dashboard:" -ForegroundColor White
+Write-Host "     http://localhost:3000  (Langfuse)" -ForegroundColor Gray
+Write-Host "     ws://localhost:8765    (WebSocket events)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Commissioner: batmanL8 | Club: East Coasters FC (330323)" -ForegroundColor Cyan
+Write-Host ""
