@@ -2,7 +2,7 @@
 rtsp_frame_analyzer.py
 ======================
 FC27 Pro Clubs — RTSP Live Frame Analyzer (Tier 2)
-East Coasters FC | Club ID: 330323
+Club: FC27_CLUB_ID / FC27_CLUB_NAME (env)
 
 REQUIREMENT: Xbox Developer Mode enabled on your console.
   Settings → System → Developer Settings → Enable Developer Mode
@@ -18,9 +18,13 @@ HOW IT WORKS:
      - Timer ROI: match clock position
      - Player rating ROI: post-match rating panel
   4. Tesseract OCR reads score and timer from each frame
-  5. On score change → Redis pub/sub event (GOAL detected)
-  6. On 90:00 → signals match end, triggers API poll immediately
-  7. Full match events stream to WebSocket clients in real time
+  5. Readings are debounced (OCR_DEBOUNCE_FRAMES), confidence-gated
+     (OCR_MIN_CONFIDENCE) and plausibility-checked (a score may only rise by
+     one goal per accepted change) by src/ocr_parsing.LiveMatchTracker
+  6. Accepted changes → Redis pub/sub events (GOAL, MATCH_STATE, ...)
+  7. Post-match screen → MATCH_END; clock jumping back to 0:xx → kickoff reset
+  8. Orientation (is our club home or away?) from FC27_HOME_AWAY or by
+     comparing HUD team names with FC27_CLUB_NAME; "unknown" → neutral events
 
 Docker: runs as a service in docker-compose.yml
   Requires: --network host or Xbox on same Docker bridge
@@ -36,15 +40,18 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import time
-from dataclasses import dataclass, field
 from typing import Optional
 
 import cv2
 import numpy as np
 import pytesseract
 import redis.asyncio as aioredis
+
+from src.ocr_parsing import (
+    SCORE_OCR_CONFIG, TIMER_OCR_CONFIG, LiveMatchTracker, TrackerConfig, event_channel,
+    parse_clock, parse_score, resolve_orientation, text_and_confidence,
+)
 
 log = logging.getLogger("fc27.rtsp")
 logging.basicConfig(
@@ -93,29 +100,21 @@ SUB_ROI     = (500, 920, 920, 60)
 CALIBRATE   = os.getenv("CALIBRATE", "false").lower() == "true"
 
 # ── Match State ────────────────────────────────────────────────────────────────
+# All event decisions (debounce, plausibility, kickoff reset, orientation,
+# duplicate suppression) live in the pure module src/ocr_parsing.py, shared
+# with host_agent/capture_agent.py.
 
-@dataclass
-class MatchState:
-    home_score:     int   = 0
-    away_score:     int   = 0
-    timer_str:      str   = "00:00"
-    timer_minutes:  int   = 0
-    home_team:      str   = "East Coasters FC"
-    away_team:      str   = "Opponent"
-    in_match:       bool  = False
-    match_ended:    bool  = False
-    events:         list  = field(default_factory=list)
-    start_ts:       float = 0.0
+HOME_AWAY_MODE = os.getenv("FC27_HOME_AWAY", "auto")   # home | away | auto
+CLUB_NAME      = os.getenv("FC27_CLUB_NAME", "")
+ORIENTATION_RETRY_FRAMES = int(os.getenv("OCR_ORIENTATION_RETRY_FRAMES", "10"))
 
-    def score_str(self) -> str:
-        return f"{self.home_score} - {self.away_score}"
+MatchState = LiveMatchTracker   # backwards-compatible name
 
-    def result(self) -> str:
-        if self.home_score > self.away_score:
-            return "win"
-        elif self.home_score < self.away_score:
-            return "loss"
-        return "tie"
+
+def new_state() -> LiveMatchTracker:
+    # 'home'/'away' are forced; 'auto' starts unknown until HUD names are read.
+    return LiveMatchTracker(config=TrackerConfig.from_env(),
+                            orientation=resolve_orientation(HOME_AWAY_MODE))
 
 # ── OCR Helpers ────────────────────────────────────────────────────────────────
 
@@ -126,42 +125,22 @@ def _crop(frame: np.ndarray, roi: tuple) -> np.ndarray:
         x, y, w, h = x*2, y*2, w*2, h*2
     return frame[y:y+h, x:x+w]
 
-def _ocr(region: np.ndarray, config: str = "--psm 7 digits") -> str:
+def _preprocess(region: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+    return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+def _ocr(region: np.ndarray, config: str = "--psm 7") -> str:
     """Run Tesseract OCR on a region. Returns stripped text."""
-    gray   = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    text   = pytesseract.image_to_string(thresh, config=config)
-    return text.strip()
+    return pytesseract.image_to_string(_preprocess(region), config=config).strip()
 
-def _parse_score(text: str) -> Optional[tuple[int, int]]:
-    """
-    Parse score string like '1 - 0' or '1-0' or '2  1'.
-    Returns (home, away) or None if unparseable.
-    """
-    import re
-    m = re.search(r"(\d+)\s*[-–]\s*(\d+)", text)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    # Try space-separated
-    parts = [p for p in text.split() if p.isdigit()]
-    if len(parts) == 2:
-        return int(parts[0]), int(parts[1])
-    return None
-
-def _parse_timer(text: str) -> Optional[tuple[str, int]]:
-    """
-    Parse timer like '67:32' or '90+3'. Returns (str, minutes) or None.
-    """
-    import re
-    m = re.search(r"(\d{1,3})[:\s+](\d{2})", text)
-    if m:
-        mins = int(m.group(1))
-        return f"{mins}:{m.group(2)}", mins
-    m2 = re.search(r"(\d{1,3})", text)
-    if m2:
-        mins = int(m2.group(1))
-        return f"{mins}:00", mins
-    return None
+def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
+    """OCR with per-word confidences (min over words). Confidence None if unavailable."""
+    img = _preprocess(region)
+    try:
+        data = pytesseract.image_to_data(img, config=config, output_type=pytesseract.Output.DICT)
+        return text_and_confidence(data)
+    except Exception:   # older tesseract builds: fall back without confidence
+        return pytesseract.image_to_string(img, config=config).strip(), None
 
 def _detect_match_active(frame: np.ndarray) -> bool:
     """
@@ -184,18 +163,38 @@ def _detect_match_ended(frame: np.ndarray) -> bool:
     mean   = float(gray.mean())
     return mean > 180   # post-match screen is much brighter than HUD
 
+def _read_team_names(frame: np.ndarray) -> tuple[str, str]:
+    return _ocr(_crop(frame, HOME_ROI), "--psm 7"), _ocr(_crop(frame, AWAY_ROI), "--psm 7")
+
+def _refresh_orientation(frame: np.ndarray, state: LiveMatchTracker) -> None:
+    if HOME_AWAY_MODE in ("home", "away"):
+        state.set_orientation(HOME_AWAY_MODE)
+        return
+    home, away = _read_team_names(frame)
+    if home:
+        state.home_team = home[:64]
+    if away:
+        state.away_team = away[:64]
+    state.set_orientation(resolve_orientation(HOME_AWAY_MODE, CLUB_NAME, home, away))
+
 # ── Event Publisher ────────────────────────────────────────────────────────────
 
 async def publish_event(redis: aioredis.Redis, event_type: str, payload: dict) -> None:
+    payload = {k: v for k, v in payload.items() if k != "event"}
     payload.update({
+        "type":       event_type,
         "fc_version": FC_VERSION,
         "platform":   PLATFORM,
         "club_id":    CLUB_ID,
         "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
-    channel = f"fc27:live:{event_type.lower()}"
-    await redis.publish(channel, json.dumps(payload))
-    log.info("EVENT [%s]: %s", event_type, payload)
+    await redis.publish(event_channel(event_type), json.dumps(payload))
+    log.info("EVENT [%s]: score=%s-%s timer=%s", event_type,
+             payload.get("home_score", "?"), payload.get("away_score", "?"), payload.get("timer", ""))
+
+async def publish_all(redis: aioredis.Redis, events: list[dict]) -> None:
+    for ev in events:
+        await publish_event(redis, ev["event"], ev)
 
 # ── Calibration Mode ───────────────────────────────────────────────────────────
 
@@ -231,104 +230,47 @@ def run_calibration(frame: np.ndarray) -> None:
 
 async def process_frame(
     frame: np.ndarray,
-    state: MatchState,
+    state: LiveMatchTracker,
     redis: aioredis.Redis,
-) -> MatchState:
+) -> LiveMatchTracker:
     """
-    Process one frame: detect state, OCR score and timer, publish events.
+    Process one frame: detect HUD state, OCR score and clock, let the shared
+    tracker decide which (debounced, plausible, de-duplicated) events to publish.
     """
     if CALIBRATE:
         run_calibration(frame)
         return state
 
-    # Detect if we're in a match
     active = _detect_match_active(frame)
     if not active and not state.in_match:
         return state   # not in a match, nothing to do
 
     if active and not state.in_match:
-        # Match just started
-        state.in_match  = True
-        state.start_ts  = time.time()
-        state.events    = []
-        await publish_event(redis, "MATCH_START", {
-            "home_team": state.home_team,
-            "away_team": state.away_team,
-        })
-        log.info("MATCH START detected")
+        _refresh_orientation(frame, state)
+        await publish_all(redis, state.start_match())
+        state.frames_since_orientation = 0
+        log.info("MATCH START detected (orientation=%s)", state.orientation)
 
     if not active and state.in_match:
-        # Check for post-match rating screen
         if _detect_match_ended(frame):
-            state.match_ended = True
-            state.in_match    = False
-            result            = state.result()
-            await publish_event(redis, "MATCH_END", {
-                "home_score": state.home_score,
-                "away_score": state.away_score,
-                "result":     result,
-                "timer":      state.timer_str,
-                "events":     state.events,
-            })
+            events = state.end_match()
+            await publish_all(redis, events)
             log.info("MATCH END — %s %s result=%s",
-                     state.score_str(), state.timer_str, result)
+                     state.score_str(), state.timer_str, state.result()["result"])
         return state
 
-    # ── OCR score ────────────────────────────────────────────────────────
-    score_crop   = _crop(frame, SCORE_ROI)
-    score_text   = _ocr(score_crop, "--psm 7")
-    parsed_score = _parse_score(score_text)
+    # Keep trying to establish orientation while it is unknown.
+    if state.orientation == "unknown" and CLUB_NAME:
+        n = getattr(state, "frames_since_orientation", 0) + 1
+        state.frames_since_orientation = n
+        if n >= ORIENTATION_RETRY_FRAMES:
+            state.frames_since_orientation = 0
+            _refresh_orientation(frame, state)
 
-    if parsed_score:
-        new_home, new_away = parsed_score
-        # Detect goal events
-        if new_home > state.home_score:
-            goals_scored = new_home - state.home_score
-            for _ in range(goals_scored):
-                event = {
-                    "type":   "GOAL",
-                    "team":   "home",
-                    "score":  f"{new_home}-{new_away}",
-                    "timer":  state.timer_str,
-                }
-                state.events.append(event)
-                await publish_event(redis, "GOAL", event)
-                log.info("⚽ GOAL — Home! Score: %d-%d @ %s",
-                         new_home, new_away, state.timer_str)
-
-        if new_away > state.away_score:
-            goals_scored = new_away - state.away_score
-            for _ in range(goals_scored):
-                event = {
-                    "type":   "GOAL",
-                    "team":   "away",
-                    "score":  f"{new_home}-{new_away}",
-                    "timer":  state.timer_str,
-                }
-                state.events.append(event)
-                await publish_event(redis, "GOAL", event)
-                log.info("⚽ GOAL — Away! Score: %d-%d @ %s",
-                         new_home, new_away, state.timer_str)
-
-        state.home_score = new_home
-        state.away_score = new_away
-
-    # ── OCR timer ────────────────────────────────────────────────────────
-    timer_crop   = _crop(frame, TIMER_ROI)
-    timer_text   = _ocr(timer_crop, "--psm 7 digits")
-    parsed_timer = _parse_timer(timer_text)
-    if parsed_timer:
-        state.timer_str, state.timer_minutes = parsed_timer
-
-    # Publish periodic state update every minute of match time
-    if state.timer_minutes % 5 == 0 and state.timer_str.endswith(":00"):
-        await publish_event(redis, "MATCH_STATE", {
-            "home_score":    state.home_score,
-            "away_score":    state.away_score,
-            "timer":         state.timer_str,
-            "events_so_far": len(state.events),
-        })
-
+    score_text, score_conf = _ocr_conf(_crop(frame, SCORE_ROI), SCORE_OCR_CONFIG)
+    timer_text, timer_conf = _ocr_conf(_crop(frame, TIMER_ROI), TIMER_OCR_CONFIG)
+    events = state.observe(parse_score(score_text), score_conf, parse_clock(timer_text), timer_conf)
+    await publish_all(redis, events)
     return state
 
 # ── ffmpeg RTSP → frames ───────────────────────────────────────────────────────
@@ -355,7 +297,8 @@ async def main() -> None:
     log.info("FC27 RTSP Frame Analyzer starting (Tier 2 — requires Xbox Dev Mode)")
     log.info("RTSP URL : %s", RTSP_URL)
     log.info("Frame    : %dx%d | Mode: %s", FRAME_W, FRAME_H, "4K" if USE_4K else "1080p")
-    log.info("Redis    : %s", REDIS_URL)
+    log.info("Redis    : configured (URL not logged)")
+    log.info("Orientation mode: %s | club name set: %s", HOME_AWAY_MODE, bool(CLUB_NAME))
 
     if CALIBRATE:
         log.info("CALIBRATION MODE — displaying first frame with ROI overlays")
@@ -366,7 +309,7 @@ async def main() -> None:
 
     cmd   = build_ffmpeg_cmd()
     log.info("Starting ffmpeg: %s", " ".join(cmd))
-    state = MatchState()
+    state = new_state()
 
     proc  = await asyncio.create_subprocess_exec(
         *cmd,
@@ -378,7 +321,10 @@ async def main() -> None:
         while True:
             raw = await proc.stdout.readexactly(FRAME_BYTES)
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((FRAME_H, FRAME_W, 3))
-            state = await process_frame(frame, state, redis)
+            try:
+                state = await process_frame(frame, state, redis)
+            except Exception as exc:   # one bad frame must not stop the analyzer
+                log.error("Frame processing error: %s", type(exc).__name__)
 
             if CALIBRATE:
                 break   # calibration shows one frame then exits
@@ -386,7 +332,7 @@ async def main() -> None:
     except asyncio.IncompleteReadError:
         log.warning("RTSP stream ended (ffmpeg process exited)")
     except Exception as exc:
-        log.error("Frame processing error: %s", exc)
+        log.error("RTSP analyzer error: %s", type(exc).__name__)
     finally:
         proc.terminate()
         await redis.aclose()
