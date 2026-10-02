@@ -1,0 +1,45 @@
+# Free security scanning for this private repository (no GitHub Code Security licence needed).
+# CodeQL is deliberately NOT used here: its licence permits free use only on open-source
+# codebases (OSI licence AND public repo); private repos require GitHub Advanced Security.
+# Results are kept as build artifacts (they do not appear in the Security tab).
+name: security-scan
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # weekly, Monday 06:17 UTC, catches newly published advisories
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Install scanners
+        run: python -m pip install "bandit[sarif]==1.9.4" "pip-audit==2.10.1"
+      - name: Bandit (SAST) - full report
+        run: |
+          mkdir -p reports
+          bandit -r src voice host_agent scripts -f sarif -o reports/bandit.sarif --exit-zero
+          bandit -r src voice host_agent scripts -f txt -o reports/bandit.txt --exit-zero
+      - name: Bandit gate - fail on high severity + high confidence
+        run: bandit -r src voice host_agent scripts --severity-level high --confidence-level high -q
+      - name: pip-audit gate - runtime dependencies (fail on any known vulnerability)
+        run: pip-audit -r requirements.txt --progress-spinner off --format json --output reports/pip-audit-runtime.json --desc on
+      - name: pip-audit report - optional extras (report only, see SECURITY_CHANGES.md)
+        if: always()
+        run: |
+          pip-audit -r requirements-swarms.txt --progress-spinner off --format json --output reports/pip-audit-swarms.json --desc on || true
+          pip-audit -r requirements-langfuse.txt --progress-spinner off --format json --output reports/pip-audit-langfuse.json --desc on || true
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-scan-${{ github.run_id }}
+          path: reports/
+          retention-days: 30
