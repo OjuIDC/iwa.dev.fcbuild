@@ -169,3 +169,7 @@ audit/historical/         superseded audit notes (historical only)
 ```
 
 See also `docs/VOICE_CAPABILITIES.md`, `docs/DEPLOYMENT_AND_SECURITY.md`, `IMPLEMENTATION_REPORT.md` and `SECURITY_CHANGES.md`.
+
+## License
+
+Apache License 2.0. See `LICENSE`.
