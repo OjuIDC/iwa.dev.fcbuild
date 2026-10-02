@@ -1,0 +1,29 @@
+# Weekly dependency update PRs. Security updates are raised as soon as advisories appear.
+# Images in Compose/Dockerfiles are pinned tag@digest; Dependabot bumps both together.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"            # requirements*.txt and pyproject.toml
+    schedule: {interval: weekly, day: monday}
+    open-pull-requests-limit: 5
+    groups:
+      langchain-stack:
+        patterns: ["langgraph*", "langchain*"]
+      minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, python]
+
+  - package-ecosystem: docker          # Dockerfile.* base images
+    directory: "/"
+    schedule: {interval: weekly, day: monday}
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker-compose  # docker-compose*.yml service images
+    directory: "/"
+    schedule: {interval: weekly, day: monday}
+    labels: [dependencies, docker]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: {interval: weekly, day: monday}
+    labels: [dependencies, ci]
