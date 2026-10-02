@@ -37,6 +37,12 @@ Each entry gives the defect, the fix and the evidence. Test names refer to files
 - Tests: `test_rundown_*`, `test_roles.py`.
 
 ## Supply chain and deployment
+- `security-scan` workflow (free; no Code Security licence needed):
+  - **Bandit (Python static analysis):** full SARIF and text reports are kept as build artifacts; the build fails on any finding that is both high severity and high confidence.
+  - **pip-audit on the runtime requirements:** the build fails on any known vulnerability.
+  - **When it runs:** on every push and PR, plus weekly.
+  - CodeQL is not used on the private repo, because its licence requires a public open-source repo or Advanced Security.
+- Pillow raised to `>=12.3,<13`, which fixes 35 advisories in the 11.x line.
 - Base images are pinned by tag and digest, resolved from the registries on 2026-10-01; `:latest` is gone.
 - LangGraph and Swarms are pinned to exact versions.
 - The installer verifies SHA-256 for downloads, or requires an explicit `-AllowUnverifiedDownload`.
@@ -45,6 +51,11 @@ Each entry gives the defect, the fix and the evidence. Test names refer to files
 - pytest is no longer a runtime dependency.
 
 ## Residual risks
+- **Optional Swarms backend pulls a vulnerable LiteLLM.** `swarms==15.0.3` pins `litellm==1.76.1`, which carries 32 published advisories as of 2026-10-02.
+  - **Why the exposure is small:** almost all of these advisories concern the LiteLLM *proxy server*, which this stack never runs; only the library client is used, behind `invoke_role`.
+  - **What it would take to fix:** a fix needs a Swarms release that moves past that pin.
+  - **How to avoid it:** set `ROLE_BACKEND=native`, and build without `WITH_SWARMS` if you want no LiteLLM at all.
+  - **How it is tracked:** `security-scan` reports it every week, as a report only (it does not fail the build).
 - In the lab deployment, secrets are environment variables. `*_FILE` support allows moving to mounted secrets.
 - The HMAC key is symmetric. graph-api can verify signatures, so it could also forge them: a compromised graph-api container is fully trusted.
   - Mitigation path: switch to asymmetric signatures (Ed25519) with the private key only on the Commissioner's device.
