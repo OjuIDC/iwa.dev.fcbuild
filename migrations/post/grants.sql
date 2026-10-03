@@ -1,4 +1,4 @@
--- grants-policy-version: 1
+-- grants-policy-version: 2
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -31,5 +31,20 @@ BEGIN
 
     IF to_regclass('public.approval_audit_id_seq') IS NOT NULL THEN
         GRANT USAGE ON SEQUENCE public.approval_audit_id_seq TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.domain_events') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.domain_events TO fc27_app;
+        GRANT SELECT ON public.domain_events TO fc27_dispatch;
+    END IF;
+    IF to_regclass('public.domain_events_event_id_seq') IS NOT NULL THEN
+        GRANT USAGE ON SEQUENCE public.domain_events_event_id_seq TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.outbox') IS NOT NULL THEN
+        GRANT INSERT ON public.outbox TO fc27_app;
+    END IF;
+    IF to_regclass('public.outbox_outbox_id_seq') IS NOT NULL THEN
+        GRANT USAGE ON SEQUENCE public.outbox_outbox_id_seq TO fc27_app;
     END IF;
 END $$;

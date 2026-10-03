@@ -18,7 +18,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY = GrantsPolicy(version=1, sha256="609cfd6160fae4d42d0cfbe50c9252e815033b6bea67bb7179c32d6194727fd2")
+GRANTS_POLICY = GrantsPolicy(version=2, sha256="a0c8d37ed61daff8900b116f992fa791f5072c11862c17c264cbc9251f0f4f79")
 
 class MigrationError(RuntimeError):
     pass
