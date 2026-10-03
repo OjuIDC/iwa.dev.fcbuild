@@ -214,7 +214,7 @@ class GraphRunner:
         self.app = build_graph(deps).compile(checkpointer=checkpointer)
 
     @classmethod
-    def from_conninfo(cls, conninfo: str, deps: GraphDeps, max_pool: int = 10) -> "GraphRunner":
+    def from_conninfo(cls, conninfo: str, deps: GraphDeps, max_pool: int = 10, *, setup: bool = False) -> "GraphRunner":
         from langgraph.checkpoint.postgres import PostgresSaver
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
@@ -222,7 +222,8 @@ class GraphRunner:
         pool = ConnectionPool(conninfo, max_size=max_pool, open=True,
                               kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
         saver = PostgresSaver(pool)
-        saver.setup()
+        if setup:
+            saver.setup()
         runner = cls(saver, deps)
         runner.pool = pool
         return runner

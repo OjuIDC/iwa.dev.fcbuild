@@ -267,9 +267,9 @@ def test_audit_and_decision_commit_together(client, pg_uri):
     assert row[0] == "approved" and row[1] == COMMISSIONER_ID and row[2] == row[3] and row[4] == "coach-best-p1" and row[5]
 
 
-def test_failed_audit_rolls_back_decision(client, pg_uri):
+def test_failed_audit_rolls_back_decision(client, pg_uri, pg_admin_db_uri):
     tid = start(client)
-    with psycopg.connect(pg_uri) as conn:
+    with psycopg.connect(pg_admin_db_uri, autocommit=True) as conn:
         conn.execute("""CREATE FUNCTION fail_audit() RETURNS trigger LANGUAGE plpgsql AS $$
                         BEGIN RAISE EXCEPTION 'audit store unavailable'; END $$""")
         conn.execute("CREATE TRIGGER fail_audit BEFORE INSERT ON approval_audit FOR EACH ROW EXECUTE FUNCTION fail_audit()")

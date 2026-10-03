@@ -35,25 +35,6 @@ def pg_admin_uri() -> str:
     return ADMIN_URI
 
 
-@pytest.fixture()
-def pg_uri(pg_admin_uri):
-    """A fresh, fully migrated database per test."""
-    from src.db_migrate import migrate
-
-    name = f"fc27_test_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(pg_admin_uri, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
-    uri = _with_db(pg_admin_uri, name)
-    migrate(uri)
-    try:
-        yield uri
-    finally:
-        with psycopg.connect(pg_admin_uri, autocommit=True) as conn:
-            conn.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
-                (name,),
-            )
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
 from fastapi.testclient import TestClient
 from tests.helpers import make_app
 
@@ -155,4 +136,29 @@ def pg_db(pg_admin_uri, pg_roles):
     with psycopg.connect(pg_admin_uri, autocommit=True) as conn:
         conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
         conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+
+
+from src.db_migrate import migrate
+
+@pytest.fixture()
+def pg_db_migrated(pg_db):
+    migrate(pg_db.migrator)
+    yield pg_db
+
+@pytest.fixture()
+def pg_admin_db_uri(pg_db_migrated):
+    yield pg_db_migrated.admin
+
+@pytest.fixture()
+def pg_migrator_uri(pg_db_migrated):
+    yield pg_db_migrated.migrator
+
+@pytest.fixture()
+def pg_uri(pg_db_migrated):
+    yield pg_db_migrated.app
+
+@pytest.fixture()
+def pg_dispatch_uri(pg_db_migrated):
+    yield pg_db_migrated.dispatch
+
 

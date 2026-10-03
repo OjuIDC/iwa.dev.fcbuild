@@ -38,7 +38,9 @@ class ApiSettings:
     signing_secret: str
     approval_ttl_seconds: int = 120
     redis_url: str | None = None
-    run_migrations: bool = True
+    run_migrations: bool = False
+    checkpoint_setup: bool = False
+    enforce_db_posture: bool = True
 
     @classmethod
     def from_env(cls) -> "ApiSettings":
@@ -54,7 +56,8 @@ class ApiSettings:
                 signing_secret=read_secret("APPROVAL_SIGNING_SECRET", min_length=32),
                 approval_ttl_seconds=int(os.getenv("APPROVAL_TTL_SECONDS", "120")),
                 redis_url=read_secret("REDIS_URL", required=False),
-                run_migrations=env_bool("GRAPH_RUN_MIGRATIONS", True),
+                run_migrations=env_bool("GRAPH_RUN_MIGRATIONS", False),
+                checkpoint_setup=env_bool("GRAPH_CHECKPOINT_SETUP", False),
             )
         except ValueError as exc:  # ConfigError is a RuntimeError; Authenticator raises ValueError
             raise ConfigError(str(exc)) from exc
@@ -141,6 +144,14 @@ def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
             migrate(settings.postgres_uri)
+            
+        if settings.enforce_db_posture:
+            from src.db_migrate import check_runtime_posture
+            with psycopg.connect(settings.postgres_uri) as conn:
+                violations = check_runtime_posture(conn)
+                if violations:
+                    raise ConfigError(f"database role posture violation: {violations}")
+
         if graph["runner"] is None and pipeline is None:
             from .graph import GraphDeps, GraphRunner
 
@@ -149,7 +160,8 @@ def create_app(settings: ApiSettings | None = None, *, pipeline: Pipeline | None
 
             graph["runner"] = GraphRunner.from_conninfo(
                 settings.postgres_uri,
-                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=tracer_from_env()))
+                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=tracer_from_env()),
+                setup=settings.checkpoint_setup)
             graph["owned"] = True
         if graph["runner"] is not None:
             for thread_id in store.terminal_thread_ids():

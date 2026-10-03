@@ -15,8 +15,8 @@ SVC = {"X-API-Key": SERVICE_TOKEN}
 COM = {"X-API-Key": COMMISSIONER_TOKEN}
 
 
-def settings(pg_uri: str, ttl: int = 120) -> ApiSettings:
-    return ApiSettings(
+def settings(pg_uri: str, ttl: int = 120, **kwargs) -> ApiSettings:
+    args = dict(
         postgres_uri=pg_uri,
         authenticator=Authenticator(SERVICE_TOKEN, hashlib.sha256(COMMISSIONER_TOKEN.encode()).hexdigest(), COMMISSIONER_ID),
         signing_secret=SIGNING_SECRET,
@@ -24,6 +24,8 @@ def settings(pg_uri: str, ttl: int = 120) -> ApiSettings:
         redis_url=None,
         run_migrations=False,
     )
+    args.update(kwargs)
+    return ApiSettings(**args)
 
 
 def candidate(role: str, sel: str, pid: str) -> dict:
