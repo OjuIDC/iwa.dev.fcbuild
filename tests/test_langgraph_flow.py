@@ -12,54 +12,8 @@ from src.approval_store import ApprovalStore
 from src.graph import ApprovalNotCommitted, GraphDeps, GraphRunner, run_config
 from src.roles import RoleOutput, RoleResult
 from tests.helpers import COM, SVC, make_app, settings, signed
+from tests.conftest import PLAYERS, dashboard, FakeRoles
 
-PLAYERS = {f"p{i}": {"rating": 9 - i * 0.4, "goals": 0, "assists": 0, "passattempts": 10, "passesmade": 8} for i in range(9)}
-
-
-def dashboard(players=PLAYERS):
-    return {"matches": [{"players": {"330323": players}}], "members": {}, "overall": {}}
-
-
-class FakeRoles:
-    def __init__(self, adjustments=None, invalid=()):
-        self.adjustments = adjustments or {}
-        self.invalid = set(invalid)
-        self.calls = []
-
-    def __call__(self, role, data, registry=None):
-        self.calls.append(role)
-        if role in self.invalid:
-            return RoleResult(role=role, valid=False, error="invalid structured output: ValidationError", provider="ollama", model="m")
-        assessments = [{"player_id": p, "adjustment": a, "reason": "fixture"} for p, a in self.adjustments.get(role, {}).items()]
-        return RoleResult(role=role, valid=True, provider="ollama", model="qwen2.5:7b",
-                          output=RoleOutput(summary=f"{role} summary", assessments=assessments))
-
-
-@pytest.fixture()
-def wired(pg_uri):
-    def build(dash=None, roles=None, mcp_fails=False):
-        store = ApprovalStore(pg_uri)
-
-        def mcp(tool, args):
-            if mcp_fails:
-                raise ConnectionError("mcp down")
-            return dash if dash is not None else dashboard()
-
-        runner = GraphRunner.from_conninfo(pg_uri, GraphDeps(mcp=mcp, role_runner=roles or FakeRoles(),
-                                                            registry_factory=lambda: None, decision_reader=store.load))
-        from src.graph_api import create_app
-        events = []
-        app = create_app(settings(pg_uri), runner=runner, publisher=lambda c, p: events.append(c))
-        return runner, app
-    runners = []
-
-    def factory(**kw):
-        r, app = build(**kw)
-        runners.append(r)
-        return r, app
-    yield factory
-    for r in runners:
-        r.pool.close()
 
 
 def run(client):
@@ -241,3 +195,4 @@ def test_audit_query_shows_progression_interrupt_and_decision(wired, pg_uri):
     assert "\"signature\"" not in blob and "\"signature_sha256\"" not in blob and "\"dashboard\":" not in blob
     with pytest.raises(ThreadNotFound):
         get_audit(pg_uri, "fc27-330323-run-20200101-999", runner=runner)
+

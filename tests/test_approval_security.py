@@ -20,12 +20,6 @@ pytestmark = pytest.mark.usefixtures("pg_uri")
 COMMISSIONER = Principal(Role.commissioner, COMMISSIONER_ID)
 
 
-@pytest.fixture()
-def client(pg_uri):
-    app, events = make_app(pg_uri)
-    with TestClient(app) as c:
-        c.events = events
-        yield c
 
 
 def start(client, **extra) -> str:
@@ -322,3 +316,4 @@ def test_empty_package_is_not_approvable(pg_uri):
     with TestClient(app) as c:
         tid = start(c)
         assert decide(c, tid).status_code == 409
+
