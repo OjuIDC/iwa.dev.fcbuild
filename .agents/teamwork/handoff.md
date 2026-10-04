@@ -26,7 +26,7 @@
 
 ## 3. Caveats
 - Phase 1 strictly implements the Secure Data Foundation and stops at the Phase 1 boundary.
-- Player dispatch remains completely disabled. Dispatch worker and player delivery adapters are NOT implemented in Phase 1 and are deferred to Phase 5.
+- Player dispatch remains completely disabled. Dispatch worker and player delivery adapters are NOT implemented in Phase 1 and are deferred to Phase 3.
 - Activation gate `G-ID` is in UNVERIFIED status pending live EA player identity proof per `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`.
 - Activation gate `G-OUTBOX` is refused by API routes until Phase 3 relay and reconciliation tests are implemented.
 

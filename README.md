@@ -3,7 +3,7 @@
 This is a local-first match-analysis and recommendation stack for an EA FC27 Pro Clubs club (`fc_version: "27"`, `platform: "common-gen5"`).
 
 - Model output is advisory only.
-- Nothing is approved without a signed decision from the human Commissioner, recorded atomically in PostgreSQL.
+- Club-level actions require authorization from the Commissioner or an explicitly authorized human delegate under the applicable authority policy. Player-specific assignments require the affected player's authenticated decision when the consent policy requires it. After policy-defined escalation, affected-player fallback may apply only to that player's eligible assignment. No agent may decide for a human, and inactivity never constitutes approval.
 
 **Status.** The stack can be deployed for a controlled lab or a secured single-host setup. It is not a public internet service.
 Compose configuration and the automated test suite are validated. Running the full stack in Docker on a target host has **not** been validated (see `TEST_RESULTS.md`).
@@ -152,7 +152,7 @@ See `MIGRATION_GUIDE.md`. In short:
 
 Phase 1 intentionally implements only the secure data foundation. The dashboard, identity, player-agent pipeline, personalization, outbox relay, tracking, analytics, audit UI, and operational deployment remain required deliverables in Phases 2 through 6.
 
-- [ ] Phase 1: Secure data foundation
+- [x] Phase 1: Secure data foundation
 - [ ] Phase 2: Identity and authorization
 - [ ] Phase 3: Dispatch worker and player-agent pipeline
 - [ ] Phase 4: Dashboard UI and real-time delivery
