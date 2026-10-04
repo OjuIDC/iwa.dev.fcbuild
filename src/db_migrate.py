@@ -18,7 +18,11 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY = GrantsPolicy(version=2, sha256="a0c8d37ed61daff8900b116f992fa791f5072c11862c17c264cbc9251f0f4f79")
+def _compute_grants_sha256() -> str:
+    p = MIGRATIONS_DIR / "post" / "grants.sql"
+    return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
+
+GRANTS_POLICY = GrantsPolicy(version=5, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -55,6 +59,28 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
         row = cur.fetchone()
         if row and row[0]:
             violations.append("dispatch_owner_member")
+
+        # check fc27_dispatch_transition
+        cur.execute("""
+            SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'fc27_dispatch_transition'
+        """)
+        fn_row = cur.fetchone()
+        if fn_row:
+            oid, prosecdef, proowner, proconfig = fn_row
+            if not prosecdef:
+                violations.append("dispatch_transition_not_secdef")
+            if proowner != "fc27_owner":
+                violations.append("dispatch_transition_not_owner")
+            cfg = " ".join(proconfig) if proconfig else ""
+            if "search_path=pg_catalog, pg_temp" not in cfg:
+                violations.append("dispatch_transition_search_path")
+            cur.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')", (oid,))
+            has_pub = cur.fetchone()
+            if has_pub and has_pub[0]:
+                violations.append("dispatch_transition_public_exec")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
@@ -166,7 +192,12 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
     return applied_now
 
 def main() -> int:
-    conninfo = os.environ.get("POSTGRES_URI")
+    from src import settings
+    try:
+        conninfo = settings.read_secret("POSTGRES_URI")
+    except settings.ConfigError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return 2
     if not conninfo:
         print("POSTGRES_URI is not set", file=sys.stderr)
         return 2

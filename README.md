@@ -34,7 +34,7 @@ optional: voice profile (read-only), rtsp profile (OCR), Langfuse overlay (traci
 | Voice | **Implemented, optional** (`--profile voice`). Read-only status, TTS and STT. **Voice cannot authorize decisions.** |
 | Watcher / OCR / rundown | **Implemented.**<ul><li>Idempotent Redis processing state</li><li>Clock parsing with debounce</li><li>Orientation-aware events</li><li>JSON-isolated prompts</li></ul> |
 | Windhover | **Unresolved.** No interface contract exists; see `docs/WINDHOVER_INTEGRATION_GAP.md`. |
-| Per-player observer agents, automatic player-agent dispatch | **Not implemented.** An approval records the selection; nothing executes it. |
+| Per-player observer agents, automatic player-agent dispatch | **Data foundation only (Phase 1).** Dispatch disabled; approvals record the selection only. See `docs/DISPATCH_ACTIVATION.md`. |
 
 ## Credentials (summary)
 
@@ -52,11 +52,18 @@ All of these come from `config.example.env`. See `docs/APPROVAL_SECURITY.md`.
 ## Quick start
 
 ```bash
-cp config.example.env .env                      # replace every replace_with_* value (independent random values)
-python scripts/commissioner_decide.py hash-token  # paste the output into GRAPH_COMMISSIONER_TOKEN_SHA256
-docker compose --env-file .env config --quiet
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # or -f docker-compose.cpu.yml
-curl -fsS http://127.0.0.1:8001/health
+# 1. Populate configuration and secrets
+cp config.example.env .env                        # fill non-secret settings
+python scripts/commissioner_decide.py hash-token    # generate GRAPH_COMMISSIONER_TOKEN_SHA256
+# Populate ./secrets/ files (see MIGRATION_GUIDE.md) with umask 077
+
+# 2. Start PostgreSQL and run one-time role bootstrap
+docker compose up -d postgres
+docker compose --profile bootstrap run --rm db-bootstrap --confirm
+
+# 3. Launch the stack
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8001/health/ready
 ```
 
 ## Running a recommendation and deciding
@@ -140,6 +147,28 @@ See `MIGRATION_GUIDE.md`. In short:
 2. Replace `GRAPH_API_TOKEN` with the new service and Commissioner credentials.
 3. Let graph-api apply migration 0002.
 4. Re-run any thread that was `awaiting_approval` before the upgrade.
+
+## Programme Roadmap & Phase Status
+
+Phase 1 intentionally implements only the secure data foundation. The dashboard, identity, player-agent pipeline, personalization, outbox relay, tracking, analytics, audit UI, and operational deployment remain required deliverables in Phases 2 through 6.
+
+- [ ] Phase 1: Secure data foundation
+- [ ] Phase 2: Identity and authorization
+- [ ] Phase 3: Dispatch worker and player-agent pipeline
+- [ ] Phase 4: Dashboard UI and real-time delivery
+- [ ] Phase 5: Tracking and analytics
+- [ ] Phase 6: Operations, audit, and rollout
+
+### Mandatory Phase 1 Status Statement
+> "Secure data foundation complete. Dispatch remains disabled. No player delivery has occurred."
+
+### Architectural Invariant Distinctions
+The platform enforces clear boundaries across lifecycle concepts:
+- **Approval != Activation**: Commissioner approval commits recommendation intent; it does not activate a plan.
+- **Approval != Dispatch**: Approvals record the selection only; no player delivery or dispatch occurs in Phase 1.
+- **Graph Resume != Authorization**: A resume signal only wakes the workflow; authorization must be read from committed PostgreSQL records.
+- **Redis Publication != Authoritative Delivery**: Redis provides transient notification wake-ups only; PostgreSQL is the sole authoritative audit store.
+- **Phase 1 Completion != Programme Completion**: Phase 1 provides the secure data foundation; the complete programme requires Phases 2 through 6.
 
 ## Known limits
 

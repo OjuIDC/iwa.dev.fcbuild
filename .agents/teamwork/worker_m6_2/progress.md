@@ -1,0 +1,28 @@
+# Progress — worker_m6_2
+
+- Last visited: 2026-10-03T23:30:00Z
+- Status: Completed all remediation actions.
+- Completed:
+  - BRIEFING.md created and updated with full change tracking and quality status.
+  - Read mandatory context files (ORIGINAL_REQUEST.md, DISPATCH.md, remediation_analysis.md, challenge_report.md, auditor_m6_challenge_1/audit_report.md).
+  - Hardened `tests/e2e/test_tier1_features.py`:
+    - Imported `create_app` from `src.graph_api`.
+    - Implemented strict HMAC kill switch verification (403 `proof_type_disabled`) in `test_feature_28_cli_hmac_kill_switch_support`.
+    - Implemented genuine atomic dispatch creation and transactional persistence check in `test_feature_37_atomic_approval_to_dispatch_creation`.
+  - Hardened `tests/e2e/test_tier2_boundaries.py`:
+    - Implemented HTTP status code and body validation assertions (200/201 on valid default schema, 422 on empty raw content, 422 on empty string club_id) in `test_tier2_empty_run_request_body_rejected`.
+    - Replaced all 5 local dictionary checks in `TestObjectiveBoundsBoundaries` with genuine validation against `validate_metric_bounds()`, `Objective.model_validate()`, and `create_dispatch_for_approval()`.
+  - Hardened `tests/e2e/test_tier4_scenarios.py`:
+    - Imported `column_exists` from `tests.e2e.conftest`.
+    - Replaced tautological `count >= 0` check in `test_section_1a_authority_separation_club_vs_player` with column checks (`scope`, `allow_player_consent`, `allow_player_fallback`), distinct policy insertions, positive count assertions, and `CheckViolation` exception assertion on illegal fallback.
+  - Realigned `TEST_RESULTS.md`:
+    - Corrected E2E test inventory in Section 2.2 and Section 3 to 81 tests (Tier 1: 42, Tier 2: 25, Tier 3: 5, Tier 4: 9) and updated execution provenance.
+    - Updated all test node citations in AC table (Section 4), C-1 through C-10 (Section 5), Section 1A trace (Section 6), and Features 1-41 (Section 7) to use authentic class names.
+    - Cleaned AC-39 node IDs to canonical format.
+  - Realigned `SECURITY_CHANGES.md`:
+    - Replaced all 24 invalid test citations with canonical paths and authentic method names across Sections 1 to 11.
+    - Verified exact verbatim Phase 1 Completion Statement at lines 5-6 remains preserved.
+- In Progress:
+  - Writing handoff.md.
+- Next steps:
+  - Send completion notification message to parent agent (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`).

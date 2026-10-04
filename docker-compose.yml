@@ -34,6 +34,45 @@ x-app-security: &app-security
   init: true
 
 services:
+  db-bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile.graph
+    <<: *app-security
+    command: ["python", "-m", "src.db_roles", "bootstrap", "--database", "fc27", "--legacy-owner", "fc27"]
+    environment:
+      POSTGRES_ADMIN_URI_FILE: /run/secrets/postgres_admin_uri
+      FC27_MIGRATOR_PASSWORD_FILE: /run/secrets/fc27_migrator_password
+      FC27_APP_PASSWORD_FILE: /run/secrets/fc27_app_password
+      FC27_DISPATCH_PASSWORD_FILE: /run/secrets/fc27_dispatch_password
+    secrets:
+      - postgres_admin_uri
+      - fc27_migrator_password
+      - fc27_app_password
+      - fc27_dispatch_password
+    networks: [fc27_data]
+    profiles: [bootstrap]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.graph
+    <<: *app-security
+    command: ["python", "-m", "src.db_migrate"]
+    environment:
+      POSTGRES_URI_FILE: /run/secrets/fc27_migrator_uri
+    secrets:
+      - fc27_migrator_uri
+    networks: [fc27_data]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea}
     environment:
@@ -157,7 +196,14 @@ services:
     environment:
       <<: *common
       # Only graph-api receives database access and approval-verification material.
-      POSTGRES_URI: postgresql://fc27:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fc27
+      POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+      GRAPH_RUN_MIGRATIONS: "false"
+      GRAPH_CHECKPOINT_SETUP: "false"
+      DISPATCH_ENABLED: "false"
+      APPROVAL_REQUEST_TTL_HOURS: ${APPROVAL_REQUEST_TTL_HOURS:-72}
+      APPROVAL_CLI_HMAC_ENABLED: ${APPROVAL_CLI_HMAC_ENABLED:-true}
+      FC27_CODE_REVISION: ${FC27_CODE_REVISION:-}
+      FC27_DEPLOYMENT_ID: ${FC27_DEPLOYMENT_ID:-}
       GRAPH_SERVICE_TOKEN: ${GRAPH_SERVICE_TOKEN:?Set GRAPH_SERVICE_TOKEN in .env}
       GRAPH_COMMISSIONER_TOKEN_SHA256: ${GRAPH_COMMISSIONER_TOKEN_SHA256:?Set GRAPH_COMMISSIONER_TOKEN_SHA256 in .env}
       COMMISSIONER_ID: ${COMMISSIONER_ID:?Set COMMISSIONER_ID in .env}
@@ -174,11 +220,15 @@ services:
       LANGSMITH_TRACING: "false"
       LANGCHAIN_TRACING_V2: "false"
       LANGFUSE_ENABLED: "false"
+    secrets:
+      - fc27_app_uri
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./reports:/app/reports:ro
     depends_on:
+      db-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -318,3 +368,17 @@ services:
       tts: {condition: service_healthy}
     ports: ["127.0.0.1:${VOICE_HOST_PORT:-9000}:9000"]
     restart: unless-stopped
+
+secrets:
+  postgres_admin_uri:
+    file: ./secrets/postgres_admin_uri
+  fc27_migrator_password:
+    file: ./secrets/fc27_migrator_password
+  fc27_app_password:
+    file: ./secrets/fc27_app_password
+  fc27_dispatch_password:
+    file: ./secrets/fc27_dispatch_password
+  fc27_migrator_uri:
+    file: ./secrets/fc27_migrator_uri
+  fc27_app_uri:
+    file: ./secrets/fc27_app_uri

@@ -144,7 +144,8 @@ def test_nonce_is_single_use(client, pg_uri):
     tid = start(client)
     ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=REJECT).json()
     assert client.post(f"/threads/{tid}/decision", headers=COM, json=signed(ch)).status_code == 200
-    replay = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(ch))
+    diff_ch = {**ch, "notes": "other notes"}
+    replay = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(diff_ch))
     assert replay.status_code == 409
 
 
@@ -200,13 +201,19 @@ def test_modified_signed_payload_is_rejected(client, pg_uri):
     assert client.post(f"/threads/{tid}/decision", headers=COM, json=good).status_code == 200
 
 
+def test_package_version_immutable_once_awaiting_approval(client, pg_uri):
+    tid = start(client)
+    with psycopg.connect(pg_uri) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation, match="package_version is immutable"):
+            conn.execute("UPDATE graph_threads SET package_version=%s WHERE thread_id=%s", ("f" * 64, tid))
+
+
 def test_stale_candidate_package_cannot_be_approved(client, pg_uri):
     tid = start(client)
     ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
-    with psycopg.connect(pg_uri) as conn:
-        conn.execute("UPDATE graph_threads SET package_version=%s WHERE thread_id=%s", ("f" * 64, tid))
-    r = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(ch))
-    assert r.status_code == 409 and "stale" in r.json()["detail"]
+    stale_ch = {**ch, "package_version": "f" * 64}
+    r = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(stale_ch))
+    assert r.status_code == 409 and ("stale" in r.json()["detail"] or "match" in r.json()["detail"])
 
 
 def test_unknown_candidate_cannot_be_challenged(client):

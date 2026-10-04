@@ -7,7 +7,18 @@ import hashlib
 import json
 from typing import Any
 
-from .schemas import DecisionIntent, DecisionKind
+from .schemas import DecisionIntent, DecisionKind, SignedDecision
+
+# In Phase 1 Task 4 / Milestone 1, REQUEST_REVISION is an authoritative decision kind.
+if "REQUEST_REVISION" not in DecisionKind.__members__:
+    _obj = str.__new__(DecisionKind, "REQUEST_REVISION")
+    _obj._name_ = "REQUEST_REVISION"
+    _obj._value_ = "REQUEST_REVISION"
+    DecisionKind._member_map_["REQUEST_REVISION"] = _obj
+    DecisionKind._value2member_map_["REQUEST_REVISION"] = _obj
+    type.__setattr__(DecisionKind, "REQUEST_REVISION", _obj)
+    DecisionIntent.model_rebuild(force=True)
+    SignedDecision.model_rebuild(force=True)
 
 
 class DecisionConflict(ValueError):
@@ -22,8 +33,8 @@ def package_version(lead_packages: dict[str, Any] | None) -> str | None:
 
 
 def resolve_candidate(state: dict[str, Any], intent: DecisionIntent) -> dict[str, Any] | None:
-    """Return the persisted candidate an APPROVE refers to, or None for REJECT."""
-    if intent.decision is DecisionKind.REJECT:
+    """Return the persisted candidate an APPROVE refers to, or None for REJECT/REQUEST_REVISION."""
+    if intent.decision is DecisionKind.REJECT or getattr(intent.decision, "value", None) == "REQUEST_REVISION" or intent.decision == "REQUEST_REVISION":
         return None
     packages = state.get("lead_packages") or {}
     package = packages.get(intent.owner.value)
@@ -42,23 +53,31 @@ def resolve_candidate(state: dict[str, Any], intent: DecisionIntent) -> dict[str
 def apply_decision_to_state(state: dict[str, Any], intent: DecisionIntent, approved_by: str, decided_at: str) -> dict[str, Any]:
     if state.get("status") != "awaiting_approval":
         raise DecisionConflict("thread is not awaiting approval")
-    candidate = resolve_candidate(state, intent)
+
+    resolve_candidate(state, intent)
     new_state = copy.deepcopy(state)
+
     approved = intent.decision is DecisionKind.APPROVE
+    is_revision = getattr(intent.decision, "value", None) == "REQUEST_REVISION" or intent.decision == "REQUEST_REVISION"
+
     if approved:
-        new_state["dispatch"] = {
-            "owner": intent.owner.value,
-            "selection": intent.selection.value,
-            "candidate": candidate,
-            "dispatched_to_player_agent": intent.player_id,
-        }
+        target_status = "approved"
+        summary = "APPROVED"
+    elif is_revision:
+        target_status = "revision_requested"
+        summary = "REVISION_REQUESTED"
+    else:
+        target_status = "rejected"
+        summary = "REJECTED"
+
+    # In Phase 1, dispatch is disabled. Under no condition is new_state["dispatch"] written!
     new_state.update(
         approved=approved,
-        status="approved" if approved else "rejected",
+        status=target_status,
         approved_by=approved_by,
         commissioner_input=intent.notes,
     )
     new_state["audit_log"] = list(new_state.get("audit_log", [])) + [
-        {"node": "approval", "ts": decided_at, "summary": "APPROVED" if approved else "REJECTED", "approved_by": approved_by}
+        {"node": "approval", "ts": decided_at, "summary": summary, "approved_by": approved_by}
     ]
     return new_state

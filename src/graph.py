@@ -24,6 +24,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Callable, TypedDict
+from uuid import uuid4
 
 import httpx
 from langgraph.graph import END, START, StateGraph
@@ -40,6 +41,14 @@ from .tracing import NullTracer
 log = logging.getLogger("fc27.graph")
 ROLE_NODES = ("scout", "analyst", "coach", "tactics", "director")
 
+DECIDED_STATUSES = ("approved", "rejected", "revision_requested")
+
+TERMINAL_STATUS_MAP = {
+    "approved": "APPROVED, NOT DISPATCHED",
+    "rejected": "REJECTED, NO ACTION TAKEN",
+    "revision_requested": "REVISION_REQUESTED, NO ACTION TAKEN",
+}
+
 
 class FC27State(TypedDict, total=False):
     thread_id: str
@@ -54,6 +63,7 @@ class FC27State(TypedDict, total=False):
     role_reports: dict[str, dict]
     lead_packages: dict[str, dict]
     package_version: str | None
+    approval_request_id: str | None
     approval_request: dict
     approval_decision: dict
     status: str
@@ -132,29 +142,72 @@ def build_graph(deps: GraphDeps) -> StateGraph:
         packages = build_lead_packages(state.get("dashboard", {}), state["club_id"], results, state["thread_id"])
         version = package_version(packages)
         approvable = sorted(k for k, v in packages.items() if v.get("approvable"))
-        request = {"thread_id": state["thread_id"], "package_version": version, "approvable_owners": approvable,
-                   "fc_version": FC_VERSION, "platform": state["platform"]}
-        return {"lead_packages": packages, "package_version": version, "approval_request": request,
-                "status": "awaiting_approval",
-                "audit_log": _audit("prepare_approval", state, f"approvable owners: {approvable or 'none'}")}
+        req_id = state.get("approval_request_id") or str(uuid4())
+        request = {
+            "thread_id": state["thread_id"],
+            "package_version": version,
+            "package_hash": version,
+            "approvable_owners": approvable,
+            "approval_request_id": req_id,
+            "safe_summary": f"approvable owners: {approvable or 'none'}",
+            "required_authority": "commissioner",
+            "fc_version": FC_VERSION,
+            "platform": state["platform"],
+        }
+        return {
+            "lead_packages": packages,
+            "package_version": version,
+            "approval_request_id": req_id,
+            "approval_request": request,
+            "status": "awaiting_approval",
+            "audit_log": _audit("prepare_approval", state, f"approvable owners: {approvable or 'none'}"),
+        }
 
     def approval(state: FC27State) -> dict:
         # Pauses here until the Graph API resumes the thread after a committed decision.
         interrupt(state["approval_request"])
         row = deps.decision_reader(state["thread_id"])
-        if not row or row.get("status") not in ("approved", "rejected"):
+        if not row or row.get("status") not in DECIDED_STATUSES:
             raise ApprovalNotCommitted("no committed Commissioner decision for this thread")
+
         payload = row.get("decision_payload") or {}
-        if payload.get("package_version") != state.get("package_version"):
+        expected_version = state.get("package_version")
+        if payload.get("package_version") != expected_version:
             raise ApprovalNotCommitted("committed decision refers to a different package version")
-        decision = {"status": row["status"], "approved_by": row.get("approved_by"),
-                    "approved_at": str(row.get("approved_at")),
-                    **{k: payload.get(k) for k in ("decision", "owner", "selection", "candidate_id", "player_id", "nonce")}}
-        return {"approval_decision": decision, "status": row["status"],
-                "audit_log": _audit("approval", state, f"{row['status']} by {row.get('approved_by')}")}
+        if row.get("package_version") != expected_version:
+            raise ApprovalNotCommitted("committed thread refers to a different package version")
+
+        state_req_id = state.get("approval_request_id")
+        row_req_id = row.get("approval_request_id")
+        if state_req_id and row_req_id and str(row_req_id) != str(state_req_id):
+            raise ApprovalNotCommitted("committed decision refers to a different approval request")
+
+        actor_type = row.get("actor_type") or payload.get("actor_type")
+        authority_basis = row.get("authority_basis") or payload.get("authority_basis")
+        if actor_type and actor_type != "commissioner":
+            raise ApprovalNotCommitted(f"unsupported actor type in Phase 1: {actor_type}")
+        if authority_basis and authority_basis != "primary":
+            raise ApprovalNotCommitted(f"unsupported authority basis in Phase 1: {authority_basis}")
+
+        db_status = row["status"]
+        terminal_status = TERMINAL_STATUS_MAP.get(db_status, db_status)
+
+        decision = {
+            "status": db_status,
+            "terminal_status": terminal_status,
+            "approved_by": row.get("approved_by"),
+            "approved_at": str(row.get("approved_at")),
+            **{k: payload.get(k) for k in ("decision", "owner", "selection", "candidate_id", "player_id", "nonce")},
+        }
+        return {
+            "approval_decision": decision,
+            "status": terminal_status,
+            "audit_log": _audit("approval", state, f"{terminal_status} by {row.get('approved_by')}"),
+        }
 
     def finalize_decision(state: FC27State) -> dict:
-        return {"audit_log": _audit("finalize_decision", state, f"run finalized as {state['status']}")}
+        status = state.get("status", "unknown")
+        return {"audit_log": _audit("finalize_decision", state, f"run finalized as {status}")}
 
     tracer = deps.tracer
 
@@ -211,6 +264,7 @@ class GraphRunner:
     def __init__(self, checkpointer, deps: GraphDeps):
         self.checkpointer = checkpointer
         self.tracer = deps.tracer
+        self.decision_reader = deps.decision_reader
         self.app = build_graph(deps).compile(checkpointer=checkpointer)
 
     @classmethod
@@ -245,6 +299,9 @@ class GraphRunner:
         snap = self.app.get_state({"configurable": {"thread_id": thread_id}})
         if not self._approval_pending(snap):
             return dict(snap.values)  # nothing pending: terminal threads never re-enter approval
+        row = self.decision_reader(thread_id)
+        if not row or row.get("status") not in DECIDED_STATUSES:
+            return self.values(thread_id)
         v = snap.values
         try:
             self.app.invoke(Command(resume={"thread_id": thread_id}),

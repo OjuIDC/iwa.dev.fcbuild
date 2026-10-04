@@ -1,4 +1,4 @@
--- grants-policy-version: 2
+-- grants-policy-version: 5
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -43,8 +43,126 @@ BEGIN
 
     IF to_regclass('public.outbox') IS NOT NULL THEN
         GRANT INSERT ON public.outbox TO fc27_app;
+        GRANT SELECT ON public.outbox TO fc27_dispatch;
+        GRANT UPDATE (published_at, attempts, last_error, locked_until) ON public.outbox TO fc27_dispatch;
     END IF;
     IF to_regclass('public.outbox_outbox_id_seq') IS NOT NULL THEN
         GRANT USAGE ON SEQUENCE public.outbox_outbox_id_seq TO fc27_app;
+    END IF;
+
+    -- Milestone 1 additions
+    IF to_regclass('public.approval_requests') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.approval_requests TO fc27_app;
+    END IF;
+    IF to_regclass('public.fc27_approval_inconsistencies') IS NOT NULL THEN
+        GRANT SELECT ON public.fc27_approval_inconsistencies TO fc27_app;
+    END IF;
+
+    -- Section 1A compatibility additions
+    IF to_regclass('public.authority_policies') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.authority_policies TO fc27_app;
+    END IF;
+    IF to_regclass('public.authority_delegations') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.authority_delegations TO fc27_app;
+    END IF;
+    IF to_regclass('public.player_assignments') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.player_assignments TO fc27_app;
+    END IF;
+    IF to_regclass('public.player_decision_requests') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.player_decision_requests TO fc27_app;
+    END IF;
+    IF to_regclass('public.player_decisions') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.player_decisions TO fc27_app;
+    END IF;
+    IF to_regclass('public.approval_escalations') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.approval_escalations TO fc27_app;
+    END IF;
+    IF to_regclass('public.authority_conflicts') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.authority_conflicts TO fc27_app;
+    END IF;
+
+    -- Milestone 3 Part C & D Grants
+    IF to_regclass('public.players') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.players TO fc27_app;
+        GRANT SELECT ON public.players TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatches') IS NOT NULL THEN
+        -- CRITICAL: NO UPDATE, NO DELETE on dispatches for any runtime role!
+        GRANT SELECT, INSERT ON public.dispatches TO fc27_app;
+        GRANT SELECT ON public.dispatches TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_transition_rules') IS NOT NULL THEN
+        GRANT SELECT ON public.dispatch_transition_rules TO fc27_app, fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_plans') IS NOT NULL THEN
+        GRANT SELECT ON public.dispatch_plans TO fc27_app;
+        GRANT SELECT, INSERT ON public.dispatch_plans TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.player_observations') IS NOT NULL THEN
+        GRANT SELECT ON public.player_observations TO fc27_app;
+        GRANT SELECT, INSERT ON public.player_observations TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_assessments') IS NOT NULL THEN
+        GRANT SELECT ON public.dispatch_assessments TO fc27_app;
+        GRANT SELECT, INSERT ON public.dispatch_assessments TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_delivery_attempts') IS NOT NULL THEN
+        GRANT SELECT ON public.dispatch_delivery_attempts TO fc27_app;
+        GRANT SELECT, INSERT ON public.dispatch_delivery_attempts TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_acknowledgments') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.dispatch_acknowledgments TO fc27_app;
+        GRANT SELECT ON public.dispatch_acknowledgments TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_plan_decisions') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.dispatch_plan_decisions TO fc27_app;
+        GRANT SELECT ON public.dispatch_plan_decisions TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_comments') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.dispatch_comments TO fc27_app;
+        GRANT SELECT ON public.dispatch_comments TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.analyst_notes') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.analyst_notes TO fc27_app;
+        GRANT SELECT ON public.analyst_notes TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.idempotency_keys') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.idempotency_keys TO fc27_app;
+    END IF;
+
+    -- Function Execution Grants
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_dispatch_transition') THEN
+        REVOKE ALL ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) 
+            TO fc27_app, fc27_dispatch;
+    END IF;
+
+    -- Milestone 4 additions
+    IF to_regclass('public.activation_gate_log') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.activation_gate_log TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.activation_gate_log_id_seq') IS NOT NULL THEN
+        GRANT USAGE ON SEQUENCE public.activation_gate_log_id_seq TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.activation_gates') IS NOT NULL THEN
+        GRANT SELECT ON public.activation_gates TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.service_heartbeats') IS NOT NULL THEN
+        GRANT SELECT ON public.service_heartbeats TO fc27_app;
+        GRANT SELECT, INSERT, UPDATE ON public.service_heartbeats TO fc27_dispatch;
     END IF;
 END $$;

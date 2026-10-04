@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Any, Iterable
 
 from src import approval
 from src.graph_api import ApiSettings, create_app
@@ -71,3 +72,109 @@ def signed(challenge: dict, secret: str = SIGNING_SECRET) -> dict:
 APPROVE_COACH_BEST = {"decision": "APPROVE", "owner": "coach", "selection": "best",
                       "candidate_id": "coach-best-p1", "player_id": "p1", "notes": "ok"}
 REJECT = {"decision": "REJECT", "notes": "no"}
+
+
+def legacy_install(admin_db_uri: str) -> None:
+    """Installs 0001, 0002 and PostgresSaver checkpoints as admin (pre-bootstrap legacy state)."""
+    from pathlib import Path
+    import psycopg
+    migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
+    with psycopg.connect(admin_db_uri, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version    text PRIMARY KEY,
+                    name       text NOT NULL,
+                    sha256     text NOT NULL,
+                    applied_at timestamptz NOT NULL DEFAULT now()
+                )
+            """)
+            for v, filename in [("0001", "0001_initial.sql"), ("0002", "0002_approval_security.sql")]:
+                sql_path = migrations_dir / filename
+                content = sql_path.read_text(encoding="utf-8")
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                cur.execute(content)
+                cur.execute(
+                    "INSERT INTO schema_migrations(version, name, sha256) VALUES (%s, %s, %s)",
+                    (v, filename, digest),
+                )
+        from langgraph.checkpoint.postgres import PostgresSaver
+        PostgresSaver(conn).setup()
+
+
+def start(client, **extra) -> str:
+    r = client.post("/run", headers=SVC, json={"club_id": "330323", **extra})
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "awaiting_approval"
+    return r.json()["thread_id"]
+
+
+def decide(client, tid, intent=APPROVE_COACH_BEST, headers=COM):
+    ch = client.post(f"/threads/{tid}/decision-challenge", headers=headers, json=intent)
+    if ch.status_code != 200:
+        return ch
+    return client.post(f"/threads/{tid}/decision", headers=headers, json=signed(ch.json()))
+
+
+def db_status(pg_uri, tid):
+    import psycopg
+    with psycopg.connect(pg_uri) as conn:
+        row = conn.execute(
+            "SELECT status, (SELECT count(*) FROM approval_audit WHERE thread_id=%s) AS audits "
+            "FROM graph_threads WHERE thread_id=%s",
+            (tid, tid),
+        ).fetchone()
+        return (row[0], row[1]) if row else None
+
+
+def fake_packages_dispatchable(player_ids: tuple[str, ...] = ("1001", "1002", "1003")) -> dict[str, Any]:
+    """Generates lead packages with valid Objectives and numeric player IDs."""
+    sels = ["best", "best_runner_up", "middle", "middle_runner_up", "lowest", "ignore"]
+    out = {}
+    valid_objective = {
+        "metric": "pass_accuracy",
+        "direction": "increase",
+        "target_delta": 5.0,
+        "min_matches": 3,
+        "max_matches": 5,
+        "bounds_policy": "fc27-objective-bounds-v1",
+    }
+    for role in ("scout", "analyst", "coach", "tactics", "director"):
+        pkg = {"owner": role, "approvable": True}
+        for i, sel in enumerate(sels):
+            if i < len(player_ids):
+                pid = player_ids[i]
+                pkg[sel] = {
+                    "candidate_id": f"{role}-{sel}-{pid}",
+                    "player_id": str(pid),
+                    "owner": role,
+                    "tier": "best" if "best" in sel else ("middle" if "middle" in sel else "lowest"),
+                    "score": 80.0,
+                    "rationale": f"Valid recommendation for {pid}",
+                    "action": "drill",
+                    "evidence_refs": ["match:1"],
+                    "objective": valid_objective,
+                }
+        out[role] = pkg
+    return out
+
+
+def seed_verified_players(admin_db_uri: str, ids: Iterable[str], club_id: str = "330323") -> None:
+    """Seeds active, verified players in public.players via admin connection."""
+    import psycopg
+    with psycopg.connect(admin_db_uri, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            for pid in ids:
+                cur.execute(
+                    """INSERT INTO public.players (
+                        player_id, club_id, display_name, active, status, platform, identity_verified_at
+                    ) VALUES (%s, %s, %s, true, 'active', 'common-gen5', now())
+                    ON CONFLICT (player_id) DO UPDATE
+                    SET identity_verified_at = EXCLUDED.identity_verified_at,
+                        active = true,
+                        status = 'active',
+                        club_id = EXCLUDED.club_id""",
+                    (str(pid), club_id, f"Player {pid}"),
+                )
+
+
