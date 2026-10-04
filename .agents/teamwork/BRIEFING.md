@@ -1,37 +1,41 @@
-# BRIEFING — 2026-10-03T14:01:00Z
+# BRIEFING — 2026-10-04T06:25:00Z
 
 ## Mission
-Sentinel monitoring and lifecycle orchestration for Phase 1: Secure Data Foundation.
+Sentinel monitoring and lifecycle orchestration for Phase 2: Identity and Authorization.
 
 ## 🔒 My Identity
 - Archetype: sentinel
 - Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork
-- Orchestrator: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Victory Auditor: 81cc748c-57bd-40b4-8e90-c613e408bb8d
+- Orchestrator: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Victory Auditor: 8f394807-841c-4504-aba1-2bcf585e2cc0
 
 ## 🔒 Key Constraints
 - No technical decisions — relay only
 - Victory Audit is MANDATORY before reporting completion
-- Stop implementation at Phase 1 boundary
-- DISPATCH_ENABLED=false at all times; no player delivery
+- Stop implementation at Phase 2 boundary
+- DISPATCH_ENABLED=false at all times; DISPATCH_WORKER_ENABLED=false; no player delivery
 - Verification via teamwork_preview_victory_auditor is BLOCKING before success report
+- Maintain append-only sections across context resets
 
 ## User Context
-- **Last user request**: Incorporate Section 1A human authority & implement Phase 1 Secure Data Foundation.
+- **Last user request**: Implement Phase 2: Identity and Authorization for FC27 Player Dispatch programme.
+- **Pending clarifications**: none
 - **Delivered results**:
-  - Milestone 1: Authoritative Approval Lifecycle, Expiry & Core Data Model (PASSED, 87/87 tests)
-  - Milestone 2: Graph Core & Persistent Graph API (PASSED, 125/125 tests, Iteration 2 verified)
-  - Milestone 3: Dispatch Schema, Hardened Transition & Immutability (PASSED, 70/70 tests, Iteration 3 verified)
-  - Milestone 4: Activation Gates & Atomic Approval-to-Dispatch Creation (PASSED, Iteration 2 verified)
-  - Milestone 5: Compose Topology, Secrets & Documentation (PASSED, Iteration 1 verified)
-  - Milestone 6: Final Verification, E2E Suite & Phase 2 Handoff (PASSED, Iteration 3 verified)
+  - Phase 1: Secure Data Foundation completed and verified (VICTORY CONFIRMED).
+  - Phase 2 Milestone 1: Identity Data Foundation & Cryptography (GATE PASS).
+  - Phase 2 Milestone 2: Centralized Authorization & Service Boundaries (GATE PASS).
+  - Phase 2 Milestone 3: Server-Side Sessions & Invitations Lifecycle (GATE PASS).
+  - Phase 2 Milestone 4: WebAuthn Passkeys, Staff TOTP & Commissioner Bootstrap/Recovery (GATE PASS).
+  - Phase 2 Milestone 5: Decision Step-Up, Player Decisions & Graph API Migration (GATE PASS).
 
 ## Project Status
-- **Phase**: complete (VICTORY CONFIRMED by independent auditor)
+- **Phase**: complete
+- **Active Tasks**:
+  - none (crons killed)
 
 ## Routing Decision
 - **Chosen path**: General (`teamwork_preview_orchestrator`)
-- **Rationale**: Multi-part SWE engineering task with full implementation/review team across schema, Graph core, API, Compose, security tests, and integration. Not a document review, math proof, or single lightweight bugfix.
+- **Rationale**: Multi-part SWE engineering task with full implementation, security, testing, adversarial-review, and integration team across identity DB/migrations, authentication service, authorization service, player consent authentication, Commissioner bootstrap/recovery, staff TOTP, BFF/service identity, and secrets handling. Not a document review, math proof, or single lightweight bugfix.
 - **Pre-flight audit required**: No
 
 ## Victory Audit Status
@@ -42,3 +46,6 @@ Sentinel monitoring and lifecycle orchestration for Phase 1: Secure Data Foundat
 ## Artifact Index
 - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md — Authoritative record of user request
 - c:\Users\iwadev\dev\iwa.dev.fcbuild\ORIGINAL_REQUEST.md — Workspace copy of user request
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\context.md — Phase 2 Orchestrator context
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\progress.md — Active orchestrator progress log
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\GATE_STATUS.md — Milestone gate ledger

@@ -1,39 +1,59 @@
-# Dispatch: Milestone 5 Reviewer 1 (Compose Topology, Secrets & Migration Isolation)
+# DISPATCH — 2026-10-04T05:50:00Z
 
-**Agent**: `reviewer_m5_1`
-**Role**: Milestone 5 Reviewer 1 (Compose Topology, Secrets & Migration Isolation)
-**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1`
-**Timestamp**: 2026-10-03T21:28:00Z
+## Mission
+Review Scoped Action Tokens, Decision Step-Up Engine, Passkey Evidence Minting & Scope Lockout for Phase 2 Milestone 5.
 
----
+## Authoritative Inputs
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (MANDATORY: You MUST read this before starting work)
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
 
-## 1. Objective
-Objectively review the Milestone 5 Docker Compose topology, file secrets configuration, least-privilege service roles, migration runner secret loading, and isolation test suite in `tests/test_compose_isolation.py`.
+## Focus Areas
+1. `src/identity/tokens.py`:
+   - Inspect `ScopedActionTokenEngine`: format `sat_<secrets.token_urlsafe(32)>`, SHA-256 hex digest storage in `fc27_action_tokens.token_hash`. Zero plaintext tokens in DB.
+   - Atomic consumption via `SELECT ... FOR UPDATE` setting `consumed_at = now()` where `consumed_at IS NULL`.
+   - Exception hierarchy: `ActionTokenNotFoundError` (404), `ActionTokenAlreadyConsumedError` (409), `ActionTokenExpiredError` (410), `ActionTokenRevokedError` (410), `ActionTokenScopeMismatchError` (403), `ActionTokenAssignmentMismatchError` (403).
+2. `src/identity/routers/step_up.py`:
+   - `POST /v1/auth/step-up/challenge` (and alias `/step-up/options`): validates required package fields (`package_id`, `package_version`, `package_hash`, `decision`). Missing fields trigger 422. Deterministic canonical `bound_payload_hash`.
+   - `POST /v1/auth/step-up/verify`: validates WebAuthn assertion, validates sign counter increment, consumes challenge, and mints single-use `authentication_evidence_id` in `fc27_decision_evidence`.
+   - Scope and replay lockout: evidence bound strictly to package parameters. Replaying consumed evidence yields 409.
+3. `src/identity/store.py`:
+   - Inspect `_ensure_decision_evidence_table`, `create_decision_evidence`, `get_decision_evidence`, and `consume_decision_evidence`.
+4. Unit test suite: `tests/identity/test_tokens.py` and `tests/identity/test_step_up.py`.
+5. Scope dormancy: Verify `DISPATCH_ENABLED=false` and zero player delivery.
 
-## 2. Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
-4. `docker-compose.yml`
-5. `config.example.env`
-6. `.gitignore`
-7. `src/db_migrate.py` (lines 190–205)
-8. `tests/test_compose_isolation.py`
+## Verification Instructions
+Execute test verification:
+```pwsh
+.\.venv\Scripts\pytest.exe tests/identity/test_tokens.py tests/identity/test_step_up.py tests/test_packaging.py tests/test_phase1_scope.py -v
+```
+If an interactive terminal prompt times out waiting for user confirmation, document the attempted command and timeout honestly, and verify via AST and static analysis.
+Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
 
-## 3. Tasks
-1. Inspect `docker-compose.yml`:
-   - Top-level `secrets:` declaring the 6 `./secrets/` file mounts.
-   - `db-bootstrap` service (profile `bootstrap`, least-privilege role bootstrap, mounts the 4 bootstrap secrets).
-   - `db-migrate` service (`python -m src.db_migrate`, `POSTGRES_URI_FILE=/run/secrets/fc27_migrator_uri`, network `fc27_data`, depends on `postgres: service_healthy`).
-   - `graph-api`: `POSTGRES_URI_FILE=/run/secrets/fc27_app_uri`, mount `fc27_app_uri`, `GRAPH_RUN_MIGRATIONS: "false"`, `GRAPH_CHECKPOINT_SETUP: "false"`, `DISPATCH_ENABLED: "false"`, depends on `db-migrate: service_completed_successfully`.
-2. Inspect `config.example.env` & `.gitignore`:
-   - Verify `secrets/` is in `.gitignore`.
-   - Verify `config.example.env` has no database passwords and points to `./secrets/` files.
-3. Inspect `src/db_migrate.py`:
-   - Verify `main()` uses `settings.read_secret("POSTGRES_URI")` to support `POSTGRES_URI_FILE`.
-4. Inspect `tests/test_compose_isolation.py`:
-   - Verify all test functions and the `dummy_secrets` fixture for `docker compose config`.
-5. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-6. Write `review.md` and `handoff.md` in your working directory.
-7. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Deliver report to:
+`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1\handoff.md`
+When finished, notify orchestrator with your verdict and report path via send_message.
+
+
+## 2026-10-04T09:47:23Z
+You are reviewer_m5_1, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1\DISPATCH.md before starting work.
+
+Your task:
+Review Scoped Action Tokens, Decision Step-Up Engine, Passkey Evidence Minting & Scope Lockout for Phase 2 Milestone 5:
+1. Inspect src/identity/tokens.py: ScopedActionTokenEngine, sat_ format, SHA-256 hex digest storage in fc27_action_tokens.token_hash, atomic SELECT ... FOR UPDATE consumption, exception hierarchy.
+2. Inspect src/identity/routers/step_up.py: POST /v1/auth/step-up/challenge, POST /v1/auth/step-up/verify, WebAuthn assertion verification, sign counter check, single-use authentication_evidence_id minting in fc27_decision_evidence, scope and replay lockout.
+3. Inspect src/identity/store.py: _ensure_decision_evidence_table, create_decision_evidence, get_decision_evidence, consume_decision_evidence.
+4. Inspect unit test suites: tests/identity/test_tokens.py, tests/identity/test_step_up.py.
+5. Execute verification tests:
+   .\.venv\Scripts\pytest.exe tests/identity/test_tokens.py tests/identity/test_step_up.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via static analysis / AST checks.
+6. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_1\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.

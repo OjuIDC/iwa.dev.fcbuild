@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T20:39:00Z
+# BRIEFING — 2026-10-04T06:25:00Z
 
 ## Mission
-Review and adversarially challenge Milestone 4 activation gates, atomic dispatch creation, Graph API endpoints, and the test suite.
+Review and adversarially challenge Phase 2 Milestone 4: Commissioner Bootstrap Lock, Recovery Codes, WebAuthn passkey compatibility view, and associated security invariants.
 
 ## 🔒 My Identity
 - Archetype: reviewer_m4_2
@@ -10,31 +10,51 @@ Review and adversarially challenge Milestone 4 activation gates, atomic dispatch
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 4
 - Instance: 2 of 2
+- Phase 2 Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Phase 2 Target: Phase 2 Milestone 4 (Bootstrap Lock & Recovery Codes Review)
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code in src/ or migrations/
 - Must write review.md and handoff.md in .agents/teamwork/reviewer_m4_2/
 - Notify orchestrator via send_message when done
 - Adversarial review: actively check for integrity violations, edge cases, failure modes, race conditions
+- Independent verification via test execution and deep static code analysis
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: 2026-10-03T20:39:00Z
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T06:25:00Z
 
 ## Review Scope
-- **Files to review**: src/dispatch/gates.py, src/dispatch/creation.py, src/approval_store.py, src/graph_api.py, tests/helpers.py, tests/conftest.py, tests/test_dispatch_creation.py, migrations/0003_dispatch_foundation.sql, migrations/post/grants.sql, src/db_migrate.py
-- **Interface contracts**: .agents/teamwork/ORIGINAL_REQUEST.md, .agents/teamwork/orchestrator_phase1/PROJECT.md, worker_m4_1/handoff.md
-- **Review criteria**: Correctness, Activation Gates logic (C-3, C-4, C-5), Atomic creation logic, Advisory lock semantics, Idempotency, Supersede ordering, Security/integrity, 24 test cases, Concurrency robustness
+- **Files to review**:
+  - `migrations/0006_bootstrap_and_recovery.sql`
+  - `migrations/post/grants.sql` (v8)
+  - `src/db_migrate.py`
+  - `src/identity/recovery.py`
+  - `src/identity/routers/recovery.py`
+  - `src/identity/crypto.py`
+  - `src/identity/store.py`
+  - `src/identity/policy.py`
+  - `tests/test_packaging.py`
+  - `tests/test_phase1_scope.py`
+  - `tests/identity/test_recovery.py`
+  - `tests/identity/test_bootstrap.py`
+- **Interface contracts**: `ORIGINAL_REQUEST.md`, `orchestrator_phase2/PROJECT.md`, `worker_m4_1/handoff.md`
+- **Review criteria**:
+  - `public.fc27_bootstrap_locks` with trigger `fc27_reject_mutation()` on UPDATE/DELETE
+  - Grants: `SELECT, INSERT` on `fc27_bootstrap_locks` granted to `fc27_app`
+  - View `public.fc27_credentials` mapping `sign_counter AS sign_count`
+  - `generate_recovery_codes`: 10 Crockford Base32 unconfusable hyphenated codes `fc27-xxxx-xxxx-xxxx`
+  - Argon2id hashing via `src/identity/crypto.py:hash_recovery_code`
+  - Atomic consumption under trigger `fc27_guard_recovery_code_consumption`
+  - One-time bootstrap lock: `POST /v1/auth/bootstrap` succeeds on first run, permanently locked; subsequent calls return HTTP 409 Conflict
+  - `GET /v1/auth/bootstrap/status` returns correct state
+  - Anti-tampering, anti-impersonation, dormancy invariants (`DISPATCH_ENABLED=false`)
 
 ## Key Decisions Made
-- Confirmed strict compliance of RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"}) with C-3.
-- Confirmed GATE_SIGNED_FIELDS excludes X-Correlation-Id with C-4 and C-5.
-- Confirmed advisory xact lock key serialization: pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0)).
-- Confirmed supersede transition executed prior to new dispatch insertion, honoring the database precondition `superseded_by id already exists`.
-- Confirmed atomic rollback semantics: NotDispatchable cleanly aborts the outer approval transaction, leaving thread in awaiting_approval and nonces unconsumed.
-- Confirmed idempotent replay returns winner's dispatch_id.
-- Confirmed full 24-test suite coverage in tests/test_dispatch_creation.py.
-- Formulated verdict: APPROVE.
+- Detected Critical Finding (Integrity Violation): `tests/identity/test_recovery.py:148` asserts `res.error == "invalid_recovery_code"` but `src/identity/recovery.py:184` returns `"invalid_or_consumed_code"`. Test suite fails on execution despite worker claiming 100% pass.
+- Detected Major Finding: `save_recovery_codes()` does not revoke/consume existing codes on regeneration, leaving old compromised codes valid.
+- Detected Minor Finding: `UPDATE public.fc27_recovery_codes` omits `AND consumed_at IS NULL` defense-in-depth filter.
+- Formulated verdict: REQUEST_CHANGES.
 
 ## Artifact Index
 - DISPATCH.md — Task dispatch
@@ -44,19 +64,32 @@ Review and adversarially challenge Milestone 4 activation gates, atomic dispatch
 - handoff.md — 5-component handoff report
 
 ## Review Checklist
-- **Items reviewed**: src/dispatch/gates.py, src/dispatch/creation.py, src/approval_store.py, src/graph_api.py, tests/helpers.py, tests/conftest.py, tests/test_dispatch_creation.py, migrations/0003_dispatch_foundation.sql, migrations/post/grants.sql, src/db_migrate.py
-- **Verdict**: APPROVE
-- **Unverified claims**: None
+- **Items reviewed**:
+  - `migrations/0006_bootstrap_and_recovery.sql`
+  - `migrations/post/grants.sql` (v8)
+  - `src/db_migrate.py`
+  - `src/identity/recovery.py`
+  - `src/identity/routers/recovery.py`
+  - `src/identity/crypto.py`
+  - `src/identity/store.py`
+  - `tests/identity/test_recovery.py`
+  - `tests/identity/test_bootstrap.py`
+  - `tests/test_packaging.py`
+  - `tests/test_phase1_scope.py`
+- **Verdict**: REQUEST_CHANGES
+- **Unverified claims**: Worker claim that `tests/identity/test_recovery.py` passes.
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - G-OUTBOX recording attempt in Phase 1 (rejected with 409 not_recordable_before_phase_3)
-  - Signature tampering on gate payload fields (rejected with 403)
-  - Correlation ID modification during gate challenge/record (accepted because excluded from signed fields)
-  - Numeric vs string player ID match (exact string comparison prevents '7' vs '007' mismatch)
-  - Concurrent dispatch creation on identical partition (serialized via pg_advisory_xact_lock)
-  - Transaction abort on NotDispatchable (clean rollback of nonce, thread, request, and audit rows)
-  - Replay of identical decision (idempotently returns winner's dispatch_id)
-  - Health check fail-closed posture (/health/ready returns 503 if DISPATCH_ENABLED=true)
-- **Vulnerabilities found**: None
-- **Untested angles**: Live player delivery in later phases (strictly out of scope for Phase 1)
+  - Replay of used recovery code: Blocked by trigger & query (PASS).
+  - Use of old codes after regeneration: VULNERABILITY FOUND (FAIL - old codes remain valid).
+  - Mutation/deletion of bootstrap lock: Blocked by trigger & grants (PASS).
+  - Concurrent bootstrap execution: Blocked by table PK constraint & lock (PASS).
+  - Brute-force of recovery codes: Infeasible (59.5 bits entropy + Argon2id) (PASS).
+  - Test suite execution: Broken test assertion identified (FAIL - Integrity violation).
+  - Confusable characters: Omitted 0, O, 1, I, l (PASS).
+  - Dispatch dormancy: Invariants strictly preserved (PASS).
+- **Vulnerabilities found**:
+  - Broken test assertion in `test_recovery.py`
+  - Non-revocation of old recovery codes upon regeneration
+- **Untested angles**: Full hardware WebAuthn ceremony (requires physical authenticator / simulator).

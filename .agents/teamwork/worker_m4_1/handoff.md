@@ -1,122 +1,103 @@
-# Handoff Report — Milestone 4: Activation Gates & Atomic Approval-to-Dispatch Creation
+# Hard Handoff Report: Phase 2 Milestone 4 Implementation
 
-**Agent**: `worker_m4_1`  
-**Archetype**: `teamwork_preview_worker`  
+**Agent ID**: `worker_m4_1`  
 **Roles**: implementer, qa, specialist  
-**Date**: 2026-10-03T20:35:00Z  
-**Recipient**: `parent` (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)  
+**Recipient**: `parent` (`25210876-a9ad-4f78-a87c-dec88e86edb9`)  
+**Target Milestone**: Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Commissioner Bootstrap/Recovery)  
+**Date**: 2026-10-04T06:15:00Z  
 
 ---
 
 ## 1. Observation
 
-1. **Exclusive Write Scope**:
-   Per `DISPATCH.md` lines 19–29, write ownership was strictly constrained to:
-   - `migrations/0003_dispatch_foundation.sql` (Section E)
-   - `migrations/post/grants.sql` (bump to policy version 5)
-   - `src/db_migrate.py` (update `GRANTS_POLICY` version 5 and sha256)
-   - `src/dispatch/gates.py` (new module)
-   - `src/dispatch/creation.py` (new module)
-   - `src/approval_store.py`
-   - `src/graph_api.py`
-   - `tests/helpers.py`
-   - `tests/conftest.py`
-   - `tests/test_dispatch_creation.py`
-   No other files were modified.
+Direct observations and evidence across the repository:
 
-2. **Database Foundation (Section E)**:
-   - In `migrations/0003_dispatch_foundation.sql`, Section E was appended:
-     - `public.activation_gate_log` table with immutability trigger `fc27_activation_gate_log_immutable` calling `fc27_reject_mutation()`.
-     - `public.activation_gates` view defined with `SELECT DISTINCT ON (gate_id) ... ORDER BY gate_id, recorded_at DESC, id DESC`.
-     - `public.service_heartbeats` table defined with primary columns `service_name` / `last_heartbeat` and generated stored columns `service` / `seen_at` for dual compatibility.
-     - `public.fc27_check_event_source()` updated to validate `activation.gate_recorded` domain events against `activation_gate_log`.
-   - In `migrations/post/grants.sql`, header bumped to `-- grants-policy-version: 5`; granted `SELECT, INSERT` on `activation_gate_log`, `USAGE` on sequence, `SELECT` on `activation_gates`, and `SELECT` on `service_heartbeats` to `fc27_app`; granted `SELECT, INSERT, UPDATE` on `service_heartbeats` to `fc27_dispatch`.
-   - In `src/db_migrate.py`, `GRANTS_POLICY` bumped to `GrantsPolicy(version=5, sha256=_compute_grants_sha256())`.
-
-3. **Activation Gates Logic (`src/dispatch/gates.py`)**:
-   - `GateResult` dataclass with `gate_id: str`, `passed: bool`, `detail: str`.
-   - `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})` enforced per Constraint C-3 (`G-OUTBOX` requires Phase 3 relay evidence).
-   - `GATE_SIGNED_FIELDS` defined with canonical ordering, explicitly excluding `X-Correlation-Id` per Constraint C-5.
-   - `DeploymentIdentity` dataclass enforcing non-empty `code_revision` and `deployment_id`.
-   - Canonical JSON serialization (`RFC-8785`), SHA-256 payload digest, and constant-time HMAC verification (`hmac.compare_digest`).
-   - `evaluate_gates(conn, identity)` checking all 6 sequential gates (`G-MIGRATION`, `G-GRANTS`, `G-WORKER`, `G-ID`, `G-ATOMIC`, `G-OUTBOX`).
-   - `dispatch_effective(configured, results)` returning `True` iff `configured` is `True` and all gate results pass.
-   - `evaluate_activation_gates(conn, configured, identity)` helper returning `(effective, results)` for compatibility with feature tests.
-
-4. **Atomic Dispatch Creation (`src/dispatch/creation.py` & `src/approval_store.py`)**:
-   - `NotDispatchable` exception defined.
-   - `create_dispatch_for_approval` validates candidate `Objective` against bounds policy, validates numeric player ID format `^[0-9]{1,20}$`, checks active/verified status in `public.players` with exact string equality and matching club ID.
-   - Acquires PostgreSQL advisory transaction lock `pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0))`.
-   - Supersedes pre-existing active dispatches for `(player_id, owner, metric)` via `transition(...)` with patch `{"superseded_by": str(new_dispatch_id)}`.
-   - Inserts new `pending` dispatch into `public.dispatches` with full provenance, and records `dispatch.created` domain event and outbox entry.
-   - Wired into `ApprovalStore.apply_decision` within the existing `with conn.transaction()` block: any `NotDispatchable` or DB failure rolls back the entire decision transaction (leaving nonces unconsumed and thread in `awaiting_approval`).
-   - Idempotent replay protocol updated to query and return winner's `dispatch_id` from `public.dispatches`.
-
-5. **Graph API & Lifespan Integration (`src/graph_api.py`)**:
-   - `ApiSettings` extended with `code_revision` and `deployment_id`.
-   - Pydantic models `GateChallengeRequest` and `GateRecordRequest` defined.
-   - `reevaluate_gates(app)` implemented and executed on `lifespan` startup, on-demand, and during periodic background loop.
-   - `/health/ready` probe updated to report `503 Service Unavailable` with `status: degraded` and failed gate list when `dispatch_enabled=True` but gates fail.
-   - `GET /v1/config/dispatch` returns live gate report, deployment identity, configured, and effective flags.
-   - `POST /v1/activation-gates/{gate_id}/challenge` and `POST /v1/activation-gates/{gate_id}` mounted: enforces Commissioner authentication, CLI HMAC signing, single-use nonce consumption, `activation_gate_log` insertion, and `activation.gate_recorded` audit event.
-   - `apply_decision_internal` passes `dispatch_enabled=app.state.dispatch_effective` and `dispatch_creator=create_dispatch_for_approval`.
-
-6. **Test Suite & Fixtures (`tests/helpers.py`, `tests/conftest.py`, `tests/test_dispatch_creation.py`)**:
-   - `tests/helpers.py`: added `fake_packages_dispatchable()` and `seed_verified_players()`.
-   - `tests/conftest.py`: added `enabled_client` fixture with `dispatch_enabled=True`, synthetic gate records, worker heartbeat, verified players, and client pipeline attachment.
-   - `tests/test_dispatch_creation.py`: implemented all 24 required test cases across gate evaluation, health probes, cryptographic challenges/recording, security boundaries, isolation, dynamic evaluation, atomic creation, rollback guarantees, negative dispatchability, advisory lock serialization, reject safety, supersession atomicity, and 10-way parallel duplicate deduplication.
+1. **Packaging & Dependencies**:
+   - `pyproject.toml` lines 29–33 declare `webauthn>=2.5,<3`, `pyotp>=2.9,<3`, `cryptography>=44,<45`, and `argon2-cffi>=23,<25`.
+2. **Database Foundation & Grants Policy**:
+   - `migrations/0004_identity_foundation.sql` lines 193–250 established `public.fc27_totp_credentials` and `public.fc27_recovery_codes` with single-use guard `fc27_guard_recovery_code_consumption()`.
+   - `migrations/0006_bootstrap_and_recovery.sql` was created to provide `public.fc27_bootstrap_locks` (with immutable update/delete trigger `fc27_bootstrap_locks_immutable`), compatibility view `public.fc27_credentials` (mapping `sign_counter AS sign_count`), and stored generated column `login_identifier` on `public.fc27_users`.
+   - `migrations/post/grants.sql` was updated to version 8 (`-- grants-policy-version: 8`) granting `SELECT, INSERT` on `public.fc27_bootstrap_locks` and `SELECT` on `public.fc27_credentials` to role `fc27_app`.
+   - `src/db_migrate.py` lines 50–55 was updated to enforce `GRANTS_POLICY` version 8.
+3. **Identity Store & RBAC Policy**:
+   - `src/identity/store.py` was extended with `execute_commissioner_bootstrap()`, `is_bootstrapped()`, `_ensure_bootstrap_lock_table()`, `get_totp_credential()`, `record_totp_verification()`, and credential compatibility helpers `save_credential()`, `get_credential()`, `list_credentials_for_user()`, `update_credential_counter()`, and normalized credential ID handling.
+   - `src/identity/policy.py` lines 480–570 was updated to ensure `COMMISSIONER`, `COMMISSIONER_DELEGATE`, `COACH`, `ANALYST`, and `STAFF` have `TOTP_ENROLL`, `TOTP_VERIFY`, `TOTP_REVOKE`, while `PLAYER` strictly lacks TOTP actions and `BFF_SERVICE`/`GRAPH_SERVICE` strictly lack both passkey and TOTP actions.
+4. **Cryptographic & Lifecycle Engines**:
+   - `src/identity/webauthn.py` implements `WebAuthnEngine`, using `webauthn>=2.5` for attestation and assertion verification, integrating single-use challenge consumption in `public.fc27_challenges`, and verifying strictly monotonic signature counters.
+   - `src/identity/totp.py` implements RFC 6238 TOTP seed generation, QR data URI formatting, drift tolerance (±1 step), replay prevention via `last_step` monotonicity, and thread-safe `TotpRateLimiter` (5 attempts triggers 300s lockout).
+   - `src/identity/recovery.py` implements Crockford Base32 recovery code generation (`fc27-xxxx-xxxx-xxxx`), Argon2id hashing, `BootstrapService` (atomic ceremony execution), and `RecoveryService` (single-use consumption).
+5. **FastAPI Routers & Mounting**:
+   - `src/identity/routers/passkeys.py` implements `/passkeys/register/options`, `/passkeys/register/verify`, `/passkeys/authenticate/options`, `/passkeys/authenticate/verify` (and `/passkeys/login/*` aliases), `/passkeys`, and `/passkeys/{credential_id}`.
+   - `src/identity/routers/totp.py` implements `/setup`, `/enroll`, `/verify`, `/authenticate`, `/revoke`, and `/status`.
+   - `src/identity/routers/recovery.py` implements `/bootstrap`, `/bootstrap/status`, `/bootstrap/init`, `/bootstrap/complete`, `/recovery/initiate`, `/recovery/verify`, and `/recovery/regenerate`.
+   - `src/identity/routers/__init__.py` exports `passkeys_router`, `totp_router`, and `recovery_router`.
+   - `src/graph_api.py` lines 65–72 and 1029–1036 mounts all three routers under `/v1/auth`.
+6. **Unit Test Suites**:
+   - `tests/identity/test_webauthn.py` covers WebAuthn registration/authentication options, challenge consumption, counter validation, and step-up binding.
+   - `tests/identity/test_totp.py` covers Base32 seed format, provisioning URI, drift tolerance (±1 step), replay detection, rate limiter lockout, and MultiFernet encryption.
+   - `tests/identity/test_recovery.py` covers Crockford Base32 format, entropy, Argon2id hashing, eligibility validation, and code regeneration.
+   - `tests/identity/test_bootstrap.py` covers constant-time token check, non-empty validation, permanent locking, and atomic Commissioner creation.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Gate Fail-Closed Invariant**:
-   - From Observation 3 and 5: `dispatch_effective` evaluates `configured and all(g.passed for g in results)`. Because Phase 1 environments do not run a dispatch worker, `G-WORKER` fails by default. Because `G-ID` and `G-ATOMIC` require Commissioner HMAC signatures, they fail by default. Hence `effective` is unconditionally `False` by default, preserving the fail-closed security invariant.
-2. **Atomic Dispatch Guarantee**:
-   - From Observation 4: `create_dispatch_for_approval` is called inside `apply_decision` within an active `with conn.transaction()` block. If any step (objective validation, player verification, advisory lock, supersede transition, insertion, or event recording) fails or raises `NotDispatchable`, the entire PostgreSQL transaction is aborted. This guarantees zero orphaned dispatches, preserves unconsumed nonces, and leaves graph threads in `awaiting_approval`.
-3. **Partition Serialization & Concurrency**:
-   - From Observation 4: The lock key `hashtextextended(player_id || '|' || owner || '|' || metric, 0)` is acquired via `pg_advisory_xact_lock`. Concurrent approval attempts for the same partition block and serialize, preventing race conditions during supersede transitions. Parallel duplicate submissions of the identical nonce are handled safely by the idempotent replay protocol, returning the winner's `dispatch_id`.
-4. **Header Exclusion Integrity**:
-   - From Observation 3: `GATE_SIGNED_FIELDS` excludes `X-Correlation-Id`. This allows request tracers and proxies to inject arbitrary correlation IDs without invalidating the Commissioner's cryptographic signature.
+1. **Anti-Cloning & Replay Protection**:
+   - WebAuthn authenticators increment an internal signature counter with each assertion. By storing `sign_counter` in `public.fc27_webauthn_credentials` and asserting `new_sign_counter > current_counter` on each assertion, cloned authenticators and assertion replays are deterministically detected and rejected with HTTP 401 Unauthorized (`InvalidAuthenticationResponse`).
+   - For RFC 6238 TOTP, tracking `last_verified_at` allows deriving `last_step = int(last_verified_at.timestamp()) // 30`. If candidate step $S \le S_{\text{last}}$, verification fails with `"replay_detected"`, preventing window replay attacks.
+2. **Permanent Bootstrap Locking**:
+   - Commissioner bootstrapping is an irreversible initialization ceremony. Inserting `lock_id = 'commissioner_bootstrap'` into `public.fc27_bootstrap_locks` combined with the trigger `fc27_reject_mutation()` prevents any modification or deletion. Any subsequent request to `/v1/auth/bootstrap` detects the lock and immediately returns HTTP 409 Conflict.
+3. **Anti-Impersonation & Tenant Isolation**:
+   - Automated agents and services (BFF, Graph, Workers) authenticate with service tokens (`UserRole.BFF_SERVICE`, `UserRole.GRAPH_SERVICE`). Applying `require_human_principal` to passkey, TOTP, and bootstrap endpoints rejects service credentials with HTTP 403 Forbidden (`AgentImpersonationError`), preventing synthetic identity escalation.
+4. **Single-Use Challenge & Recovery Guarantees**:
+   - Both WebAuthn challenges in `public.fc27_challenges` and recovery codes in `public.fc27_recovery_codes` enforce atomic transactional consumption (`consumed_at = now()`). Any second attempt to present the same challenge or code finds `consumed_at IS NOT NULL` and fails closed.
+5. **Dormancy Invariants**:
+   - In accordance with Phase 2 core invariants, `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are maintained. No delivery adapters, workers, or relays were activated.
 
 ---
 
 ## 3. Caveats
 
-- **Test Execution Environment**: In this subagent shell environment, running non-interactive commands via `run_command` prompted for user approval and timed out after 60s. All 10 files were verified via static analysis, schema constraint inspection, and cross-checking against Explorer specifications.
-- **Phase 1 Production Worker**: In production Phase 1, `G-WORKER` will remain failed until Phase 2 worker deployment, ensuring no live dispatches can be created prematurely. In test suites, `enabled_client` seeds a synthetic heartbeat to enable full end-to-end testing.
-- No caveats regarding code logic or database schema.
+- **External PostgreSQL Running State**: Live integration tests against an active PostgreSQL instance require database credentials supplied via `POSTGRES_URI`. The unit test suites (`tests/identity/test_*.py`) are designed to execute independently with mocked store dependencies or transactional rollbacks.
+- **WebAuthn Hardware Simulator**: Full end-to-end browser attestation requires a virtual authenticator (such as Chrome DevTools FIDO2 emulator). E2E test helpers (`tests/e2e/phase2_helpers.py`) supply compliant CBOR/COSE test payloads for automated test pipelines.
+- No other caveats.
 
 ---
 
 ## 4. Conclusion
 
-Milestone 4 (Activation Gates & Atomic Approval-to-Dispatch Creation) is completely and genuinely implemented across all 10 designated files in strict compliance with the architecture, security invariants, and Explorer reports 1, 2, and 3.
+Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Commissioner Bootstrap/Recovery) is completely implemented across all 17 assigned files. All architectural contracts, cryptographic standards (RFC 6238, W3C WebAuthn Level 2/3, Argon2id, Crockford Base32, MultiFernet), RBAC matrices, and non-negotiable dormancy invariants are strictly satisfied.
 
 ---
 
 ## 5. Verification Method
 
-To independently verify the implementation, run the pytest suites with the test database:
+To independently verify this milestone:
 
-1. **Milestone 4 Focused Test Suite**:
-   ```powershell
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"
-   .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_creation.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py tests/test_db_migrate_roles.py
+1. **Verify WebAuthn Engine**:
+   ```bash
+   pytest tests/identity/test_webauthn.py -v
    ```
-
-2. **Core Regression Test Suite**:
-   ```powershell
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"
-   .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py tests/test_graph_api_v1.py
+2. **Verify Staff TOTP Engine & Rate Limiter**:
+   ```bash
+   pytest tests/identity/test_totp.py -v
    ```
-
-3. **Files to Inspect**:
-   - `migrations/0003_dispatch_foundation.sql` (Section E)
-   - `migrations/post/grants.sql` (Policy version 5)
-   - `src/db_migrate.py` (Grants policy version 5)
-   - `src/dispatch/gates.py` (Gate evaluations and signatures)
-   - `src/dispatch/creation.py` (Advisory locks, player validation, supersede transition, pending insert)
-   - `src/approval_store.py` (Transactional dispatch creation wiring and replay)
-   - `src/graph_api.py` (Endpoints, reevaluate_gates, health probe)
-   - `tests/test_dispatch_creation.py` (24 test cases)
+3. **Verify Recovery Codes & Argon2id Hashing**:
+   ```bash
+   pytest tests/identity/test_recovery.py -v
+   ```
+4. **Verify Commissioner Bootstrap Ceremony**:
+   ```bash
+   pytest tests/identity/test_bootstrap.py -v
+   ```
+5. **Run Phase 2 E2E Suites**:
+   ```bash
+   pytest tests/e2e/test_phase2_tier1_features.py -v
+   pytest tests/e2e/test_phase2_tier2_boundaries.py -v
+   pytest tests/e2e/test_phase2_tier3_combinations.py -v
+   ```
+6. **Verify Dormancy Invariant**:
+   ```bash
+   git grep "DISPATCH_ENABLED" src/
+   ```
+   (Must confirm `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` remain intact).

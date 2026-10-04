@@ -1,1035 +1,614 @@
-# Technical Schema Analysis & Implementation Design: Milestone 1
+# Technical Analysis & Schema Design: Phase 2 Milestone 1 Identity Data Foundation
 
-**Document Version:** 1.0.0  
-**Date:** 2026-10-03  
-**Author:** explorer_m1_schema_1 (teamwork_preview_explorer)  
-**Target Milestone:** Milestone 1 — Authoritative Approval Lifecycle & Expiry (Task 4 + Section 1A)  
-**Scope Boundaries:** Read-only exploration and design. No repository files modified.
+## 1. Executive Summary
 
----
+Phase 2 Milestone 1 establishes the authoritative identity and cryptographic data foundation for the FC27 Player Dispatch programme. In accordance with:
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (§5, §17)
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md` (Features 1–3, 6–12, 13–17, 27–33, 41, 42)
+- Existing Phase 1 migrations (`0001_initial.sql`, `0002_approval_security.sql`, `0003_dispatch_foundation.sql`, `post/grants.sql`, `src/db_migrate.py`)
 
-## 1. Executive Summary & Architectural Scope
-
-Milestone 1 builds the authoritative approval and human authority data foundation within the player-dispatch programme. It bridges the foundational event/outbox infrastructure (Milestone 0 / 0003 Section A) with the core LangGraph workflow engine (Milestone 2) and subsequent dispatch execution pipeline (Milestones 3–6).
-
-This milestone delivers two tightly integrated SQL components:
-1. **0003 Section B (Authoritative Approval Lifecycle & Expiry):**
-   - Authoritative `approval_requests` entity managing the approval lifecycle (`awaiting_approval`, `approved`, `rejected`, `revision_requested`, `expired`).
-   - Bidirectional foreign key and paired consistency constraint trigger (`fc27_check_approval_pair`) between `graph_threads` and `approval_requests`.
-   - Inconsistencies diagnostic view (`fc27_approval_inconsistencies`).
-   - Terminal state protection and provenance immutability triggers on both tables.
-   - Nonce typing, revocation, and lifecycle extensions (`approval_nonces`).
-   - Proof typing and correlation fields on append-only audit (`approval_audit`).
-   - Domain event source verification update (`fc27_check_event_source`).
-   - Safe, idempotent legacy backfill for pre-existing 0002 threads.
-2. **Section 1A Compatibility Model (Human Authority, Player Consent & Continuity):**
-   - Resolves the single-approver bottleneck without collapsing club authorization, delegated authority, player consent, and fallback authority into an ambiguous boolean.
-   - Compatibility schema across seven normalized tables:
-     - `authority_policies`: Declares permitted decision authority rules per action type and scope.
-     - `authority_delegations`: Explicit, time-bounded, revocable human delegations.
-     - `player_assignments`: Versioned personal package assignments per affected player.
-     - `player_decision_requests`: Assignment-specific decision challenge records.
-     - `player_decisions`: Immutable player consent, fallback, or rejection decisions.
-     - `approval_escalations`: Auditable state progression history preventing silent timeout approvals.
-     - `authority_conflicts`: Isolation and tracking of late or conflicting decisions.
-   - Grants policy upgrade (`migrations/post/grants.sql` v3) and runner synchronization (`src/db_migrate.py`).
+This design specifies:
+1. Exact DDL for `migrations/0004_identity_foundation.sql` defining 9 new relational tables (`fc27_users`, `fc27_user_roles`, `fc27_invitations`, `fc27_sessions`, `fc27_webauthn_credentials`, `fc27_totp_credentials`, `fc27_recovery_codes`, `fc27_action_tokens`, `fc27_challenges`).
+2. Defensive database triggers enforcing status state machine transitions, authenticator clone protection (sign-counter monotonicity), single-use consumption, and append-only deletion blocking (`fc27_reject_mutation()`).
+3. Expansion of `public.domain_events`'s `source_table` check constraint to support identity audit events without schema violations.
+4. Updates to `migrations/post/grants.sql` bumping policy version from 5 to 6 and granting least-privilege DML to `fc27_app` with zero grants to `fc27_dispatch`.
+5. Updates to `src/db_migrate.py` reflecting `GrantsPolicy(version=6)`.
+6. Rollback / idempotency design ensuring clean recovery in case of migration failures.
 
 ---
 
-## 2. Deep Technical Design: `0003_dispatch_foundation.sql` Section B
+## 2. Problem Boundary & Architectural Alignment
 
-### 2.1 Table `public.approval_requests`
+### 2.1 Non-Negotiable Invariants
+- **PostgreSQL Authority**: Identities, credentials, sessions, tokens, and decisions reside authoritatively in PostgreSQL. Graph checkpoints remain transient workflow state.
+- **Dispatch Dormancy**: Strict `DISPATCH_ENABLED=false` and zero player delivery. Identity operations do not unlock delivery.
+- **No Impersonation**: Agents (LLMs/Graph nodes/workers) and services (BFF) cannot authenticate or decide for humans.
+- **Cryptographic Storage Standards**:
+  - One-way tokens (invitations, sessions, action tokens): Stored strictly as SHA-256 hex digests (`[0-9a-f]{64}`).
+  - Recovery codes: Stored irreversibly via Argon2id (`$argon2id$...`).
+  - Sensitive recoverable secrets (TOTP seeds): Stored encrypted at rest using AES-GCM / MultiFernet envelope encryption with key versioning (`key_version >= 1`).
+  - WebAuthn credentials: Only public keys (`public_key bytea`) and raw credential IDs (`credential_id bytea`) are persisted. Authenticator private keys are never handled or stored.
+- **Separation of Concerns**:
+  - Application roles (`fc27_user_roles`) are decoupled from database login roles (`fc27_owner`, `fc27_app`, `fc27_dispatch`, `fc27_migrator`).
+  - Local authenticated player account (`fc27_users`) is decoupled from EA player identity evidence (`public.players`). No gamertag fallback.
 
-`approval_requests` becomes the single authoritative source of truth for all recommendation approvals. `graph_threads` stores execution state, but authorization status lives here.
+---
 
-#### DDL Specification
+## 3. Relational Schema Architecture (0004_identity_foundation.sql)
+
+```
+                            +--------------------------+
+                            |       fc27_users         |
+                            |--------------------------|
+                            | user_id (UUID PK)        |
+                            | club_id (text)           |
+                            | login_id (text UNIQUE)   |
+                            | display_name (text)      |
+                            | status (enum)            |
+                            | player_id (text FK NULL) |
+                            +--------------------------+
+                                     |       |
+                 +-------------------+       +-----------------------+
+                 | 1:N                       | 1:N                   | 1:N
+                 v                           v                       v
+       +-------------------+       +-------------------+   +--------------------+
+       |  fc27_user_roles  |       |   fc27_sessions   |   | fc27_webauthn_     |
+       |-------------------|       |-------------------|   | credentials        |
+       | user_id (UUID PK) |       | session_id (PK)   |   |--------------------|
+       | role (text PK)    |       | token_hash (SHA)  |   | credential_id (PK) |
+       | granted_at        |       | auth_level        |   | user_id (UUID FK)  |
+       | granted_by        |       | idle_expires_at   |   | public_key (bytea) |
+       +-------------------+       | absolute_expires  |   | sign_counter       |
+                                   +-------------------+   +--------------------+
+                 | 1:1                       | 1:N                   | 1:N
+                 v                           v                       v
+       +-------------------+       +-------------------+   +--------------------+
+       |    fc27_totp_     |       |   fc27_recovery_  |   | fc27_action_       |
+       |   credentials     |       |       codes       |   |      tokens        |
+       |-------------------|       |-------------------|   |--------------------|
+       | user_id (UUID PK) |       | code_id (UUID PK) |   | token_id (UUID PK) |
+       | encrypted_seed    |       | user_id (UUID FK) |   | user_id (UUID FK)  |
+       | key_version       |       | code_hash(Argon2) |   | assignment_id (FK) |
+       | status (enum)     |       | consumed_at       |   | token_hash (SHA)   |
+       +-------------------+       +-------------------+   +--------------------+
+
+       +------------------------------------+   +------------------------------------+
+       |          fc27_invitations          |   |          fc27_challenges           |
+       |------------------------------------|   |------------------------------------|
+       | invitation_id (UUID PK)            |   | challenge_id (UUID PK)             |
+       | token_hash (SHA-256 UNIQUE)        |   | challenge_type (enum)              |
+       | club_id (text)                     |   | challenge_str (text UNIQUE)        |
+       | intended_role (enum)               |   | user_id (UUID FK NULL)             |
+       | invited_email (text)               |   | bound_payload_hash (SHA-256 NULL)  |
+       | issued_at, expires_at, consumed_at |   | expires_at, consumed_at            |
+       +------------------------------------+   +------------------------------------+
+```
+
+---
+
+## 4. Complete SQL DDL Specification (`migrations/0004_identity_foundation.sql`)
+
 ```sql
-CREATE TABLE IF NOT EXISTS public.approval_requests (
-    approval_request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    thread_id text UNIQUE NOT NULL REFERENCES public.graph_threads(thread_id),
-    package_version text NOT NULL CHECK (package_version ~ '^[0-9a-f]{64}$'),
-    status text NOT NULL CHECK (status IN (
-        'awaiting_approval',
-        'approved',
-        'rejected',
-        'revision_requested',
-        'expired'
+-- Phase 2 Milestone 1: Identity Data Foundation
+-- Defines authoritative users, roles, invitations, server-side sessions,
+-- WebAuthn/TOTP credentials, recovery material, action tokens, and challenges.
+
+-- 1. fc27_users -------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_users (
+    user_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    club_id text NOT NULL CHECK (club_id ~ '^[0-9]+$'),
+    login_id text NOT NULL UNIQUE CHECK (char_length(login_id) BETWEEN 3 AND 255 AND login_id = lower(trim(login_id))),
+    display_name text NOT NULL CHECK (char_length(display_name) BETWEEN 1 AND 128),
+    status text NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'suspended', 'recovery_required', 'disabled')),
+    player_id text NULL REFERENCES public.players(player_id) ON DELETE SET NULL CHECK (player_id IS NULL OR player_id ~ '^[0-9]{1,20}$'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    activated_at timestamptz NULL,
+    suspended_at timestamptz NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS fc27_users_club_status_idx 
+    ON public.fc27_users(club_id, status);
+
+CREATE INDEX IF NOT EXISTS fc27_users_player_id_idx 
+    ON public.fc27_users(player_id) 
+    WHERE player_id IS NOT NULL;
+
+-- Guard for user status transitions, immutability of identifiers, and automatic timestamps
+CREATE OR REPLACE FUNCTION public.fc27_guard_user_status_transition()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        -- Immutable identifiers
+        IF NEW.user_id <> OLD.user_id THEN
+            RAISE check_violation USING MESSAGE = 'user_id is immutable';
+        END IF;
+        IF NEW.club_id <> OLD.club_id THEN
+            RAISE check_violation USING MESSAGE = 'club_id is immutable';
+        END IF;
+        IF NEW.created_at <> OLD.created_at THEN
+            RAISE check_violation USING MESSAGE = 'created_at is immutable';
+        END IF;
+
+        -- Status transition state machine
+        IF OLD.status = 'disabled' AND NEW.status <> 'disabled' THEN
+            RAISE check_violation USING MESSAGE = 'disabled user account cannot be reactivated';
+        END IF;
+        IF OLD.status = 'invited' AND NEW.status NOT IN ('invited', 'active', 'disabled') THEN
+            RAISE check_violation USING MESSAGE = 'invited account can only transition to active or disabled';
+        END IF;
+
+        -- Auto-maintain activated_at
+        IF OLD.status = 'invited' AND NEW.status = 'active' AND NEW.activated_at IS NULL THEN
+            NEW.activated_at = now();
+        END IF;
+
+        -- Auto-maintain suspended_at
+        IF NEW.status = 'suspended' AND OLD.status <> 'suspended' AND NEW.suspended_at IS NULL THEN
+            NEW.suspended_at = now();
+        ELSIF NEW.status <> 'suspended' AND OLD.status = 'suspended' THEN
+            NEW.suspended_at = NULL;
+        END IF;
+
+        NEW.updated_at = now();
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS fc27_users_status_guard ON public.fc27_users;
+CREATE TRIGGER fc27_users_status_guard
+    BEFORE UPDATE ON public.fc27_users
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_user_status_transition();
+
+
+-- 2. fc27_user_roles --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_user_roles (
+    user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    role text NOT NULL CHECK (role IN (
+        'commissioner',
+        'commissioner_delegate',
+        'coach',
+        'analyst',
+        'staff',
+        'player',
+        'bff_service',
+        'graph_service'
     )),
-    created_at timestamptz NOT NULL DEFAULT now(),
-    expires_at timestamptz NOT NULL,
-    decided_at timestamptz,
-    expired_at timestamptz,
-    version integer NOT NULL DEFAULT 1,
-    CHECK (expires_at > created_at),
-    CHECK ((status = 'expired') = (expired_at IS NOT NULL)),
-    CHECK ((status IN ('approved', 'rejected', 'revision_requested')) = (decided_at IS NOT NULL))
+    granted_at timestamptz NOT NULL DEFAULT now(),
+    granted_by text NOT NULL CHECK (char_length(granted_by) BETWEEN 1 AND 128),
+    PRIMARY KEY (user_id, role)
 );
 
-CREATE INDEX IF NOT EXISTS approval_requests_status_expires_idx 
-    ON public.approval_requests(status, expires_at);
-```
-
-#### Invariants & Constraints:
-- `expires_at > created_at`: Expiration must be strictly in the future.
-- `(status = 'expired') = (expired_at IS NOT NULL)`: Enforces that marking expired records the timestamp, and timestamp implies expired status.
-- `(status IN ('approved','rejected','revision_requested')) = (decided_at IS NOT NULL)`: Enforces exact timestamp recording on terminal decisions.
-
-#### Triggers: Provenance Immutability & Terminal Freezing
-```sql
-CREATE OR REPLACE FUNCTION public.fc27_guard_approval_request_transition()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        IF OLD.status IN ('approved', 'rejected', 'revision_requested', 'expired') THEN
-            RAISE EXCEPTION 'approval_request % is terminal and cannot be deleted', OLD.approval_request_id
-                USING ERRCODE = 'check_violation';
-        END IF;
-        RETURN OLD;
-    END IF;
-
-    -- Freeze terminal rows
-    IF OLD.status IN ('approved', 'rejected', 'revision_requested', 'expired') THEN
-        RAISE EXCEPTION 'approval_request % is terminal (%) and cannot be modified', OLD.approval_request_id, OLD.status
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    -- Provenance immutability
-    IF NEW.approval_request_id <> OLD.approval_request_id THEN
-        RAISE EXCEPTION 'approval_request_id is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-    IF NEW.thread_id <> OLD.thread_id THEN
-        RAISE EXCEPTION 'thread_id is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-    IF NEW.package_version <> OLD.package_version THEN
-        RAISE EXCEPTION 'package_version is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-    IF NEW.created_at <> OLD.created_at THEN
-        RAISE EXCEPTION 'created_at is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-    IF NEW.expires_at <> OLD.expires_at THEN
-        RAISE EXCEPTION 'expires_at is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-
-    -- Enforce legal state machine transition: awaiting_approval -> {terminal}
-    IF NEW.status IN ('approved', 'rejected', 'revision_requested', 'expired') AND OLD.status <> 'awaiting_approval' THEN
-        RAISE EXCEPTION 'approval_request % must be awaiting_approval before transition to % (was %)',
-            OLD.approval_request_id, NEW.status, OLD.status
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS fc27_approval_requests_guard ON public.approval_requests;
-CREATE TRIGGER fc27_approval_requests_guard
-BEFORE UPDATE OR DELETE ON public.approval_requests
-FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_approval_request_transition();
-```
-
----
-
-### 2.2 Table `public.graph_threads` Modifications
-
-`graph_threads` is enhanced to establish the foreign key link to `approval_requests` and expand its lifecycle constraints to include `revision_requested` and `expired`.
-
-#### Schema Alterations
-```sql
--- 1. Add approval_request_id foreign key
-ALTER TABLE public.graph_threads
-    ADD COLUMN IF NOT EXISTS approval_request_id uuid UNIQUE REFERENCES public.approval_requests(approval_request_id);
-
--- 2. Extend status CHECK constraint
-ALTER TABLE public.graph_threads
-    DROP CONSTRAINT IF EXISTS graph_threads_status_chk;
-
-ALTER TABLE public.graph_threads
-    ADD CONSTRAINT graph_threads_status_chk
-    CHECK (status IN (
-        'running',
-        'awaiting_approval',
-        'approved',
-        'rejected',
-        'revision_requested',
-        'expired',
-        'failed'
-    ));
-
--- 3. Replace terminal fields CHECK constraint
-ALTER TABLE public.graph_threads
-    DROP CONSTRAINT IF EXISTS graph_threads_terminal_fields_chk;
-
-ALTER TABLE public.graph_threads
-    ADD CONSTRAINT graph_threads_terminal_fields_chk
-    CHECK (
-        (status IN ('approved', 'rejected', 'revision_requested'))
-        = (approved_by IS NOT NULL AND approved_at IS NOT NULL AND decision_payload IS NOT NULL)
-    );
-```
-*Note on `expired`:* When a thread transitions to `expired`, it does NOT require `approved_by` or `decision_payload`. Therefore, `expired` is intentionally omitted from the positive condition in `graph_threads_terminal_fields_chk`.
-
-#### Replaced Transition Guard Trigger
-The existing `fc27_guard_thread_transition()` trigger must be replaced to enforce:
-1. Terminal set includes `'approved'`, `'rejected'`, `'revision_requested'`, `'expired'`.
-2. `package_version` is immutable once `status` is `awaiting_approval` (exact message: `'package_version is immutable'`).
-3. `approval_request_id` can be set at most once (`'approval_request_id is immutable once set'`).
-4. Allowed edges: `awaiting_approval -> {approved, rejected, revision_requested, expired}`.
-
-```sql
-CREATE OR REPLACE FUNCTION public.fc27_guard_thread_transition()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        IF OLD.status IN ('approved', 'rejected', 'revision_requested', 'expired') THEN
-            RAISE EXCEPTION 'thread % is terminal and cannot be deleted', OLD.thread_id
-                USING ERRCODE = 'check_violation';
-        END IF;
-        RETURN OLD;
-    END IF;
-
-    -- Freeze terminal rows
-    IF OLD.status IN ('approved', 'rejected', 'revision_requested', 'expired') THEN
-        RAISE EXCEPTION 'thread % is terminal (%) and cannot be modified', OLD.thread_id, OLD.status
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    -- Package version immutability
-    IF (OLD.status = 'awaiting_approval' OR OLD.package_version IS NOT NULL) 
-       AND NEW.package_version IS DISTINCT FROM OLD.package_version THEN
-        RAISE EXCEPTION 'package_version is immutable'
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    -- approval_request_id set at most once
-    IF OLD.approval_request_id IS NOT NULL 
-       AND NEW.approval_request_id IS DISTINCT FROM OLD.approval_request_id THEN
-        RAISE EXCEPTION 'approval_request_id is immutable once set'
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    -- State machine guards
-    IF NEW.status IN ('approved', 'rejected', 'revision_requested', 'expired') 
-       AND OLD.status <> 'awaiting_approval' THEN
-        RAISE EXCEPTION 'thread % must be awaiting_approval before a decision (was %)', OLD.thread_id, OLD.status
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    IF NEW.status = 'awaiting_approval' AND OLD.status NOT IN ('running', 'awaiting_approval') THEN
-        RAISE EXCEPTION 'thread % cannot return to awaiting_approval from %', OLD.thread_id, OLD.status
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    IF NEW.thread_id <> OLD.thread_id THEN
-        RAISE EXCEPTION 'thread_id is immutable' USING ERRCODE = 'check_violation';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS graph_threads_guard ON public.graph_threads;
-CREATE TRIGGER graph_threads_guard
-BEFORE UPDATE OR DELETE ON public.graph_threads
-FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_thread_transition();
-```
-
----
-
-### 2.3 Paired Consistency Trigger: `fc27_check_approval_pair()`
-
-To guarantee transactional alignment between `graph_threads` and `approval_requests`, twin `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` triggers execute at `COMMIT` time. Any uncoordinated update fails closed.
-
-```sql
-CREATE OR REPLACE FUNCTION public.fc27_check_approval_pair()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = pg_catalog, pg_temp
-AS $$
-DECLARE
-    v_req public.approval_requests%ROWTYPE;
-    v_thread public.graph_threads%ROWTYPE;
-BEGIN
-    IF TG_TABLE_NAME = 'graph_threads' THEN
-        -- An awaiting thread with a package version MUST be linked
-        IF NEW.status = 'awaiting_approval' AND NEW.package_version IS NOT NULL AND NEW.approval_request_id IS NULL THEN
-            RAISE EXCEPTION 'approval pair: awaiting_approval thread % with package_version must be linked to an approval_request', NEW.thread_id
-                USING ERRCODE = 'check_violation';
-        END IF;
-
-        IF NEW.approval_request_id IS NOT NULL THEN
-            SELECT * INTO v_req FROM public.approval_requests WHERE approval_request_id = NEW.approval_request_id;
-            IF NOT FOUND THEN
-                RAISE EXCEPTION 'approval pair: linked approval_request % not found for thread %', NEW.approval_request_id, NEW.thread_id
-                    USING ERRCODE = 'check_violation';
-            END IF;
-            IF v_req.status <> NEW.status THEN
-                RAISE EXCEPTION 'approval pair: status mismatch between thread % (%) and approval_request % (%)',
-                    NEW.thread_id, NEW.status, v_req.approval_request_id, v_req.status
-                    USING ERRCODE = 'check_violation';
-            END IF;
-            IF v_req.package_version IS DISTINCT FROM NEW.package_version THEN
-                RAISE EXCEPTION 'approval pair: package_version mismatch between thread % (%) and approval_request % (%)',
-                    NEW.thread_id, NEW.package_version, v_req.approval_request_id, v_req.package_version
-                    USING ERRCODE = 'check_violation';
-            END IF;
-            IF v_req.thread_id <> NEW.thread_id THEN
-                RAISE EXCEPTION 'approval pair: thread_id mismatch between thread % and approval_request thread %',
-                    NEW.thread_id, v_req.thread_id
-                    USING ERRCODE = 'check_violation';
-            END IF;
-        END IF;
-
-    ELSIF TG_TABLE_NAME = 'approval_requests' THEN
-        SELECT * INTO v_thread FROM public.graph_threads WHERE thread_id = NEW.thread_id;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'approval pair: linked thread % not found for approval_request %', NEW.thread_id, NEW.approval_request_id
-                USING ERRCODE = 'check_violation';
-        END IF;
-        IF v_thread.approval_request_id IS DISTINCT FROM NEW.approval_request_id THEN
-            RAISE EXCEPTION 'approval pair: thread % does not link to approval_request %', NEW.thread_id, NEW.approval_request_id
-                USING ERRCODE = 'check_violation';
-        END IF;
-        IF v_thread.status <> NEW.status THEN
-            RAISE EXCEPTION 'approval pair: status mismatch between approval_request % (%) and thread % (%)',
-                NEW.approval_request_id, NEW.status, v_thread.thread_id, v_thread.status
-                USING ERRCODE = 'check_violation';
-        END IF;
-        IF v_thread.package_version IS DISTINCT FROM NEW.package_version THEN
-            RAISE EXCEPTION 'approval pair: package_version mismatch between approval_request % (%) and thread % (%)',
-                NEW.approval_request_id, NEW.package_version, v_thread.thread_id, v_thread.package_version
-                USING ERRCODE = 'check_violation';
-        END IF;
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS fc27_graph_threads_pair_check ON public.graph_threads;
-CREATE CONSTRAINT TRIGGER fc27_graph_threads_pair_check
-AFTER INSERT OR UPDATE ON public.graph_threads
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION public.fc27_check_approval_pair();
-
-DROP TRIGGER IF EXISTS fc27_approval_requests_pair_check ON public.approval_requests;
-CREATE CONSTRAINT TRIGGER fc27_approval_requests_pair_check
-AFTER INSERT OR UPDATE ON public.approval_requests
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION public.fc27_check_approval_pair();
-```
-
----
-
-### 2.4 Diagnostic View: `public.fc27_approval_inconsistencies`
-
-The view exposes discrepancies between execution state and authorization records. Graph API queries this view at startup and on `/health/ready`. Any non-legacy inconsistency degrades service health and blocks decisions.
-
-```sql
-CREATE OR REPLACE VIEW public.fc27_approval_inconsistencies AS
--- 1. status_mismatch: linked, but statuses differ
-SELECT 'status_mismatch'::text AS kind,
-       g.thread_id,
-       r.approval_request_id
-  FROM public.graph_threads g
-  JOIN public.approval_requests r ON g.approval_request_id = r.approval_request_id
- WHERE g.status <> r.status
-
-UNION ALL
-
--- 2. package_mismatch: linked, but package_version differs
-SELECT 'package_mismatch'::text AS kind,
-       g.thread_id,
-       r.approval_request_id
-  FROM public.graph_threads g
-  JOIN public.approval_requests r ON g.approval_request_id = r.approval_request_id
- WHERE g.package_version IS DISTINCT FROM r.package_version
-
-UNION ALL
-
--- 3. unlinked_request: approval_requests row whose thread doesn't link back to it or doesn't exist
-SELECT 'unlinked_request'::text AS kind,
-       r.thread_id,
-       r.approval_request_id
-  FROM public.approval_requests r
-  LEFT JOIN public.graph_threads g ON r.approval_request_id = g.approval_request_id
- WHERE g.thread_id IS NULL OR g.thread_id <> r.thread_id
-
-UNION ALL
-
--- 4. missing_link: active awaiting thread with package_version that has no approval_request_id
-SELECT 'missing_link'::text AS kind,
-       g.thread_id,
-       g.approval_request_id
-  FROM public.graph_threads g
- WHERE g.status = 'awaiting_approval'
-   AND g.package_version IS NOT NULL
-   AND g.approval_request_id IS NULL
-
-UNION ALL
-
--- 5. legacy_unlinked: historical pre-0003 threads without an approval_request_id
-SELECT 'legacy_unlinked'::text AS kind,
-       g.thread_id,
-       g.approval_request_id
-  FROM public.graph_threads g
- WHERE g.approval_request_id IS NULL
-   AND NOT (g.status = 'awaiting_approval' AND g.package_version IS NOT NULL);
-```
-
----
-
-### 2.5 Table `public.approval_audit` Extensions
-
-`approval_audit` records immutable evidence of each terminal authorization action.
-
-#### Schema Alterations
-```sql
--- Extend decision constraint to accept REQUEST_REVISION
-ALTER TABLE public.approval_audit
-    DROP CONSTRAINT IF EXISTS approval_audit_decision_check;
-ALTER TABLE public.approval_audit
-    DROP CONSTRAINT IF EXISTS approval_audit_decision_chk;
-
-ALTER TABLE public.approval_audit
-    ADD CONSTRAINT approval_audit_decision_chk
-    CHECK (decision IN ('APPROVE', 'REJECT', 'REQUEST_REVISION'));
-
--- Add Phase 1 Task 4 fields
-ALTER TABLE public.approval_audit
-    ADD COLUMN IF NOT EXISTS proof_type text NOT NULL DEFAULT 'hmac'
-        CHECK (proof_type IN ('hmac', 'webauthn')),
-    ADD COLUMN IF NOT EXISTS actor_user_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS webauthn_credential_id bytea NULL,
-    ADD COLUMN IF NOT EXISTS correlation_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS approval_request_id uuid NULL 
-        REFERENCES public.approval_requests(approval_request_id);
-
-CREATE INDEX IF NOT EXISTS approval_audit_request_idx 
-    ON public.approval_audit(approval_request_id);
-```
-
----
-
-### 2.6 Table `public.approval_nonces` Extensions
-
-Single-use challenge nonces are generalized across thread approvals, dispatch actions, role assignments, and activation gates.
-
-#### Schema Alterations
-```sql
--- 1. Add new columns
-ALTER TABLE public.approval_nonces
-    ADD COLUMN IF NOT EXISTS revoked_at timestamptz NULL,
-    ADD COLUMN IF NOT EXISTS subject_type text NOT NULL DEFAULT 'thread',
-    ADD COLUMN IF NOT EXISTS dispatch_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS user_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS gate_id text NULL;
-
--- 2. Make legacy non-nullable fields nullable for non-thread subjects
-ALTER TABLE public.approval_nonces
-    ALTER COLUMN thread_id DROP NOT NULL,
-    ALTER COLUMN package_version DROP NOT NULL;
-
--- 3. Subject-type CHECK constraint
-ALTER TABLE public.approval_nonces
-    DROP CONSTRAINT IF EXISTS approval_nonces_subject_type_chk;
-
-ALTER TABLE public.approval_nonces
-    ADD CONSTRAINT approval_nonces_subject_type_chk
-    CHECK (subject_type IN (
-        'thread',
-        'dispatch_plan',
-        'dispatch_cancel',
-        'role_grant',
-        'activation_gate'
-    ));
-
--- 4. Exactly-one-subject column coupling constraint
-ALTER TABLE public.approval_nonces
-    DROP CONSTRAINT IF EXISTS approval_nonces_subject_columns_chk;
-
-ALTER TABLE public.approval_nonces
-    ADD CONSTRAINT approval_nonces_subject_columns_chk
-    CHECK (
-        (subject_type = 'thread' 
-            AND thread_id IS NOT NULL AND package_version IS NOT NULL 
-            AND dispatch_id IS NULL AND user_id IS NULL AND gate_id IS NULL)
-        OR
-        (subject_type IN ('dispatch_plan', 'dispatch_cancel') 
-            AND dispatch_id IS NOT NULL 
-            AND thread_id IS NULL AND user_id IS NULL AND gate_id IS NULL)
-        OR
-        (subject_type = 'role_grant' 
-            AND user_id IS NOT NULL 
-            AND thread_id IS NULL AND dispatch_id IS NULL AND gate_id IS NULL)
-        OR
-        (subject_type = 'activation_gate' 
-            AND gate_id IS NOT NULL 
-            AND thread_id IS NULL AND dispatch_id IS NULL AND user_id IS NULL)
-    );
-```
-
----
-
-### 2.7 Trigger Function `public.fc27_check_event_source()` Update
-
-The trigger function from Section A is replaced to validate source integrity and entity-ownership for `approval_requests` and `approval_audit`.
-
-```sql
-CREATE OR REPLACE FUNCTION public.fc27_check_event_source()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    -- Transition-only event types (C-10)
-    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created') 
-       OR NEW.event_type LIKE 'plan.%' 
-       OR NEW.event_type LIKE 'tracking.%' THEN
-        IF current_user != 'fc27_owner' OR session_user NOT IN ('fc27_app', 'fc27_dispatch') THEN
-            RAISE EXCEPTION 'transition-only event type not allowed outside transition function';
-        END IF;
-    END IF;
-
-    -- Sourced event validation
-    IF NEW.event_type = 'approval.decided' THEN
-        IF NEW.source_table IS DISTINCT FROM 'approval_audit' THEN
-            RAISE EXCEPTION 'approval.decided requires source_table = approval_audit';
-        END IF;
-        IF NEW.source_id IS NULL THEN
-            RAISE EXCEPTION 'approval.decided requires a source_id';
-        END IF;
-        -- Entity ownership check (entity_id matches approval_request_id or thread_id)
-        IF NEW.entity_type = 'approval_request' THEN
-            IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit 
-                 WHERE id = NEW.source_id::bigint 
-                   AND approval_request_id = NEW.entity_id::uuid
-            ) THEN
-                RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
-            END IF;
-        ELSE
-            IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit 
-                 WHERE id = NEW.source_id::bigint 
-                   AND thread_id = NEW.entity_id
-            ) THEN
-                RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
-            END IF;
-        END IF;
-
-    ELSIF NEW.event_type IN ('approval.created', 'approval.expired') THEN
-        IF NEW.source_table IS DISTINCT FROM 'approval_requests' THEN
-            RAISE EXCEPTION 'event_type requires source_table = approval_requests';
-        END IF;
-        IF NEW.source_id IS NULL THEN
-            RAISE EXCEPTION 'event requires a source_id';
-        END IF;
-        -- Validate source row exists and matches entity_id
-        IF NOT EXISTS (
-            SELECT 1 FROM public.approval_requests 
-             WHERE approval_request_id = NEW.source_id::uuid 
-               AND approval_request_id = NEW.entity_id::uuid
-        ) THEN
-            RAISE EXCEPTION 'source row not found or entity mismatch for approval request event';
-        END IF;
-
-    ELSIF NEW.event_type = 'dispatch.created' THEN
-        IF NEW.source_table IS DISTINCT FROM 'dispatches' THEN
-            RAISE EXCEPTION 'event_type requires source_table = dispatches';
-        END IF;
-        IF NEW.source_id IS NULL THEN
-            RAISE EXCEPTION 'event requires a source_id';
-        END IF;
-
-    ELSIF NEW.event_type = 'dispatch.acknowledged' THEN
-        IF NEW.source_table IS DISTINCT FROM 'dispatch_acknowledgments' THEN
-            RAISE EXCEPTION 'event_type requires source_table = dispatch_acknowledgments';
-        END IF;
-        IF NEW.source_id IS NULL THEN
-            RAISE EXCEPTION 'event requires a source_id';
-        END IF;
-
-    ELSIF NEW.event_type IN ('tracking.updated', 'tracking.completed') THEN
-        IF NEW.source_table IS DISTINCT FROM 'dispatch_assessments' THEN
-            RAISE EXCEPTION 'event_type requires source_table = dispatch_assessments';
-        END IF;
-        IF NEW.source_id IS NULL THEN
-            RAISE EXCEPTION 'event requires a source_id';
-        END IF;
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-```
-
----
-
-### 2.8 Legacy Data Backfill
-
-Executed inside migration `0003` to backfill pre-existing data safely.
-
-#### Backfill Logic
-1. For each `graph_threads` row where `status = 'awaiting_approval' AND package_version IS NOT NULL`:
-   - Generate a new `approval_requests` row.
-   - Set `expires_at = greatest(created_at + interval '72 hours', now() + interval '1 hour')`.
-   - Update `graph_threads.approval_request_id` to link the new request.
-2. Terminal rows (`approved`, `rejected`, `failed`) and awaiting threads without `package_version` are NOT altered.
-3. This step is executed BEFORE the constraint triggers are created, ensuring atomic, conflict-free transition.
-
-```sql
-DO $$
-DECLARE
-    r RECORD;
-    v_req_id uuid;
-BEGIN
-    FOR r IN 
-        SELECT thread_id, package_version, created_at 
-          FROM public.graph_threads 
-         WHERE status = 'awaiting_approval' 
-           AND package_version IS NOT NULL 
-           AND approval_request_id IS NULL
-    LOOP
-        v_req_id := gen_random_uuid();
-        
-        INSERT INTO public.approval_requests (
-            approval_request_id,
-            thread_id,
-            package_version,
-            status,
-            created_at,
-            expires_at,
-            version
-        ) VALUES (
-            v_req_id,
-            r.thread_id,
-            r.package_version,
-            'awaiting_approval',
-            r.created_at,
-            GREATEST(r.created_at + interval '72 hours', now() + interval '1 hour'),
-            1
-        );
-
-        UPDATE public.graph_threads
-           SET approval_request_id = v_req_id
-         WHERE thread_id = r.thread_id;
-    END LOOP;
-END $$;
-```
-
----
-
-## 3. Section 1A Human Authority & Player Consent Compatibility
-
-Section 1A of the project charter establishes that:
-- The Commissioner authorizes club-level actions.
-- An explicit human delegate may authorize designated scoped actions.
-- Affected players authorize their own player-specific assignments.
-- Affected-player fallback is permitted only after escalation for personal developmental actions, and never for club-wide or multi-player actions.
-- Inactivity or timeout never constitutes an approval.
-- Agents (including LLMs and worker processes) never make decisions for humans.
-
-To prevent future destructive migrations while keeping Phase 1 strictly read-only for production authorization, Milestone 1 introduces seven forward-compatible tables and compatibility fields on `approval_audit`.
-
-### 3.1 DDL: Seven Section 1A Compatibility Tables
-
-#### 1. `public.authority_policies`
-Defines allowed decision authority, delegation rights, and fallback rules per action scope.
-```sql
-CREATE TABLE IF NOT EXISTS public.authority_policies (
-    policy_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    policy_name text UNIQUE NOT NULL CHECK (char_length(policy_name) BETWEEN 1 AND 64),
-    scope text NOT NULL CHECK (scope IN ('club', 'player_specific', 'mixed')),
-    action_type text NOT NULL CHECK (char_length(action_type) BETWEEN 1 AND 64),
-    primary_role text NOT NULL DEFAULT 'commissioner',
-    allow_delegation boolean NOT NULL DEFAULT false,
-    allow_player_consent boolean NOT NULL DEFAULT false,
-    allow_player_fallback boolean NOT NULL DEFAULT false,
-    escalation_timeout_seconds integer CHECK (escalation_timeout_seconds IS NULL OR escalation_timeout_seconds > 0),
-    is_active boolean NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    version integer NOT NULL DEFAULT 1,
-    -- Invariants: Fallback only allowed for player-specific actions
-    CHECK (allow_player_fallback = false OR scope = 'player_specific'),
-    -- Prohibited club-level actions from fallback
-    CHECK (
-        allow_player_fallback = false OR
-        action_type NOT IN (
-            'club_strategy', 'team_tactics', 'formations', 'programme_release',
-            'club_dispatch_activation', 'policy_exception', 'roster',
-            'transfer', 'recruitment', 'discipline', 'fair_play',
-            'identity_change', 'access_control', 'delegation_policy'
-        )
-    )
-);
-
-CREATE INDEX IF NOT EXISTS authority_policies_scope_idx 
-    ON public.authority_policies(scope, action_type);
-```
-
-#### 2. `public.authority_delegations`
-Manages revocable, time-bounded delegations of human authority.
-```sql
-CREATE TABLE IF NOT EXISTS public.authority_delegations (
-    delegation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    delegator_id text NOT NULL,
-    delegate_id text NOT NULL,
-    delegate_role text NOT NULL DEFAULT 'deputy',
-    scope text NOT NULL CHECK (scope IN ('club', 'player_specific')),
-    allowed_action_types text[] NOT NULL DEFAULT '{}',
+CREATE INDEX IF NOT EXISTS fc27_user_roles_role_idx 
+    ON public.fc27_user_roles(role, user_id);
+
+
+-- 3. fc27_invitations -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_invitations (
+    invitation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    club_id text NOT NULL CHECK (club_id ~ '^[0-9]+$'),
+    intended_role text NOT NULL CHECK (intended_role IN (
+        'commissioner',
+        'commissioner_delegate',
+        'coach',
+        'analyst',
+        'staff',
+        'player',
+        'bff_service',
+        'graph_service'
+    )),
+    invited_email text NOT NULL CHECK (char_length(invited_email) BETWEEN 3 AND 255 AND invited_email = lower(trim(invited_email))),
+    creator_id text NOT NULL CHECK (char_length(creator_id) BETWEEN 1 AND 128),
     issued_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL,
-    revoked_at timestamptz,
-    revoked_by text,
-    revocation_reason text,
-    created_at timestamptz NOT NULL DEFAULT now(),
+    consumed_at timestamptz NULL,
+    revoked_at timestamptz NULL,
     CHECK (expires_at > issued_at),
-    CHECK (revoked_at IS NULL OR (revoked_by IS NOT NULL AND revocation_reason IS NOT NULL))
+    CHECK (consumed_at IS NULL OR revoked_at IS NULL)
 );
 
-CREATE INDEX IF NOT EXISTS authority_delegations_active_idx 
-    ON public.authority_delegations(delegate_id, scope)
+CREATE INDEX IF NOT EXISTS fc27_invitations_club_role_idx 
+    ON public.fc27_invitations(club_id, intended_role);
+
+CREATE INDEX IF NOT EXISTS fc27_invitations_active_idx 
+    ON public.fc27_invitations(token_hash, expires_at) 
+    WHERE consumed_at IS NULL AND revoked_at IS NULL;
+
+
+-- 4. fc27_sessions ----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_sessions (
+    session_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    auth_level text NOT NULL CHECK (auth_level IN ('authenticated', 'mfa_totp', 'step_up_passkey')),
+    auth_method text NOT NULL CHECK (auth_method IN ('passkey', 'totp', 'service_token', 'recovery_code')),
+    ip_address text NULL CHECK (ip_address IS NULL OR char_length(ip_address) <= 64),
+    user_agent text NULL CHECK (user_agent IS NULL OR char_length(user_agent) <= 512),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_used_at timestamptz NOT NULL DEFAULT now(),
+    idle_expires_at timestamptz NOT NULL,
+    absolute_expires_at timestamptz NOT NULL,
+    revoked_at timestamptz NULL,
+    CHECK (absolute_expires_at > created_at),
+    CHECK (idle_expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS fc27_sessions_user_idx 
+    ON public.fc27_sessions(user_id);
+
+CREATE INDEX IF NOT EXISTS fc27_sessions_active_idx 
+    ON public.fc27_sessions(token_hash, idle_expires_at, absolute_expires_at) 
     WHERE revoked_at IS NULL;
-```
 
-#### 3. `public.player_assignments`
-Records one immutable package assignment per individual player.
-```sql
-CREATE TABLE IF NOT EXISTS public.player_assignments (
-    assignment_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    package_id text NOT NULL,
-    package_version text NOT NULL CHECK (package_version ~ '^[0-9a-f]{64}$'),
-    package_hash text NOT NULL CHECK (package_hash ~ '^[0-9a-f]{64}$'),
-    subject_player_id text NOT NULL CHECK (subject_player_id ~ '^[0-9]{1,20}$'),
-    club_id text NOT NULL CHECK (club_id ~ '^[0-9]+$'),
-    assignment_version integer NOT NULL DEFAULT 1,
-    assignment_hash text NOT NULL CHECK (assignment_hash ~ '^[0-9a-f]{64}$'),
-    assignment_scope text NOT NULL DEFAULT 'player_specific' CHECK (assignment_scope = 'player_specific'),
-    action_type text NOT NULL,
-    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'invalidated', 'completed', 'paused')),
-    requires_player_consent boolean NOT NULL DEFAULT true,
-    fallback_eligible boolean NOT NULL DEFAULT false,
-    superseded_by uuid REFERENCES public.player_assignments(assignment_id),
+
+-- 5. fc27_webauthn_credentials ----------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_webauthn_credentials (
+    credential_id bytea PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    public_key bytea NOT NULL,
+    sign_counter bigint NOT NULL DEFAULT 0 CHECK (sign_counter >= 0),
+    label text NOT NULL DEFAULT 'Passkey' CHECK (char_length(label) BETWEEN 1 AND 128),
+    aaguid uuid NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (package_id, subject_player_id, assignment_version)
+    last_used_at timestamptz NULL,
+    revoked_at timestamptz NULL
 );
 
-CREATE INDEX IF NOT EXISTS player_assignments_player_status_idx 
-    ON public.player_assignments(subject_player_id, status);
-```
+CREATE INDEX IF NOT EXISTS fc27_webauthn_credentials_user_idx 
+    ON public.fc27_webauthn_credentials(user_id) 
+    WHERE revoked_at IS NULL;
 
-#### 4. `public.player_decision_requests`
-Explicit challenges issued to players for personal assignment review.
-```sql
-CREATE TABLE IF NOT EXISTS public.player_decision_requests (
-    request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    assignment_id uuid NOT NULL REFERENCES public.player_assignments(assignment_id),
-    subject_player_id text NOT NULL CHECK (subject_player_id ~ '^[0-9]{1,20}$'),
-    status text NOT NULL DEFAULT 'awaiting_player' CHECK (status IN (
-        'awaiting_player', 'decided', 'expired', 'invalidated', 'superseded'
-    )),
-    challenge_nonce text UNIQUE,
-    action_token_reference text UNIQUE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    expires_at timestamptz NOT NULL,
-    decided_at timestamptz,
-    version integer NOT NULL DEFAULT 1,
-    CHECK (expires_at > created_at),
-    CHECK ((status = 'decided') = (decided_at IS NOT NULL))
-);
-
-CREATE INDEX IF NOT EXISTS player_decision_requests_assignment_idx 
-    ON public.player_decision_requests(assignment_id);
-```
-
-#### 5. `public.player_decisions`
-Append-only log of player actions (`accept`, `reject`, `change_request`, `pause`, `acknowledge`).
-```sql
-CREATE TABLE IF NOT EXISTS public.player_decisions (
-    decision_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    request_id uuid NOT NULL REFERENCES public.player_decision_requests(request_id),
-    assignment_id uuid NOT NULL REFERENCES public.player_assignments(assignment_id),
-    subject_player_id text NOT NULL CHECK (subject_player_id ~ '^[0-9]{1,20}$'),
-    actor_type text NOT NULL CHECK (actor_type = 'player'),
-    actor_id text NOT NULL,
-    decision text NOT NULL CHECK (decision IN ('accept', 'reject', 'change_request', 'pause', 'acknowledge')),
-    authority_basis text NOT NULL CHECK (authority_basis IN ('affected_player_consent', 'affected_player_fallback')),
-    assignment_version integer NOT NULL,
-    assignment_hash text NOT NULL CHECK (assignment_hash ~ '^[0-9a-f]{64}$'),
-    package_id text NOT NULL,
-    package_version text NOT NULL CHECK (package_version ~ '^[0-9a-f]{64}$'),
-    package_hash text NOT NULL CHECK (package_hash ~ '^[0-9a-f]{64}$'),
-    notes text NOT NULL DEFAULT '',
-    authentication_evidence_id uuid,
-    action_token_reference text,
-    idempotency_key text UNIQUE,
-    decided_at timestamptz NOT NULL DEFAULT now(),
-    created_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (actor_id = subject_player_id)
-);
-
-CREATE TRIGGER fc27_player_decisions_immutable
-BEFORE UPDATE OR DELETE ON public.player_decisions
-FOR EACH ROW EXECUTE FUNCTION public.fc27_reject_mutation();
-```
-
-#### 6. `public.approval_escalations`
-Append-only progression tracking for unacted requests.
-```sql
-CREATE TABLE IF NOT EXISTS public.approval_escalations (
-    escalation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    approval_request_id uuid NOT NULL REFERENCES public.approval_requests(approval_request_id),
-    from_state text NOT NULL,
-    to_state text NOT NULL CHECK (to_state IN (
-        'awaiting_primary', 'primary_reminder_due', 'evaluating_fallback',
-        'awaiting_delegate', 'awaiting_affected_player', 'held_no_authorized_approver',
-        'terminal', 'expired', 'invalidated', 'superseded', 'conflict_requires_resolution'
-    )),
-    trigger_reason text NOT NULL CHECK (trigger_reason IN (
-        'timer_elapsed', 'manual_escalation', 'delegate_unavailable', 'policy_rule', 'conflict_detected'
-    )),
-    fallback_eligible boolean NOT NULL DEFAULT false,
-    eligible_actor_type text CHECK (eligible_actor_type IN ('commissioner', 'delegate', 'player')),
-    eligible_actor_id text,
-    escalated_at timestamptz NOT NULL DEFAULT now(),
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TRIGGER fc27_approval_escalations_immutable
-BEFORE UPDATE OR DELETE ON public.approval_escalations
-FOR EACH ROW EXECUTE FUNCTION public.fc27_reject_mutation();
-```
-
-#### 7. `public.authority_conflicts`
-Durable isolation for late or conflicting decisions.
-```sql
-CREATE TABLE IF NOT EXISTS public.authority_conflicts (
-    conflict_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    approval_request_id uuid NOT NULL REFERENCES public.approval_requests(approval_request_id),
-    first_decision_id text NOT NULL,
-    conflicting_decision_payload jsonb NOT NULL,
-    conflict_type text NOT NULL CHECK (conflict_type IN (
-        'late_primary_after_delegate', 'late_primary_after_fallback',
-        'concurrent_decisions', 'conflicting_scope', 'unauthorized_attempt'
-    )),
-    status text NOT NULL DEFAULT 'unresolved' CHECK (status IN (
-        'unresolved', 'reconciled_primary_held', 'reconciled_fallback_revoked', 'invalidated'
-    )),
-    detected_at timestamptz NOT NULL DEFAULT now(),
-    reconciled_at timestamptz,
-    reconciled_by text,
-    reconciliation_notes text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-```
-
-### 3.2 Compatibility Fields on `public.approval_audit`
-
-To support Section 1A actor typing, authority basis, and conflict recording, `approval_audit` receives the following fields:
-
-```sql
-ALTER TABLE public.approval_audit
-    ADD COLUMN IF NOT EXISTS actor_type text NOT NULL DEFAULT 'commissioner'
-        CHECK (actor_type IN ('commissioner', 'delegate', 'player', 'system')),
-    ADD COLUMN IF NOT EXISTS authority_role text NOT NULL DEFAULT 'commissioner',
-    ADD COLUMN IF NOT EXISTS authority_basis text NOT NULL DEFAULT 'primary'
-        CHECK (authority_basis IN ('primary', 'explicit_delegate', 'affected_player_consent', 'affected_player_fallback')),
-    ADD COLUMN IF NOT EXISTS decision_scope text NOT NULL DEFAULT 'club'
-        CHECK (decision_scope IN ('club', 'player_specific', 'mixed')),
-    ADD COLUMN IF NOT EXISTS delegation_id uuid NULL 
-        REFERENCES public.authority_delegations(delegation_id),
-    ADD COLUMN IF NOT EXISTS subject_player_id text NULL,
-    ADD COLUMN IF NOT EXISTS package_id text NULL,
-    ADD COLUMN IF NOT EXISTS package_hash text NULL,
-    ADD COLUMN IF NOT EXISTS assignment_id uuid NULL 
-        REFERENCES public.player_assignments(assignment_id),
-    ADD COLUMN IF NOT EXISTS assignment_version integer NULL,
-    ADD COLUMN IF NOT EXISTS assignment_hash text NULL,
-    ADD COLUMN IF NOT EXISTS authentication_evidence_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS action_token_reference text NULL,
-    ADD COLUMN IF NOT EXISTS invalidated_at timestamptz NULL,
-    ADD COLUMN IF NOT EXISTS superseded_by uuid NULL,
-    ADD COLUMN IF NOT EXISTS conflict_state text NULL 
-        CHECK (conflict_state IS NULL OR conflict_state IN ('none', 'conflict_detected', 'reconciled'));
-```
-
----
-
-## 4. `migrations/post/grants.sql` Version 3 Update
-
-Every database role conforms strictly to least privilege:
-- `fc27_owner`: Owns all objects.
-- `fc27_migrator`: Has `CONNECT` and inherits `fc27_owner` membership.
-- `fc27_app`: Application role (graph-api). Needs DML on approval and compatibility tables. No DDL, no superuser, no ownership.
-- `fc27_dispatch`: Worker role. Has **zero** access to approval tables, nonces, or user decision data.
-
-### 4.1 Grants Script Diff Specification
-Bump `-- grants-policy-version: 3` and add conditional grants for Milestone 1 objects:
-
-```sql
--- grants-policy-version: 3
-DO $$
+-- Sign counter monotonicity guard against cloned authenticators
+CREATE OR REPLACE FUNCTION public.fc27_guard_webauthn_counter()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
 BEGIN
-    -- Existing M0 objects
-    IF to_regclass('public.graph_threads') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.graph_threads TO fc27_app;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.sign_counter < OLD.sign_counter THEN
+            RAISE check_violation USING MESSAGE = 'webauthn sign_counter cannot decrease';
+        END IF;
     END IF;
-    IF to_regclass('public.approval_nonces') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.approval_nonces TO fc27_app;
-    END IF;
-    IF to_regclass('public.run_sequences') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.run_sequences TO fc27_app;
-    END IF;
-    IF to_regclass('public.approval_audit') IS NOT NULL THEN
-        GRANT SELECT, INSERT ON public.approval_audit TO fc27_app;
-    END IF;
-    IF to_regclass('public.schema_migrations') IS NOT NULL THEN
-        GRANT SELECT ON public.schema_migrations TO fc27_app;
-    END IF;
-    IF to_regclass('public.checkpoints') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON public.checkpoints TO fc27_app;
-    END IF;
-    IF to_regclass('public.checkpoint_blobs') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON public.checkpoint_blobs TO fc27_app;
-    END IF;
-    IF to_regclass('public.checkpoint_writes') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON public.checkpoint_writes TO fc27_app;
-    END IF;
-    IF to_regclass('public.checkpoint_migrations') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON public.checkpoint_migrations TO fc27_app;
-    END IF;
-    IF to_regclass('public.approval_audit_id_seq') IS NOT NULL THEN
-        GRANT USAGE ON SEQUENCE public.approval_audit_id_seq TO fc27_app;
-    END IF;
-    IF to_regclass('public.domain_events') IS NOT NULL THEN
-        GRANT SELECT, INSERT ON public.domain_events TO fc27_app;
-        GRANT SELECT ON public.domain_events TO fc27_dispatch;
-    END IF;
-    IF to_regclass('public.domain_events_event_id_seq') IS NOT NULL THEN
-        GRANT USAGE ON SEQUENCE public.domain_events_event_id_seq TO fc27_app;
-    END IF;
-    IF to_regclass('public.outbox') IS NOT NULL THEN
-        GRANT INSERT ON public.outbox TO fc27_app;
-    END IF;
-    IF to_regclass('public.outbox_outbox_id_seq') IS NOT NULL THEN
-        GRANT USAGE ON SEQUENCE public.outbox_outbox_id_seq TO fc27_app;
-    END IF;
+    RETURN NEW;
+END;
+$$;
 
-    -- Milestone 1 additions
-    IF to_regclass('public.approval_requests') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.approval_requests TO fc27_app;
-    END IF;
-    IF to_regclass('public.fc27_approval_inconsistencies') IS NOT NULL THEN
-        GRANT SELECT ON public.fc27_approval_inconsistencies TO fc27_app;
-    END IF;
+DROP TRIGGER IF EXISTS fc27_webauthn_counter_guard ON public.fc27_webauthn_credentials;
+CREATE TRIGGER fc27_webauthn_counter_guard
+    BEFORE UPDATE ON public.fc27_webauthn_credentials
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_webauthn_counter();
 
-    -- Section 1A compatibility additions
-    IF to_regclass('public.authority_policies') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.authority_policies TO fc27_app;
+
+-- 6. fc27_totp_credentials --------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_totp_credentials (
+    user_id uuid PRIMARY KEY REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    encrypted_seed text NOT NULL CHECK (char_length(encrypted_seed) >= 16),
+    key_version integer NOT NULL DEFAULT 1 CHECK (key_version >= 1),
+    status text NOT NULL DEFAULT 'enrolled' CHECK (status IN ('enrolled', 'active', 'revoked')),
+    enrolled_at timestamptz NOT NULL DEFAULT now(),
+    last_verified_at timestamptz NULL,
+    revoked_at timestamptz NULL,
+    CHECK (revoked_at IS NULL OR status = 'revoked')
+);
+
+
+-- 7. fc27_recovery_codes ----------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_recovery_codes (
+    code_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    code_hash text NOT NULL CHECK (char_length(code_hash) >= 32),
+    consumed_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS fc27_recovery_codes_user_idx 
+    ON public.fc27_recovery_codes(user_id);
+
+CREATE INDEX IF NOT EXISTS fc27_recovery_codes_active_idx 
+    ON public.fc27_recovery_codes(user_id) 
+    WHERE consumed_at IS NULL;
+
+-- Deletions strictly forbidden via fc27_reject_mutation()
+DROP TRIGGER IF EXISTS fc27_recovery_codes_immutable ON public.fc27_recovery_codes;
+CREATE TRIGGER fc27_recovery_codes_immutable
+    BEFORE DELETE ON public.fc27_recovery_codes
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_reject_mutation();
+
+-- Single-use transition guard for consumed_at; immutability for all other attributes
+CREATE OR REPLACE FUNCTION public.fc27_guard_recovery_code_consumption()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.consumed_at IS NOT NULL THEN
+        RAISE check_violation USING MESSAGE = 'recovery code is already consumed';
     END IF;
-    IF to_regclass('public.authority_delegations') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.authority_delegations TO fc27_app;
+    IF NEW.consumed_at IS NULL THEN
+        RAISE check_violation USING MESSAGE = 'cannot un-consume recovery code';
     END IF;
-    IF to_regclass('public.player_assignments') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.player_assignments TO fc27_app;
+    IF NEW.code_id <> OLD.code_id OR NEW.user_id <> OLD.user_id OR NEW.code_hash <> OLD.code_hash OR NEW.created_at <> OLD.created_at THEN
+        RAISE check_violation USING MESSAGE = 'recovery code attributes are immutable';
     END IF;
-    IF to_regclass('public.player_decision_requests') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.player_decision_requests TO fc27_app;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS fc27_recovery_codes_update_guard ON public.fc27_recovery_codes;
+CREATE TRIGGER fc27_recovery_codes_update_guard
+    BEFORE UPDATE ON public.fc27_recovery_codes
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_recovery_code_consumption();
+
+
+-- 8. fc27_action_tokens -----------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_action_tokens (
+    token_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    assignment_id uuid NULL REFERENCES public.player_assignments(assignment_id) ON DELETE CASCADE,
+    scope text NOT NULL CHECK (scope IN (
+        'player_decision',
+        'step_up',
+        'delegation',
+        'invitation',
+        'recovery'
+    )),
+    expires_at timestamptz NOT NULL,
+    consumed_at timestamptz NULL,
+    revoked_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (expires_at > created_at),
+    CHECK (consumed_at IS NULL OR revoked_at IS NULL)
+);
+
+CREATE INDEX IF NOT EXISTS fc27_action_tokens_user_scope_idx 
+    ON public.fc27_action_tokens(user_id, scope);
+
+CREATE INDEX IF NOT EXISTS fc27_action_tokens_assignment_idx 
+    ON public.fc27_action_tokens(assignment_id) 
+    WHERE assignment_id IS NOT NULL;
+
+-- Action token parameter immutability and consumption guard
+CREATE OR REPLACE FUNCTION public.fc27_guard_action_token_mutation()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.consumed_at IS NOT NULL THEN
+        RAISE check_violation USING MESSAGE = 'action token is already consumed';
     END IF;
-    IF to_regclass('public.player_decisions') IS NOT NULL THEN
-        GRANT SELECT, INSERT ON public.player_decisions TO fc27_app;
+    IF OLD.revoked_at IS NOT NULL THEN
+        RAISE check_violation USING MESSAGE = 'action token is already revoked';
     END IF;
-    IF to_regclass('public.approval_escalations') IS NOT NULL THEN
-        GRANT SELECT, INSERT ON public.approval_escalations TO fc27_app;
+    IF NEW.token_id <> OLD.token_id OR NEW.token_hash <> OLD.token_hash OR NEW.user_id <> OLD.user_id OR NEW.scope <> OLD.scope OR NEW.expires_at <> OLD.expires_at THEN
+        RAISE check_violation USING MESSAGE = 'action token parameters are immutable';
     END IF;
-    IF to_regclass('public.authority_conflicts') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON public.authority_conflicts TO fc27_app;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS fc27_action_tokens_guard ON public.fc27_action_tokens;
+CREATE TRIGGER fc27_action_tokens_guard
+    BEFORE UPDATE ON public.fc27_action_tokens
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_action_token_mutation();
+
+
+-- 9. fc27_challenges --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.fc27_challenges (
+    challenge_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    challenge_type text NOT NULL CHECK (challenge_type IN (
+        'webauthn_registration',
+        'webauthn_login',
+        'step_up_decision',
+        'player_decision'
+    )),
+    challenge_str text NOT NULL UNIQUE CHECK (char_length(challenge_str) >= 16),
+    user_id uuid NULL REFERENCES public.fc27_users(user_id) ON DELETE CASCADE,
+    bound_payload_hash text NULL CHECK (bound_payload_hash IS NULL OR bound_payload_hash ~ '^[0-9a-f]{64}$'),
+    expires_at timestamptz NOT NULL,
+    consumed_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS fc27_challenges_user_idx 
+    ON public.fc27_challenges(user_id) 
+    WHERE user_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS fc27_challenges_active_idx 
+    ON public.fc27_challenges(challenge_str, expires_at) 
+    WHERE consumed_at IS NULL;
+
+-- Challenge immutability and consumption guard
+CREATE OR REPLACE FUNCTION public.fc27_guard_challenge_consumption()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.consumed_at IS NOT NULL THEN
+        RAISE check_violation USING MESSAGE = 'challenge is already consumed';
     END IF;
-END $$;
+    IF NEW.consumed_at IS NULL THEN
+        RAISE check_violation USING MESSAGE = 'cannot un-consume challenge';
+    END IF;
+    IF NEW.challenge_id <> OLD.challenge_id OR NEW.challenge_type <> OLD.challenge_type OR NEW.challenge_str <> OLD.challenge_str OR NEW.expires_at <> OLD.expires_at THEN
+        RAISE check_violation USING MESSAGE = 'challenge parameters are immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS fc27_challenges_consumption_guard ON public.fc27_challenges;
+CREATE TRIGGER fc27_challenges_consumption_guard
+    BEFORE UPDATE ON public.fc27_challenges
+    FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_challenge_consumption();
+
+
+-- 10. domain_events Check Constraint Expansion ------------------------------
+-- Expand source_table check constraint on domain_events to accept identity tables
+ALTER TABLE public.domain_events DROP CONSTRAINT IF EXISTS domain_events_source_table_check;
+ALTER TABLE public.domain_events ADD CONSTRAINT domain_events_source_table_check
+CHECK (source_table IN (
+    'approval_audit',
+    'approval_requests',
+    'dispatches',
+    'dispatch_acknowledgments',
+    'dispatch_assessments',
+    'dispatch_plans',
+    'dispatch_plan_decisions',
+    'dispatch_delivery_attempts',
+    'user_roles',
+    'activation_gate_log',
+    'fc27_users',
+    'fc27_user_roles',
+    'fc27_invitations',
+    'fc27_sessions',
+    'fc27_webauthn_credentials',
+    'fc27_totp_credentials',
+    'fc27_recovery_codes',
+    'fc27_action_tokens',
+    'fc27_challenges'
+));
 ```
 
 ---
 
-## 5. `src/db_migrate.py` GRANTS_POLICY Update
+## 5. Security & Least Privilege Design (`migrations/post/grants.sql`)
 
-`src/db_migrate.py` maintains cryptographic tamper verification over `migrations/post/grants.sql`. When editing `grants.sql`, the version and expected SHA-256 hash must be updated in tandem.
+### 5.1 Policy Version Bump
+`migrations/post/grants.sql` line 1 must be bumped from:
+```sql
+-- grants-policy-version: 5
+```
+to:
+```sql
+-- grants-policy-version: 6
+```
 
-### Required Code Change in `src/db_migrate.py`:
+### 5.2 Table-by-Table Privilege Allocation
+Under principle of least privilege:
+- `fc27_app` receives strictly the required DML privileges.
+- `fc27_dispatch` receives **ZERO** privileges on all 9 `fc27_*` tables.
+- No `fc27_*` table grants `DELETE` except `fc27_sessions` (session cleanup), `fc27_challenges` (expired ceremony garbage collection), and `fc27_user_roles` (role revocation).
+- `fc27_recovery_codes` has a `BEFORE DELETE` trigger calling `fc27_reject_mutation()`, preventing any row deletion even if `fc27_app` attempted it.
+
+```sql
+    -- Phase 2 Milestone 1: Identity Data Foundation Grants
+    IF to_regclass('public.fc27_users') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_users TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_user_roles') IS NOT NULL THEN
+        GRANT SELECT, INSERT, DELETE ON public.fc27_user_roles TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_invitations') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_invitations TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_sessions') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_sessions TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_webauthn_credentials') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_webauthn_credentials TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_totp_credentials') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_totp_credentials TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_recovery_codes') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_recovery_codes TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_action_tokens') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_action_tokens TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_challenges') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_challenges TO fc27_app;
+    END IF;
+```
+
+---
+
+## 6. Migration Runner Updates (`src/db_migrate.py`)
+
+In `src/db_migrate.py`:
+Update line 25:
 ```python
-# Before (Version 2):
-# GRANTS_POLICY = GrantsPolicy(version=2, sha256="a0c8d37ed61daff8900b116f992fa791f5072c11862c17c264cbc9251f0f4f79")
+GRANTS_POLICY = GrantsPolicy(version=6, sha256=_compute_grants_sha256())
+```
 
-# After (Version 3):
-GRANTS_POLICY = GrantsPolicy(version=3, sha256="<computed_sha256_of_version_3_grants_sql>")
+When `migrate()` runs:
+1. It verifies `grants.sql` starts with `-- grants-policy-version: 6`.
+2. It verifies the SHA-256 digest of `grants.sql` matches `GRANTS_POLICY.sha256`.
+3. It applies `0004_identity_foundation.sql`, records it in `schema_migrations`, executes `grants.sql`, and records version 6 in `schema_policy_versions`.
+4. It calls `verify_postconditions(conn)` ensuring `fc27_app` is not superuser, not member of `fc27_owner`, and lacks `CREATE` on `public` schema.
+
+---
+
+## 7. Rollback & Idempotency Specification
+
+### 7.1 Idempotency
+- All table creations use `CREATE TABLE IF NOT EXISTS`.
+- All index creations use `CREATE INDEX IF NOT EXISTS`.
+- All trigger creations drop any pre-existing trigger before creating (`DROP TRIGGER IF EXISTS ...; CREATE TRIGGER ...`).
+- All helper functions use `CREATE OR REPLACE FUNCTION ...`.
+
+### 7.2 Down-Migration Script (`migrations/down/0004_identity_foundation_down.sql`)
+```sql
+-- Rollback for 0004_identity_foundation.sql
+DROP TRIGGER IF EXISTS fc27_challenges_consumption_guard ON public.fc27_challenges;
+DROP FUNCTION IF EXISTS public.fc27_guard_challenge_consumption();
+
+DROP TRIGGER IF EXISTS fc27_action_tokens_guard ON public.fc27_action_tokens;
+DROP FUNCTION IF EXISTS public.fc27_guard_action_token_mutation();
+
+DROP TRIGGER IF EXISTS fc27_recovery_codes_update_guard ON public.fc27_recovery_codes;
+DROP FUNCTION IF EXISTS public.fc27_guard_recovery_code_consumption();
+DROP TRIGGER IF EXISTS fc27_recovery_codes_immutable ON public.fc27_recovery_codes;
+
+DROP TRIGGER IF EXISTS fc27_webauthn_counter_guard ON public.fc27_webauthn_credentials;
+DROP FUNCTION IF EXISTS public.fc27_guard_webauthn_counter();
+
+DROP TRIGGER IF EXISTS fc27_users_status_guard ON public.fc27_users;
+DROP FUNCTION IF EXISTS public.fc27_guard_user_status_transition();
+
+DROP TABLE IF EXISTS public.fc27_challenges CASCADE;
+DROP TABLE IF EXISTS public.fc27_action_tokens CASCADE;
+DROP TABLE IF EXISTS public.fc27_recovery_codes CASCADE;
+DROP TABLE IF EXISTS public.fc27_totp_credentials CASCADE;
+DROP TABLE IF EXISTS public.fc27_webauthn_credentials CASCADE;
+DROP TABLE IF EXISTS public.fc27_sessions CASCADE;
+DROP TABLE IF EXISTS public.fc27_invitations CASCADE;
+DROP TABLE IF EXISTS public.fc27_user_roles CASCADE;
+DROP TABLE IF EXISTS public.fc27_users CASCADE;
+
+-- Revert domain_events source_table check
+ALTER TABLE public.domain_events DROP CONSTRAINT IF EXISTS domain_events_source_table_check;
+ALTER TABLE public.domain_events ADD CONSTRAINT domain_events_source_table_check
+CHECK (source_table IN (
+    'approval_audit','approval_requests','dispatches','dispatch_acknowledgments',
+    'dispatch_assessments','dispatch_plans','dispatch_plan_decisions',
+    'dispatch_delivery_attempts','user_roles','activation_gate_log'
+));
 ```
 
 ---
 
-## 6. Concurrency & Global Lock Order Analysis
+## 8. Verification Strategy
 
-To eliminate deadlocks between the background expiry daemon (`expire_due`) and concurrent decision execution (`apply_decision`), the strict global lock hierarchy (Spec §7.6) must be observed across all transactions:
-
-1. **Lock Nonces (`public.approval_nonces`):**
-   Lock all active nonces for the target thread in ascending order by `nonce`:
-   `SELECT nonce FROM public.approval_nonces WHERE thread_id = %s AND consumed_at IS NULL ORDER BY nonce FOR UPDATE;`
-2. **Lock Approval Request (`public.approval_requests`):**
-   Lock the specific approval request:
-   `SELECT * FROM public.approval_requests WHERE approval_request_id = %s FOR UPDATE;`
-   *(Reads that only inspect status use `FOR SHARE` in the exact same sequence).*
-3. **Lock Thread (`public.graph_threads`):**
-   Lock the execution thread record:
-   `SELECT * FROM public.graph_threads WHERE thread_id = %s FOR UPDATE;`
-4. **Lock Dispatches (`public.dispatches`):**
-   (Applies only in Milestone 4 when dispatch creation occurs inside the SECURITY DEFINER transition function).
-
-### Expiry vs Decision Race Resolution
-If `apply_decision` and `expire_due` arrive at the deadline simultaneously:
-- Whichever acquires the nonces first wins the entire sequence.
-- If `expire_due` wins: it sets request status to `expired`, thread status to `expired`, and revokes nonces. When `apply_decision` acquires the lock, it observes `status = 'expired'` and fails safely with HTTP 409 `approval_expired`.
-- If `apply_decision` wins: it consumes the nonce and commits `approved`/`rejected`. When `expire_due` acquires the lock, it re-verifies `status = 'awaiting_approval'`, finds that it is already terminal, and takes no action.
-- In neither case can a deadlock or corrupt intermediate state occur.
-
----
-
-## 7. Downstream Implementation Checklist for Implementer
-
-When the implementation agent is dispatched, the following steps must be followed:
-
-- [ ] **1. Append Section B to `migrations/0003_dispatch_foundation.sql`:**
-  - Create table `public.approval_requests` with constraints.
-  - Create function and trigger `fc27_guard_approval_request_transition`.
-  - Alter `public.graph_threads` (add `approval_request_id`, update status CHECK, update terminal fields CHECK).
-  - Execute legacy backfill loop on `graph_threads`.
-  - Replace trigger function `public.fc27_guard_thread_transition`.
-  - Create function and constraint triggers `public.fc27_check_approval_pair`.
-  - Create view `public.fc27_approval_inconsistencies`.
-  - Alter `public.approval_audit` (extend decision check, add Task 4 & Section 1A fields).
-  - Alter `public.approval_nonces` (add revoked_at, subject_type, dispatch_id, user_id, gate_id, update checks).
-  - Replace trigger function `public.fc27_check_event_source`.
-  - Create Section 1A tables: `authority_policies`, `authority_delegations`, `player_assignments`, `player_decision_requests`, `player_decisions`, `approval_escalations`, `authority_conflicts`.
-- [ ] **2. Update `migrations/post/grants.sql`:**
-  - Bump header to `-- grants-policy-version: 3`.
-  - Add grants for `fc27_app` on all new relations.
-- [ ] **3. Update `src/db_migrate.py`:**
-  - Compute SHA-256 of updated `grants.sql`.
-  - Update `GRANTS_POLICY` constant with version `3` and new SHA-256 hash.
-- [ ] **4. Update Python Persistence in `src/approval_store.py`:**
-  - Link `approval_requests` creation in `complete_run`.
-  - Enforce global lock order and consistency verification in `apply_decision` and `expire_due`.
-- [ ] **5. Execute Verification Tests:**
-  - Run `python -m pytest -o addopts="" -q tests/test_db_migrate_roles.py`
-  - Run `python -m pytest -o addopts="" -q tests/test_migration_0003.py`
-  - Run `python -m pytest -o addopts="" -q tests/test_approval_lifecycle.py`
-  - Confirm zero non-legacy inconsistencies in `fc27_approval_inconsistencies`.
+1. **Migration Verification**:
+   - Fresh install test: `migrate()` executes `0001` -> `0002` -> `0003` -> `0004` -> `grants.sql` without error.
+   - Upgrade test: Starting from migrated `0003` database, applying `0004` cleanly adds all 9 tables.
+   - Idempotency test: Re-executing `migrate()` performs no DDL and succeeds.
+2. **Security & Posture Verification**:
+   - `test_db_migrate_roles.py` passes with `GRANTS_POLICY.version == 6`.
+   - `fc27_app` connection can SELECT, INSERT, UPDATE on `fc27_users` and `fc27_sessions`.
+   - `fc27_app` cannot DROP tables or CREATE new tables.
+   - `fc27_dispatch` cannot SELECT, INSERT, UPDATE, or DELETE on any `fc27_*` table.
+3. **Trigger & Invariant Verification**:
+   - `fc27_recovery_codes`: DELETE is rejected with `check_violation` (`fc27_recovery_codes is append-only`).
+   - `fc27_recovery_codes`: UPDATE setting `consumed_at` succeeds once; second UPDATE fails.
+   - `fc27_users`: Transitioning from `disabled` to `active` is rejected.
+   - `fc27_webauthn_credentials`: Decreasing `sign_counter` is rejected.

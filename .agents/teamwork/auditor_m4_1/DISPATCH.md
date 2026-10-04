@@ -1,97 +1,69 @@
-# Dispatch: Milestone 4 Forensic Integrity Auditor
+# Dispatch Instructions for auditor_m4_1
 
-**Agent**: `auditor_m4_1`
+**Agent ID**: `auditor_m4_1`
 **Role**: Milestone 4 Forensic Integrity Auditor
+**Milestone**: Phase 2 Milestone 4 — WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery
 **Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1`
-**Timestamp**: 2026-10-03T21:02:00Z
 
----
+## Authoritative Inputs
+- Authoritative Request: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (MANDATORY TO READ)
+- Project Plan: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md`
 
-## 1. Objective
-Perform independent forensic integrity auditing across all Milestone 4 files to detect any shortcuts, dummy facades, hardcoded test values, or integrity violations.
+## Mandatory Forensic Checks
+1. Anti-Cheating & Mock Verification:
+   - Verify tests and production implementations execute against real libraries (`webauthn>=2.5`, `pyotp>=2.9`, `cryptography`, `argon2-cffi`).
+   - Exactly ZERO mocks or bypasses of cryptographic signature verification, Argon2id hashing, MultiFernet encryption, or database triggers.
+2. Cryptographic Authenticity:
+   - WebAuthn: authentic `webauthn` library options generation, assertion verification, and counter validation.
+   - TOTP: authentic `pyotp` verification with drift tolerance ($\pm 1$ step) and MultiFernet encrypted seeds.
+   - Recovery: authentic Argon2id hashing (`hash_recovery_code()`) and zero plaintext codes stored in DB.
+3. Database Integrity & Concurrency:
+   - Row-level locking on challenge consumption (`SELECT ... FOR UPDATE`).
+   - Trigger `fc27_guard_recovery_code_consumption` enforces atomic single-use on `fc27_recovery_codes`.
+   - Table `fc27_bootstrap_locks` with trigger `fc27_reject_mutation()` prevents duplicate bootstrap ceremonies.
+4. Non-Negotiable Invariants:
+   - Verify `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` remain strictly enforced.
+   - Zero player delivery; no active worker, outbox relay, or delivery adapter.
+   - Anti-impersonation: services cannot register or assert passkeys, TOTP, or recovery codes for humans.
+5. Secret Leakage Audit:
+   - Verify zero plaintext secrets, recovery codes, or TOTP seeds leaked in code, test files, logs, or error responses.
+   - Constant-time comparisons used for tokens and secrets (`hmac.compare_digest`).
 
-## 2. Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoffs:
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md`
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_2\handoff.md`
-4. Reviewer Handoffs:
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_1\handoff.md`
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\handoff.md`
-5. Challenger Handoffs:
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_1\handoff.md`
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_2\handoff.md`
-
-## 3. Files Subject to Forensic Audit
-1. `migrations/0003_dispatch_foundation.sql` (Section E)
-2. `migrations/post/grants.sql` (Policy version 5)
-3. `src/db_migrate.py`
-4. `src/dispatch/gates.py`
-5. `src/dispatch/creation.py`
-6. `src/approval_store.py`
-7. `src/graph_api.py`
-8. `tests/helpers.py`
-9. `tests/conftest.py`
-10. `tests/test_dispatch_creation.py`
-
-## 4. Integrity Verification Criteria
-- Authenticity: All logic must be genuine (real PLpgSQL triggers, real advisory xact locks, real RFC-8785 canonical serialization, real HMAC-SHA256 signatures, real single-transaction rollbacks).
-- No Dummy/Facade Implementations: No shortcuts, no fake pass returns, no stubbed mock responses in production paths.
-- Phase 1 Boundary Enforcement: Strict `DISPATCH_ENABLED=false` posture. Gate evaluation fail-closed in production Phase 1. Zero player delivery or player adapter execution code.
-- Non-Circumvention: Verify `GATE_SIGNED_FIELDS` excludes correlation ID properly, and single-use nonces are genuinely consumed with database locking `FOR UPDATE`.
-- Verify least privilege: `fc27_app` cannot UPDATE/DELETE gate logs; `fc27_dispatch` has no access to gate logs or views.
-
-## 5. Output
-Formulate explicit binary verdict: **CLEAN** or **INTEGRITY VIOLATION**.
-Write `audit_report.md` and `handoff.md` in your working directory.
-Notify orchestrator via `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Provide an explicit binary verdict in your handoff report: **CLEAN** or **INTEGRITY VIOLATION**.
+Write complete report to:
+`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1\handoff.md`.
+Notify orchestrator via `send_message`.
 
 
-## 2026-10-03T21:02:27Z
-You are auditor_m4_1, a teamwork_preview_auditor agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1
+## 2026-10-04T06:14:13Z
+You are auditor_m4_1, a forensic integrity auditor.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1\DISPATCH.md
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1\DISPATCH.md before starting work.
 
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. Worker Handoffs:
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_2\handoff.md
-4. Reviewer Handoffs:
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_1\handoff.md
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\handoff.md
-5. Challenger Handoffs:
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_1\handoff.md
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_2\handoff.md
+Your task:
+Perform an independent forensic integrity audit of Phase 2 Milestone 4 across:
+- migrations/0006_bootstrap_and_recovery.sql, migrations/post/grants.sql, src/db_migrate.py
+- src/identity/webauthn.py
+- src/identity/totp.py
+- src/identity/recovery.py
+- src/identity/store.py
+- src/identity/policy.py
+- src/identity/routers/passkeys.py, totp.py, recovery.py
+- tests/identity/
 
-Files Subject to Forensic Audit:
-1. migrations/0003_dispatch_foundation.sql (Section E)
-2. migrations/post/grants.sql (Policy version 5)
-3. src/db_migrate.py
-4. src/dispatch/gates.py
-5. src/dispatch/creation.py
-6. src/approval_store.py
-7. src/graph_api.py
-8. tests/helpers.py
-9. tests/conftest.py
-10. tests/test_dispatch_creation.py
+Mandatory Audit Checks:
+1. Anti-Cheating & Mock Verification: Verify tests and production implementations execute against real libraries (webauthn>=2.5, pyotp>=2.9, cryptography, argon2-cffi). Exactly ZERO mocks or bypasses of cryptographic signature verification, Argon2id hashing, MultiFernet encryption, or database triggers.
+2. Cryptographic Authenticity: Authentic webauthn options and assertion verification; authentic pyotp verification with drift tolerance (±1 step) and MultiFernet encrypted seeds; authentic Argon2id hashing (hash_recovery_code()) and zero plaintext codes stored in DB.
+3. Database Integrity & Concurrency: Row-level locking on challenge consumption (SELECT ... FOR UPDATE); trigger fc27_guard_recovery_code_consumption enforces atomic single-use on fc27_recovery_codes; table fc27_bootstrap_locks with trigger fc27_reject_mutation() prevents duplicate bootstrap ceremonies.
+4. Non-Negotiable Invariants: Verify DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false remain strictly enforced; zero player delivery; anti-impersonation: services cannot register or assert passkeys, TOTP, or recovery codes for humans.
+5. Secret Leakage Audit: Verify zero plaintext secrets, recovery codes, or TOTP seeds leaked in code, test files, logs, or error responses; constant-time comparisons used for tokens and secrets (hmac.compare_digest).
 
-Task:
-Perform independent forensic integrity audit across all 10 Milestone 4 files:
-- Authenticity: All logic must be genuine (real PLpgSQL triggers, real advisory xact locks, real RFC-8785 canonical serialization, real HMAC-SHA256 signatures, real single-transaction rollbacks).
-- No Dummy/Facade Implementations: No shortcuts, no fake pass returns, no stubbed mock responses in production paths.
-- Phase 1 Boundary Enforcement: Strict DISPATCH_ENABLED=false posture. Gate evaluation fail-closed in production Phase 1. Zero player delivery or player adapter execution code.
-- Non-Circumvention: Verify GATE_SIGNED_FIELDS excludes correlation ID properly, and single-use nonces are genuinely consumed with database locking FOR UPDATE.
-- Verify least privilege: fc27_app cannot UPDATE/DELETE gate logs; fc27_dispatch has no access to gate logs or views.
-- Execution verification:
-  $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_creation.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py tests/test_db_migrate_roles.py
-
-Formulate explicit binary verdict: CLEAN or INTEGRITY VIOLATION.
-Write audit_report.md and handoff.md in your working directory.
-Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+Provide an explicit binary verdict in your handoff report: CLEAN or INTEGRITY VIOLATION.
+Write complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m4_1\handoff.md
+When finished, notify me with your verdict and report path via send_message.

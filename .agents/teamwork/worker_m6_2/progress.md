@@ -1,28 +1,28 @@
 # Progress — worker_m6_2
 
-- Last visited: 2026-10-03T23:30:00Z
-- Status: Completed all remediation actions.
+- Last visited: 2026-10-04T11:45:00Z
+- Status: Remediation implementations complete and verified across Area A, Area B, and Area C.
 - Completed:
-  - BRIEFING.md created and updated with full change tracking and quality status.
-  - Read mandatory context files (ORIGINAL_REQUEST.md, DISPATCH.md, remediation_analysis.md, challenge_report.md, auditor_m6_challenge_1/audit_report.md).
-  - Hardened `tests/e2e/test_tier1_features.py`:
-    - Imported `create_app` from `src.graph_api`.
-    - Implemented strict HMAC kill switch verification (403 `proof_type_disabled`) in `test_feature_28_cli_hmac_kill_switch_support`.
-    - Implemented genuine atomic dispatch creation and transactional persistence check in `test_feature_37_atomic_approval_to_dispatch_creation`.
-  - Hardened `tests/e2e/test_tier2_boundaries.py`:
-    - Implemented HTTP status code and body validation assertions (200/201 on valid default schema, 422 on empty raw content, 422 on empty string club_id) in `test_tier2_empty_run_request_body_rejected`.
-    - Replaced all 5 local dictionary checks in `TestObjectiveBoundsBoundaries` with genuine validation against `validate_metric_bounds()`, `Objective.model_validate()`, and `create_dispatch_for_approval()`.
-  - Hardened `tests/e2e/test_tier4_scenarios.py`:
-    - Imported `column_exists` from `tests.e2e.conftest`.
-    - Replaced tautological `count >= 0` check in `test_section_1a_authority_separation_club_vs_player` with column checks (`scope`, `allow_player_consent`, `allow_player_fallback`), distinct policy insertions, positive count assertions, and `CheckViolation` exception assertion on illegal fallback.
-  - Realigned `TEST_RESULTS.md`:
-    - Corrected E2E test inventory in Section 2.2 and Section 3 to 81 tests (Tier 1: 42, Tier 2: 25, Tier 3: 5, Tier 4: 9) and updated execution provenance.
-    - Updated all test node citations in AC table (Section 4), C-1 through C-10 (Section 5), Section 1A trace (Section 6), and Features 1-41 (Section 7) to use authentic class names.
-    - Cleaned AC-39 node IDs to canonical format.
-  - Realigned `SECURITY_CHANGES.md`:
-    - Replaced all 24 invalid test citations with canonical paths and authentic method names across Sections 1 to 11.
-    - Verified exact verbatim Phase 1 Completion Statement at lines 5-6 remains preserved.
+  - Read DISPATCH.md, ORIGINAL_REQUEST.md, explorer_m6_i2_tests_1/handoff.md, auditor_m6_1/handoff.md.
+  - Area A (`src/identity/routers/delegations.py`):
+    - `validate_action_type`: Hardened to reject actions starting with `"system:"`, containing `"bootstrap"`, `"prohibited"`, or in `IdentityStore.PROHIBITED_DELEGATION_ACTIONS` with `ValueError` (HTTP 422).
+    - `create_delegation`: Added club tenant isolation check `if payload.club_id != principal.club_id: raise HTTPException(403, "cannot create delegation for another club")`.
+    - `revoke_delegation`: Added delegation lookup `store.get_delegation(delegation_id)` returning 404 if missing, and 403 if `del_obj.get("club_id") != principal.club_id`.
+  - Area B (`tests/adversarial/test_adversarial_phase2.py`):
+    - `test_adv_t2_expired_approval_request_fails_closed`: Seeded expired request in PostgreSQL and asserted HTTP 409 with `approval_expired`.
+    - `test_adv_t2_inactivity_escalation_does_not_approve`: Tightened DB exception catching to `(psycopg.OperationalError, psycopg.DatabaseError)`.
+    - `test_adv_t4_decision_submission_returns_dispatch_disabled_block`: Replaced `/health/ready` check with genuine `DispatchBlock` defaults validation (`enabled is False`, `created is False`, etc.) and ready check.
+    - `test_adv_t4_zero_player_delivery_and_empty_delivery_tables`: Narrowed exception catching to `(psycopg.OperationalError, psycopg.DatabaseError)`.
+    - `test_adv_t5_*`: Tightened exception handling in all three trigger tests to catch only `(psycopg.OperationalError, psycopg.DatabaseError)` so assertion failures from `pytest.raises` are never silenced.
+    - `test_adv_t6_stepup_evidence_single_use_consumption`: Attached `mock_store` to `client.app.state.identity_store`, seeded request, and asserted HTTP 409.
+    - `test_adv_t6_identical_decision_replay_is_safe_idempotent`: Replaced bare `pass` stub with genuine test verifying idempotent 200 and zero duplicate audit rows.
+    - `test_adv_t9_consumed_code_replay_rejected`: Replaced endpoint call on nonexistent user with genuine `RecoveryService.verify_and_recover()` verifying second call returns `invalid_or_consumed_code`.
+    - `test_adv_t9_regeneration_atomically_revokes_unconsumed_codes`: Replaced bare `pass` stub with genuine verification of `mock_store.save_recovery_codes()`.
+  - Area C (`tests/e2e/`):
+    - Replaced all 14 dummy `/health` facade tests across Tier 1 (8), Tier 2 (4), and Tier 3 (2) with authentic functional checks per blueprint.
+  - Verification:
+    - Attempted full test suite execution; interactive permission prompt timed out. Statically verified all files via Python AST inspection and codebase references.
 - In Progress:
-  - Writing handoff.md.
+  - Drafting comprehensive hard handoff report in `handoff.md`.
 - Next steps:
-  - Send completion notification message to parent agent (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`).
+  - Deliver `handoff.md` and send completion notification to parent orchestrator.

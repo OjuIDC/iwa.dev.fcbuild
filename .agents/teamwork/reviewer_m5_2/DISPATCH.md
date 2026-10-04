@@ -1,40 +1,62 @@
-# Dispatch: Milestone 5 Reviewer 2 (Scope Protection & Documentation)
+# DISPATCH — 2026-10-04T05:50:00Z
 
-**Agent**: `reviewer_m5_2`
-**Role**: Milestone 5 Reviewer 2 (Scope Protection & Documentation)
-**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2`
-**Timestamp**: 2026-10-03T21:28:00Z
+## Mission
+Review Player Decisions Router, Object-Level Player Isolation, 5 Decision Actions, Graph API Migration & Kill Switch for Phase 2 Milestone 5.
 
----
+## Authoritative Inputs
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (MANDATORY: You MUST read this before starting work)
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
 
-## 1. Objective
-Objectively review the Milestone 5 Phase 1 scope protection tests in `tests/test_phase1_scope.py` and all operator/security documentation artifacts (`docs/DISPATCH_ACTIVATION.md`, `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`, `MIGRATION_GUIDE.md`, `README.md`, `docs/APPROVAL_SECURITY.md`).
+## Focus Areas
+1. `src/identity/routers/player.py`:
+   - Inspect `POST /v1/player/decision-challenge` and `POST /v1/player/decisions` (and aliases).
+   - Object-Level Player Isolation: Pure player can ONLY query or decide own assignments (`subject_player_id == principal.player_id`). Cross-player and staff impersonation attempts return HTTP 403 `PlayerIsolationError`.
+   - Distinct 5 actions: `accept` (requires passkey assertion or token), `reject`, `change_request` (requires mandatory notes, 422 if empty), `pause` (requires `duration_days >= 1`, 422 if invalid), `acknowledge` (receipt confirmation without activating).
+   - Dual proof types: `proof_type: Literal["passkey", "action_token"]`.
+   - G-TIMEOUT Invariant: Inactivity or timeout alters escalation state, but NEVER commits an approval decision.
+   - Anti-impersonation: `require_human_principal` enforced.
+2. `src/schemas.py`:
+   - Inspect `DecisionSubmission`: unifies Phase 2 WebAuthn (`decision`, `proof_type="webauthn"`, `authentication_evidence_id`, `notes`) and legacy Phase 1 HMAC. Auto-detection of legacy HMAC when signature provided without evidence ID.
+3. `src/graph_api.py`:
+   - `ApiSettings`: default `cli_hmac_enabled: bool = False` (and `APPROVAL_CLI_HMAC_ENABLED=False` default).
+   - Proof guard `check_decision_proof_type`: Immediately blocks non-WebAuthn probes with HTTP 403 `proof_type_disabled` before authentication and schema validation when HMAC disabled.
+   - `apply_decision_unified`: centralized policy authorization via `policy.authorize()`, WebAuthn evidence validation, G-TIMEOUT guard, universal dormancy (`dispatch.enabled = false`).
+   - Endpoints: `POST /approval/packages/{package_id}/decide`, `/v1/approval-requests/{id}/decisions`, `/v1/runs/{id}/decision`.
+4. Unit test suite: `tests/identity/test_player.py`.
+5. Scope dormancy: Verify `DISPATCH_ENABLED=false` and zero player delivery.
 
-## 2. Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
-4. `tests/test_phase1_scope.py`
-5. `docs/DISPATCH_ACTIVATION.md`
-6. `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`
-7. `MIGRATION_GUIDE.md`
-8. `README.md`
-9. `docs/APPROVAL_SECURITY.md`
+## Verification Instructions
+Execute test verification:
+```pwsh
+.\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+```
+If an interactive terminal prompt times out waiting for user confirmation, document the attempted command and timeout honestly, and verify via AST and static analysis.
+Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
 
-## 3. Tasks
-1. Inspect `tests/test_phase1_scope.py`:
-   - Verify all 5 test functions: `test_no_phase2plus_code`, `test_no_webauthn_imports`, `test_no_tracking_writes_outside_tests`, `test_docs_state_disabled_and_gates`, `test_activation_doc_forbids_phase1_enablement`.
-2. Inspect `docs/DISPATCH_ACTIVATION.md`:
-   - Verify exact disabled message `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-   - Verify table of 6 gates (`G-MIGRATION` through `G-OUTBOX`).
-   - Verify 4 mandatory statements verbatim in substance (C-2, C-3).
-3. Inspect `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`:
-   - Verify header `Status: UNVERIFIED (G-ID not met)` and the 5 AC-47 criteria with empty evidence tables.
-4. Inspect `MIGRATION_GUIDE.md`, `README.md`, `docs/APPROVAL_SECURITY.md`:
-   - Verify fresh install and role bootstrap commands.
-   - Verify database secret files section with `umask 077` (C-7).
-   - Verify Section 1A human authority, player consent, and candidate error privacy.
-5. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-6. Write `review.md` and `handoff.md` in your working directory.
-7. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Deliver report to:
+`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2\handoff.md`
+When finished, notify orchestrator with your verdict and report path via send_message.
+
+## 2026-10-04T09:47:23Z
+You are reviewer_m5_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2\DISPATCH.md before starting work.
+
+Your task:
+Review Player Decisions Router, Object-Level Player Isolation, 5 Decision Actions, Graph API Migration & Kill Switch for Phase 2 Milestone 5:
+1. Inspect src/identity/routers/player.py: POST /v1/player/decision-challenge, POST /v1/player/decisions (and aliases), check_player_isolation (PlayerIsolationError 403), 5 distinct actions (accept, reject, change_request, pause, acknowledge), dual proofs (passkey or token), G-TIMEOUT invariant, require_human_principal.
+2. Inspect src/schemas.py: DecisionSubmission model with WebAuthn, HMAC, and auto-detection.
+3. Inspect src/graph_api.py: ApiSettings (cli_hmac_enabled: bool = False default), check_decision_proof_type guard (403 proof_type_disabled), apply_decision_unified, endpoints (POST /approval/packages/{package_id}/decide, /v1/approval-requests/{id}/decisions, /v1/runs/{id}/decision), router mounts.
+4. Inspect unit test suite: tests/identity/test_player.py.
+5. Execute verification tests:
+   .\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via static analysis / AST checks.
+6. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.

@@ -1,43 +1,50 @@
-# DISPATCH: reviewer_m2_2
+# Dispatch Instructions for reviewer_m2_2
 
-- **Assigned Role**: Reviewer 2 (Graph API & Security Routes)
-- **Archetype**: teamwork_preview_reviewer
-- **Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2
-- **Parent**: orchestrator_phase1 (conv id: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b)
+**Agent ID**: `reviewer_m2_2`
+**Role**: Delegations & Database Hardening Reviewer
+**Milestone**: Phase 2 Milestone 2 — Centralized Authorization & Service Boundaries
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2`
 
-## Mandatory Inputs (MUST READ FIRST)
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
 
-## Focus & Review Scope
-Perform independent review of Milestone 2 with focus on Persistent Graph API & Security Routes:
-1. Versioned `/v1/` routes in `src/graph_api.py`: Check all routes (`/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/approval-request`, `/v1/runs/{id}/resume`, `/v1/runs/{id}/decision-challenge`, `/v1/runs/{id}/decision`, `/v1/approval-requests/{id}/decisions`, `/v1/runs/{id}/kill`). Check backward-compatible legacy route aliases.
-2. Correlation Middleware in `src/correlation.py`: Check UUIDv4 validation, stripping of malformed input on 422 errors, `ContextVar` propagation, `CorrelationIdFilter` log injection, and `X-Correlation-Id` header echo.
-3. Safe Projections: Verify projection models in `src/schemas.py` and responses in `src/graph_api.py`. Confirm no leakage of DB credentials, internal stack traces, or secrets.
-4. Health Probes: Check `/health/live` and `/health/ready`. Verify `/health/ready` returns 503 if DB is unreachable, role posture is invalid, or if `DISPATCH_ENABLED=true`.
-5. HMAC Kill Switch: Verify `/v1/runs/{id}/decision-challenge`, `/v1/runs/{id}/decision`, and `/v1/approval-requests/{id}/decisions` return 403 `{"detail": "proof_type_disabled"}` when `APPROVAL_CLI_HMAC_ENABLED=false` before body validation.
-6. Inspect `tests/test_graph_api_v1.py`.
+## Review Tasks
+1. Review `migrations/0005_delegations.sql`:
+   - Non-destructive alter of `public.authority_delegations` (adding `club_id`, `starts_at`, relaxing `scope`)
+   - Creation of `public.fc27_delegations` view
+   - Update of `domain_events_source_table_check` to accept `authority_delegations` and `fc27_delegations`
+2. Review `migrations/post/grants.sql` & `src/db_migrate.py`:
+   - Policy version 7 declared in header and tracked in `db_migrate.py`
+   - Scoped DML granted to `fc27_app` on `authority_delegations` and `fc27_delegations`
+   - Exactly 0 grants on delegations to `fc27_dispatch`
+3. Review `src/identity/store.py` delegation methods:
+   - `create_delegation`, `get_delegation`, `list_delegations`, `revoke_delegation`, `evaluate_delegation`
+   - Audit event emission (`identity.delegation_granted`, `identity.delegation_revoked`) into `domain_events`
+4. Execute verification tests:
+   - `pytest tests/identity/test_delegations.py -v`
+   - Packaging and migration sync tests
+5. Document commands, findings, and explicit verdict (**APPROVE** or **REQUEST_CHANGES**) in:
+   `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2\handoff.md`
 
-## Verification Commands
-Run the tests:
-```powershell
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_graph_api_v1.py
-```
-And verify baseline tests:
-```powershell
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_events_outbox.py tests/test_approval_lifecycle.py
-```
+## 2026-10-04T04:21:22Z
+You are reviewer_m2_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md
 
-## Output Requirements
-1. Write `review.md` in your working directory with detailed findings, evidence citations, and rationale.
-2. Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-3. Write `handoff.md` following the Handoff Protocol (Observation, Logic Chain, Caveats, Conclusion, Verification Method).
-4. Send a message to orchestrator (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`) with your verdict and handoff path.
-Do NOT modify production source code in `src/` or `migrations/`.
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
 
-
-## 2026-10-03T16:21:22Z
-You are reviewer_m2_2, a teamwork_preview_reviewer agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2
-Task: Perform independent review of Milestone 2 focusing on Persistent Graph API & Security Routes.
+Your task:
+Review the database migration, security constraints, and delegation persistence for Phase 2 Milestone 2.
+1. Inspect migrations/0005_delegations.sql, migrations/post/grants.sql (version 7), and src/db_migrate.py. Verify least privilege: fc27_app has scoped DML; fc27_dispatch has 0 grants.
+2. Review delegation store methods in src/identity/store.py (create_delegation, get_delegation, list_delegations, revoke_delegation, evaluate_delegation) and event emission to domain_events.
+3. Execute verification tests:
+   - pytest tests/identity/test_delegations.py -v
+   - pytest tests/test_packaging.py tests/test_phase1_scope.py -v
+4. Document commands, findings, and explicit verdict (APPROVE or REQUEST_CHANGES) in:
+   c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_2\handoff.md
+When finished, notify me with your verdict and report path via send_message.

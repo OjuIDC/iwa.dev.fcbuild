@@ -1,63 +1,64 @@
-# Dispatch: Milestone 5 Challenger 2 (Scope Protection & Invariants Hardening)
+# DISPATCH — 2026-10-04T05:50:00Z
 
-**Agent**: `challenger_m5_2`
-**Role**: Milestone 5 Challenger 2 (Scope Protection & Invariants Hardening)
-**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2`
-**Timestamp**: 2026-10-03T21:28:00Z
+## Mission
+Adversarial Stress Testing of Object-Level Player Isolation, 5 Decision Actions, HMAC Kill Switch & G-TIMEOUT Invariant for Phase 2 Milestone 5.
 
----
+## Authoritative Inputs
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (MANDATORY: You MUST read this before starting work)
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
 
-## 1. Objective
-Adversarially challenge Phase 1 scope protection, forbidden imports, companion tracking writes, and activation documentation invariants.
+## Adversarial Tracks
+1. Object-Level Player Isolation (`src/identity/routers/player.py`):
+   - Attack 1: Cross-Player Viewing — Player A attempts to query Player B's assignments. Verify fails closed with HTTP 403 `PlayerIsolationError`.
+   - Attack 2: Cross-Player Challenge — Player A attempts to request a decision challenge for Player B's assignment. Verify fails closed with HTTP 403 `PlayerIsolationError`.
+   - Attack 3: Cross-Player Decision — Player A attempts to submit a decision for Player B's assignment. Verify fails closed with HTTP 403 `PlayerIsolationError`.
+   - Attack 4: Staff Impersonation — Commissioner or Delegate attempts to decide a player assignment as player. Verify fails closed with HTTP 403.
+2. 5 Distinct Player Decision Actions:
+   - Attack 5: Conflation of `acknowledge` with `accept` — verify that `acknowledge` records informational review receipt but NEVER activates developmental plans or transitions assignment to completed.
+   - Attack 6: Incomplete `change_request` — verify submitting `change_request` without notes fails closed with HTTP 422.
+   - Attack 7: Invalid `pause` — verify submitting `pause` without positive duration fails closed with HTTP 422.
+3. Graph API HMAC Kill Switch (`src/graph_api.py`):
+   - Attack 8: HMAC Submission with Kill Switch Active — verify submitting `proof_type="hmac"` when `APPROVAL_CLI_HMAC_ENABLED=false` is rejected immediately with HTTP 403 `proof_type_disabled`.
+   - Attack 9: Pre-flight Unauthenticated Probe — verify that non-WebAuthn probe to decision endpoints returns HTTP 403 before authentication or schema parsing.
+4. G-TIMEOUT Invariant (Feature 46):
+   - Attack 10: Inactivity / Timeout Approval Injection — verify any attempt to submit an approval with action `"timeout"` or attribute `timeout_approved: true` is rejected with HTTP 403 `AgentImpersonationError`.
+   - Attack 11: Expired Request Decision — verify submitting a decision for an expired request returns HTTP 409 `approval_expired`.
+5. Universal Invariants:
+   - Verify `DISPATCH_ENABLED=false` and zero player delivery.
 
-## 2. Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
-4. `tests/test_phase1_scope.py`
-5. `docs/DISPATCH_ACTIVATION.md`
-6. `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`
+## Verification Instructions
+Execute test verification:
+```pwsh
+.\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+```
+If an interactive terminal prompt times out waiting for user confirmation, document the attempted command and timeout honestly, and verify via AST and static analysis.
+Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
 
-## 3. Tasks & Attacks
-1. Challenge Scope Boundaries (C-8, AC-58):
-   - Attack directory layout: verify no `src/dashboard`, `src/identity`.
-   - Attack dispatch modules: verify no forbidden file prefixes in `src/dispatch/`.
-   - Attack imports: verify no `webauthn` in AST or string imports under `src/`.
-   - Attack tracking writes: verify no SQL mutations on `player_observations`, `dispatch_assessments`, `dispatch_plans`, or `dispatch_delivery_attempts` outside `tests/`.
-2. Challenge Documentation Invariants (C-2, C-3):
-   - Verify `docs/DISPATCH_ACTIVATION.md` strictly includes:
-     - Exact disabled message: `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-     - All 6 gates: `G-MIGRATION`, `G-GRANTS`, `G-WORKER`, `G-ID`, `G-ATOMIC`, `G-OUTBOX`.
-     - The 4 verbatim mandatory statements forbidding Phase 1 operational enablement.
-   - Verify `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` status is `UNVERIFIED (G-ID not met)` and all 5 AC-47 tables remain empty placeholders.
-3. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-4. Write `challenge_report.md` and `handoff.md` in your working directory.
-5. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Deliver report to:
+`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2\handoff.md`
+When finished, notify orchestrator with your verdict and report path via send_message.
 
+## 2026-10-04T09:47:23Z
+You are challenger_m5_2, an adversarial verifier agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md
 
-## 2026-10-03T21:26:58Z
-From: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-You are challenger_m5_2, a teamwork_preview_challenger agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2\DISPATCH.md before starting work.
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2\DISPATCH.md
-
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. Worker Handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md
-4. tests/test_phase1_scope.py
-5. docs/DISPATCH_ACTIVATION.md
-6. docs/EA_PLAYER_IDENTITY_VERIFICATION.md
-
-Task:
-Adversarially challenge Phase 1 scope protection, forbidden imports, companion tracking writes, and activation documentation invariants:
-1. Challenge scope boundaries: verify no src/dashboard, src/identity, no forbidden dispatch file prefixes, no webauthn imports, no tracking table writes outside tests.
-2. Challenge documentation invariants: verify docs/DISPATCH_ACTIVATION.md exact disabled string, 6 gates table, 4 mandatory boundary statements.
-3. Verify docs/EA_PLAYER_IDENTITY_VERIFICATION.md status UNVERIFIED and empty AC-47 tables.
-4. Formulate explicit verdict: APPROVE or REQUEST_CHANGES.
-5. Write challenge_report.md and handoff.md in your working directory.
-6. Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+Your task:
+Empirically stress-test Object-Level Player Isolation, 5 Decision Actions, HMAC Kill Switch & G-TIMEOUT Invariant for Phase 2 Milestone 5:
+1. Object-Level Player Isolation: test cross-player viewing (403), cross-player challenge (403), cross-player decision (403), staff impersonation (403).
+2. 5 Decision Actions: test acknowledge does not activate or accept, test change_request without notes fails (422), test pause without positive duration fails (422).
+3. Graph API HMAC Kill Switch: test proof_type=hmac rejected when APPROVAL_CLI_HMAC_ENABLED=false (403 proof_type_disabled), pre-flight probe blocked before auth.
+4. G-TIMEOUT Invariant: test timeout approval injection rejected (403 AgentImpersonationError), expired request decision rejected (409 approval_expired).
+5. Scope dormancy: verify DISPATCH_ENABLED=false and zero player delivery.
+6. Execute empirical tests:
+   .\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via static analysis / AST checks.
+7. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m5_2\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.

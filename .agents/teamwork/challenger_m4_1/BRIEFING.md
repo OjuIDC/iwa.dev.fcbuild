@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T20:48:00Z
+# BRIEFING — 2026-10-04T06:22:00Z
 
 ## Mission
-Adversarially challenge Milestone 4 activation gate evaluation, cryptographic challenge/recording protocol, deployment identity binding, correlation ID isolation, and dynamic gate re-evaluation.
+Adversarially challenge Phase 2 Milestone 4: Passkey anti-cloning, challenge lifecycle & single-use, TOTP replay/drift/rate limiting, anti-impersonation, and packaging/scope guards.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_challenger
@@ -9,6 +9,11 @@ Adversarially challenge Milestone 4 activation gate evaluation, cryptographic ch
 - Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_1
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 4 (Gate Security, Nonces & Dynamic Re-evaluation)
+- Instance: 1 of 1
+- Archetype: empirical_challenger
+- Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m4_1
+- Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Milestone: Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery)
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
@@ -19,48 +24,64 @@ Adversarially challenge Milestone 4 activation gate evaluation, cryptographic ch
 - Notify orchestrator via send_message when done
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: 2026-10-03T20:48:00Z
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T06:22:00Z
 
 ## Review Scope
 - **Files to review**:
-  - src/dispatch/gates.py
-  - src/graph_api.py
-  - tests/test_dispatch_creation.py
-  - .agents/teamwork/ORIGINAL_REQUEST.md
-  - .agents/teamwork/orchestrator_phase1/PROJECT.md
-  - .agents/teamwork/worker_m4_1/handoff.md
-  - .agents/teamwork/reviewer_m4_1/handoff.md
-  - .agents/teamwork/reviewer_m4_2/handoff.md
-- **Interface contracts**: ORIGINAL_REQUEST.md, PROJECT.md
-- **Review criteria**: Correctness, security, cryptographic replay/tampering defense, correlation isolation, edge cases
+  - `src/identity/webauthn.py`
+  - `src/identity/totp.py`
+  - `src/identity/recovery.py`
+  - `src/identity/store.py`
+  - `src/identity/policy.py`
+  - `src/identity/deps.py`
+  - `src/identity/routers/passkeys.py`
+  - `src/identity/routers/totp.py`
+  - `src/identity/routers/recovery.py`
+  - `migrations/0004_identity_foundation.sql`
+  - `migrations/0006_bootstrap_and_recovery.sql`
+  - `tests/identity/test_webauthn.py`
+  - `tests/identity/test_totp.py`
+  - `tests/test_packaging.py`
+  - `tests/test_phase1_scope.py`
+  - `tests/identity/test_adversarial_m4_1.py` (created)
+- **Interface contracts**: `PROJECT.md`, `ORIGINAL_REQUEST.md`, `DISPATCH.md`
+- **Review criteria**: Passkey anti-cloning, challenge lifecycle, TOTP drift/replay/lockout, anti-impersonation, scope guards.
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Nonce replay rejection on `/v1/activation-gates/{gate_id}` (verified: 409 Conflict)
-  - Expired nonces (>300s) and tampered payload rejection (verified: 409 / 403)
-  - Phase 1 boundary & G-OUTBOX refusal (verified: 409 Conflict, Constraint C-3)
-  - Automated gates manual challenge refusal (verified: 422 Unprocessable Entity)
-  - Correlation ID isolation from signatures (verified: `GATE_SIGNED_FIELDS` excludes header, Constraints C-4, C-5)
-  - Dynamic gate re-evaluation without restart (verified: `reevaluate_gates` mutates state in place, Constraint C-1)
-  - Readiness probe under `dispatch_enabled=True`
+  - Passkey anti-cloning: non-increasing counter rejection in WebAuthnEngine and IdentityStore (verified: raises 401).
+  - PostgreSQL trigger `fc27_guard_webauthn_counter`: BEFORE UPDATE prevents decrementing sign_counter (verified).
+  - Challenge single-use: replay after consumption fails closed (verified: returns None / raises 400).
+  - Challenge expiration: expired challenge fails closed (verified).
+  - Cross-user challenge mismatch in registration: rejected with "challenge not issued to this user" (verified).
+  - Cross-user challenge mismatch in authentication: VULNERABILITY FOUND. `verify_authentication_response` omits user_id validation against challenge_row.
+  - Step-up challenge bound payload hash: tampering fails closed (verified).
+  - TOTP replay in same 30s window: rejected with "replay_detected" (verified).
+  - TOTP replay against older window: rejected with "replay_detected" (verified).
+  - TOTP drift outside ±1 step: rejected with "invalid_or_expired_code" (verified).
+  - TOTP rate limiting: 5 consecutive failures triggers 300s lockout (verified).
+  - Anti-impersonation: service tokens calling human endpoints rejected with 403 AgentImpersonationError (verified).
+  - Scope guards & packaging: dependencies synchronized, DISPATCH_ENABLED=false intact (verified).
 - **Vulnerabilities found**:
-  - Contract regression in `src/graph_api.py:414-421`: when `dispatch_enabled=True` and gates are blocked, `/health/ready` reason omits `"DISPATCH_ENABLED must be false"`, breaking existing contract tests in `tests/test_graph_api_v1.py` (lines 320 and 656) and `tests/test_langgraph_flow.py` (line 42).
+  1. `tests/identity/test_totp.py`: Unresolved `ImportError: cannot import name 'DEFAULT_RECOVERY_CODE_COUNT' from 'src.identity.totp'`. Test suite cannot be collected.
+  2. `tests/identity/test_webauthn.py`: 4 broken unit tests (line 70 RP name assertion failure, lines 118 & 140 missing required keyword `user_id` raising TypeError, line 202 calling non-existent method `generate_step_up_challenge` raising AttributeError).
+  3. `src/identity/webauthn.py`: `verify_authentication_response` and `verify_step_up_response` omit cross-user challenge isolation (`challenge_row.get("user_id")` is never checked against stored credential `user_id`).
 - **Untested angles**:
-  - Live production worker heartbeat (out of scope for Phase 1).
-  - Outbox relay processing (deferred to Phase 3).
+  - Live hardware FIDO2 dongle attestation (simulated with standard W3C WebAuthn Level 2/3 test vectors).
 
 ## Loaded Skills
 - None requested directly.
 
 ## Key Decisions Made
-- Verdict determined: **REQUEST_CHANGES** due to contract regression on `/health/ready` reason string under `dispatch_enabled=True`.
-- Recommended exact 1-line mitigation for `src/graph_api.py:419`.
-- Completed `challenge_report.md` and `handoff.md`.
+- Explicit verdict: **REQUEST_CHANGES**.
+- Authored comprehensive empirical test harness: `tests/identity/test_adversarial_m4_1.py`.
+- Formulated exact remediation steps for worker_m4_1 in `handoff.md` and `challenge_report.md`.
 
 ## Artifact Index
-- DISPATCH.md — Initial dispatch instructions
-- BRIEFING.md — Persistent working memory
-- progress.md — Liveness and task execution progress
-- challenge_report.md — Detailed adversarial findings, attack surface, and test results
-- handoff.md — 5-component handoff report with verification commands
+- `DISPATCH.md` — Dispatch record and timestamps
+- `BRIEFING.md` — Persistent working memory
+- `progress.md` — Execution status and liveness
+- `challenge_report.md` — Detailed adversarial findings and attack surface breakdown
+- `handoff.md` — 5-component handoff report with verification commands
+- `tests/identity/test_adversarial_m4_1.py` — Standalone adversarial test suite

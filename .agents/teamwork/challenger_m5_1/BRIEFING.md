@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T21:33:00Z
+# BRIEFING — 2026-10-04T09:57:30Z
 
 ## Mission
-Adversarially challenge Docker Compose topology, secrets isolation, environment variable leakage, service network boundaries, and tests/test_compose_isolation.py.
+Empirically stress-test Scoped Action Tokens & Decision Step-Up Replay / Scope Lockout for Phase 2 Milestone 5.
 
 ## 🔒 My Identity
 - Archetype: challenger
@@ -10,58 +10,67 @@ Adversarially challenge Docker Compose topology, secrets isolation, environment 
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 5
 - Instance: 1 of 1
+- Phase 2 Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Phase 2 Milestone: Phase 2 Milestone 5
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify production source code in src/ or migrations/
 - Empirical verification required: must run verification code and tests yourself
 - Produce challenge_report.md and handoff.md
 - Formulate explicit verdict: APPROVE or REQUEST_CHANGES
+- Phase 2 M5 scope: Scoped Action Tokens & Decision Step-Up Replay / Scope Lockout
+- Inactivity/timeout never authorizes (G-TIMEOUT)
+- DISPATCH_ENABLED=false and zero player delivery
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: not yet
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T09:57:30Z
 
 ## Review Scope
-- **Files to review**:
-  - `docker-compose.yml`
-  - `config.example.env`
-  - `.gitignore`
-  - `tests/test_compose_isolation.py`
-  - `src/settings.py` (fail-closed behavior)
+- **Files reviewed**:
+  - `src/identity/tokens.py`
+  - `src/identity/routers/step_up.py`
+  - `src/identity/routers/player.py`
+  - `src/identity/store.py`
+  - `src/graph_api.py`
+  - `src/schemas.py`
+  - `tests/identity/test_tokens.py`
+  - `tests/identity/test_step_up.py`
+  - `tests/identity/test_player.py`
+  - `tests/test_packaging.py`
+  - `tests/test_phase1_scope.py`
   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m5_1\handoff.md`
-- **Interface contracts**:
-  - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
-  - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-- **Review criteria**:
-  - Secrets mounting boundaries (least privilege)
-  - No DB passwords in environment variables
-  - `secrets/` strictly ignored by git
-  - `settings.read_secret` fails closed
-  - Robustness of `tests/test_compose_isolation.py`
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Secret mounting boundary isolation (`fc27_migrator_uri` only in `db-migrate`, `fc27_app_uri` only in `graph-api`, 4 bootstrap secrets only in `db-bootstrap`, no DB secrets in peripheral containers)
-  - Absence of plaintext database passwords in environment variables across all services
-  - Gitignore protection of `./secrets/`
-  - Fail-closed behavior of `settings.read_secret` on missing, empty, or unreadable secret files
-  - Network isolation of `fc27_data` (`internal: true`, non-database containers segregated to `fc27_net`)
+  - Attack 1: Token Replay (409) — PASS in implementation
+  - Attack 2: Expired Token (410) — PASS in implementation
+  - Attack 3: Revoked Token (410) — PASS in implementation
+  - Attack 4: Scope Confusion (403) — PASS in implementation
+  - Attack 5: Assignment Mismatch (403) — PASS in implementation
+  - Attack 6: Token Format & Plaintext Storage — PASS in implementation
+  - Attack 7: Evidence Replay (409) — PASS in implementation
+  - Attack 8: Evidence Scope Lockout (400/403) — PASS in implementation
+  - Attack 9: Missing Binding Parameters (422) — PASS in implementation
+  - Attack 10: Scope Dormancy — PASS across repo
 - **Vulnerabilities found**:
-  - None critical/high.
-  - Informational finding: `tests/test_compose_isolation.py` has a module-level `pytestmark` skipping the entire file if the `docker` CLI is absent, which also skips pure Python unit tests (`test_settings_read_secret_fails_closed`, `test_secrets_dir_is_gitignored`).
-- **Untested angles**: Live Docker daemon network packet sniffing (out of non-interactive subagent scope).
+  - Test discovery crash in `tests/identity/test_tokens.py` (`ImportError` on missing symbols)
+  - Runtime `TypeError` in `test_tokens.py` (invalid keyword arg and subscripting `ActionTokenRecord`)
+  - Assertion failure in `test_step_up.py` (unmocked `store.get_challenge` causing 400 instead of 200)
+  - Missing keyword arguments in `test_step_up.py` DB integration test for `create_decision_evidence`
+  - Runtime `AttributeError` in `test_player.py` (`mock_consume.return_value.token_id`)
 
 ## Loaded Skills
 - None specified by dispatch
 
 ## Key Decisions Made
-- Confirmed all secrets mounting boundaries and environment scrubbing strictly adhere to least privilege.
-- Verified fail-closed logic in `src/settings.py`.
-- Formulated explicit verdict: **APPROVE**.
+- Confirmed core security invariants in `tokens.py`, `step_up.py`, `store.py`, and `graph_api.py` are sound.
+- Identified blocking test collection failures and API contract divergences.
+- Formulated explicit verdict: **REQUEST_CHANGES**.
 - Authored `challenge_report.md` and `handoff.md`.
 
 ## Artifact Index
-- `DISPATCH.md` — Dispatch instructions
+- `DISPATCH.md` — Dispatch instructions & logs
 - `BRIEFING.md` — Persistent context
 - `progress.md` — Liveness heartbeat
 - `challenge_report.md` — Detailed adversarial evaluation

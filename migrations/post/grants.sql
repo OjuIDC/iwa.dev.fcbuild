@@ -1,4 +1,4 @@
--- grants-policy-version: 5
+-- grants-policy-version: 8
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -64,6 +64,9 @@ BEGIN
     END IF;
     IF to_regclass('public.authority_delegations') IS NOT NULL THEN
         GRANT SELECT, INSERT, UPDATE ON public.authority_delegations TO fc27_app;
+    END IF;
+    IF to_regclass('public.fc27_delegations') IS NOT NULL THEN
+        GRANT SELECT ON public.fc27_delegations TO fc27_app;
     END IF;
     IF to_regclass('public.player_assignments') IS NOT NULL THEN
         GRANT SELECT, INSERT, UPDATE ON public.player_assignments TO fc27_app;
@@ -164,5 +167,50 @@ BEGIN
     IF to_regclass('public.service_heartbeats') IS NOT NULL THEN
         GRANT SELECT ON public.service_heartbeats TO fc27_app;
         GRANT SELECT, INSERT, UPDATE ON public.service_heartbeats TO fc27_dispatch;
+    END IF;
+
+    -- Phase 2 Milestone 1: Identity Data Foundation Grants
+    IF to_regclass('public.fc27_users') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_users TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_user_roles') IS NOT NULL THEN
+        GRANT SELECT, INSERT, DELETE ON public.fc27_user_roles TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_invitations') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_invitations TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_sessions') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_sessions TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_webauthn_credentials') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_webauthn_credentials TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_totp_credentials') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_totp_credentials TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_recovery_codes') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_recovery_codes TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_action_tokens') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_action_tokens TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_challenges') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_challenges TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_bootstrap_locks') IS NOT NULL THEN
+        GRANT SELECT, INSERT ON public.fc27_bootstrap_locks TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_credentials') IS NOT NULL THEN
+        GRANT SELECT ON public.fc27_credentials TO fc27_app;
     END IF;
 END $$;

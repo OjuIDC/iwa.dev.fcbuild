@@ -1,87 +1,207 @@
-# Adversarial Challenge Report: Milestone 5 Compose Isolation & Secrets Hardening
+# Milestone 5 Adversarial Challenge Report: Scoped Action Tokens & Decision Step-Up
 
-**Agent**: `challenger_m5_1`  
-**Role**: Milestone 5 Challenger (critic, specialist)  
-**Date**: 2026-10-03  
-**Verdict**: **APPROVE**  
-
----
-
-## 1. Challenge Summary
-
-**Overall risk assessment**: **LOW**
-
-The Docker Compose configuration, secrets isolation topology, environment variable scrubbing, network segregation, and configuration failure modes were rigorously and adversarially analyzed. All mandatory Phase 1 invariants and security boundaries are strictly enforced.
+**Agent**: `challenger_m5_1` (Empirical Challenger & Adversarial Verifier)  
+**Target Milestone**: Phase 2 Milestone 5 (Features 18, 19, 20, 21, 22, 23, 24, 25, 27, 43, 44, 46)  
+**Worker Under Review**: `worker_m5_1`  
+**Date**: 2026-10-04T09:55:00Z  
 
 ---
 
-## 2. Challenges & Attack Hypotheses
+## 1. Executive Summary & Verdict
 
-### [Low] Challenge 1: Module-level `pytestmark` skips non-docker tests when Docker CLI is absent
-- **Assumption challenged**: All tests in `tests/test_compose_isolation.py` require the Docker CLI.
-- **Attack scenario**: In a CI or developer test runner lacking the `docker` binary, `pytestmark = pytest.mark.skipif(shutil.which("docker") is None)` skips the entire test module, including tests that do not depend on `docker compose config` (e.g. `test_settings_read_secret_fails_closed`, `test_secrets_dir_is_gitignored`, `test_dockerfiles_pin_base_images`).
-- **Blast radius**: Low. When Docker CLI is present, all tests execute. In environments without Docker, settings fail-closed tests and gitignore checks could be bypassed from the automated test run unless co-located or unskipped.
-- **Mitigation**: Move `pytest.mark.skipif(...)` from module-level `pytestmark` to specific fixtures/tests that invoke `_config` (`model`, `lf_model`, `test_missing_secret_fails_closed`, etc.), allowing pure-Python static and unit tests to execute unconditionally.
-- **Verdict Impact**: Informational / Low recommendation; does not compromise security invariants in deployed Docker environments.
+- **Overall Risk Assessment**: **HIGH (BLOCKING CI/TEST REGRESSION)**
+- **Verdict**: **REQUEST_CHANGES**
 
-### [Low] Challenge 2: Accidental fallback to environment variable when `*_FILE` is specified
-- **Assumption challenged**: If `POSTGRES_URI_FILE` is invalid or missing, `settings.read_secret("POSTGRES_URI")` might fall back to an insecure literal `POSTGRES_URI` set in the environment.
-- **Attack scenario**: An operator accidentally sets `POSTGRES_URI="postgresql://bad..."` in the environment while mounting a secret file. If the secret file fails to read, does it fall back to the insecure URI?
-- **Analysis & Stress Test**: Traced `src/settings.py` lines 23-37:
-  ```python
-  file_var = os.getenv(f"{name}_FILE")
-  if file_var:
-      try:
-          value = Path(file_var).read_text(encoding="utf-8").strip()
-      except OSError as exc:
-          raise ConfigError(f"cannot read {name}_FILE") from exc
-  else:
-      value = os.getenv(name, "").strip()
+While the core security and cryptographic logic in `src/identity/tokens.py`, `src/identity/routers/step_up.py`, and `src/graph_api.py` is robust and fails closed against attacks (satisfying replay, expiry, revocation, scope lockout, and universal dormancy invariants), the **test suites introduced in Milestone 5 contain severe API contract mismatches, unimported symbols, and mock type crashes that completely block pytest execution**. Specifically:
+1. `tests/identity/test_tokens.py` imports non-existent symbols (`ScopedActionToken`, `VALID_ACTION_SCOPES`, `hash_action_token`, `is_action_token_format`), causing `pytest` to crash with an unhandled `ImportError` during test collection.
+2. `tests/identity/test_tokens.py` calls `engine.issue_token` with `expires_in_minutes` (instead of `ttl_seconds`) and treats `ActionTokenRecord` dataclasses as subscriptable dictionaries (`verified["user_id"]`), causing immediate runtime `TypeError`s.
+3. `tests/identity/test_step_up.py` fails to mock `store.get_challenge` in `test_step_up_verify_endpoint_mints_evidence`, causing the endpoint to return HTTP 400 instead of HTTP 200, and calls `store.create_decision_evidence` without mandatory keyword arguments.
+4. `tests/identity/test_player.py` mocks `ScopedActionTokenEngine.consume_token` with a dict (`{"user_id": ...}`), whereas `src/identity/routers/player.py` expects an `ActionTokenRecord` with attribute `.token_id`, causing an unhandled `AttributeError` (HTTP 500).
+
+Because the worker's test run was interrupted by an interactive terminal prompt timeout, these test breakages were never detected prior to handoff. The implementation cannot be accepted until these test suites and interface seams are reconciled.
+
+---
+
+## 2. Adversarial Challenges & Findings
+
+### [Critical] Challenge 1: `tests/identity/test_tokens.py` Fails Test Collection (`ImportError`)
+
+- **Assumption Challenged**: Worker claimed `tests/identity/test_tokens.py` verifies token issuance, hashing, and error hierarchy.
+- **Attack Scenario**: Running standard pytest collection:
+  ```pwsh
+  pytest tests/identity/test_tokens.py -v
   ```
-  When `file_var` is set, the `else` block is unreachable. Any error reading the file raises `ConfigError` immediately (`cannot read POSTGRES_URI_FILE`). It NEVER falls back to `POSTGRES_URI`.
-  Furthermore, if the file exists but contains only whitespace or is empty, `not value` triggers `raise ConfigError(...)`.
-- **Blast radius**: None; system fails closed as designed.
-
-### [Low] Challenge 3: Network isolation bypass via shared application network
-- **Assumption challenged**: Services on `fc27_net` (e.g. `live-watcher`, `post-match-rundown`, `ws-server`, `voice-gateway`) might attempt direct connections to PostgreSQL.
-- **Attack scenario**: A compromised service on `fc27_net` attempts a TCP connection to `postgres:5432`.
-- **Analysis**: In `docker-compose.yml`, `postgres` is connected ONLY to network `fc27_data`, which is marked `internal: true`. The non-database services belong exclusively to `fc27_net`. Docker's bridge driver prevents inter-network routing. Only `graph-api`, `db-bootstrap`, `db-migrate`, and `postgres` are attached to `fc27_data`.
-- **Blast radius**: Zero; network boundary is strictly enforced at container runtime.
-
----
-
-## 3. Stress Test Results & Forensic Verifications
-
-| Test Vector | Target / Method | Expected Behavior | Actual Behavior | Result |
-|---|---|---|---|---|
-| **Mount Boundary: Migrator Secret** | `docker-compose.yml` (`db-migrate`) | `fc27_migrator_uri` mounted only in `db-migrate` | Mounted in `db-migrate` only. Absent in `graph-api`, `db-bootstrap`, and all other services. | **PASS** |
-| **Mount Boundary: App Secret** | `docker-compose.yml` (`graph-api`) | `fc27_app_uri` mounted only in `graph-api` | Mounted in `graph-api` only. Absent in `db-migrate`, `db-bootstrap`, and all other services. | **PASS** |
-| **Mount Boundary: Bootstrap Secrets** | `docker-compose.yml` (`db-bootstrap`) | 4 bootstrap secrets (`postgres_admin_uri`, `fc27_migrator_password`, `fc27_app_password`, `fc27_dispatch_password`) mounted only in `db-bootstrap` | Exactly mounted in `db-bootstrap` only. Absent in all runtime services. | **PASS** |
-| **No DB Secrets in Peripheral Services** | `docker-compose.yml` (`redis`, `postgres`, `ollama`, `model-health`, `ws-server`, `fc27-mcp`, etc.) | Zero database secrets mounted | No `secrets:` blocks or references in any peripheral service. | **PASS** |
-| **No DB Passwords in Env Vars** | All services in `docker-compose.yml` & `docker-compose.langfuse.yml` | No `POSTGRES_URI`, `POSTGRES_ADMIN_URI`, or `FC27_*_PASSWORD` in `environment:` | All services use `*_FILE` variables targeting `/run/secrets/`. Zero plaintext DB credentials in container envs. | **PASS** |
-| **Gitignore Protection** | `.gitignore` line 9 | `secrets/` strictly ignored by git | Line 9 explicitly contains `secrets/`. No secrets directory or files tracked in repository. | **PASS** |
-| **Fail-Closed: Missing Secret File** | `src/settings.py` (`read_secret`) | Raises `ConfigError` on missing file | `Path(file_var).read_text()` raises `FileNotFoundError` (subclass of `OSError`), caught and re-raised as `ConfigError`. | **PASS** |
-| **Fail-Closed: Empty Secret File** | `src/settings.py` (`read_secret`) | Raises `ConfigError` on empty file | `strip()` yields empty string, `if not value: raise ConfigError`. | **PASS** |
-| **Fail-Closed: Unreadable Secret Path** | `src/settings.py` (`read_secret`) | Raises `ConfigError` if path is a directory or unreadable | Caught by `except OSError: raise ConfigError`. | **PASS** |
-| **Fail-Closed: Length Constraints** | `src/settings.py` (`read_secret`) | Enforces `min_length` (e.g. 32 chars for `GRAPH_SERVICE_TOKEN`) | `len(value) < min_length` raises `ConfigError`. | **PASS** |
-| **Runtime DDL Protection** | `graph-api` configuration | `graph-api` cannot run migrations or checkpoint DDL | Sets `GRAPH_RUN_MIGRATIONS="false"`, `GRAPH_CHECKPOINT_SETUP="false"`. Runs as least-privileged role `fc27_app`. | **PASS** |
-| **Dispatch Invariant** | `graph-api` configuration | `DISPATCH_ENABLED` defaults to `"false"` | Both `docker-compose.yml` and `docker-compose.langfuse.yml` explicitly set `DISPATCH_ENABLED: "false"`. | **PASS** |
-
----
-
-## 4. Unchallenged Areas
-
-- **Docker daemon runtime container execution**: Container runtime daemon networking and kernel namespace enforcement were statically verified against Compose v2 schema definitions and AST traces, but not executed live via `docker compose up` because daemon socket operations are out-of-scope for non-interactive subagent execution.
+- **Blast Radius**: Pytest cannot collect tests from `tests/identity/test_tokens.py`. Entire test suite halts immediately before any test can execute.
+- **Root Cause**:
+  In `tests/identity/test_tokens.py` lines 26–40:
+  ```python
+  from src.identity.tokens import (
+      ActionTokenAlreadyConsumedError,
+      ActionTokenAssignmentMismatchError,
+      ActionTokenError,
+      ActionTokenExpiredError,
+      ActionTokenNotFoundError,
+      ActionTokenRevokedError,
+      ActionTokenScopeMismatchError,
+      ScopedActionToken,               # <-- NOT DEFINED in tokens.py (defined as ActionTokenRecord)
+      ScopedActionTokenEngine,
+      VALID_ACTION_SCOPES,             # <-- NOT DEFINED in tokens.py (defined in store.py)
+      hash_action_token,               # <-- NOT DEFINED in tokens.py (defined as hash_token in crypto.py)
+      is_action_token_format,          # <-- NOT DEFINED in tokens.py
+  )
+  ```
+- **Mitigation Required**:
+  Either:
+  1. Export compatibility aliases and helpers in `src/identity/tokens.py`:
+     ```python
+     ScopedActionToken = ActionTokenRecord
+     VALID_ACTION_SCOPES = IdentityStore.VALID_ACTION_SCOPES
+     hash_action_token = hash_token
+     def is_action_token_format(tok: Any) -> bool:
+         return isinstance(tok, str) and tok.startswith(TOKEN_PREFIX) and len(tok) >= 36
+     ```
+  2. OR refactor `tests/identity/test_tokens.py` to import `ActionTokenRecord` and use the actual method signatures of `ScopedActionTokenEngine`.
 
 ---
 
-## 5. Explicit Verdict
+### [Critical] Challenge 2: `ScopedActionTokenEngine` API Signature & Subscripting Incompatibility in `test_tokens.py`
 
-**Verdict**: **APPROVE**
+- **Assumption Challenged**: `tests/identity/test_tokens.py` accurately tests `ScopedActionTokenEngine`.
+- **Attack Scenario**: Once imported, test functions in `test_tokens.py` execute against `ScopedActionTokenEngine`.
+- **Blast Radius**: Every single unit test in `test_tokens.py` crashes with `TypeError`.
+- **Root Cause**:
+  1. `test_engine_issue_token` (line 97) calls:
+     ```python
+     sat = engine.issue_token(
+         user_id=uid,
+         scope="player_decision",
+         assignment_id=aid,
+         expires_in_minutes=60, # <-- Unexpected keyword argument! tokens.py expects ttl_seconds
+     )
+     assert sat.raw_token.startswith("sat_") # <-- tokens.py returns tuple[str, ActionTokenRecord]
+     ```
+  2. `test_verify_and_consume_token_success` (line 144) and all negative verify tests:
+     ```python
+     mock_store.get_action_token_by_hash.return_value = mock_row # <-- tokens.py calls get_action_token_by_token(raw_token)
+     verified = engine.verify_token(...)
+     assert verified["user_id"] == uid # <-- ActionTokenRecord is a dataclass, not a dict! TypeError: 'ActionTokenRecord' object is not subscriptable
+     ```
+- **Mitigation Required**:
+  Update `test_tokens.py` to match the real engine contract:
+  - Call `raw_token, record = engine.issue_token(..., ttl_seconds=3600)`.
+  - Mock `mock_store.get_action_token_by_token.return_value = mock_row`.
+  - Access fields via attributes: `assert verified.user_id == uid` and `assert consumed.consumed_at is not None`.
 
-Milestone 5 implementation meets all acceptance criteria and security invariants:
-1. Secrets mounting boundaries are strictly partitioned according to least privilege.
-2. Raw database passwords and connection strings are eliminated from environment variables.
-3. Secret files under `./secrets/` are strictly git-ignored.
-4. `settings.read_secret` fails closed across all missing, unreadable, and invalid input vectors.
-5. Service network isolation prevents lateral database access from non-authoritative services.
+---
+
+### [High] Challenge 3: Incomplete Mocking and Missing Keyword Arguments in `tests/identity/test_step_up.py`
+
+- **Assumption Challenged**: `test_step_up_verify_endpoint_mints_evidence` and `test_db_decision_evidence_lifecycle` in `test_step_up.py` pass.
+- **Attack Scenario**: Executing `tests/identity/test_step_up.py`.
+- **Blast Radius**: Step-up router verify test fails with HTTP 400; DB lifecycle integration test crashes with `TypeError`.
+- **Root Cause**:
+  1. In `test_step_up_verify_endpoint_mints_evidence` (line 202):
+     In `step_up_verify` (`src/identity/routers/step_up.py`), lines 230–235:
+     ```python
+     challenge_row = store.get_challenge(challenge_str)
+     if not challenge_row or challenge_row.get("challenge_type") != "step_up_decision":
+         raise HTTPException(status_code=400, detail="challenge not found or invalid type")
+     ```
+     `test_step_up.py` only mocks `get_webauthn_engine`, leaving `mock_store.get_challenge` unconfigured. `MagicMock.get("challenge_type") != "step_up_decision"` evaluates to `True`, immediately returning HTTP 400 instead of HTTP 200.
+  2. In `test_db_decision_evidence_lifecycle` (line 264):
+     ```python
+     ev = store.create_decision_evidence(
+         user_id=uid,
+         bound_payload_hash=bound_hash,
+         package_id=pkg_id,
+         package_version="1",
+         package_hash=pkg_hash,
+         decision="approved",
+         ttl_seconds=300,
+     )
+     ```
+     In `src/identity/store.py` line 2253, `create_decision_evidence` defines:
+     `challenge_id: UUID | None`, `approval_request_id: UUID | str | None`, `credential_id: bytes` without default values. Calling without them raises `TypeError: missing 3 required keyword-only arguments`.
+- **Mitigation Required**:
+  1. In `src/identity/store.py`, provide safe defaults:
+     ```python
+     challenge_id: UUID | None = None,
+     approval_request_id: UUID | str | None = None,
+     credential_id: bytes = b"",
+     ```
+  2. In `test_step_up.py`, configure `mock_store.get_challenge.return_value = {"challenge_type": "step_up_decision", "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5), "user_id": principal.user_id, "bound_payload_hash": "..."}` and `mock_store.get_webauthn_credential.return_value = {...}`.
+
+---
+
+### [High] Challenge 4: Mock Object Discrepancy in `tests/identity/test_player.py` (`AttributeError`)
+
+- **Assumption Challenged**: Player decision flow with action token (`test_player_decision_action_token_flow`) passes.
+- **Attack Scenario**: Executing `test_player_decision_action_token_flow` in `tests/identity/test_player.py`.
+- **Blast Radius**: FastAPI endpoint raises unhandled `AttributeError` returning HTTP 500.
+- **Root Cause**:
+  In `test_player.py` lines 261–262:
+  ```python
+  with patch.object(ScopedActionTokenEngine, "consume_token") as mock_consume:
+      mock_consume.return_value = {"user_id": principal.user_id}
+  ```
+  In `src/identity/routers/player.py` line 424:
+  ```python
+  token_ref = str(consumed_token.token_id)
+  ```
+  Because `mock_consume.return_value` is a dictionary, `consumed_token.token_id` raises:
+  `AttributeError: 'dict' object has no attribute 'token_id'`.
+- **Mitigation Required**:
+  In `test_player.py`, mock `consume_token` with an object possessing `token_id`, e.g.:
+  `mock_consume.return_value = MagicMock(token_id=uuid4(), user_id=principal.user_id)`.
+
+---
+
+## 3. Adversarial Attack Track Stress Test Matrix
+
+| # | Attack Scenario | Target Component | Expected Behavior | Actual Implementation Behavior | Assessment |
+|---|-----------------|------------------|-------------------|--------------------------------|------------|
+| 1 | **Token Replay** | `tokens.py`, `store.py` | HTTP 409 Conflict | `ActionTokenAlreadyConsumedError` (409) raised on second consume. Locked via `FOR UPDATE`. | **PASS** (Implementation verified) |
+| 2 | **Expired Token** | `tokens.py`, `store.py` | HTTP 410 Gone | `ActionTokenExpiredError` (410) raised when `expires_at <= now`. | **PASS** (Implementation verified) |
+| 3 | **Revoked Token** | `tokens.py`, `store.py` | HTTP 410 Gone | `ActionTokenRevokedError` (410) raised when `revoked_at is not None`. | **PASS** (Implementation verified) |
+| 4 | **Scope Confusion** | `tokens.py`, `store.py` | HTTP 403 Forbidden | `ActionTokenScopeMismatchError` (403) raised when `expected_scope != record.scope`. | **PASS** (Implementation verified) |
+| 5 | **Assignment Mismatch** | `tokens.py` | HTTP 403 Forbidden | `ActionTokenAssignmentMismatchError` (403) raised when assignment ID differs. | **PASS** (Implementation verified) |
+| 6 | **Token Format & Storage** | `tokens.py`, `crypto.py` | Format `sat_`, SHA-256 only in DB | `TOKEN_PREFIX = "sat_"`, 256-bit URL-safe entropy. DB table `fc27_action_tokens` contains only `token_hash` hex digest. Zero plaintext persistence. | **PASS** (Implementation verified) |
+| 7 | **Evidence Replay** | `graph_api.py`, `store.py` | HTTP 409 Conflict | `consume_decision_evidence` enforces single-use with `FOR UPDATE`. `apply_decision_unified` checks `consumed_at` and raises 409 Conflict on replay. | **PASS** (Implementation verified) |
+| 8 | **Scope Lockout** | `graph_api.py`, `store.py` | HTTP 400 or 403 | `apply_decision_unified` lines 1114–1121 enforce `package_id` and `decision` match, raising 403. `consume_decision_evidence` raises 400 on package hash/version mismatch. | **PASS** (Implementation verified) |
+| 9 | **Missing Binding Params** | `step_up.py` | HTTP 422 Unprocessable | `StepUpChallengeRequest` requires `package_id`, `package_version`, `package_hash`, `decision` as mandatory fields. Omitting any returns HTTP 422. | **PASS** (Implementation verified) |
+| 10 | **Scope Dormancy** | `graph_api.py`, Compose | `DISPATCH_ENABLED=false`, 0 delivery | `dispatch: {enabled: false}` in all decision responses; `DISPATCH_ENABLED: "false"` in Compose; zero player delivery adapters. | **PASS** (Implementation verified) |
+
+---
+
+## 4. Verification Evidence & Static Analysis
+
+1. **Test Execution Command Attempted**:
+   ```pwsh
+   .\.venv\Scripts\pytest.exe tests/identity/test_tokens.py tests/identity/test_step_up.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   ```
+   **Output**: Timed out waiting for interactive user permission prompt on the Windows host.
+   **Action Taken**: Fallback to exhaustive AST inspection, import tracing, and static execution simulation across all Milestone 5 targets.
+
+2. **Phase 1 Boundary & Packaging Validation**:
+   - `tests/test_packaging.py`: Confirms exact pinning of `langgraph`, runtime requirements separation.
+   - `tests/test_phase1_scope.py`: Confirms absence of Phase 3+ dispatch workers, tracking table writes, and verifies universal `DISPATCH_ENABLED=false`.
+
+---
+
+## 5. Required Remediations for `worker_m5_1`
+
+To achieve **APPROVE** verdict:
+
+1. **Reconcile `src/identity/tokens.py` and `tests/identity/test_tokens.py`**:
+   - In `src/identity/tokens.py`, add compatibility exports:
+     - `ScopedActionToken = ActionTokenRecord`
+     - `VALID_ACTION_SCOPES = IdentityStore.VALID_ACTION_SCOPES`
+     - `hash_action_token = hash_token`
+     - `def is_action_token_format(val: Any) -> bool: return isinstance(val, str) and val.startswith(TOKEN_PREFIX) and len(val) >= 36`
+   - In `tests/identity/test_tokens.py`, fix `issue_token` parameter (`ttl_seconds=3600`), unpack the 2-tuple `(raw_token, record)`, update mock from `get_action_token_by_hash` to `get_action_token_by_token`, and access `record.user_id` / `record.consumed_at` via attributes.
+2. **Add Defaults in `src/identity/store.py` for `create_decision_evidence`**:
+   - Set `challenge_id: UUID | None = None`, `approval_request_id: UUID | str | None = None`, `credential_id: bytes = b""` in `create_decision_evidence`.
+3. **Fix Mocks in `tests/identity/test_step_up.py`**:
+   - Provide a valid mocked challenge in `test_step_up_verify_endpoint_mints_evidence` so `step_up_verify` receives `challenge_type == "step_up_decision"` and an active `expires_at`.
+4. **Fix Mock Return Type in `tests/identity/test_player.py`**:
+   - In `test_player_decision_action_token_flow`, return an object with `.token_id` (such as `MagicMock(token_id=uuid4(), user_id=principal.user_id)`) from `ScopedActionTokenEngine.consume_token`.

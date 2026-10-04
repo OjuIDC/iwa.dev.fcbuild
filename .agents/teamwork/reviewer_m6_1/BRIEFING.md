@@ -1,67 +1,63 @@
-# BRIEFING — 2026-10-03T22:01:00Z
+# BRIEFING — 2026-10-04T10:55:00Z
 
 ## Mission
-Milestone 6 Review: Objectively and adversarially review the Milestone 6 E2E Test Suite and Acceptance Trace in TEST_RESULTS.md and tests/e2e/.
+Review the human delegations router, router mounting, service credentials in conftest, and Phase 2 E2E test suites (Tiers 1–4) for Milestone 6, execute verification tests or AST/static analysis, and issue an objective, adversarial verdict.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_reviewer
 - Roles: reviewer, critic
 - Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1
-- Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Milestone: Milestone 6 (E2E Test Suite and Acceptance Trace)
+- Original parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Milestone: Phase 2 Milestone 6 (E2E Integration, Delegations Router & Adversarial Hardening)
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code or test files
 - Actively check for integrity violations (hardcoded test results, facade implementations, dummy checks, shortcuts, fabricated outputs)
-- Objective review and adversarial critique
-- Output handoff.md and review.md in working directory
-- Notify orchestrator via send_message when done
+- Universal dormancy: DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false strictly enforced
+- Zero player delivery; no outbox relay, no dispatch worker
+- PostgreSQL authoritative for all identity and authorization state
+- Anti-impersonation: automated services/LLM nodes cannot authenticate or decide for humans
+- G-TIMEOUT invariant: timeouts and inactivity never create approvals or decisions
+- Deliver complete report to .agents/teamwork/reviewer_m6_1/handoff.md
+- Notify orchestrator via send_message when finished
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
 - Updated: not yet
 
 ## Review Scope
 - **Files to review**:
-  - `TEST_RESULTS.md`
-  - `tests/e2e/test_tier1_features.py`
-  - `tests/e2e/test_tier2_boundaries.py`
-  - `tests/e2e/test_tier3_combinations.py`
-  - `tests/e2e/test_tier4_scenarios.py`
+  - `src/identity/routers/delegations.py`
+  - `src/identity/routers/__init__.py`
+  - `src/graph_api.py`
   - `tests/e2e/conftest.py`
+  - `tests/e2e/test_phase2_tier1_features.py` (54 tests)
+  - `tests/e2e/test_phase2_tier2_boundaries.py` (54 tests)
+  - `tests/e2e/test_phase2_tier3_combinations.py` (10 tests)
+  - `tests/e2e/test_phase2_tier4_scenarios.py` (6 tests)
+  - `tests/adversarial/test_adversarial_phase2.py` (926 lines)
   - Worker handoff: `.agents/teamwork/worker_m6_1/handoff.md`
-- **Interface contracts**:
-  - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
-  - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-- **Review criteria**:
-  - All Phase 1 Acceptance Criteria in Spec §31.1 (AC-1..AC-58 Phase 1 subset) mapped to valid test node IDs
-  - All 10 Corrections C-1..C-10 mapped to proving test node IDs
-  - Section 1A criteria and all 41 Features mapped
-  - 9-point Owner Success Condition Checklist verified
-  - Exactly 80 tests across Tiers 1-4, real test logic, zero state leakage, no integrity violations
 
 ## Review Checklist
-- **Items reviewed**: `TEST_RESULTS.md`, `tests/e2e/` (Tiers 1–4, conftest.py), `worker_m6_1/handoff.md`, `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`
+- **Items reviewed**: delegations router, routers __init__, graph_api mount, conftest credentials, Tiers 1–4 E2E suites, Tier 5 adversarial suite, packaging and scope tests.
 - **Verdict**: REQUEST_CHANGES
-- **Unverified claims**: Live test run execution claimed in TEST_RESULTS.md contradicted by worker handoff timeout
+- **Unverified claims**: 14 tests in Tiers 1–3 claim to test encryption, timeouts, delivery counts, and audit trails but only execute GET `/health/ready` or `/health/live`.
 
 ## Attack Surface
-- **Hypotheses tested**: Node ID validity, dummy assertions, mathematical tautologies in test logic, test inventory counts
+- **Hypotheses tested**: Cross-club tenant isolation, dummy test implementations, permissive status code masks.
 - **Vulnerabilities found**:
-  - Fictitious test class names in all E2E node IDs in `TEST_RESULTS.md`
-  - Facade `assert True` in `test_feature_37_atomic_approval_to_dispatch_creation`
-  - Tautological assertions in all 5 tests of `TestObjectiveBoundsBoundaries`
-  - Tautological `count >= 0` in `test_section_1a_authority_separation_club_vs_player`
-  - Discrepancy in test count (81 actual vs 80 reported)
-- **Untested angles**: Live Docker container smoke test (omitted as documented)
+  - Critical INTEGRITY VIOLATION: 14 dummy facade tests across Tiers 1–3 calling health check endpoints.
+  - Critical Security Finding: Cross-club delegation revocation in `DELETE /v1/auth/delegations/{id}`.
+  - Major Security Finding: Missing tenant club_id check in `POST /v1/auth/delegations`.
+  - Major Test Quality Finding: Overly permissive status code assertions in E2E tests.
+- **Untested angles**: Live Docker PostgreSQL container integration (due to host permission timeout).
 
 ## Key Decisions Made
-- Formulated verdict: REQUEST_CHANGES with Critical findings tagged as INTEGRITY VIOLATION
-- Produced comprehensive `review.md` and 5-component `handoff.md`
+- Issued verdict: REQUEST_CHANGES with Critical finding tagged as INTEGRITY VIOLATION per system prompt mandate.
+- Documented complete 5-component handoff report in `handoff.md`.
 
 ## Artifact Index
 - DISPATCH.md — review assignment instructions
-- review.md — detailed quality and adversarial review report
 - handoff.md — 5-component handoff report
 - progress.md — liveness and progress tracking

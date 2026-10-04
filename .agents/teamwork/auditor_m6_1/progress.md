@@ -1,17 +1,18 @@
 # Progress — auditor_m6_1
 
 **Agent**: auditor_m6_1
-**Task**: Whole-project forensic integrity audit (Milestone 6)
-**Last visited**: 2026-10-03T21:56:00Z
+**Task**: Phase 2 Final Forensic Integrity Audit
+**Last visited**: 2026-10-04T10:56:00Z
 **Status**: IN_PROGRESS
 
 ## Steps
-- [x] Step 1: Initialize DISPATCH.md, BRIEFING.md, and progress.md
-- [x] Step 2: Read MANDATORY context files (ORIGINAL_REQUEST.md, PROJECT.md, worker_m6_1/handoff.md, deliverables, E2E tests, scope tests)
-- [ ] Step 3: Source Code & Implementation Authenticity Analysis (facade checks, hardcoded returns, trivial assertions, AST scans)
-- [ ] Step 4: Report Verification Analysis (TEST_RESULTS.md and SECURITY_CHANGES.md accuracy and proving nodes)
-- [ ] Step 5: Phase 1 Boundary Enforcement Check (DISPATCH_ENABLED=false, no player delivery, no WebAuthn, completion statement)
-- [ ] Step 6: Section 1A Invariants Verification (inactivity never approves, no agent decisions, fail closed)
-- [ ] Step 7: Independent Test Suite Execution & Output Verification
-- [ ] Step 8: Formulate Verdict & Write audit_report.md and handoff.md
-- [ ] Step 9: Message orchestrator
+- [x] Step 1: Read ORIGINAL_REQUEST.md, DISPATCH.md, PROJECT.md, and worker_m6_1/handoff.md
+- [x] Step 2: Initialize DISPATCH.md, BRIEFING.md, and progress.md
+- [x] Step 3: Check 1 — Anti-Cheating & Real Cryptography Verification (PASSED: SHA-256, WebAuthn, Argon2id, MultiFernet, PyOTP genuine and unmocked in production)
+- [x] Step 4: Check 2 — Delegations Router & Mounting Authenticity (PASSED: genuine 193-line module, exported in __init__.py, mounted in graph_api.py:1391, prohibited actions blocked)
+- [x] Step 5: Check 3 — Tier 5 Adversarial Suite Authenticity (FAILED: facade tests with `pass` in lines 666 and 867 of test_adversarial_phase2.py, plus trivial endpoint checks in test_adv_t4 and E2E suites)
+- [x] Step 6: Check 4 — Universal Dormancy & Zero Player Delivery (PASSED: DISPATCH_ENABLED=false, no workers/relays, Phase 1 commit 3339d6d preserved)
+- [x] Step 7: Check 5 — Anti-Impersonation & G-TIMEOUT (PASSED: require_human_principal enforced, G-TIMEOUT enforced)
+- [x] Step 8: Check 6 — Secret Leakage & Constant-Time Comparisons Audit (PASSED: zero plaintext secrets in DB, constant-time comparisons used)
+- [x] Step 9: Formulate Binary Verdict (INTEGRITY VIOLATION)
+- [ ] Step 10: Deliver report to handoff.md and notify orchestrator via send_message

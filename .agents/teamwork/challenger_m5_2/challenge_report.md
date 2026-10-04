@@ -1,150 +1,216 @@
-# Challenge Report: Milestone 5 Scope Protection & Invariants Hardening
+# Phase 2 Milestone 5 Adversarial Challenge Report
 
-**Agent**: `challenger_m5_2`  
-**Role**: Milestone 5 Challenger 2 (Empirical Scope Protection & Invariants Hardening)  
-**Target**: Milestone 5 Implementation by `worker_m5_1`  
-**Date**: 2026-10-03  
-**Verdict**: **APPROVE**  
-
----
-
-## 1. Executive Summary
-
-As an empirical challenger, an exhaustive adversarial audit was conducted on Phase 1 scope protection, forbidden imports, companion tracking table writes, and activation documentation invariants.
-
-Every verification was executed empirically using static analysis, AST inspection, literal search, directory structure enumeration, and contract cross-validation. The worker's claims were not assumed; rather, every boundary assertion was independently verified against the actual repository state.
-
-**Overall Risk Assessment**: **LOW** (Safe to proceed; Phase 1 scope boundaries are hermetically sealed, and documentation invariants strictly forbid premature activation).
+**Author**: `challenger_m5_2` (Empirical Challenger)  
+**Milestone**: Phase 2 Milestone 5 — Decision Step-Up, Player Decisions, Graph API Migration  
+**Date**: 2026-10-04T09:55:00Z  
+**Verdict**: **REQUEST_CHANGES**  
 
 ---
 
-## 2. Adversarial Attacks and Challenge Results
+## Executive Summary
 
-### Challenge 1: Phase 2+ Scope Creep & Directory Layout (C-8, AC-58)
-- **Assumption Challenged**: No premature Phase 2+ modules (dashboard, identity, workers, trackers, personalizers) exist in `src/`.
-- **Attack Scenario**: An implementer could have added scaffolding files (`src/dashboard/`, `src/identity/`, `src/worker.py`, `src/tracker.py`, etc.) to facilitate future phases or test conveniences.
-- **Empirical Verification**:
-  - `src/dashboard` (directory and file): **CONFIRMED NON-EXISTENT**.
-  - `src/identity` (directory and file): **CONFIRMED NON-EXISTENT**.
-  - `src/dispatch/` directory enumeration:
-    Only 5 files exist: `__init__.py`, `creation.py`, `gates.py`, `objective.py`, `transition.py`.
-  - Stems and file names were tested against all 10 forbidden prefixes (`worker`, `relay`, `tracker`, `tracking`, `ingest`, `assess`, `baseline`, `analytics`, `personalize`, `agent`):
-    **ZERO MATCHES** (`0/5` offending files).
-  - Extended check on root `src/` for forbidden prefixes:
-    Checked all 30 root files (`approval.py`, `approval_store.py`, `audit_query.py`, `benchmark.py`, `correlation.py`, `db_migrate.py`, `db_roles.py`, `decision.py`, `events.py`, `fc27_mcp_server.py`, `graph.py`, `graph_api.py`, `hierarchy.py`, `lead_packages.py`, `live_match_watcher.py`, `live_ws_server.py`, `mcp_retry.py`, `model_selection.py`, `ocr_parsing.py`, `post_match_rundown.py`, `roles.py`, `rtsp_frame_analyzer.py`, `schemas.py`, `security.py`, `settings.py`, `swarms_backend.py`, `thread_ids.py`, `tracing.py`, `voice_gateway.py`).
-    **ZERO MATCHES**.
-- **Blast Radius**: None. Boundary is intact.
-- **Result**: **PASS**.
+An adversarial empirical verification of Phase 2 Milestone 5 was conducted across the 5 required tracks:
+1. Object-Level Player Isolation (`src/identity/routers/player.py`)
+2. 5 Distinct Player Decision Actions (`src/identity/routers/player.py`)
+3. Graph API HMAC Kill Switch (`src/graph_api.py`)
+4. G-TIMEOUT Invariant (Feature 46) (`src/identity/policy.py`, `src/graph_api.py`)
+5. Universal Dormancy & Scope Protection (`tests/test_packaging.py`, `tests/test_phase1_scope.py`, `docker-compose.yml`)
+
+### Overall Assessment
+- **Production Implementation Core (`src/`)**: **ROBUST & SOUND**. The business logic, isolation checks, policy authorization engine, HMAC kill switch, pre-flight route guards, G-TIMEOUT guards, and universal dormancy mechanisms correctly fail closed and enforce all security invariants.
+- **Verification Test Suites (`tests/identity/`)**: **CRITICAL DEFECTS IDENTIFIED**. The unit test files delivered by `worker_m5_1` (`tests/identity/test_player.py`, `tests/identity/test_tokens.py`, `tests/identity/test_step_up.py`) were not executed by the worker (execution timed out during permission check) and contain multiple fatal errors (mock dictionary type mismatches, dataclass subscripting errors, missing parameters, unmocked attributes, and Pydantic validation assertion errors). If executed with `pytest`, multiple tests will fail immediately with `AttributeError`, `TypeError`, `KeyError`, and `AssertionError`.
+- **Verdict**: **REQUEST_CHANGES** pending test suite remediation.
 
 ---
 
-### Challenge 2: Forbidden Identity & Passkey Imports (C-8, AC-58)
-- **Assumption Challenged**: No WebAuthn / FIDO2 / Passkey library or module imports exist in any Python code under `src/`.
-- **Attack Scenario**: Phase 2 authentication or WebAuthn dependencies could have been imported in `src/security.py`, `src/graph_api.py`, or schema files as forward-looking helpers.
-- **Empirical Verification**:
-  - Case-insensitive regex and string grep for `webauthn`: **0 results** across all 35 Python files in `src/`.
-  - Case-insensitive regex and string grep for `py_webauthn`: **0 results** across all 35 Python files in `src/`.
-  - Case-insensitive regex and string grep for `fido`: **0 results** across all 35 Python files in `src/`.
-  - Case-insensitive regex and string grep for `passkey`: **0 results** across all 35 Python files in `src/`.
-  - AST Walk trace (`ast.Import` and `ast.ImportFrom` nodes): All import statements in `src/` resolve exclusively to standard library, FastAPI/Pydantic, LangGraph/LangChain, psycopg/psycopg_pool, httpx, and local `src` modules.
-- **Blast Radius**: None. Phase 2 WebAuthn identity is completely deferred.
-- **Result**: **PASS**.
+## Detailed Track Verification
+
+### Track 1: Object-Level Player Isolation (`src/identity/routers/player.py`)
+
+| Attack Vector | Target Endpoint / Code | Mechanism | Expected | Observed Behavior | Status |
+|---|---|---|---|---|---|
+| **Attack 1: Cross-Player Viewing** | `GET /assignments/{id}` (`get_player_assignment_detail`, line 577) | `check_player_isolation(principal, assignment)` | HTTP 403 `PlayerIsolationError` | Evaluates `principal.player_id == subject_player_id`. When Player A accesses Player B, raises `PlayerIsolationError(403)`. | **PASS** |
+| **Attack 2: Cross-Player Challenge** | `POST /decision-challenge` (`generate_player_decision_challenge`, line 291) | `check_player_isolation(principal, assignment)` | HTTP 403 `PlayerIsolationError` | Evaluates player ID match against assignment subject. Raises `PlayerIsolationError(403)`. | **PASS** |
+| **Attack 3: Cross-Player Decision** | `POST /decisions` (`execute_player_decision`, line 374) | `check_player_isolation(principal, assignment)` | HTTP 403 `PlayerIsolationError` | Evaluates player ID match against assignment subject. Raises `PlayerIsolationError(403)`. | **PASS** |
+| **Attack 4: Staff Impersonation** | All player endpoints (`check_player_isolation`, lines 248-251) | `principal.is_player` check | HTTP 403 `PlayerIsolationError` | Non-players (coaches, analysts, staff, commissioner) attempting player actions raise `PlayerIsolationError(403)`. | **PASS** |
+
+### Track 2: 5 Distinct Player Decision Actions (`src/identity/routers/player.py`)
+
+| Attack Vector | Target Endpoint / Code | Mechanism | Expected | Observed Behavior | Status |
+|---|---|---|---|---|---|
+| **Attack 5: Conflation of `acknowledge` with `accept`** | `execute_player_decision` (lines 395-406) & `record_player_decision` (`store.py:2682`) | Proof differentiation & DB update | `acknowledge` records receipt without activating | `accept` enforces passkey/action-token proof. `acknowledge` does not require proof, records review receipt, and does NOT activate assignment or transition to active. | **PASS** |
+| **Attack 6: Incomplete `change_request`** | `PlayerDecisionSubmissionRequest.validate_rules` (lines 140-145) | Pydantic model validator | HTTP 422 if empty notes/reason | When `decision == "change_request"`, empty notes/reason raises `ValueError`, resulting in FastAPI HTTP 422. | **PASS** |
+| **Attack 7: Invalid `pause`** | `PlayerDecisionSubmissionRequest.validate_rules` (lines 147-149) | Pydantic model validator | HTTP 422 if duration < 1 | When `duration_days < 1`, raises `ValueError`, resulting in FastAPI HTTP 422. | **PASS** |
+
+### Track 3: Graph API HMAC Kill Switch (`src/graph_api.py`)
+
+| Attack Vector | Target Endpoint / Code | Mechanism | Expected | Observed Behavior | Status |
+|---|---|---|---|---|---|
+| **Attack 8: HMAC Submission with Kill Switch Active** | `apply_decision_unified` (line 1051) & `require_hmac` (line 829) | `settings.cli_hmac_enabled` check | HTTP 403 `proof_type_disabled` | `cli_hmac_enabled: bool = False` by default. Submitting `proof_type="hmac"` raises HTTP 403 `proof_type_disabled`. | **PASS** |
+| **Attack 9: Pre-flight Unauthenticated Probe** | Decision endpoints (`check_decision_proof_type`, lines 909-918) | FastAPI route dependency | HTTP 403 before authentication | Route dependency `dependencies=[Depends(check_decision_proof_type)]` runs before `Depends(get_current_principal)`. Probes without WebAuthn evidence immediately return HTTP 403 `proof_type_disabled`. | **PASS** |
+
+### Track 4: G-TIMEOUT Invariant (Feature 46)
+
+| Attack Vector | Target Endpoint / Code | Mechanism | Expected | Observed Behavior | Status |
+|---|---|---|---|---|---|
+| **Attack 10: Inactivity / Timeout Approval Injection** | `src/identity/policy.py:649` & `src/identity/policy.py:658` | Action & attribute inspection | HTTP 403 `AgentImpersonationError` | Any action starting with `"timeout"` or attribute `timeout_approved: true` raises `AgentImpersonationError` (HTTP 403). | **PASS** |
+| **Attack 11: Expired Request Decision** | `src/graph_api.py:1002` (`apply_decision_unified`) | Request status & expiry check | HTTP 409 `approval_expired` | Non-awaiting or expired requests reject with HTTP 409 `approval_expired`. | **PASS** |
+
+### Track 5: Scope Dormancy & Packaging
+
+| Attack Vector | Target Files | Mechanism | Expected | Observed Behavior | Status |
+|---|---|---|---|---|---|
+| **Attack 12: Dispatch Dormancy Invariant** | `docker-compose.yml`, `src/graph_api.py`, `tests/test_phase1_scope.py` | Universal env check | `DISPATCH_ENABLED=false`, zero player delivery | `DISPATCH_ENABLED=false` enforced in compose and settings. Zero player delivery adapters. | **PASS** |
+| **Attack 13: Packaging & Dependency Pins** | `pyproject.toml`, `requirements.txt`, `tests/test_packaging.py` | Package inspection | Requirements match pyproject | `langgraph` pinned, test tools excluded from runtime dependencies. | **PASS** |
 
 ---
 
-### Challenge 3: Companion Tracking Table Mutations (C-8, AC-58)
-- **Assumption Challenged**: No production code under `src/` or `migrations/` writes to the Phase 5 companion tracking tables (`player_observations`, `dispatch_assessments`, `dispatch_plans`, `dispatch_delivery_attempts`).
-- **Attack Scenario**: Stored procedures, triggers, or backend modules could inadvertently write baseline records, mock tracking states, or attempt logging outside the test harness.
-- **Empirical Verification**:
-  - Grep search for `player_observations` across `src/`: **0 results**.
-  - Grep search for `dispatch_assessments` across `src/`: **0 results**.
-  - Grep search for `dispatch_plans` across `src/`: **0 results**.
-  - Grep search for `dispatch_delivery_attempts` across `src/`: **0 results**.
-  - Repository-wide audit:
-    - `migrations/0003_dispatch_foundation.sql`: Defines tables, foreign keys, immutability triggers, and check constraints (`source_table IN (...)`). Contains **0 DML mutation statements** (`INSERT INTO`, `UPDATE`, `DELETE FROM`, `TRUNCATE`) on tracking tables.
-    - `migrations/post/grants.sql`: Defines grants (`SELECT` to `fc27_app`, `SELECT, INSERT` to `fc27_dispatch`).
-    - `tests/`: Mutations exist strictly inside tests (`test_adversarial_m3_challenger.py`, `test_dispatch_schema.py`, `test_dispatch_transition.py`).
-  - Python write search: Zero SQL mutation queries targeting tracking tables exist in production code.
-- **Blast Radius**: None. Tracking tables remain pure forward-compatible schema placeholders.
-- **Result**: **PASS**.
+## Adversarial Vulnerability Findings (Test Suite Defects)
+
+While production code enforces all security invariants, the newly authored test files will FAIL during test execution. The defects are documented below with root cause and remediation.
+
+### Defect 1: Pydantic Validation Error Assertion Failure in `test_player.py`
+- **Location**: `tests/identity/test_player.py:301-302`
+- **Flawed Code**:
+  ```python
+  resp_cr_empty = client.post(
+      f"/v1/player/assignments/{aid}/decision",
+      json={"decision": "change_request", "notes": ""},
+  )
+  assert resp_cr_empty.status_code == 422
+  assert "notes required" in resp_cr_empty.json()["detail"].lower()
+  ```
+- **Root Cause**:
+  1. In FastAPI, `resp.json()["detail"]` for a validation error is a `list[dict]`, e.g., `[{'type': 'value_error', 'loc': ['body'], 'msg': 'Value error, change_request requires non-empty notes or reason', ...}]`. Calling `.lower()` on a `list` raises:
+     ```
+     AttributeError: 'list' object has no attribute 'lower'
+     ```
+  2. The string in `src/identity/routers/player.py:144` is `"change_request requires non-empty notes or reason"`. Even if converted to string, it does NOT contain `"notes required"`.
+- **Remediation**:
+  ```python
+  assert resp_cr_empty.status_code == 422
+  detail_str = str(resp_cr_empty.json()["detail"]).lower()
+  assert "change_request requires non-empty notes or reason" in detail_str
+  ```
+
+### Defect 2: Mock Return Value Type Mismatch in `test_player.py` (`consume_token`)
+- **Location**: `tests/identity/test_player.py:261-263`
+- **Flawed Code**:
+  ```python
+  with patch.object(ScopedActionTokenEngine, "consume_token") as mock_consume:
+      mock_consume.return_value = {"user_id": principal.user_id}
+  ```
+- **Root Cause**:
+  In `src/identity/routers/player.py:424`, the code accesses:
+  ```python
+  token_ref = str(consumed_token.token_id)
+  ```
+  Because `mock_consume.return_value` is a dictionary, accessing `.token_id` raises:
+  ```
+  AttributeError: 'dict' object has no attribute 'token_id'
+  ```
+  This causes an unhandled 500 error instead of 200 OK.
+- **Remediation**:
+  Mock an object with a `token_id` attribute:
+  ```python
+  mock_token_record = MagicMock()
+  mock_token_record.token_id = uuid4()
+  mock_consume.return_value = mock_token_record
+  ```
+
+### Defect 3: Incomplete Mock Return Value in `test_player.py` (`record_player_decision`)
+- **Location**: `tests/identity/test_player.py:255-259` and `324-328`
+- **Flawed Code**:
+  ```python
+  mock_store.record_player_decision.return_value = {
+      "decision_id": uuid4(),
+      "decision": "accept",
+      "status": "decided",
+  }
+  ```
+- **Root Cause**:
+  In `src/identity/routers/player.py:501-519`, `PlayerDecisionResponse` accesses:
+  `decision_row["request_id"]`, `decision_row["assignment_id"]`, `decision_row["subject_player_id"]`, `decision_row["authority_basis"]`, `decision_row["assignment_version"]`, `decision_row["assignment_hash"]`, `decision_row["package_id"]`, `decision_row["package_version"]`, `decision_row["package_hash"]`, `decision_row["decided_at"]`.
+  Missing these keys raises `KeyError: 'request_id'`.
+- **Remediation**:
+  Provide all required response fields in the mock dictionary or mock a full database row.
+
+### Defect 4: Unexpected Parameter & Return Type in `test_tokens.py` (`issue_token`)
+- **Location**: `tests/identity/test_tokens.py:96-107` and `273-280`
+- **Flawed Code**:
+  ```python
+  sat = engine.issue_token(
+      user_id=uid,
+      scope="player_decision",
+      assignment_id=aid,
+      expires_in_minutes=60,
+  )
+  assert sat.raw_token.startswith("sat_")
+  ```
+- **Root Cause**:
+  1. `ScopedActionTokenEngine.issue_token` in `src/identity/tokens.py:105` takes `ttl_seconds`, NOT `expires_in_minutes`. Passing `expires_in_minutes` raises:
+     ```
+     TypeError: ScopedActionTokenEngine.issue_token() got an unexpected keyword argument 'expires_in_minutes'
+     ```
+  2. `issue_token` returns `tuple[str, ActionTokenRecord]`. Accessing `sat.raw_token` on a tuple raises:
+     ```
+     AttributeError: 'tuple' object has no attribute 'raw_token'
+     ```
+- **Remediation**:
+  ```python
+  raw_token, token_record = engine.issue_token(
+      user_id=uid,
+      scope="player_decision",
+      assignment_id=aid,
+      ttl_seconds=3600,
+  )
+  assert raw_token.startswith("sat_")
+  ```
+
+### Defect 5: Dataclass Subscripting in `test_tokens.py` (`verify_token` & `consume_token`)
+- **Location**: `tests/identity/test_tokens.py:148-154`
+- **Flawed Code**:
+  ```python
+  verified = engine.verify_token(...)
+  assert verified["user_id"] == uid
+
+  consumed = engine.consume_token(...)
+  assert consumed["consumed_at"] is not None
+  ```
+- **Root Cause**:
+  `verify_token` and `consume_token` return `ActionTokenRecord` instances (a frozen dataclass). Attempting dictionary subscripting raises:
+  ```
+  TypeError: 'ActionTokenRecord' object is not subscriptable
+  ```
+- **Remediation**:
+  Access dataclass fields via attributes:
+  ```python
+  assert verified.user_id == uid
+  assert consumed.consumed_at is not None
+  ```
+
+### Defect 6: Missing Store Challenge Mock in `test_step_up.py`
+- **Location**: `tests/identity/test_step_up.py:202-243`
+- **Flawed Code**:
+  `mock_store.get_challenge` is not configured.
+- **Root Cause**:
+  In `src/identity/routers/step_up.py:230-231`:
+  ```python
+  challenge_row = store.get_challenge(challenge_str)
+  if not challenge_row or challenge_row.get("challenge_type") != "step_up_decision":
+      raise HTTPException(status_code=400, detail="challenge not found or invalid type")
+  ```
+  An unmocked `store.get_challenge` returns a `MagicMock`. Comparing `MagicMock() != "step_up_decision"` evaluates to `True`, raising HTTP 400.
+  The test asserts HTTP 200, but gets HTTP 400.
+- **Remediation**:
+  Configure `mock_store.get_challenge.return_value = {"challenge_type": "step_up_decision", "consumed_at": None, "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5), "user_id": principal.user_id, "bound_payload_hash": "..."}`.
 
 ---
 
-### Challenge 4: Dispatch Activation Documentation Invariants (C-2, C-3)
-- **Assumption Challenged**: `docs/DISPATCH_ACTIVATION.md` accurately documents the exact runtime safety invariant error message, all 6 rollout gates, the Phase 1 G-OUTBOX refusal, and the 4 mandatory contract statements forbidding Phase 1 operational enablement.
-- **Attack Scenario**: Discrepancies between documentation and actual implementation in `src/graph_api.py` / `src/dispatch/gates.py`, or diluted statements permitting soft activation.
-- **Empirical Verification**:
-  - **Exact Disabled Message**:
-    - Documented in `docs/DISPATCH_ACTIVATION.md` line 41:
-      `Phase 1 safety invariant violation: DISPATCH_ENABLED must be false`
-    - Implemented in `src/graph_api.py` lines 419 and 427:
-      `"reason": f"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false (dispatch configured but blocked: {', '.join(failed)})"`
-      `"reason": "Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`
-      **EXACT MATCH**.
-  - **6 Rollout Gates Table**:
-    Section 3 contains table specifying:
-    1. `G-MIGRATION` (Automatic, migration 0003 applied)
-    2. `G-GRANTS` (Automatic, least-privilege catalog posture)
-    3. `G-WORKER` (Automatic, `service_heartbeats` <60s; fails closed in Phase 1 as no worker exists)
-    4. `G-ID` (Manual, signed HMAC evidence; `UNVERIFIED (G-ID not met)`)
-    5. `G-ATOMIC` (Manual, signed CI URL for atomic approval-to-dispatch tests)
-    6. `G-OUTBOX` (Manual, Phase 3 outbox relay evidence; refused in Phase 1 via `not_recordable_before_phase_3`)
-    **ALL 6 PRESENT AND ACCURATELY SPECIFIED**.
-  - **4 Verbatim Contract Statements**:
-    1. Statement 1: `"Phase 1 MUST NOT be enabled in any deployed environment"` -> Found verbatim at Section 1, item 2.
-    2. Statement 2: `"Passing the Phase 1 tests alone does not authorize activation"` -> Found verbatim at Section 1, item 3.
-    3. Statement 3: `"There is no production dispatch-worker in Phase 1, so G-WORKER cannot pass"` -> Found verbatim at Section 1, item 4.
-    4. Statement 4: `"G-OUTBOX cannot be satisfied before Phase 3: its evidence is the Phase 3 relay and reconciliation test run, and the route refuses it in Phase 1 (not_recordable_before_phase_3)"` -> Found verbatim at Section 1, item 5.
-- **Blast Radius**: None. Operators cannot misinterpret Phase 1 completion as operational enablement.
-- **Result**: **PASS**.
+## Conclusion & Verdict
 
----
+Because Milestone 5 cannot pass automated testing until these test suite defects are resolved, the required verdict is:
 
-### Challenge 5: EA Player Identity Verification Runbook (AC-47)
-- **Assumption Challenged**: `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` remains strictly `UNVERIFIED` and does not contain fabricated match captures or player records to bypass `G-ID`.
-- **Attack Scenario**: Fake sample player IDs or synthetic match logs entered into AC-47 tables could be claimed as empirical proof of EA player ID stability.
-- **Empirical Verification**:
-  - Document status line 3: `**Status: UNVERIFIED (G-ID not met)**`.
-  - Table 2.1 (`clubs/matches` and `members/stats` structures): Both rows contain `*[TBD]*` and `*Pending live EA capture*`.
-  - Table 2.2 (Stability across 3 matches): All 3 rows contain `*[TBD]*` and `*Pending capture across 3 matches*`.
-  - Table 2.3 (Stability across gamertag change): Row contains `*[TBD]*` and `*Pending player rename test*`.
-  - Table 2.4 (Club and Platform scoping): Row contains `*[TBD]*` and `*Pending verification*`.
-  - Table 2.5 (Transferred, removed, duplicate, unavailable edge cases): All 4 rows contain `*[TBD]*` and `*Pending test*`.
-  - Zero fabricated or production player identities exist.
-- **Blast Radius**: None. Gate `G-ID` cannot be accidentally recorded or justified without real Phase 3 live captures.
-- **Result**: **PASS**.
+**REQUEST_CHANGES**
 
----
-
-### Challenge 6: Stress Testing of `tests/test_phase1_scope.py` Test Logic
-- **Assumption Challenged**: The test suite in `tests/test_phase1_scope.py` is thorough, cannot be trivially circumvented, and will reliably fail if boundary violations occur.
-- **Analysis**:
-  - `test_no_phase2plus_code()` checks both file existence and directory existence for `dashboard` and `identity`, and walks `src/dispatch/` with rglob checking all stems and names against 10 prefixes.
-  - `test_no_webauthn_imports()` uses both AST parsing and multiline regex matching, detecting direct imports, relative imports, and module aliases.
-  - `test_no_tracking_writes_outside_tests()` inspects all Python files under `src/` against case-insensitive DML commands targeting all four tracking tables with or without schema prefixes.
-  - `test_docs_state_disabled_and_gates()` asserts presence of all 6 gate tokens and exact error string.
-  - `test_activation_doc_forbids_phase1_enablement()` uses regex search with case-insensitive patterns to guarantee all 4 contract statements and required error tokens are present.
-- **Result**: **PASS**.
-
----
-
-## 3. Stress Test Matrix Summary
-
-| Test Case / Attack | Expected Behavior | Actual Behavior | Pass/Fail |
-|---|---|---|---|
-| Probe `src/dashboard` / `src/identity` | Non-existent | Neither directory nor file exists | **PASS** |
-| Probe `src/dispatch/` forbidden prefixes | Zero files matching 10 forbidden prefixes | All 5 files are approved Phase 1 modules | **PASS** |
-| Probe `src/` for WebAuthn imports | Zero imports / AST nodes | 0 occurrences in AST and text | **PASS** |
-| Probe `src/` for companion tracking writes | Zero DML queries on tracking tables | 0 occurrences | **PASS** |
-| Validate exact disabled error string | Matches `src/graph_api.py` | `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"` | **PASS** |
-| Validate 6 activation gates table | Lists G-MIGRATION through G-OUTBOX | Complete table present with Phase 1 status | **PASS** |
-| Validate 4 mandatory boundary statements | Verbatim contractual statements present | All 4 statements present verbatim | **PASS** |
-| Validate EA Runbook AC-47 tables | Status UNVERIFIED and empty tables | Status UNVERIFIED, all tables contain `[TBD]` | **PASS** |
-
----
-
-## 4. Final Verdict
-
-**Verdict**: **APPROVE**
-
-All Phase 1 scope boundaries, forbidden imports, companion tracking writes, and activation documentation invariants are fully satisfied and rigorously protected. Milestone 5 is ready for final orchestrator sign-off and progression to Milestone 6.
+The worker `worker_m5_1` should apply the specific remediations outlined above to `tests/identity/test_player.py`, `tests/identity/test_tokens.py`, and `tests/identity/test_step_up.py`. Production code in `src/` requires no modifications.

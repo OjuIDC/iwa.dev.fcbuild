@@ -1,74 +1,62 @@
-# Task Assignment: reviewer_m3_1 (Milestone 3 Reviewer 1 - Schema, Triggers & Grants)
+# Dispatch Instructions for reviewer_m3_1
 
-## Mission
-Perform independent review of Milestone 3 focusing on database schema, immutability triggers, least-privilege grants policy v4, and schema tests.
+**Agent ID**: `reviewer_m3_1`
+**Role**: API Routers & FastAPI Integration Reviewer
+**Milestone**: Phase 2 Milestone 3 — Server-Side Sessions & Invitations Lifecycle
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1`
 
-## Working Directory
-`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Read §5, §6, §7, §8, §11, §14)
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
 
-## Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
-4. `migrations/0003_dispatch_foundation.sql` (Section C)
-5. `migrations/post/grants.sql`
-6. `src/db_migrate.py`
-7. `tests/test_dispatch_schema.py`
+## Mandatory Non-Negotiable Invariants
+- `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced at all times.
+- Zero player delivery; no active worker or relay.
+- Plaintext tokens (sessions and invitations) are NEVER stored in PostgreSQL; only deterministic SHA-256 hashes (`hash_token()`).
+- Single-use invitation consumption enforced under atomic `FOR UPDATE` lock.
+- User account status transition strictly respects `fc27_users_status_guard`: `invited` -> `active`.
+- Dual session timeouts: 30-minute idle expiration strictly capped at 24-hour absolute expiration.
 
-## Review Verification Checklist
-1. **`public.players` Schema**:
-   - `player_id` is numeric string format `^[0-9]{1,20}$`. Non-numeric or length > 20 rejected.
-   - `club_id` is numeric string format `^[0-9]+$`.
-   - `platform` default `'common-gen5'`.
-   - `display_name` max length 64.
-   - `squad_number` between 1 and 99, unique per club when set.
-2. **`public.dispatches` Schema & Triggers**:
-   - Foreign keys to `graph_threads`, `approval_requests`, `approval_audit`, `players`.
-   - `dispatch_status` domain matches authoritative specification.
-   - Partial unique index `dispatches_one_active_per_objective` prevents duplicate active objectives per player and owner.
-   - Trigger `fc27_dispatch_insert_guard` ensures initial insert has `dispatch_status = 'pending'`, `version = 1`, `plan_version = 0`, and lifecycle timestamps NULL.
-   - Trigger `fc27_dispatch_immutable` prevents mutation of all 17 provenance fields and freezes terminal rows.
-3. **Tracking Tables**:
-   - 8 tracking tables (`dispatch_plans`, `dispatch_plan_decisions`, `dispatch_delivery_attempts`, `dispatch_acknowledgments`, `dispatch_comments`, `analyst_notes`, `player_observations`, `dispatch_assessments`) protected by append-only trigger `fc27_reject_mutation()`.
-4. **Grants Policy v4**:
-   - `migrations/post/grants.sql` has header `-- grants-policy-version: 4`.
-   - `fc27_app`: SELECT, INSERT on `players` and `dispatches` (NO direct UPDATE/DELETE on `dispatches`).
-   - `fc27_dispatch`: SELECT on `players` and `dispatches` (NO direct INSERT, UPDATE, DELETE).
-   - `src/db_migrate.py`: `GRANTS_POLICY` version is 4 and sha256 matches `grants.sql`. Catalog postconditions verify function security properties.
-5. **Execute Test Verification**:
-   ```pwsh
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_migration_0003.py tests/test_dispatch_schema.py
-   ```
+## Review Scope
+1. **API Routers**:
+   - Inspect `src/identity/routers/invitations.py`, `src/identity/routers/sessions.py`, `src/identity/routers/users.py`, and `src/identity/routers/__init__.py`.
+   - Verify request and response models, input validation (Pydantic models, forbidden extra fields, clean error serialization), and route decorators.
+   - Verify route aliases matching E2E test suite expectations (`/v1/auth/invitations/{token}/accept` and `/consume`, `/v1/auth/session` and `/v1/auth/me`).
+2. **FastAPI Integration**:
+   - Inspect `src/graph_api.py`: verify router mounting, attachment of `app.state.identity_store`, and custom exception handlers for `IdentityStoreError` and `AuthorizationError`.
+3. **Execution & Test Verification**:
+   - Execute verification tests:
+     - `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`
+     - `pytest tests/identity/test_routers_invitations.py tests/identity/test_routers_sessions.py tests/identity/test_routers_users.py -v`
+     - `pytest tests/e2e/test_phase2_tier1_features.py -k "invitation or session" -v`
+   - Document all executed commands, test outputs, and findings in `handoff.md`.
+4. **Verdict**:
+   - Provide an explicit verdict: `APPROVE` or `REQUEST_CHANGES`.
 
-## Output Requirements
-Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-Write `review.md` and `handoff.md` in your working directory.
-Notify the orchestrator with `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Write your report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1\handoff.md`.
+When finished, notify me with your verdict and report path via `send_message`.
 
+## 2026-10-04T05:00:05Z
+You are reviewer_m3_1, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
 
-## 2026-10-03T17:49:47Z
-You are reviewer_m3_1, a teamwork_preview_reviewer agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1\DISPATCH.md
-
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
-
-Task:
-Perform independent review of Milestone 3 focusing on database schema, immutability triggers, least-privilege grants policy v4, and schema tests:
-1. Verify public.players table constraints (numeric player_id regex, club_id regex, platform defaults).
-2. Verify public.dispatches table foreign keys, insert guard trigger, 17 immutable provenance columns, terminal row freezing, and partial unique index.
-3. Verify 8 forward-compatible tracking tables protected by append-only triggers.
-4. Verify migrations/post/grants.sql (version 4) least-privilege grants and src/db_migrate.py GRANTS_POLICY sha256 synchronization.
-5. Run tests:
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_migration_0003.py tests/test_dispatch_schema.py
-
-Formulate explicit verdict: APPROVE or REQUEST_CHANGES.
-Write review.md and handoff.md in your working directory.
-Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+Your task:
+Review the API Routers and FastAPI Integration for Phase 2 Milestone 3: Server-Side Sessions & Invitations Lifecycle.
+1. Inspect src/identity/routers/invitations.py, src/identity/routers/sessions.py, src/identity/routers/users.py, src/identity/routers/__init__.py, and src/graph_api.py.
+2. Verify route definitions, request/response models, input validations, and error mappings.
+3. Verify dependency wiring: get_current_principal, require_human_principal, and get_identity_store.
+4. Execute verification tests:
+   - pytest tests/test_packaging.py tests/test_phase1_scope.py -v
+   - pytest tests/identity/test_routers_invitations.py tests/identity/test_routers_sessions.py tests/identity/test_routers_users.py -v
+   - pytest tests/e2e/test_phase2_tier1_features.py -k "invitation or session" -v
+5. Document all commands, test outputs, and findings in handoff.md.
+6. Provide an explicit verdict: APPROVE or REQUEST_CHANGES.
+Write report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1\handoff.md
+When finished, notify me with your verdict and report path via send_message.

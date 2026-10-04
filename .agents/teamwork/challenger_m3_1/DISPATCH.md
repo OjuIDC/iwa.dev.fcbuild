@@ -1,68 +1,65 @@
-# Task Assignment: challenger_m3_1 (Milestone 3 Challenger 1 - State Machine & Phase 1 Invariants)
+# Dispatch Instructions for challenger_m3_1
 
-## Mission
-Adversarially challenge Milestone 3 state machine transitions, optimistic locking under concurrency, and strict Phase 1 delivery blocks.
+**Agent ID**: `challenger_m3_1`
+**Role**: Session Dual-Expiry & Lifecycle Challenger
+**Milestone**: Phase 2 Milestone 3 — Server-Side Sessions & Invitations Lifecycle
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1`
 
-## Working Directory
-`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Read §5, §7, §8, §11, §14)
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
 
-## Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
-4. `migrations/0003_dispatch_foundation.sql` (Sections C and D)
-5. `src/dispatch/transition.py`
-6. `tests/test_dispatch_transition.py`
+## Mandatory Non-Negotiable Invariants
+- `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced at all times.
+- Zero player delivery; no active worker or relay.
+- Plaintext tokens are NEVER stored in PostgreSQL; only deterministic SHA-256 hashes (`hash_token()`).
+- Dual session timeouts: 30-minute idle expiration strictly capped at 24-hour absolute expiration.
+- Suspended or disabled accounts fail closed immediately on session validation (HTTP 401).
+- Session rotation on privilege change revokes previous session and issues new session in a single transaction.
 
-## Adversarial Challenge Vectors
-1. **Phase 1 Delivery Bypass Attacks**:
-   - Attempt transition to `delivered` using every permitted role (`fc27_app`, `fc27_dispatch`, superuser), every actor kind (`worker`, `commissioner`, `system`), with valid and invalid preconditions.
-   - Verify that transition to `delivered` UNCONDITIONALLY fails closed with SQLSTATE `FC002` ("Phase 1 invariant violation: transition to delivered is disabled (DISPATCH_ENABLED=false)").
-2. **State Machine Edge Bypasses**:
-   - Attempt arbitrary, out-of-order, or forbidden transitions (e.g. `pending -> completed`, `pending -> delivered`, `cancelled -> pending`, `superseded -> active`).
-   - Verify all forbidden edges raise SQLSTATE `FC002`.
-   - Verify terminal states (`completed`, `expired`, `cancelled`, `superseded`) are completely immutable and frozen.
-3. **Concurrency & Race Condition Attacks**:
-   - Simulate concurrent conflicting transitions against the same dispatch row with stale `expected_version` or stale `expected_status`.
-   - Verify that exactly one succeeds and the other fails with SQLSTATE `FC001` (VersionConflictError).
-   - Verify that row-level locking (`SELECT FOR UPDATE`) prevents deadlocks or torn states.
-4. **Outbox & Domain Event Atomicity**:
-   - When a transition is rejected or rolled back, verify that zero rows remain in `public.domain_events` or `public.outbox`.
-   - Verify event types and payloads match the transition.
-5. **Execute Test Verification**:
-   ```pwsh
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_transition.py
-   ```
+## Adversarial Verification Tasks
+Empirically stress-test the session subsystem:
+1. **Dual-Expiry Invariant**:
+   - Verify that an idle session (>30 min) fails closed with HTTP 401 even if within the 24-hour absolute window.
+   - Verify that an expired absolute session (>24 hrs) fails closed with HTTP 401 regardless of recent touches.
+   - Verify that calling `/v1/auth/sessions/touch` extends `idle_expires_at` but NEVER extends beyond `absolute_expires_at`.
+2. **Session Rotation & Invalidation**:
+   - Verify that rotating a session atomically revokes the old session (`revoked_at = now()`).
+   - Verify that the old session token fails closed with HTTP 401 immediately after rotation.
+   - Verify that logging out (`POST /v1/auth/logout`) or deleting a session immediately revokes it.
+3. **Account Suspension & User Status Invariants**:
+   - Verify that suspending a user account immediately invalidates all active sessions across all devices (HTTP 401).
+   - Verify that a disabled user account cannot be used to authenticate.
+4. **Anti-Impersonation & Player Isolation**:
+   - Verify that service tokens (BFF, Graph, Worker) cannot call human session management endpoints (`AgentImpersonationError` / 403).
+   - Verify that Player A cannot inspect or revoke Player B's sessions (`PlayerIsolationError` / 403).
+5. **Execution**:
+   - Write and execute adversarial test scripts, run `pytest tests/identity/test_routers_sessions.py -v`.
+   - Document commands, test execution logs, and empirical evidence in `handoff.md`.
+6. **Verdict**:
+   - Provide an explicit verdict: `APPROVE` or `REQUEST_CHANGES`.
 
-## Output Requirements
-Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-Write `challenge_report.md` and `handoff.md` in your working directory.
-Notify the orchestrator with `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Write your report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1\handoff.md`.
+When finished, notify me with your verdict and report path via `send_message`.
 
+## 2026-10-04T05:00:05Z
+You are challenger_m3_1, an adversarial verifier agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
 
-## 2026-10-03T17:49:47Z
-[Message] timestamp=2026-10-03T17:49:47Z sender=7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b priority=MESSAGE_PRIORITY_HIGH content=You are challenger_m3_1, a teamwork_preview_challenger agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1\DISPATCH.md
-
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
-
-Task:
-Adversarially challenge Milestone 3 state machine transitions, optimistic concurrency locking, and strict Phase 1 delivery blocks:
-1. Phase 1 delivery bypass attacks: attempt transition to delivered with all roles and actors; verify unconditional FC002 block.
-2. State machine edge bypasses: attempt out-of-order/forbidden transitions; verify FC002 rejection and terminal state freezing.
-3. Concurrency attacks: conflicting concurrent transitions with stale version/status; verify exactly one succeeds and second raises FC001.
-4. Outbox atomicity: verify rolled-back transitions leave zero traces in domain_events or outbox.
-5. Run tests:
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_transition.py
-
-Formulate explicit verdict: APPROVE or REQUEST_CHANGES.
-Write challenge_report.md and handoff.md in your working directory.
-Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+Your task:
+Empirically stress-test session dual-expiry, rotation, and lifecycle invariants for Phase 2 Milestone 3.
+1. Dual-Expiry: verify idle expiration (30m) fails closed with 401 even within 24h absolute; verify absolute expiration (24h) fails closed with 401; verify touch strictly caps idle_expires_at <= absolute_expires_at.
+2. Rotation & Invalidation: verify atomic rotation revokes old session and old token returns 401; verify logout/delete revokes session immediately.
+3. User Status: verify account suspension immediately fails closed all active sessions across all devices (401); verify disabled account cannot authenticate.
+4. Anti-Impersonation & Player Isolation: verify service tokens cannot call human session management endpoints (403); verify player isolation.
+5. Write and execute stress tests, document in handoff.md.
+6. Provide an explicit verdict: APPROVE or REQUEST_CHANGES.
+Write report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1\handoff.md
+When finished, notify me with your verdict and report path via send_message.

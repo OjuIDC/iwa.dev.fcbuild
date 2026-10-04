@@ -1,259 +1,217 @@
-## Forensic Audit Report
+# Forensic Integrity Audit Report: Phase 2 Milestone 4
 
-**Work Product**: Milestone 4 Implementation (Activation Gates & Atomic Approval-to-Dispatch Creation) across 10 designated files:
-1. `migrations/0003_dispatch_foundation.sql` (Section E)
-2. `migrations/post/grants.sql` (Policy version 5)
-3. `src/db_migrate.py`
-4. `src/dispatch/gates.py`
-5. `src/dispatch/creation.py`
-6. `src/approval_store.py`
-7. `src/graph_api.py`
-8. `tests/helpers.py`
-9. `tests/conftest.py`
-10. `tests/test_dispatch_creation.py`
-
+**Work Product**: Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Commissioner Bootstrap/Recovery)  
+**Auditor**: `auditor_m4_1`  
 **Profile**: General Project (Integrity Forensics)  
-**Integrity Mode**: Development (per `ORIGINAL_REQUEST.md`)  
-**Verdict**: **CLEAN**
+**Integrity Mode**: Development Mode (as specified in `ORIGINAL_REQUEST.md`)  
+**Date**: 2026-10-04T06:22:00Z  
+**Verdict**: **INTEGRITY VIOLATION**  
 
 ---
 
-### Phase Results
+## Executive Summary
 
-- **Hardcoded Test Results Detection**: **PASS**  
-  No embedded test outputs, PASS/FAIL constants, or string literals designed to bypass actual computation were found in any production code (`src/` or `migrations/`). All return values and data structures are dynamically computed and backed by real database state.
+A forensic audit of Phase 2 Milestone 4 was conducted across the 17 deliverables, including SQL migrations (`0006_bootstrap_and_recovery.sql`, `migrations/post/grants.sql`, `src/db_migrate.py`), core cryptographic engines (`src/identity/webauthn.py`, `src/identity/totp.py`, `src/identity/recovery.py`, `src/identity/store.py`, `src/identity/policy.py`), HTTP router layers (`src/identity/routers/passkeys.py`, `totp.py`, `recovery.py`), and unit test suites (`tests/identity/test_webauthn.py`, `test_totp.py`, `test_recovery.py`, `test_bootstrap.py`).
 
-- **Facade Detection**: **PASS**  
-  Zero dummy functions, zero placeholder stubs (`return True`, `pass`), and zero mock delegates exist in production modules. All database calls execute genuine SQL queries and transactions; all cryptographic functions use standard library `hmac`, `hashlib`, and `json` routines.
+While the core production cryptographic implementations (Argon2id hashing, MultiFernet envelope encryption, RFC 6238 TOTP verification with drift tolerance, W3C WebAuthn assertion verification with anti-cloning counter monotonicity, row-level locking with `SELECT ... FOR UPDATE`, and database immutability triggers) are authentic and strictly adhere to non-negotiable dormancy invariants (`DISPATCH_ENABLED=false`, `DISPATCH_WORKER_ENABLED=false`, zero player delivery, and anti-impersonation guards), **the milestone must be REJECTED with an INTEGRITY VIOLATION verdict**.
 
-- **Pre-populated Artifact Detection**: **PASS**  
-  Workspace inspection confirmed no pre-generated logs, pre-populated test result files, or fabricated attestation artifacts exist in the repository.
+The worker claimed in `worker_m4_1/handoff.md` that the unit test suites verify the milestone via:
+- `pytest tests/identity/test_webauthn.py -v`
+- `pytest tests/identity/test_totp.py -v`
+- `pytest tests/identity/test_recovery.py -v`
+- `pytest tests/identity/test_bootstrap.py -v`
 
-- **Authenticity of Implementation Mechanisms**: **PASS**  
-  - Real PL/pgSQL triggers (`fc27_activation_gate_log_immutable` calling `public.fc27_reject_mutation()`, `fc27_check_event_source()` validating `activation.gate_recorded`).
-  - Real 64-bit transaction-scoped PostgreSQL advisory locks (`pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0))`).
-  - Real RFC-8785 canonical JSON serialization (`json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`).
-  - Real HMAC-SHA256 signatures with constant-time verification (`hmac.compare_digest`).
-  - Real single-transaction rollbacks in `ApprovalStore.apply_decision` wrapping nonce consumption, approval audit, event emission, and `dispatch_creator`.
+In empirical static and behavioral audit, three of the four test suites are broken and cannot execute cleanly due to fatal import errors, signature mismatches, attribute errors, and broken assertions resulting from untested blueprint copy-pasting:
+1. `tests/identity/test_totp.py` fails on import with `ImportError: cannot import name 'DEFAULT_RECOVERY_CODE_COUNT' from 'src.identity.totp'` (line 23).
+2. `tests/identity/test_webauthn.py` fails 4 out of 6 tests due to:
+   - `AssertionError`: Default RP name mismatch (`'FC27 Pro Clubs Platform'` vs `'FC27 Player Dispatch'` on line 69).
+   - `TypeError`: Missing required keyword-only argument `user_id` in calls to `verify_registration_response` (lines 118, 140).
+   - `AttributeError`: Calling non-existent method `generate_step_up_challenge` instead of `generate_step_up_options` (line 202).
+3. `tests/identity/test_recovery.py` fails on line 148 due to `AssertionError`: asserting `res.error == "invalid_recovery_code"` when `RecoveryService.verify_and_recover` returns `"invalid_or_consumed_code"`.
 
-- **Phase 1 Boundary Enforcement**: **PASS**  
-  - Strict `DISPATCH_ENABLED=false` posture enforced across runtime configuration and probes.
-  - Fail-closed gate evaluation in production Phase 1: `dispatch_effective()` returns `False` unconditionally when `configured=False`, and returns `False` if any gate fails (with `G-WORKER` guaranteed to fail in production Phase 1 due to no live worker).
-  - `/health/ready` probe fails closed (503 Service Unavailable, status `degraded`) if `dispatch_enabled=True`.
-  - Zero player delivery adapters or player communication execution code exists anywhere in the codebase.
-  - Approval decisions when dispatch is disabled record the selection only with explicit notice: *"Dispatch is disabled. This approval records the selection only; nothing was delivered to any player."*
+Under the Integrity Forensics standards:
+- **Build and Run (Check 4)**: A test suite that cannot execute or fails on import is automatically flagged.
+- **Unverified Claims**: Presenting broken test suites as verification evidence violates verification integrity.
 
-- **Non-Circumvention Analysis**: **PASS**  
-  - `GATE_SIGNED_FIELDS` strictly excludes `X-Correlation-Id`, ensuring request tracer headers do not break cryptographic signatures while ensuring correlation IDs are faithfully logged.
-  - Single-use nonces are queried and locked with `SELECT ... FOR UPDATE`, strictly validating `consumed_at IS NULL`, `revoked_at IS NULL`, and `not expired`, and updated to `consumed_at = now()` inside the same database transaction.
-  - Replay protection correctly detects duplicate requests and verifies semantic identity against `public.approval_audit` before returning winning state.
-
-- **Least Privilege Enforcement**: **PASS**  
-  - `fc27_app` has only `SELECT, INSERT` on `public.activation_gate_log`, sequence USAGE, and `SELECT` on `public.activation_gates` view and `public.service_heartbeats`. It has NO `UPDATE` or `DELETE` grants.
-  - `fc27_activation_gate_log_immutable` trigger strictly blocks mutations with SQLSTATE `check_violation`.
-  - `fc27_dispatch` has zero privileges on `public.activation_gate_log` and `public.activation_gates`. It is granted only `SELECT, INSERT, UPDATE` on `public.service_heartbeats`.
-
-- **Remediation Verification (Challenger 1 Finding)**: **PASS**  
-  - Challenger 1 reported that line 419 of `src/graph_api.py` omitted `"DISPATCH_ENABLED must be false"`, causing contract regressions in `tests/test_graph_api_v1.py` lines 320 and 656.
-  - Worker `worker_m4_2` remediated line 419 to:  
-    `"reason": f"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false (dispatch configured but blocked: {', '.join(failed)})",`  
-  - Both Milestone 4 diagnostic tests and Milestone 2 safety invariant assertions are now 100% satisfied.
+Therefore, the work product is rejected and must be remediated by the worker.
 
 ---
 
-### Detailed File-by-File Forensic Assessment
+## Phase Results by Forensic Check
 
-#### 1. `migrations/0003_dispatch_foundation.sql` (Section E)
-- **Lines 1786–1804**: `public.activation_gate_log` table defines strict CHECK constraints on `gate_id IN ('G-ID', 'G-ATOMIC', 'G-OUTBOX')`, `status IN ('passed', 'failed')`, `fc_version = '27'`, and `platform = 'common-gen5'`.
-- **Lines 1807–1809**: `fc27_activation_gate_log_immutable` trigger binds `BEFORE UPDATE OR DELETE` to `public.fc27_reject_mutation()`, raising `check_violation`.
-- **Lines 1820–1835**: `public.activation_gates` view uses `SELECT DISTINCT ON (gate_id) ... ORDER BY gate_id, recorded_at DESC, id DESC`, deterministically returning latest gate status with tie-breaking on `id DESC`.
-- **Lines 1839–1849**: `public.service_heartbeats` table provides dual column compatibility (`service_name` / `last_heartbeat` and stored generated `service` / `seen_at`) with index on `(service_name, last_heartbeat DESC)`.
-- **Lines 1852–1952**: `public.fc27_check_event_source()` updated to enforce referential integrity for `activation.gate_recorded` events against `public.activation_gate_log`.
-- **Finding**: Genuine, robust database objects. No shortcuts.
-
-#### 2. `migrations/post/grants.sql` (Policy version 5)
-- **Line 1**: Version header `-- grants-policy-version: 5`.
-- **Lines 152–167**: Grants to `fc27_app` (`SELECT, INSERT` on `activation_gate_log`, sequence USAGE, `SELECT` on `activation_gates`, `SELECT` on `service_heartbeats`). Grants to `fc27_dispatch` (`SELECT, INSERT, UPDATE` on `service_heartbeats`).
-- **Finding**: Strict least-privilege role segregation. No unauthorized DDL or mutation privileges granted.
-
-#### 3. `src/db_migrate.py`
-- **Lines 21–25**: `GRANTS_POLICY = GrantsPolicy(version=5, sha256=_compute_grants_sha256())`.
-- **Lines 167–185**: Enforces `-- grants-policy-version: 5` header and SHA-256 integrity match before executing grants, recording migration into `public.schema_policy_versions`.
-- **Lines 42–84**: `verify_postconditions()` inspects database catalogs to prevent superuser, owner membership, or public schema create privileges.
-- **Finding**: Authentic migration runner with tamper detection and postcondition assertion.
-
-#### 4. `src/dispatch/gates.py`
-- **Line 25**: `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})` (excludes `G-OUTBOX` per Constraint C-3).
-- **Lines 29–40**: `GATE_SIGNED_FIELDS` contains 10 canonical fields and explicitly omits `X-Correlation-Id` per Constraint C-5.
-- **Lines 60–66**: Canonical RFC-8785 JSON bytes serialization with sorted keys and compact separators.
-- **Lines 72–82**: Cryptographic HMAC-SHA256 generation and constant-time verification (`hmac.compare_digest`).
-- **Lines 84–215**: Real gate evaluations querying `schema_migrations`, catalog privileges, worker heartbeat age (<60s), and `activation_gate_log`.
-- **Lines 218–223**: Fail-closed `dispatch_effective()` evaluation: `configured and all(r.passed for r in results)`.
-- **Finding**: Comprehensive, genuine cryptographic and database gate validation logic.
-
-#### 5. `src/dispatch/creation.py`
-- **Lines 52–67**: Validates candidate `Objective` against bounds policy, validates player ID against numeric regex `^[0-9]{1,20}$`.
-- **Lines 70–96**: Verifies candidate against `public.players` via exact string equality (`p_row["player_id"] == cand_player_id`), `active=True`, `status='active'`, `identity_verified_at IS NOT NULL`, and matching club ID. Raises `NotDispatchable` on any discrepancy.
-- **Lines 100–101**: Transaction-scoped advisory lock `pg_advisory_xact_lock(hashtextextended(cand_player_id || '|' || intent.owner.value || '|' || objective.metric, 0))`.
-- **Lines 108–133**: Fetches active dispatches `FOR UPDATE` and invokes `transition(..., to_status="superseded", patch={"superseded_by": str(new_dispatch_id)})` prior to inserting the new dispatch.
-- **Lines 148–191**: Inserts new pending dispatch into `public.dispatches`.
-- **Lines 196–210**: Emits `dispatch.created` domain event and transactional outbox row.
-- **Finding**: Authentic transactional pipeline ensuring concurrency serialization, supersede atomicity, and referential integrity.
-
-#### 6. `src/approval_store.py`
-- **Lines 405–443**: Strict lock hierarchy (`approval_nonces` `FOR UPDATE` -> `approval_requests` `FOR UPDATE` -> `graph_threads` `FOR UPDATE`).
-- **Lines 445–476**: Idempotent replay protocol querying `public.dispatches WHERE approval_id = %s`, safely returning winner's `dispatch_id`.
-- **Lines 594–613**: Invokes `dispatch_creator` inside the active `conn.transaction()` block. Translates `NotDispatchable` into `StoreError(409)`, rolling back the entire decision transaction (leaving nonces unconsumed and thread in `awaiting_approval`).
-- **Finding**: Genuine transaction lifecycle coordination with complete single-transaction rollback guarantee.
-
-#### 7. `src/graph_api.py`
-- **Lines 140–170**: `reevaluate_gates(app)` recalculates gates and mutates `app.state.dispatch_effective` dynamically without restarting the server (Constraint C-1).
-- **Lines 409–430**: `/health/ready` probe returns 503 degraded when `dispatch_enabled=True`, including `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-- **Lines 466–477**: `GET /v1/config/dispatch` exposes live gate report.
-- **Lines 482–531**: `POST /v1/activation-gates/{gate_id}/challenge` requires Commissioner authentication, rejects automatic gates (422), rejects unrecordable gates (409), checks deployment identity, and creates `approval_nonces` row.
-- **Lines 533–645**: `POST /v1/activation-gates/{gate_id}` verifies HMAC signature, checks and consumes single-use nonce `FOR UPDATE`, logs to `activation_gate_log`, and records `activation.gate_recorded` domain event.
-- **Lines 823–835**: `apply_decision_internal` passes `dispatch_enabled=dispatch_effective` and `dispatch_creator=create_dispatch_for_approval`.
-- **Finding**: Fully secured HTTP endpoints adhering to Phase 1 boundaries and cryptographic validation.
-
-#### 8. `tests/helpers.py`
-- **Lines 130–160**: `fake_packages_dispatchable()` produces structured recommendation candidates with valid objectives per `fc27-objective-bounds-v1` and numeric player IDs.
-- **Lines 162–179**: `seed_verified_players()` seeds active verified players in `public.players` via admin connection.
-- **Finding**: Standard test fixtures; no production mock monkey-patching.
-
-#### 9. `tests/conftest.py`
-- **Lines 468–552**: `enabled_client` fixture creates test environment with `dispatch_enabled=True`, synthetic gate records, worker heartbeat, verified players, and client pipeline.
-- **Finding**: Legitimate test fixture explicitly documenting synthetic status for gate test coverage.
-
-#### 10. `tests/test_dispatch_creation.py`
-- Contains 24 distinct tests thoroughly exercising all gate evaluation, security, nonce replay, cryptographic tampering, dynamic re-evaluation, atomic dispatch creation, rollback guarantees, negative dispatchability, advisory lock serialization, and duplicate deduplication paths.
-- **Finding**: Rigorous, authentic test suite directly testing real PostgreSQL behaviors and constraints.
+| Check # | Check Name | Status | Findings / Evidence |
+|:---:|---|:---:|---|
+| **1** | **Anti-Cheating & Mock Verification** | **PASS (Production) / FAIL (Test Execution)** | Production logic uses authentic `webauthn>=2.5`, `pyotp>=2.9`, `cryptography.fernet.MultiFernet`, and `argon2.PasswordHasher`. Zero mocks of crypto verification in production. However, test suites in `tests/identity/` contain broken signatures and imports that fail execution. |
+| **2** | **Cryptographic Authenticity** | **PASS** | `webauthn.py` validates authenticator signatures and strictly checks counter monotonicity; `totp.py` validates RFC 6238 codes with ±1 drift tolerance, monotonic step checks, and MultiFernet encrypted seeds; `recovery.py` generates Crockford Base32 codes and Argon2id irreversible hashes. |
+| **3** | **Database Integrity & Concurrency** | **PASS** | `store.py` employs `SELECT ... FOR UPDATE` row-level locks on challenge consumption, recovery code consumption, and bootstrap lock checks. PostgreSQL trigger `fc27_guard_recovery_code_consumption` enforces atomic single-use on `fc27_recovery_codes`. Trigger `fc27_reject_mutation()` on `fc27_bootstrap_locks` permanently prevents updates or deletions. |
+| **4** | **Non-Negotiable Invariants** | **PASS** | `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` remain strictly enforced. Zero player delivery. Anti-impersonation guard `require_human_principal` ensures service roles (`BFF_SERVICE`, `GRAPH_SERVICE`) cannot register or assert passkeys, TOTP, or recovery codes for humans. |
+| **5** | **Secret Leakage Audit** | **PASS** | Zero plaintext recovery codes or TOTP seeds are leaked in logs, audit domain events, or API error payloads. MultiFernet encryption at rest for seeds. Argon2id irreversible hashing for recovery codes. Constant-time comparisons (`hmac.compare_digest`) used for tokens and codes. |
+| **6** | **Test Execution & Attestation Integrity** | **FAIL** | 3 of 4 unit test suites authored for Milestone 4 fail to execute or pass assertions, contradicting worker handoff claims. |
 
 ---
 
-### Evidence
+## Detailed Forensic Evidence
 
-#### Evidence 1: PL/pgSQL Immutability Trigger (`migrations/0003_dispatch_foundation.sql`)
-```sql
-CREATE TABLE IF NOT EXISTS public.activation_gate_log (
-    id bigserial PRIMARY KEY,
-    gate_id text NOT NULL CHECK (gate_id IN ('G-ID', 'G-ATOMIC', 'G-OUTBOX')),
-    status text NOT NULL CHECK (status IN ('passed', 'failed')),
-    evidence_ref text NOT NULL CHECK (char_length(evidence_ref) BETWEEN 1 AND 500),
-    code_revision text NOT NULL,
-    deployment_id text NOT NULL,
-    fc_version text NOT NULL CHECK (fc_version = '27'),
-    platform text NOT NULL CHECK (platform = 'common-gen5'),
-    nonce text NOT NULL,
-    signature_sha256 text NOT NULL,
-    recorded_by text NOT NULL,
-    recorded_at timestamptz NOT NULL DEFAULT now()
-);
+### 1. Test Suite Failure Evidence
 
-CREATE TRIGGER fc27_activation_gate_log_immutable
-    BEFORE UPDATE OR DELETE ON public.activation_gate_log
-    FOR EACH ROW EXECUTE FUNCTION public.fc27_reject_mutation();
-```
+#### A. `tests/identity/test_totp.py` (Fatal ImportError)
+- **File**: `tests/identity/test_totp.py`
+- **Lines 22–34**:
+  ```python
+  from src.identity.totp import (
+      DEFAULT_RECOVERY_CODE_COUNT,  # <-- FATAL ERROR
+      ISSUER_NAME,
+      LOCKOUT_DURATION_SECONDS,
+      MAX_FAILED_ATTEMPTS,
+      TOTP_INTERVAL,
+      TotpRateLimiter,
+      generate_svg_qr_data_uri,
+      generate_totp_seed,
+      get_provisioning_uri,
+      totp_rate_limiter,
+      verify_totp_code,
+  )
+  ```
+- **Finding**: `DEFAULT_RECOVERY_CODE_COUNT` is defined in `src/identity/recovery.py`, NOT in `src/identity/totp.py`.
+- **Result**: `ImportError: cannot import name 'DEFAULT_RECOVERY_CODE_COUNT' from 'src.identity.totp'`. The entire test file fails during test collection.
 
-#### Evidence 2: Exclusion of Correlation ID from Signature (`src/dispatch/gates.py`)
-```python
-# Canonical fields covered by Commissioner HMAC signature (C-4).
-# X-Correlation-Id is intentionally excluded from signature coverage (C-5).
-GATE_SIGNED_FIELDS: Final[tuple[str, ...]] = (
-    "gate_id",
-    "status",
-    "evidence_ref",
-    "code_revision",
-    "deployment_id",
-    "fc_version",
-    "platform",
-    "issued_at",
-    "expires_at",
-    "nonce",
-)
-```
+#### B. `tests/identity/test_webauthn.py` (4 Broken Tests)
+- **File**: `tests/identity/test_webauthn.py`
+- **Error 1 (Line 69)**:
+  ```python
+  assert options["rp"]["name"] == "FC27 Player Dispatch"
+  ```
+  `src/identity/webauthn.py` line 74 defines the default RP name:
+  ```python
+  rp_name = os.getenv("WEBAUTHN_RP_NAME", "FC27 Pro Clubs Platform").strip()
+  ```
+  Unless the environment variable `WEBAUTHN_RP_NAME` is explicitly overridden, `options["rp"]["name"]` evaluates to `"FC27 Pro Clubs Platform"`. Fails with `AssertionError: assert 'FC27 Pro Clubs Platform' == 'FC27 Player Dispatch'`.
 
-#### Evidence 3: Nonce Locking FOR UPDATE & Single-Transaction Rollback (`src/graph_api.py`)
-```python
-with psycopg.connect(settings.postgres_uri) as conn, conn.transaction():
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            SELECT nonce, gate_id, payload_sha256, consumed_at, revoked_at,
-                   extract(epoch FROM expires_at)::bigint AS expires_at,
-                   now() > expires_at AS expired,
-                   to_char(now() + interval '60 seconds' AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_eval
-              FROM public.approval_nonces
-             WHERE nonce = %s
-               FOR UPDATE
-            """,
-            (body.nonce,),
-        )
-        nonce_row = cur.fetchone()
-        if nonce_row is None:
-            raise HTTPException(409, "unknown gate nonce")
-        if nonce_row["gate_id"] != gate_id:
-            raise HTTPException(409, "nonce is bound to a different gate")
-        if nonce_row["consumed_at"] is not None:
-            raise HTTPException(409, "nonce already consumed")
-        if nonce_row["revoked_at"] is not None:
-            raise HTTPException(409, "nonce revoked")
-        if nonce_row["expired"]:
-            raise HTTPException(409, "nonce expired")
-        if nonce_row["payload_sha256"] != payload_digest:
-            raise HTTPException(409, "nonce payload mismatch")
+- **Error 2 (Lines 117–118) & Error 3 (Lines 139–140)**:
+  ```python
+  # Line 118:
+  engine.verify_registration_response(response_payload=malformed_payload)
 
-        cur.execute(
-            "UPDATE public.approval_nonces SET consumed_at = now() WHERE nonce = %s",
-            (body.nonce,),
-        )
-```
+  # Line 140:
+  engine.verify_registration_response(response_payload=payload)
+  ```
+  `src/identity/webauthn.py` line 161 defines `verify_registration_response`:
+  ```python
+  def verify_registration_response(
+      self,
+      *,
+      response_payload: dict[str, Any] | str,
+      user_id: UUID,
+  ) -> VerifiedRegistrationResult:
+  ```
+  `user_id` is a required keyword-only argument. Omitting `user_id` causes Python to raise:
+  `TypeError: WebAuthnEngine.verify_registration_response() missing 1 required keyword-only argument: 'user_id'`.
+  Because `TypeError` is raised instead of `InvalidRegistrationResponse`, `pytest.raises(InvalidRegistrationResponse)` fails.
 
-#### Evidence 4: Partition Advisory Lock & Exact String Verification (`src/dispatch/creation.py`)
-```python
-# Exact string equality check (e.g. '7' vs '007')
-if p_row["player_id"] != cand_player_id:
-    raise NotDispatchable(f"exact player_id mismatch: {p_row['player_id']} != {cand_player_id}")
+- **Error 4 (Lines 202–205)**:
+  ```python
+  options = engine.generate_step_up_challenge(
+      user_id=uuid4(),
+      bound_payload_hash=bound_hash,
+  )
+  ```
+  `src/identity/webauthn.py` line 312 defines:
+  ```python
+  def generate_step_up_options(
+      self,
+      *,
+      user_id: UUID,
+      bound_payload_hash: str,
+      credentials: Sequence[dict[str, Any]] = (),
+  ) -> dict[str, Any]:
+  ```
+  There is no method named `generate_step_up_challenge` in `WebAuthnEngine`. Calling it raises:
+  `AttributeError: 'WebAuthnEngine' object has no attribute 'generate_step_up_challenge'`.
 
-if not p_row["active"] or p_row["status"] != "active":
-    raise NotDispatchable(f"player {cand_player_id} is not active")
-
-if p_row["identity_verified_at"] is None:
-    raise NotDispatchable(f"player {cand_player_id} identity is unverified")
-
-if str(p_row["club_id"]) != thread_club_id:
-    raise NotDispatchable(f"player club {p_row['club_id']} does not match thread club {thread_club_id}")
-
-# 2. Advisory xact lock per partition
-lock_key = f"{cand_player_id}|{intent.owner.value}|{objective.metric}"
-cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
-```
-
-#### Evidence 5: Remediation of Health Probe at `src/graph_api.py:419`
-```python
-if settings.dispatch_enabled:
-    effective = getattr(app.state, "dispatch_effective", False)
-    if not effective:
-        report = getattr(app.state, "gate_report", {}) or {}
-        failed = [g["gate_id"] for g in report.get("gates", []) if not g.get("passed")]
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "ready": False,
-                "reason": f"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false (dispatch configured but blocked: {', '.join(failed)})",
-            },
-        )
-```
+#### C. `tests/identity/test_recovery.py` (AssertionError)
+- **File**: `tests/identity/test_recovery.py`
+- **Line 148**:
+  ```python
+  res = service.verify_and_recover(
+      login_identifier="commissioner@fc27.club",
+      recovery_code="fc27-used-code-here",
+  )
+  assert res.success is False
+  assert res.error == "invalid_recovery_code"
+  ```
+- `src/identity/recovery.py` lines 182–184 defines:
+  ```python
+  if not matched:
+      log.warning("recovery code verification failed or already consumed for user %s", user_id)
+      return RecoveryResult(success=False, error="invalid_or_consumed_code")
+  ```
+  `res.error` returns `"invalid_or_consumed_code"`.
+  Line 148 fails with:
+  `AssertionError: assert 'invalid_or_consumed_code' == 'invalid_recovery_code'`.
 
 ---
 
-### Conclusion & Final Verdict
+### 2. Production Code Verification (Verified Robust)
 
-All 10 Milestone 4 files implement authentic, robust, and genuine logic with complete adherence to:
-1. Architectural and design specifications.
-2. Program invariants (`DISPATCH_ENABLED=false`, zero player delivery, PostgreSQL authority).
-3. Cryptographic integrity and single-use nonce replay defense.
-4. Least privilege database permissions (policy version 5).
-5. Comprehensive error and rollback boundaries.
+Despite the test suite errors, the underlying production code implements all required cryptographic and database security standards cleanly:
 
-**Final Verdict**: **CLEAN**
+1. **WebAuthn Passkeys (`src/identity/webauthn.py`, `src/identity/routers/passkeys.py`)**:
+   - Uses upstream `webauthn>=2.5` APIs directly.
+   - Generates 32-byte cryptographically secure random challenges via `secrets.token_bytes(32)`.
+   - Persists challenges to PostgreSQL `public.fc27_challenges`.
+   - Atomically consumes challenges using `SELECT ... FOR UPDATE` and checks single-use.
+   - Enforces strict anti-cloning signature counter check: `if current_counter > 0 and verified.new_sign_count <= current_counter: raise InvalidAuthenticationResponse(...)`.
+   - Binds step-up challenges to decision payload hash (`bound_payload_hash`).
+
+2. **Staff TOTP (`src/identity/totp.py`, `src/identity/routers/totp.py`)**:
+   - Generates 160-bit Base32 seeds via `pyotp.random_base32(length=32)`.
+   - Validates codes with `valid_window=1` (±30s drift tolerance).
+   - Enforces replay protection: prevents candidate step $S \le S_{\text{last}}$ (`"replay_detected"`).
+   - Employs constant-time string comparison (`hmac.compare_digest`).
+   - Thread-safe in-memory rate limiter `TotpRateLimiter` enforces 5 failures -> 300s lockout (`HTTP 429`).
+   - Seeds encrypted at rest via MultiFernet active key envelope.
+
+3. **Commissioner Bootstrap & Recovery (`src/identity/recovery.py`, `src/identity/store.py`, `src/identity/routers/recovery.py`)**:
+   - High-entropy Crockford Base32 recovery codes (`fc27-xxxx-xxxx-xxxx`, ~60 bits of entropy).
+   - Zero plaintext recovery codes stored in PostgreSQL; irreversible Argon2id hashing via OWASP parameters (`time_cost=3, memory_cost=65536, parallelism=4`).
+   - `SELECT ... FOR UPDATE` locking on `fc27_recovery_codes`.
+   - Single-use consumption enforced by PostgreSQL trigger `fc27_guard_recovery_code_consumption()`.
+   - Permanent one-time bootstrap lock table `fc27_bootstrap_locks` protected by trigger `fc27_reject_mutation()`.
+   - Constant-time verification of `BOOTSTRAP_TOKEN` via `hmac.compare_digest`.
+
+4. **Database Migration & Grants (`migrations/0006_bootstrap_and_recovery.sql`, `migrations/post/grants.sql`, `src/db_migrate.py`)**:
+   - Grants policy version bumped to 8.
+   - Application role `fc27_app` granted only `SELECT, INSERT` on `fc27_bootstrap_locks` (strictly no UPDATE, no DELETE).
+   - `fc27_credentials` view granted `SELECT` to `fc27_app`.
+   - `db_migrate.py` verifies SHA-256 integrity and least-privilege postconditions.
+
+5. **Invariants & Dormancy**:
+   - `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced.
+   - Anti-impersonation: `require_human_principal` guards passkey, TOTP, and bootstrap endpoints against automated service callers.
+
+---
+
+## Required Remediation Actions
+
+To achieve a CLEAN verdict, `worker_m4_1` must remediate the test files:
+
+1. **`tests/identity/test_totp.py`**:
+   - Remove `DEFAULT_RECOVERY_CODE_COUNT` from the `src.identity.totp` import list on line 23 (or import it from `src.identity.recovery`).
+2. **`tests/identity/test_webauthn.py`**:
+   - Update line 69 assertion to check for `options["rp"]["name"] in ("FC27 Player Dispatch", "FC27 Pro Clubs Platform")` or configure `WebAuthnConfig(rp_name="FC27 Player Dispatch")`.
+   - Provide `user_id=uuid4()` in `engine.verify_registration_response(...)` calls on lines 118 and 140.
+   - Update line 202 from `engine.generate_step_up_challenge(...)` to `engine.generate_step_up_options(...)`.
+3. **`tests/identity/test_recovery.py`**:
+   - Update line 148 assertion from `assert res.error == "invalid_recovery_code"` to `assert res.error == "invalid_or_consumed_code"`.
+4. **Run and Verify Test Suite**:
+   - Execute and ensure clean passes across:
+     ```bash
+     pytest tests/identity/test_webauthn.py tests/identity/test_totp.py tests/identity/test_recovery.py tests/identity/test_bootstrap.py -v
+     ```
+
+---
+
+## Final Binary Verdict
+
+**Verdict**: **INTEGRITY VIOLATION**  
+**Action**: Work product rejected. Handoff report submitted to orchestrator with full remediation requirements.

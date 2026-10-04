@@ -10,6 +10,7 @@ Any other combination returns 403; a missing or unknown key returns 401.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -58,9 +59,36 @@ from .schemas import (
     ResumeResponse,
     RunProjection,
     SignedDecision,
+    DecisionSubmission,
 )
 from .security import Authenticator, Principal, Role, require_role
 from .settings import DEFAULT_PLATFORM, FC_VERSION, ConfigError, env_bool, read_secret
+from src.identity.deps import get_current_principal
+from src.identity.policy import (
+    ActionType,
+    AgentImpersonationError,
+    AuthorityBasis,
+    AuthLevel,
+    AuthMethod,
+    AuthorizationError,
+    PrincipalContext,
+    Resource,
+    authorize,
+)
+from src.identity.routers import (
+    auth_router,
+    delegations_router,
+    invitations_router,
+    passkeys_router,
+    player_router,
+    recovery_router,
+    sessions_router,
+    step_up_router,
+    totp_router,
+    users_router,
+)
+from src.identity.store import IdentityStore, IdentityStoreError
+
 
 log = logging.getLogger("fc27.graph_api")
 
@@ -78,7 +106,7 @@ class ApiSettings:
     checkpoint_setup: bool = False
     enforce_db_posture: bool = True
     dispatch_enabled: bool = False
-    cli_hmac_enabled: bool = True
+    cli_hmac_enabled: bool = False
     approval_request_ttl_hours: int = 72
     expiry_interval_seconds: int = 60
     code_revision: str | None = None
@@ -87,7 +115,7 @@ class ApiSettings:
     @classmethod
     def from_env(cls) -> "ApiSettings":
         try:
-            cli_hmac = env_bool("APPROVAL_CLI_HMAC_ENABLED", True)
+            cli_hmac = env_bool("APPROVAL_CLI_HMAC_ENABLED", False)
             comm_id = read_secret("COMMISSIONER_ID")
             if not re.match(r"^[A-Za-z0-9._-]{1,64}$", comm_id):
                 raise ConfigError("COMMISSIONER_ID must match ^[A-Za-z0-9._-]{1,64}$")
@@ -349,6 +377,20 @@ def create_app(
                 err_dict["ctx"] = {k: str(v) if isinstance(v, Exception) else v for k, v in err_dict["ctx"].items() if k != "input"}
             clean_errors.append(err_dict)
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(clean_errors)})
+
+    app.state.identity_store = IdentityStore(settings.postgres_uri)
+
+    @app.exception_handler(IdentityStoreError)
+    async def identity_store_error_handler(_request: Request, exc: IdentityStoreError):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(AuthorizationError)
+    async def authorization_error_handler(_request: Request, exc: AuthorizationError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "error_code": exc.error_code},
+        )
+
 
     def principal(x_api_key: str | None = Header(default=None)) -> Principal:
         return settings.authenticator.authenticate(x_api_key)
@@ -866,44 +908,377 @@ def create_app(
             "graph_resume": res,
         }
 
-    @app.post("/v1/runs/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_hmac)])
-    def v1_decision(
-        request: Request,
-        body: SignedDecision,
-        thread_id: str = ThreadIdPath,
-        p: Principal = Depends(commissioner),
-    ) -> dict:
-        return apply_decision_internal(request, thread_id, body, p)
+    async def check_decision_proof_type(request: Request) -> None:
+        if settings.cli_hmac_enabled:
+            return
+        try:
+            raw_body = await request.body()
+            if b"webauthn" in raw_body or b"authentication_evidence_id" in raw_body:
+                return
+        except Exception:
+            pass
+        raise HTTPException(403, "proof_type_disabled")
 
-    @app.post("/threads/{thread_id}/decision", dependencies=[Depends(require_hmac)], include_in_schema=False)
-    def decision(
+    def apply_decision_unified(
         request: Request,
-        body: SignedDecision,
-        thread_id: str = ThreadIdPath,
-        p: Principal = Depends(commissioner),
+        body: DecisionSubmission,
+        *,
+        thread_id: str | None = None,
+        approval_request_id: UUID | str | None = None,
+        package_id: str | None = None,
+        principal: PrincipalContext,
+    ) -> dict[str, Any]:
+        """Unified authoritative decision processing for Phase 2 Milestone 5."""
+        if principal.is_service:
+            raise AgentImpersonationError(
+                f"service principal '{principal.user_id}' cannot commit human decisions"
+            )
+
+        target_thread_id: str
+        target_req_id: Any = None
+        target_pkg_version: Any = None
+        req_status: str
+        is_expired: bool = False
+
+        with store.connect() as conn:
+            if approval_request_id is not None:
+                row = conn.execute(
+                    """SELECT approval_request_id, thread_id, package_version, status,
+                              expires_at, now() >= expires_at AS is_expired
+                         FROM public.approval_requests
+                        WHERE approval_request_id = %s""",
+                    (str(approval_request_id),),
+                ).fetchone()
+                if not row:
+                    raise HTTPException(404, "approval request not found")
+                target_thread_id = row["thread_id"]
+                target_req_id = row["approval_request_id"]
+                target_pkg_version = row["package_version"]
+                req_status = row["status"]
+                is_expired = row["is_expired"]
+
+            elif package_id is not None:
+                row = conn.execute(
+                    """SELECT r.approval_request_id, r.thread_id, r.package_version, r.status,
+                              now() >= r.expires_at AS is_expired
+                         FROM public.approval_requests r
+                         JOIN public.graph_threads g USING (thread_id)
+                        WHERE (r.approval_request_id::text = %s 
+                               OR g.state->'lead_packages'->'coach'->'best'->>'candidate_id' = %s
+                               OR g.thread_id = %s)
+                          AND r.status = 'awaiting_approval'
+                        ORDER BY r.created_at DESC LIMIT 1""",
+                    (package_id, package_id, package_id),
+                ).fetchone()
+                if not row:
+                    raise HTTPException(404, f"approval request for package '{package_id}' not found")
+                target_thread_id = row["thread_id"]
+                target_req_id = row["approval_request_id"]
+                target_pkg_version = row["package_version"]
+                req_status = row["status"]
+                is_expired = row["is_expired"]
+
+            elif thread_id is not None:
+                target_thread_id = thread_id
+                th_row = conn.execute(
+                    """SELECT approval_request_id, package_version, status, club_id
+                         FROM public.graph_threads WHERE thread_id = %s""",
+                    (thread_id,),
+                ).fetchone()
+                if not th_row:
+                    raise HTTPException(404, "thread not found")
+                target_req_id = th_row["approval_request_id"]
+                target_pkg_version = th_row["package_version"]
+                req_status = th_row["status"]
+                if target_req_id:
+                    r_row = conn.execute(
+                        "SELECT status, now() >= expires_at AS is_expired FROM public.approval_requests WHERE approval_request_id = %s",
+                        (str(target_req_id),),
+                    ).fetchone()
+                    if r_row:
+                        req_status = r_row["status"]
+                        is_expired = r_row["is_expired"]
+            else:
+                raise HTTPException(400, "missing target identifier")
+
+        if req_status != "awaiting_approval" or is_expired:
+            raise HTTPException(409, "approval_expired")
+
+        action_map = {
+            "approved": ActionType.PACKAGE_APPROVE,
+            "rejected": ActionType.PACKAGE_REJECT,
+            "revision_requested": ActionType.PACKAGE_REQUEST_REVISION,
+        }
+        target_action = action_map.get(body.decision.lower())
+        if not target_action:
+            raise HTTPException(422, f"unsupported decision: {body.decision}")
+
+        authority_basis = body.authority_basis or (
+            AuthorityBasis.EXPLICIT_DELEGATE if principal.is_delegate else AuthorityBasis.PRIMARY
+        )
+
+        eval_principal = principal
+        if body.proof_type == "webauthn":
+            eval_principal = PrincipalContext.create(
+                user_id=principal.user_id,
+                club_id=principal.club_id,
+                roles=list(principal.roles),
+                auth_level=AuthLevel.STEP_UP_PASSKEY,
+                auth_method=AuthMethod.PASSKEY,
+                session_id=principal.session_id,
+                display_name=principal.display_name,
+            )
+
+        res = Resource.for_package(
+            club_id=principal.club_id,
+            package_id=package_id or str(target_req_id),
+            version=target_pkg_version,
+        )
+        id_store: IdentityStore | None = getattr(request.app.state, "identity_store", None)
+        if id_store is None:
+            uri = getattr(settings, "postgres_uri", None) or os.environ.get("POSTGRES_URI")
+            if uri:
+                id_store = IdentityStore(uri)
+                request.app.state.identity_store = id_store
+
+        authorize(
+            eval_principal,
+            target_action,
+            res,
+            authority_basis=authority_basis,
+            delegation_id=body.delegation_id,
+            store=id_store,
+        )
+
+        if body.proof_type == "hmac":
+            if not settings.cli_hmac_enabled:
+                raise HTTPException(
+                    403,
+                    "proof_type_disabled",
+                )
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            signed_obj = SignedDecision(
+                thread_id=target_thread_id,
+                decision=body.decision,
+                notes=body.notes or "",
+                package_version=body.package_version or target_pkg_version or 1,
+                nonce=body.nonce or "",
+                issued_at=body.issued_at or now_ts,
+                expires_at=body.expires_at or (now_ts + 300),
+                signature=body.signature or body.hmac_signature or "",
+            )
+            legacy_p = Principal(
+                name=principal.display_name or "commissioner",
+                role=Role.commissioner,
+                club_id=principal.club_id,
+            )
+            return apply_decision_internal(request, target_thread_id, signed_obj, legacy_p)
+
+        elif body.proof_type == "webauthn":
+            evidence_id = body.authentication_evidence_id
+            if not evidence_id:
+                raise HTTPException(422, "authentication_evidence_id required for webauthn proof_type")
+            if id_store is None:
+                raise HTTPException(500, "identity store not available")
+
+            evidence = id_store.get_decision_evidence(evidence_id)
+            if not evidence:
+                raise HTTPException(400, "unknown or invalid authentication_evidence_id")
+
+            if evidence.get("consumed_at") is not None:
+                with store.connect() as conn:
+                    existing_audit = conn.execute(
+                        """SELECT a.id, g.state, g.status
+                             FROM public.approval_audit a
+                             JOIN public.graph_threads g USING (thread_id)
+                            WHERE a.authentication_evidence_id = %s
+                              AND a.thread_id = %s""",
+                        (str(evidence_id), target_thread_id),
+                    ).fetchone()
+                    if existing_audit and existing_audit["status"].lower() == body.decision.lower():
+                        replayed = dict(existing_audit["state"]) if isinstance(existing_audit["state"], dict) else {}
+                        return {
+                            **replayed,
+                            "thread_id": target_thread_id,
+                            "status": existing_audit["status"],
+                            "package_version": target_pkg_version,
+                            "approval_audit_id": existing_audit["id"],
+                            "approval_request_id": str(target_req_id) if target_req_id else None,
+                            "dispatch": DispatchBlock(
+                                enabled=False,
+                                created=False,
+                                message="Dispatch is disabled. This approval records the selection only; nothing was delivered to any player.",
+                                dispatch_id=None,
+                            ).model_dump(mode="json"),
+                            "graph_resume": "resumed",
+                        }
+                raise HTTPException(409, "replay: authentication evidence already consumed")
+
+            if evidence.get("bound_payload_hash"):
+                if evidence.get("package_id") and package_id and evidence["package_id"] != package_id:
+                    raise HTTPException(403, "step-up evidence bound package mismatch")
+                if evidence.get("decision") and evidence["decision"].lower() != body.decision.lower():
+                    raise HTTPException(403, "step-up evidence bound decision mismatch")
+
+            target_package_id = package_id or evidence.get("package_id") or str(target_req_id)
+            target_package_version = str(body.package_version or target_pkg_version or evidence.get("package_version") or "1")
+            target_package_hash = str(evidence.get("package_hash") or target_pkg_version or "")
+
+            try:
+                id_store.consume_decision_evidence(
+                    evidence_id,
+                    expected_package_id=target_package_id,
+                    expected_package_version=target_package_version,
+                    expected_package_hash=target_package_hash,
+                )
+            except IdentityStoreError as err:
+                raise HTTPException(err.status_code, err.detail) from err
+
+            cid = getattr(request.state, "correlation_id", None) or uuid4()
+            with store.connect() as conn, conn.transaction():
+                if target_req_id:
+                    conn.execute(
+                        """UPDATE public.approval_requests
+                              SET status = %s, decided_at = now(), version = version + 1
+                            WHERE approval_request_id = %s AND status = 'awaiting_approval'""",
+                        (body.decision, target_req_id),
+                    )
+
+                conn.execute(
+                    """UPDATE public.graph_threads
+                          SET status = %s, approved_by = %s, approved_at = now(), updated_at = now()
+                        WHERE thread_id = %s AND status = 'awaiting_approval'""",
+                    (body.decision, principal.display_name or "Commissioner", target_thread_id),
+                )
+
+                audit_row = conn.execute(
+                    """INSERT INTO public.approval_audit (
+                           thread_id, approved_by, decision, notes,
+                           package_version, proof_type, authentication_evidence_id,
+                           actor_type, authority_basis, authority_role, decision_scope,
+                           correlation_id, approval_request_id
+                       ) VALUES (
+                           %s, %s, %s, %s,
+                           %s, 'webauthn', %s,
+                           %s, %s, %s, 'club',
+                           %s, %s
+                       ) RETURNING id""",
+                    (
+                        target_thread_id,
+                        principal.display_name or "Commissioner",
+                        body.decision.upper(),
+                        body.notes or "",
+                        target_pkg_version or 1,
+                        str(evidence_id),
+                        "delegate" if principal.is_delegate else "commissioner",
+                        authority_basis.value,
+                        "commissioner_delegate" if principal.is_delegate else "commissioner",
+                        cid,
+                        target_req_id,
+                    ),
+                ).fetchone()
+
+                _safe_record_event(
+                    conn,
+                    event_type="approval.decided",
+                    entity_type="approval_request",
+                    entity_id=str(target_req_id) if target_req_id else str(target_thread_id),
+                    actor=f"user:{principal.user_id}",
+                    correlation_id=cid,
+                    visibility="staff",
+                    scope_club_id=principal.club_id,
+                    source_table="approval_audit",
+                    source_id=str(audit_row["id"]),
+                    to_status=body.decision,
+                )
+
+            publish("fc27:approval:decided", {"thread_id": target_thread_id, "status": body.decision})
+            res = resume_graph(target_thread_id)
+
+            dispatch_block = DispatchBlock(
+                enabled=False,
+                created=False,
+                message="Dispatch is disabled. This approval records the selection only; nothing was delivered to any player.",
+                dispatch_id=None,
+            )
+
+            with store.connect() as conn:
+                th = conn.execute("SELECT state FROM public.graph_threads WHERE thread_id = %s", (target_thread_id,)).fetchone()
+                thread_state = dict(th["state"]) if th and isinstance(th["state"], dict) else {}
+
+            return {
+                **thread_state,
+                "thread_id": target_thread_id,
+                "status": body.decision,
+                "package_version": target_pkg_version,
+                "approval_audit_id": audit_row["id"],
+                "approval_request_id": str(target_req_id) if target_req_id else None,
+                "dispatch": dispatch_block.model_dump(mode="json"),
+                "graph_resume": res,
+            }
+        else:
+            raise HTTPException(400, f"unsupported proof_type: {body.proof_type}")
+
+    @app.post(
+        "/approval/packages/{package_id}/decide",
+        response_model=DecisionResponse,
+        tags=["approval"],
+        dependencies=[Depends(check_decision_proof_type)],
+    )
+    @app.post(
+        "/v1/approval/packages/{package_id}/decide",
+        response_model=DecisionResponse,
+        tags=["approval"],
+        include_in_schema=False,
+        dependencies=[Depends(check_decision_proof_type)],
+    )
+    async def package_decide(
+        request: Request,
+        package_id: str = Path(..., min_length=1, max_length=128),
+        body: DecisionSubmission = Body(...),
+        principal: PrincipalContext = Depends(get_current_principal),
     ) -> dict:
-        return apply_decision_internal(request, thread_id, body, p)
+        return apply_decision_unified(
+            request, body, package_id=package_id, principal=principal
+        )
 
     @app.post(
         "/v1/approval-requests/{approval_request_id}/decisions",
         response_model=DecisionResponse,
-        dependencies=[Depends(require_hmac)],
+        tags=["approval"],
+        dependencies=[Depends(check_decision_proof_type)],
     )
-    def approval_request_decision(
+    async def approval_request_decision(
         request: Request,
-        body: SignedDecision,
         approval_request_id: str = Path(pattern=r"^[0-9a-f-]{36}$"),
-        p: Principal = Depends(commissioner),
+        body: DecisionSubmission = Body(...),
+        principal: PrincipalContext = Depends(get_current_principal),
     ) -> dict:
-        with store.connect() as conn:
-            row = conn.execute(
-                "SELECT thread_id FROM public.approval_requests WHERE approval_request_id = %s",
-                (approval_request_id,),
-            ).fetchone()
-        if row is None:
-            raise HTTPException(404, "approval request not found")
+        return apply_decision_unified(
+            request, body, approval_request_id=approval_request_id, principal=principal
+        )
 
-        return apply_decision_internal(request, row["thread_id"], body, p)
+    @app.post(
+        "/v1/runs/{thread_id}/decision",
+        response_model=DecisionResponse,
+        tags=["runs"],
+        dependencies=[Depends(check_decision_proof_type)],
+    )
+    @app.post(
+        "/threads/{thread_id}/decision",
+        response_model=DecisionResponse,
+        include_in_schema=False,
+        dependencies=[Depends(check_decision_proof_type)],
+    )
+    async def v1_decision(
+        request: Request,
+        thread_id: str = ThreadIdPath,
+        body: DecisionSubmission = Body(...),
+        principal: PrincipalContext = Depends(get_current_principal),
+    ) -> dict:
+        return apply_decision_unified(
+            request, body, thread_id=thread_id, principal=principal
+        )
 
     # --------------------------------------------------------------------------
     # Emergency Run Kill Switch (POST /v1/runs/{id}/kill)
@@ -1000,4 +1375,20 @@ def create_app(
             "reason": req.reason,
         }
 
+    # --------------------------------------------------------------------------
+    # Phase 2 Identity Routers
+    # --------------------------------------------------------------------------
+    app.include_router(invitations_router, prefix="/v1/auth/invitations", tags=["invitations"])
+    app.include_router(sessions_router, prefix="/v1/auth/sessions", tags=["sessions"])
+    app.include_router(auth_router, prefix="/v1/auth", tags=["auth"])
+    app.include_router(users_router, prefix="/v1/auth/users", tags=["users"])
+    app.include_router(passkeys_router, prefix="/v1/auth", tags=["passkeys"])
+    app.include_router(totp_router, prefix="/v1/auth/totp", tags=["totp"])
+    app.include_router(recovery_router, prefix="/v1/auth", tags=["recovery", "bootstrap"])
+    app.include_router(step_up_router, prefix="/v1/auth", tags=["step-up"])
+    app.include_router(player_router, prefix="/v1/player", tags=["player-decisions"])
+    app.include_router(player_router, prefix="/v1/player-assignments", tags=["player-assignments"])
+    app.include_router(delegations_router, prefix="/v1/auth/delegations", tags=["delegations"])
+
     return app
+

@@ -1,48 +1,86 @@
-# DISPATCH — reviewer_m6_2
+# DISPATCH: reviewer_m6_2 (Tier 5 Adversarial Suite & Security Invariants Reviewer)
 
-**Agent ID**: reviewer_m6_2
-**Archetype**: teamwork_preview_reviewer
-**Assigned Task**: Milestone 6 Reviewer 2 (Security Documentation & Phase 2 Handoff)
-**Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2
-**Parent**: orchestrator_phase1 (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)
-**Timestamp**: 2026-10-03T21:55:00Z
+**Role**: `teamwork_preview_reviewer`
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2`
+**Authoritative Request**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+**Project Plan**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+**Worker Handoff**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
+**Security Hardening Explorer Report**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m6_security_hardening_1\handoff.md`
 
-## MANDATORY Context Files to Read Before Starting:
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
-4. Published Security Changes: `c:\Users\iwadev\dev\iwa.dev.fcbuild\SECURITY_CHANGES.md`
-5. Published Test Results: `c:\Users\iwadev\dev\iwa.dev.fcbuild\TEST_RESULTS.md`
-6. Related Documentation:
-   - `docs/DISPATCH_ACTIVATION.md`
-   - `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`
-   - `docs/APPROVAL_SECURITY.md`
-   - `MIGRATION_GUIDE.md`
-   - `README.md`
+---
 
-## Review Task:
-1. Inspect `SECURITY_CHANGES.md` at project root:
-   - Verify the exact verbatim Phase 1 Completion Statement is present:
-     *"Secure data foundation complete. Dispatch remains disabled. No player delivery has occurred."*
-   - Verify all 11 security hardening areas are fully documented with precise file paths, line references, and proving tests:
-     1. Database Role Separation & Least Privilege (C-6)
-     2. SECURITY DEFINER Hardening (`public.fc27_dispatch_transition`)
-     3. Approval Expiry Semantics (72h TTL, max 300s nonce, atomic paired expiry daemon)
-     4. Section 1A Human Authority & Player Consent Models (no agent decisions, inactivity never approves, single-subject fallback)
-     5. HMAC Kill Switch & Key Rotation (`APPROVAL_CLI_HMAC_ENABLED`)
-     6. Append-Only Audit & Immutability (`fc27_reject_mutation` on 13 tables)
-     7. Recommendation Package Version Immutability
-     8. LangGraph Interrupt & PostgreSQL Re-Read (AM-4)
-     9. Nonce-Bound & Deployment-Bound Activation Gates (C-4, C-1)
-     10. Event Source Identity & Correlation ID Isolation (C-10, C-5)
-     11. File-Based Secrets & Credential Sanitization (C-7)
-   - Verify Residual Risks & Future-Phase Mitigation Plan (Section 12).
-   - Verify Phase 1 Implementation Summary (Section 13).
-   - Verify Phase 2 Handoff Roadmap (Section 14).
-2. Cross-verify with companion documentation:
-   - Check `docs/DISPATCH_ACTIVATION.md` for exact disabled status and 6 gates table.
-   - Check `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` for status UNVERIFIED and empty AC-47 tables.
-3. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-4. Write `review.md` and `handoff.md` in your working directory.
-5. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code or documentation files.
+## Non-Negotiable Invariants
+1. Universal dormancy: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced across all environments, settings, and endpoints.
+2. Zero player delivery; Phase 2 must NEVER activate player dispatch, delivery adapters, or outbox relay.
+3. No Phase 3 dispatch worker, outbox relay, or player-agent execution pipeline.
+4. Preserve Phase 1 baseline commit `3339d6d672bbc59f251e1e2a6977bc9ea65edffe`.
+5. PostgreSQL is authoritative for all identity and authorization state.
+6. No agent-human impersonation (automated services/LLM nodes cannot authenticate or decide for humans; `require_human_principal` enforced).
+7. Gamertags and display names are presentation data only; use immutable local user UUIDs and numeric player IDs as primary identity.
+8. Inactivity and timeouts alter escalation state but NEVER create approvals or decisions (G-TIMEOUT invariant).
+
+---
+
+## Review Scope & Instructions
+1. Inspect `tests/adversarial/test_adversarial_phase2.py`:
+   - Verify coverage of all 10 security tracks:
+     - Track 1: Object-Level Player Isolation
+     - Track 2: G-TIMEOUT Invariant
+     - Track 3: Service Anti-Impersonation
+     - Track 4: Universal Dormancy & Zero Player Delivery
+     - Track 5: PostgreSQL Authoritative State (locks, triggers)
+     - Track 6: Decision Step-Up Replay & Scope Lockout
+     - Track 7: Scoped Action Tokens Single-Use & Expiry
+     - Track 8: Commissioner Bootstrap Lock
+     - Track 9: Commissioner Account Recovery & Argon2id Revocation
+     - Track 10: Legacy HMAC Kill Switch
+2. Inspect non-negotiable invariants:
+   - Universal dormancy: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false`.
+   - Zero player delivery; no outbox relay or worker execution.
+   - Anti-impersonation: `require_human_principal`.
+   - G-TIMEOUT: timeout/inactivity never creates decisions.
+3. Execute verification tests:
+   ```powershell
+   .\.venv\Scripts\pytest.exe tests/adversarial/test_adversarial_phase2.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   ```
+   (Set `WaitMsBeforeAsync: 10000`). If permission prompt times out, document honestly and verify via AST / static analysis.
+4. Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
+5. Deliver report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2\handoff.md`.
+6. Notify orchestrator via `send_message` when complete.
+
+## 2026-10-04T10:46:38Z
+You are reviewer_m6_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md
+Security hardening report: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m6_security_hardening_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2\DISPATCH.md before starting work.
+
+Your task:
+Review the Tier 5 Adversarial Coverage Hardening suite and security invariants for Milestone 6:
+1. Inspect tests/adversarial/test_adversarial_phase2.py:
+   - Verify coverage of all 10 security tracks:
+     - Track 1: Object-Level Player Isolation
+     - Track 2: G-TIMEOUT Invariant
+     - Track 3: Service Anti-Impersonation
+     - Track 4: Universal Dormancy & Zero Player Delivery
+     - Track 5: PostgreSQL Authoritative State (locks, triggers)
+     - Track 6: Decision Step-Up Replay & Scope Lockout
+     - Track 7: Scoped Action Tokens Single-Use & Expiry
+     - Track 8: Commissioner Bootstrap Lock
+     - Track 9: Commissioner Account Recovery & Argon2id Revocation
+     - Track 10: Legacy HMAC Kill Switch
+2. Inspect non-negotiable invariants:
+   - Universal dormancy: DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false.
+   - Zero player delivery; no outbox relay or worker execution.
+   - Anti-impersonation: require_human_principal.
+   - G-TIMEOUT: timeout/inactivity never creates decisions.
+3. Execute verification tests:
+   .\.venv\Scripts\pytest.exe tests/adversarial/test_adversarial_phase2.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via AST / static analysis.
+4. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_2\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.

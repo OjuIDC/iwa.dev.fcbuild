@@ -1,29 +1,37 @@
 # Progress Tracker — challenger_m5_2
 
-**Status**: Completed
-**Last visited**: 2026-10-03T21:33:25Z
+**Status**: Completed  
+**Last visited**: 2026-10-04T09:57:00Z  
 
 ## Tasks
 - [x] Received dispatch and initialized BRIEFING.md and progress.md
 - [x] Read mandatory documents:
   - [x] `ORIGINAL_REQUEST.md`
-  - [x] `PROJECT.md`
+  - [x] `DISPATCH.md`
+  - [x] `orchestrator_phase2/PROJECT.md`
   - [x] `worker_m5_1/handoff.md`
-  - [x] `tests/test_phase1_scope.py`
-  - [x] `docs/DISPATCH_ACTIVATION.md`
-  - [x] `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`
-- [x] Adversarially verify Phase 1 scope boundaries via empirical tools:
-  - [x] Verify non-existence of `src/dashboard`, `src/identity`
-  - [x] Verify forbidden file prefixes in `src/dispatch/` and root `src/`
-  - [x] AST and string search for `webauthn` across `src/`
-  - [x] SQL tracking table mutations outside `tests/`
-- [x] Adversarially verify Documentation Invariants:
-  - [x] `docs/DISPATCH_ACTIVATION.md` exact disabled error string
-  - [x] `docs/DISPATCH_ACTIVATION.md` 6 gates table (`G-MIGRATION`, `G-GRANTS`, `G-WORKER`, `G-ID`, `G-ATOMIC`, `G-OUTBOX`)
-  - [x] `docs/DISPATCH_ACTIVATION.md` 4 mandatory statements forbidding Phase 1 operational enablement
-  - [x] `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` status `UNVERIFIED (G-ID not met)`
-  - [x] `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` 5 empty AC-47 tables
-- [x] Adversarial stress test of `tests/test_phase1_scope.py`
-- [x] Formulate verdict: **APPROVE**
-- [x] Write `challenge_report.md` and `handoff.md`
-- [x] Notify orchestrator via `send_message`
+- [x] Investigate implementation files:
+  - [x] `src/identity/routers/player.py`
+  - [x] `src/identity/routers/step_up.py`
+  - [x] `src/identity/tokens.py`
+  - [x] `src/identity/store.py`
+  - [x] `src/graph_api.py`
+  - [x] `src/schemas.py`
+  - [x] `tests/identity/test_player.py`
+  - [x] `tests/identity/test_step_up.py`
+  - [x] `tests/identity/test_tokens.py`
+- [x] Execute empirical verification tests:
+  - [x] Run pytest attempted (permission prompt timed out waiting for user confirmation; documented honestly)
+  - [x] Performed exhaustive AST, type, and static analysis verification across all targets
+- [x] Adversarial stress testing of 5 tracks:
+  - [x] Track 1: Object-Level Player Isolation (PASS in src/)
+  - [x] Track 2: 5 Distinct Player Decision Actions (PASS in src/)
+  - [x] Track 3: Graph API HMAC Kill Switch (PASS in src/)
+  - [x] Track 4: G-TIMEOUT Invariant (PASS in src/)
+  - [x] Track 5: Universal Dormancy & Scope Protection (PASS in src/ & compose)
+- [x] Identify test suite defects:
+  - [x] Identified 6 fatal defects in `test_player.py`, `test_tokens.py`, and `test_step_up.py`
+- [x] Write `challenge_report.md`
+- [x] Formulate verdict: **REQUEST_CHANGES**
+- [x] Write 5-component `handoff.md`
+- [ ] Notify orchestrator via `send_message`

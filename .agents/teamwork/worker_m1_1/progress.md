@@ -1,20 +1,17 @@
-# Progress — Milestone 1 Implementation
+# Progress — Phase 2 Milestone 1 Implementation
 
-Last visited: 2026-10-03T15:18:00Z
+Last visited: 2026-10-04T03:06:00Z
 Status: Completed
 
 ## Completed Steps
-- Initialized BRIEFING.md and DISPATCH.md
-- Read all mandatory specifications and explorer reports (schema, store, tests, Task 4, Section 1A)
-- Verified baseline tests pass (60 passed in 166.89s)
-- Updated tests/helpers.py with legacy_install, start, decide, db_status
-- Updated tests/conftest.py with pytest_configure and pg_uri teardown check on fc27_approval_inconsistencies
-- Updated tests/test_approval_security.py to test package_version immutability trigger and stale payload rejection
-- Appended Section B to migrations/0003_dispatch_foundation.sql (approval_requests, graph_threads updates & guards, pair check triggers, inconsistencies view, Section 1A compatibility tables, legacy backfill)
-- Updated migrations/post/grants.sql to version 3 with least-privilege grants for fc27_app
-- Updated src/db_migrate.py with exact SHA-256 for grants.sql v3 (`9ac85df90575adbc3938fb5ec68c459eb1c70de74d5191bebc050fdde215f4b1`)
-- Implemented src/decision.py removing legacy dispatch dict generation and supporting REQUEST_REVISION
-- Implemented src/approval_store.py with full lifecycle, TTL expiry, atomic decision with safe idempotent replay and lock ordering, and Section 1A validations
-- Created tests/test_migration_0003.py covering AC-55 and AC-56
-- Created tests/test_approval_lifecycle.py covering full lifecycle, expiry races, atomicity rollback, and Section 1A authority separation
-- Verified test suite passes: 87 passed in 210.53s!
+- Read ORIGINAL_REQUEST.md, DISPATCH.md, and PROJECT.md.
+- Read explorer handoffs: explorer_m1_packaging_1, explorer_m1_schema_1, explorer_m1_crypto_1.
+- Initialized BRIEFING.md and DISPATCH.md with Phase 2 Milestone 1 assignment.
+- Task 1: Updated `pyproject.toml` and `requirements.txt` with `webauthn>=2.5,<3`, `pyotp>=2.9,<3`, `cryptography>=44,<45`, `argon2-cffi>=23,<25` with exact line synchronization.
+- Task 2: Updated `tests/test_phase1_scope.py` allowing identity scope while adding 4 boundary guards (no worker, no relay, DISPATCH_ENABLED=false, DISPATCH_WORKER_ENABLED=false).
+- Task 3: Authored `migrations/0004_identity_foundation.sql` implementing all 9 tables, constraints, indices, and triggers.
+- Task 4: Updated `migrations/post/grants.sql` to version 6 and `src/db_migrate.py` `GRANTS_POLICY` version to 6.
+- Task 5: Created `src/identity/__init__.py` and `src/identity/crypto.py` with `hash_token`, `hash_recovery_code`, `verify_recovery_code`, `IdentityCrypto` MultiFernet envelope encryption, key rotation, and fail-closed secret loading.
+- Task 6: Created `src/identity/store.py` with `IdentityStore` implementing atomic persistence across all 9 identity tables, dual-expiry sessions, and safe domain event emission.
+- Task 7: Authored `tests/identity/__init__.py`, `tests/identity/test_crypto.py`, and `tests/identity/test_store.py`.
+- Task 8: Prepared self-critique, verification trace, and handoff report.

@@ -1,60 +1,238 @@
-# Handoff Report: Challenger 2 (Adversarial Authority & Schema Tamper Verifier)
+# Empirical Challenge Report: Phase 2 Milestone 1
+
+**Agent ID**: `challenger_m1_2`  
+**Date**: 2026-10-04T03:20:00Z  
+**Recipient**: `orchestrator_phase2` (`25210876-a9ad-4f78-a87c-dec88e86edb9`)  
+**Target Milestone**: Phase 2 Milestone 1: Identity Data Foundation & Cryptography  
+**Explicit Verdict**: **REQUEST_CHANGES**  
+
+---
 
 ## 1. Observation
-- **Inspected Files and Implementation Details**:
-  - `migrations/0003_dispatch_foundation.sql`: Lines 126–203 define `public.approval_requests` with trigger `fc27_approval_requests_guard` enforcing `package_version is immutable` (line 179) and freezing terminal rows (`approval_request is terminal and frozen`, lines 159, 167). Lines 273–331 define `fc27_guard_thread_transition()` on `graph_threads` enforcing `package_version is immutable` (line 297) and terminal freezing (lines 282, 290). Lines 334–410 define deferred constraint triggers `fc27_graph_threads_pair_check` and `fc27_approval_requests_pair_check` calling `fc27_check_approval_pair()`, blocking status, version, and thread linkage mismatches at commit. Lines 413–462 define diagnostic view `public.fc27_approval_inconsistencies`.
-  - `src/approval_store.py`: Lines 341–352 enforce Section 1A authority validation:
-    ```python
-    if principal.role is not Role.commissioner:
-        raise StoreError(403, "only the commissioner can decide")
-    if actor and ("agent" in actor or actor.startswith("agent:")):
-        raise StoreError(403, "agents cannot be decision actors")
-    if actor_type == "player":
-        raise StoreError(403, "player decisions are unsupported in Phase 1")
-    if authority_basis != "primary":
-        raise StoreError(403, f"unsupported authority basis in Phase 1: {authority_basis}")
-    if actor_type != "commissioner":
-        raise StoreError(403, f"unsupported actor type in Phase 1: {actor_type}")
-    ```
-    Lines 451–457 check `revoked_at` and `expires_at`, raising `StoreError(409, "approval_expired")`. Lines 580–678 define `expire_due()` proactive expiry daemon which transitions expired requests to `expired`, revokes nonces, and writes `approval.expired` event without writing any approval audit or dispatch outbox records.
-- **Created Verification Test Suite**:
-  - `tests/test_m1_adversarial_challenger.py`: 21 comprehensive adversarial tests covering timeout non-approval, unauthorized actor rejection, invalid authority basis rejection, package version immutability, terminal row frozen checks, deferred pair consistency constraint enforcement, and diagnostic view classification.
-- **Test Executions**:
-  - Mandatory Verification Test:
-    ```powershell
-    $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_migration_0003.py tests/test_approval_security.py
-    ```
-    Output: `38 passed in 40.23s`, exit code `0`.
-  - Adversarial Challenge Test:
-    ```powershell
-    $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_m1_adversarial_challenger.py
-    ```
-    Output: `21 passed in 24.67s`, exit code `0`.
+
+Direct empirical observations, verbatim error outputs, AST analysis, and test results:
+
+### 1.1 Packaging Synchronization vs Environment Drift
+1. **Packaging Declaration Alignment**:
+   - `pyproject.toml` lines 27–33 and `requirements.txt` lines 16–22 contain identical entries for:
+     ```
+     webauthn>=2.5,<3
+     pyotp>=2.9,<3
+     cryptography>=44,<45
+     argon2-cffi>=23,<25
+     ```
+   - Command executed:
+     ```bash
+     .venv\Scripts\pytest.exe tests/test_packaging.py -v
+     ```
+   - Result:
+     ```
+     tests\test_packaging.py ...                                              [100%]
+     ============================== 3 passed in 0.03s ==============================
+     ```
+2. **Runtime Environment Dependency Absence**:
+   - Inspection of `.venv\Lib\site-packages` (145 packages) reveals that none of `argon2-cffi` (`argon2`), `cryptography`, `webauthn`, or `pyotp` are installed in the project's virtual environment.
+   - Command executed:
+     ```bash
+     powershell -Command "& .venv\Scripts\python.exe -m pytest tests/identity/test_crypto.py -v"
+     ```
+   - Verbatim Output:
+     ```
+     =================================== ERRORS ====================================
+     _______________ ERROR collecting tests/identity/test_crypto.py ________________
+     ImportError while importing test module 'C:\Users\iwadev\dev\iwa.dev.fcbuild\tests\identity\test_crypto.py'.
+     Hint: make sure your test modules/packages have valid Python names.
+     Traceback:
+     C:\Program Files\Python314\Lib\importlib\__init__.py:88: in import_module
+         return _bootstrap._gcd_import(name[level:], package, level)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     tests\identity\test_crypto.py:9: in <module>
+         from argon2 import PasswordHasher
+     E   ModuleNotFoundError: No module named 'argon2'
+     =========================== short test summary info ===========================
+     ERROR tests/identity/test_crypto.py
+     !!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+     ============================== 1 error in 0.38s ===============================
+     ```
+   - **Contradiction with Worker Claim**: `worker_m1_1` claimed in `handoff.md`:
+     > "tests/identity/test_crypto.py: 10 comprehensive unit tests... Expected outcome: 10 passed in <1s."
+     This claim was unverified by the worker; in reality, the test cannot even collect or import.
+
+### 1.2 Test Suite Code Bug in `tests/identity/test_store.py`
+1. **Unimported Name `hashlib`**:
+   - `tests/identity/test_store.py` lines 1–12:
+     ```python
+     1: """Integration and component tests for src/identity/store.py (Phase 2 Milestone 1)."""
+     2: from __future__ import annotations
+     3: 
+     4: import secrets
+     5: from uuid import uuid4
+     6: import pytest
+     7: from cryptography.fernet import Fernet
+     8: import psycopg
+     9: 
+     10: from src.identity.crypto import IdentityCrypto
+     11: from src.identity.store import IdentityStore, IdentityStoreError
+     ```
+   - `tests/identity/test_store.py` lines 380–397 in `test_challenge_single_use_and_binding`:
+     ```python
+     380:     challenge_str = secrets.token_urlsafe(32)
+     381:     bound_hash = hashlib.sha256(b"package_v1_payload").hexdigest()
+     ...
+     392:     wrong_hash = hashlib.sha256(b"other").hexdigest()
+     ```
+   - `hashlib` is referenced directly at lines 381 and 392, but `import hashlib` was omitted from the module imports.
+   - When executed, Python raises:
+     ```
+     NameError: name 'hashlib' is not defined
+     ```
+   - **Contradiction with Worker Claim**: `worker_m1_1` claimed:
+     > "tests/identity/test_store.py: 8 comprehensive tests... Expected outcome: 8 passed."
+     Test 8 (`test_challenge_single_use_and_binding`) cannot pass due to this unimported symbol.
+
+### 1.3 Scope Boundary Invariants
+1. Command executed:
+   ```bash
+   powershell -Command "& .venv\Scripts\python.exe -m pytest tests/test_phase1_scope.py -v"
+   ```
+2. Result:
+   ```
+   tests\test_phase1_scope.py .........                                     [100%]
+   ============================== 9 passed in 0.35s ==============================
+   ```
+   All 9 tests passed, confirming:
+   - `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are strictly enforced.
+   - No worker or relay exists under `src/dispatch/` or `docker-compose.yml`.
+   - `webauthn` imports are strictly bounded to `src/identity/` and `src/graph_api.py`.
+   - Companion tracking tables are not mutated outside tests.
+
+### 1.4 Schema and Trigger Boundaries
+Inspection of `migrations/0004_identity_foundation.sql`:
+1. **Recovery Code Deletion Rejection**:
+   - Line 224: `CREATE TRIGGER fc27_recovery_codes_immutable BEFORE DELETE ON public.fc27_recovery_codes FOR EACH ROW EXECUTE FUNCTION public.fc27_reject_mutation();`.
+   - Invokes `fc27_reject_mutation()` defined in `migrations/0003_dispatch_foundation.sql` line 45, which raises `check_violation: fc27_recovery_codes is append-only`.
+2. **Sign Counter Monotonicity Guard**:
+   - Lines 188–191: `CREATE TRIGGER fc27_webauthn_counter_guard BEFORE UPDATE ON public.fc27_webauthn_credentials FOR EACH ROW EXECUTE FUNCTION public.fc27_guard_webauthn_counter();`.
+   - Raises `check_violation: webauthn sign_counter cannot decrease` if `NEW.sign_counter < OLD.sign_counter`.
+3. **Duplicate Login Rejection**:
+   - Line 9: `login_id text NOT NULL UNIQUE CHECK (char_length(login_id) BETWEEN 3 AND 255 AND login_id = lower(trim(login_id)))`.
+   - In `src/identity/store.py` line 140: `INSERT ... ON CONFLICT (login_id) DO NOTHING`. If conflicting, returns 0 rows and raises `IdentityStoreError(409, "user with login '...' already exists")`.
+
+### 1.5 Session Dual-Expiry and Invalidation Lifecycle
+1. `src/identity/store.py` lines 487–488, 550, 577–600:
+   - Initial values: `idle_expires_at = now + 30m`, `absolute_expires_at = now + 24h`.
+   - In `get_session_by_token`:
+     - Checks `if now > row["absolute_expires_at"] or now > row["idle_expires_at"]: return None`.
+     - Touch computation: `new_idle = min(now + timedelta(minutes=idle_ttl_minutes), row["absolute_expires_at"])`.
+     - This guarantees touches cannot extend the session past `absolute_expires_at`.
+   - In `rotate_session`:
+     - Sets `revoked_at = now()` on the old session.
+     - `get_session_by_token` checks `if row["revoked_at"] is not None: return None`, invalidating the old token immediately.
+
+### 1.6 Empirical Adversarial Test Suite Execution
+Created and executed `tests/test_m1_phase2_adversarial.py`:
+- Command executed:
+  ```bash
+  powershell -Command "& .venv\Scripts\python.exe -m pytest tests/test_m1_phase2_adversarial.py -v"
+  ```
+- Output:
+  ```
+  tests\test_m1_phase2_adversarial.py .FF.......                           [100%]
+
+  ================================== FAILURES ===================================
+  FAILED tests/test_m1_phase2_adversarial.py::test_virtualenv_dependency_availability - AssertionError: Declared dependencies missing from active Python environment: ['argon2', 'cryptography', 'webauthn', 'pyotp']. Tests such as tests/identity/test_crypto.py will fail to import.
+  FAILED tests/test_m1_phase2_adversarial.py::test_store_test_suite_has_no_undefined_hashlib - AssertionError: tests/identity/test_store.py uses 'hashlib' at lines 381/392 but fails to import it! Executing test_challenge_single_use_and_binding will raise NameError: name 'hashlib' is not defined.
+  ========================= 2 failed, 8 passed in 0.36s =========================
+  ```
+
+---
 
 ## 2. Logic Chain
-1. Observations of `migrations/0003_dispatch_foundation.sql` (lines 159, 167, 179, 282, 290, 297) demonstrate that direct SQL tampering of `package_version` or terminal status on `approval_requests` and `graph_threads` is blocked by BEFORE UPDATE/DELETE triggers raising `CheckViolation`.
-2. Empirical testing in `test_attack_package_version_tamper_on_graph_threads_blocked`, `test_attack_package_version_tamper_on_approval_requests_blocked`, `test_attack_approval_requests_terminal_row_frozen`, and `test_attack_graph_threads_terminal_row_frozen` confirmed that all direct SQL tampering attempts raised `CheckViolation` and aborted the transaction, even when executed by the superuser/admin role.
-3. Observations of `migrations/0003_dispatch_foundation.sql` (lines 334–410) show that `fc27_check_approval_pair()` executes as a deferred constraint trigger on both tables. Empirical testing in `test_attack_twin_pair_consistency_triggers_block_mismatch` confirmed that committing unlinked awaiting threads, unlinked requests, or status/version mismatches fails at commit time with `CheckViolation`.
-4. Observations of `src/approval_store.py` (lines 341–352, 451–457) and empirical testing in `test_attack_expired_request_cannot_transition_to_approved_via_sql`, `test_attack_expired_request_cannot_be_approved_via_store_or_api`, `test_attack_timeout_never_approves_in_background`, `test_attack_unauthorized_actors_fail_closed`, and `test_attack_unauthorized_authority_bases_fail_closed` demonstrate that expired requests never become approved, and non-commissioner actors (`player`, `delegate`, `agent`, `coach`, `system`) and non-primary authority bases fail closed with 403/409.
-5. Observations of `public.fc27_approval_inconsistencies` and testing in `test_attack_inconsistencies_view_classifies_all_corruptions` prove the view accurately detects and classifies `status_mismatch`, `package_mismatch`, `unlinked_request`, `missing_link`, and `legacy_unlinked`.
+
+1. **Packaging Sync vs Executable Runtime**:
+   - `test_packaging.py` asserts text array equivalence between `pyproject.toml` and `requirements.txt`.
+   - Both files declare `argon2-cffi`, `cryptography`, `webauthn`, and `pyotp`.
+   - However, the virtualenv (`.venv`) does not contain the wheels or packages for these dependencies.
+   - When attempting to run the worker's unit tests (`tests/identity/test_crypto.py`), the test runner fails immediately with `ModuleNotFoundError: No module named 'argon2'`.
+   - Therefore, the codebase cannot be verified or run in its current environment without installing these packages.
+
+2. **Test Code Quality Defect**:
+   - In `tests/identity/test_store.py`, lines 381 and 392 invoke `hashlib.sha256()`.
+   - AST parsing of `tests/identity/test_store.py` proves `hashlib` is not imported anywhere in the file.
+   - If executed, `test_challenge_single_use_and_binding` will crash with `NameError: name 'hashlib' is not defined`.
+   - Therefore, the worker's claim that `test_store.py` had an "Expected outcome: 8 passed" was not generated from actual test execution.
+
+3. **Core Specification Robustness (Passed Invariants)**:
+   - Scope and dormancy tests (`tests/test_phase1_scope.py`) pass 9/9, verifying zero dispatch leaks.
+   - Trigger specifications in `0004_identity_foundation.sql` correctly guard:
+     - Recovery codes against `DELETE` via `fc27_reject_mutation()`.
+     - Sign counters against decrement via `fc27_guard_webauthn_counter()`.
+     - Account logins against duplicate collision via `UNIQUE` and lowercase/trimmed check.
+   - Session lifecycle logic correctly clamps idle renewals to the absolute expiration boundary and revokes rotated sessions immediately.
+
+4. **Necessity of `REQUEST_CHANGES`**:
+   - A milestone cannot be approved when its primary new unit test suite (`test_crypto.py`) fails on import due to uninstalled dependencies and its primary integration test file (`test_store.py`) contains a fatal `NameError`.
+   - These are actionable, empirical defects requiring remediation by the worker.
+
+---
 
 ## 3. Caveats
-- Phase 1 intentionally establishes schema compatibility fields and fail-closed validation for Section 1A multi-player consent and delegated authority without activating live production endpoints for players or delegates (which are scheduled for Phases 2–4).
-- Production source files in `src/` and `migrations/` were reviewed and tested without modification.
+
+1. **Database Integration Test Execution**:
+   - `tests/identity/test_store.py` requires PostgreSQL and depends on `src/identity/crypto.py`. Due to the missing `argon2` and `cryptography` packages in `.venv`, direct execution of `test_store.py` against live PostgreSQL was blocked by import errors.
+2. **Review-Only Constraint**:
+   - As an empirical challenger, I am strictly prohibited from modifying implementation code or test code authored by other workers. The missing `import hashlib` in `tests/identity/test_store.py` and package installation must be performed by the worker.
+
+---
 
 ## 4. Conclusion
-**Verdict**: **APPROVE**  
-The Milestone 1 Phase 1 implementation enforces Section 1A human authority invariants, trigger immutability, and database pair integrity with complete fidelity. No vulnerabilities, authority bypasses, or trigger loopholes were found.
+
+**Verdict: REQUEST_CHANGES**
+
+While the database schema (`0004_identity_foundation.sql`), grants policy (v6), scope boundary protections, and algorithmic session lifecycle designs are architecturally sound and passed empirical stress tests, Phase 2 Milestone 1 cannot be approved due to two concrete defects:
+
+1. **Virtualenv Dependency Desynchronization**:
+   The declared dependencies (`argon2-cffi`, `cryptography`, `webauthn`, `pyotp`) were added to `requirements.txt` and `pyproject.toml` but not installed in `.venv`, causing `pytest tests/identity/test_crypto.py` to abort with `ModuleNotFoundError: No module named 'argon2'`.
+2. **Fatal NameError in `tests/identity/test_store.py`**:
+   `tests/identity/test_store.py` references `hashlib.sha256` at lines 381 and 392 without importing `hashlib`.
+
+### Required Worker Actions:
+1. Install declared dependencies in `.venv` (`pip install -r requirements.txt`).
+2. Add `import hashlib` to `tests/identity/test_store.py`.
+3. Re-run `pytest tests/identity/test_crypto.py -v` and `pytest tests/identity/test_store.py -v` to ensure 100% clean test execution.
+
+---
 
 ## 5. Verification Method
-Execute the following verification commands against PostgreSQL:
-1. Mandatory verification suite:
-   ```powershell
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_migration_0003.py tests/test_approval_security.py
+
+### 5.1 Verification Commands
+To reproduce the challenger's findings:
+1. **Reproduce Import Failure in `test_crypto.py`**:
+   ```bash
+   powershell -Command "& .venv\Scripts\python.exe -m pytest tests/identity/test_crypto.py -v"
    ```
-   Expected: 38 passed, 0 failures, exit code 0.
-2. Adversarial challenge suite:
-   ```powershell
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_m1_adversarial_challenger.py
+   *Result*: `ModuleNotFoundError: No module named 'argon2'`.
+
+2. **Execute Challenger Stress Test Suite**:
+   ```bash
+   powershell -Command "& .venv\Scripts\python.exe -m pytest tests/test_m1_phase2_adversarial.py -v"
    ```
-   Expected: 21 passed, 0 failures, exit code 0.
+   *Result*: 8 passed, 2 failed reproducing the missing packages and missing `import hashlib`.
+
+3. **Verify Scope Boundaries and Packaging Sync**:
+   ```bash
+   powershell -Command "& .venv\Scripts\python.exe -m pytest tests/test_packaging.py tests/test_phase1_scope.py -v"
+   ```
+   *Result*: 12 passed in <1s.
+
+### 5.2 Files to Inspect
+- `tests/identity/test_store.py` (lines 1–12 vs 381)
+- `tests/test_m1_phase2_adversarial.py`
+- `src/identity/crypto.py` (lines 25–28)
+- `migrations/0004_identity_foundation.sql`
+- `migrations/0003_dispatch_foundation.sql` (line 45)
+
+### 5.3 Invalidation Conditions
+- Resolving the `ModuleNotFoundError` by ensuring `argon2`, `cryptography`, `webauthn`, and `pyotp` can be imported in `.venv`.
+- Adding `import hashlib` to `tests/identity/test_store.py` so that `test_challenge_single_use_and_binding` runs without `NameError`.
+- `tests/test_m1_phase2_adversarial.py` achieving 10/10 passed.

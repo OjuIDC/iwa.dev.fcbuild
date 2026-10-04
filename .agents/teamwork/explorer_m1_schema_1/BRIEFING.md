@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T14:23:30Z
+# BRIEFING — 2026-10-04T02:56:00Z
 
 ## Mission
-Perform a deep technical exploration and detailed implementation design of the SQL schema for Milestone 1 (0003_dispatch_foundation.sql Section B, Section 1A compatibility tables, grants.sql, db_migrate.py).
+Design the complete SQL schema and migration definition for Phase 2 Milestone 1: Identity Data Foundation (`0004_identity_foundation.sql`, `grants.sql`, triggers, indexes).
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_explorer
@@ -9,36 +9,37 @@ Perform a deep technical exploration and detailed implementation design of the S
 - Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m1_schema_1
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 1 - Dispatch & Data Foundation (Schema Explorer)
+- Phase 2 Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Phase 2 Milestone: Phase 2 Milestone 1 - Identity Data Foundation
 
 ## 🔒 Key Constraints
 - Read-only investigation — do NOT implement / do NOT modify repository files
 - Files for content delivery, messages for coordination
 - Handoff report in handoff.md following 5-component protocol
 - Thorough SQL design with exact code chunks and rationale
+- Phase 2: Design 0004_identity_foundation.sql and grants.sql updates
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: 2026-10-03T14:23:30Z
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T02:56:00Z
 
 ## Investigation State
 - **Explored paths**:
-  - `ORIGINAL_REQUEST.md` (Sections 1, 3, and Section 1A patch lines 961–1591)
-  - `orchestrator_phase1/PROJECT.md`
-  - `docs/superpowers/plans/2026-10-02-phase1-dispatch-data-foundation.md` (Task 4 lines 395–546)
-  - `docs/superpowers/specs/2026-10-02-player-dispatch-design.md` (§7.2, §7.4, §7.6, §14.2, §14.7, §25 step 5)
-  - Existing migrations: `0001_initial.sql`, `0002_approval_security.sql`, `0003_dispatch_foundation.sql` (Section A)
+  - `ORIGINAL_REQUEST.md` (§5, §17, lines 1862–2034 and 2539–2552)
+  - `orchestrator_phase2/PROJECT.md`
+  - `migrations/0001_initial.sql`, `0002_approval_security.sql`, `0003_dispatch_foundation.sql`
   - `migrations/post/grants.sql` & `src/db_migrate.py`
-  - `src/approval_store.py` & `src/events.py`
+  - `tests/test_db_migrate_roles.py`, `tests/test_migration_0003.py`
 - **Key findings**:
-  - Migration 0003 Section B requires `approval_requests`, thread constraints/FK, `fc27_check_approval_pair()` deferrable triggers, `fc27_approval_inconsistencies` view, `approval_audit` additions, `approval_nonces` additions, `fc27_check_event_source()` update, and legacy backfill.
-  - Section 1A mandates 7 forward-compatible tables: `authority_policies`, `authority_delegations`, `player_assignments`, `player_decision_requests`, `player_decisions`, `approval_escalations`, `authority_conflicts`, plus compatibility fields on `approval_audit`.
-  - `grants.sql` requires policy version bump from 2 to 3 with corresponding DML grants for `fc27_app` (and zero approval access for `fc27_dispatch`).
-  - `src/db_migrate.py` requires `GRANTS_POLICY` update to version 3 with the new SHA-256 hash.
-- **Unexplored areas**: None for Milestone 1 schema scope.
+  - Designed full DDL for 9 relational identity tables in `0004_identity_foundation.sql`.
+  - Configured append-only triggers: `fc27_reject_mutation()` on DELETE of recovery codes; `fc27_guard_recovery_code_consumption()` for one-way consumption; status transition guards on `fc27_users`; authenticator clone protection via `sign_counter` monotonic check on `fc27_webauthn_credentials`.
+  - Expanded `domain_events` check constraint on `source_table` to include the 9 new tables.
+  - Specified grants upgrade to version 6 in `migrations/post/grants.sql` and `src/db_migrate.py`.
+- **Unexplored areas**: None for Phase 2 Milestone 1 schema scope.
 
 ## Key Decisions Made
-- Fully specified SQL DDL, constraints, triggers, and views in `schema_analysis.md`.
-- Produced complete 5-component handoff report in `handoff.md`.
+- Authored comprehensive technical analysis in `schema_analysis.md`.
+- Authored full 5-component handoff report in `handoff.md`.
 
 ## Artifact Index
 - `DISPATCH.md` — Agent dispatch instructions and incoming messages

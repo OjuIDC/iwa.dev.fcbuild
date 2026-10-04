@@ -1,78 +1,65 @@
-# Task Assignment: reviewer_m3_2 (Milestone 3 Reviewer 2 - Transition Function & Service)
+# Dispatch Instructions for reviewer_m3_2
 
-## Mission
-Perform independent review of Milestone 3 focusing on `public.fc27_dispatch_transition`, `public.dispatch_transition_rules`, the Python transition service wrapper, objective bounds validation, and transition tests.
+**Agent ID**: `reviewer_m3_2`
+**Role**: Store Lifecycle & Tenancy Reviewer
+**Milestone**: Phase 2 Milestone 3 — Server-Side Sessions & Invitations Lifecycle
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2`
 
-## Working Directory
-`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Read §5, §6, §7, §8, §11, §12)
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
 
-## Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
-4. `migrations/0003_dispatch_foundation.sql` (Section D)
-5. `src/dispatch/transition.py`
-6. `src/dispatch/objective.py`
-7. `src/schemas.py`
-8. `tests/test_dispatch_transition.py`
+## Mandatory Non-Negotiable Invariants
+- `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced at all times.
+- Zero player delivery; no active worker or relay.
+- Plaintext tokens (sessions and invitations) are NEVER stored in PostgreSQL; only deterministic SHA-256 hashes (`hash_token()`).
+- Single-use invitation consumption enforced under atomic `FOR UPDATE` lock.
+- User account status transition strictly respects `fc27_users_status_guard`: `invited` -> `active`.
+- Dual session timeouts: 30-minute idle expiration strictly capped at 24-hour absolute expiration.
 
-## Review Verification Checklist
-1. **`public.fc27_dispatch_transition` Security & Semantics**:
-   - `SECURITY DEFINER` function with `SET search_path = pg_catalog, pg_temp`, owned by `fc27_owner`.
-   - Zero dynamic SQL (`EXECUTE`, `format(`) inside function body.
-   - Row-level lock (`SELECT FOR UPDATE`) on target dispatch.
-   - Optimistic concurrency locking (`expected_status`, `expected_version`) raising `FC001` on mismatch.
-   - Rule matrix validation against `public.dispatch_transition_rules` raising `FC002` on illegal transition.
-   - **Phase 1 Invariant**: Transition to `delivered` strictly blocked raising `FC002` ("Phase 1 invariant violation: transition to delivered is disabled (DISPATCH_ENABLED=false)").
-   - Actor header derivation (`fc27.actor`) and caller role authorization raising `FC004` on unauthorized actor.
-   - Mandatory correlation ID raising `FC005` on NULL.
-   - Precondition checks raising `FC006` when required objects missing.
-   - Reason validation raising `FC007` when reason exceeds 500 characters or missing when required.
-   - Atomic emission of domain event and outbox row in the same transaction.
-2. **Python Wrapper `src/dispatch/transition.py`**:
-   - Requires active database transaction block.
-   - Sets transaction-local `set_config('fc27.actor', ...)`.
-   - Maps SQLSTATE codes `FC001`–`FC007` to clean typed Python exceptions.
-3. **Objective Bounds Model `src/dispatch/objective.py` & `src/schemas.py`**:
-   - Metric bounds policy `fc27-objective-bounds-v1` for bounded ranges (`pass_accuracy`, `rating`, `goals`, etc.).
-   - Physical range validation (`sprint_speed`, `acceleration`, `stamina`).
-   - Match constraints `1 <= min_matches <= max_matches <= 10`.
-   - Validation errors do not leak/echo candidate input.
-4. **Execute Test Verification**:
-   ```pwsh
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_transition.py tests/test_events_outbox.py tests/test_approval_lifecycle.py
-   ```
+## Review Scope
+1. **Store Lifecycle & PostgreSQL Transactions**:
+   - Inspect `src/identity/store.py`:
+     - Invitation methods: `create_invitation`, `validate_invitation`, `consume_invitation_and_activate_user`, `revoke_invitation`.
+     - Session methods: `create_session`, `get_session_by_token`, `rotate_session`, `touch_session_by_token`, `revoke_session_by_token`, `get_session_by_id`, `list_user_sessions`, `revoke_all_user_sessions`.
+     - User methods: `get_user_by_id`, `suspend_user`, `list_users`.
+   - Verify transaction boundaries (`conn.transaction()`), explicit row locks (`FOR UPDATE`), and event recording to `domain_events`.
+   - Verify adherence to database triggers (`fc27_users_status_guard`, monotonic counters, rejection of mutations where applicable).
+2. **Tenancy & Authorization Integration**:
+   - Inspect `src/identity/policy.py` and `src/identity/deps.py`:
+     - Verify club tenancy isolation: caller from club 101 cannot access or modify resources in club 102.
+     - Verify legacy commissioner fallback and system-level tenancy.
+3. **Execution & Test Verification**:
+   - Execute verification tests:
+     - `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`
+     - `pytest tests/identity/test_store.py tests/identity/test_policy.py tests/identity/test_services.py tests/identity/test_delegations.py -v`
+   - Document all executed commands, test outputs, and findings in `handoff.md`.
+4. **Verdict**:
+   - Provide an explicit verdict: `APPROVE` or `REQUEST_CHANGES`.
 
-## Output Requirements
-Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-Write `review.md` and `handoff.md` in your working directory.
-Notify the orchestrator with `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+Write your report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2\handoff.md`.
+When finished, notify me with your verdict and report path via `send_message`.
 
 
-## 2026-10-03T17:49:47Z
-[Message] timestamp=2026-10-03T17:49:47Z sender=7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b priority=MESSAGE_PRIORITY_HIGH content=You are reviewer_m3_2, a teamwork_preview_reviewer agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2
+## 2026-10-04T05:00:05Z
+You are reviewer_m3_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2\DISPATCH.md
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
 
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
-
-Task:
-Perform independent review of Milestone 3 focusing on public.fc27_dispatch_transition, public.dispatch_transition_rules, Python transition service wrapper, objective bounds validation, and transition tests:
-1. Verify public.fc27_dispatch_transition is SECURITY DEFINER with search_path=pg_catalog, pg_temp, owned by fc27_owner, row locking, and zero dynamic SQL.
-2. Verify Phase 1 invariant: transition to delivered unconditionally blocked raising SQLSTATE FC002.
-3. Verify optimistic locking (expected_status, expected_version), actor derivation, mandatory correlation ID, and atomic outbox emission.
-4. Verify Python wrapper in src/dispatch/transition.py maps SQLSTATEs FC001–FC007 to typed exceptions.
-5. Verify objective bounds model in src/dispatch/objective.py and src/schemas.py.
-6. Run tests:
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_transition.py tests/test_events_outbox.py tests/test_approval_lifecycle.py
-
-Formulate explicit verdict: APPROVE or REQUEST_CHANGES.
-Write review.md and handoff.md in your working directory.
-Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+Your task:
+Review the Store Lifecycle, Database Triggers, and Tenancy Isolation for Phase 2 Milestone 3: Server-Side Sessions & Invitations Lifecycle.
+1. Inspect src/identity/store.py (invitation, session, and user lifecycle methods), transaction boundaries, row locking (FOR UPDATE), and trigger compliance (fc27_users_status_guard).
+2. Inspect src/identity/policy.py and src/identity/deps.py for club tenancy isolation and legacy commissioner fallback.
+3. Execute verification tests:
+   - pytest tests/test_packaging.py tests/test_phase1_scope.py -v
+   - pytest tests/identity/test_store.py tests/identity/test_policy.py tests/identity/test_services.py tests/identity/test_delegations.py -v
+4. Document all commands, test outputs, and findings in handoff.md.
+5. Provide an explicit verdict: APPROVE or REQUEST_CHANGES.
+Write report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_2\handoff.md
+When finished, notify me with your verdict and report path via send_message.

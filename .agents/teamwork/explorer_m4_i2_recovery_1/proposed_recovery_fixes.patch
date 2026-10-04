@@ -1,0 +1,28 @@
+diff --git a/src/identity/store.py b/src/identity/store.py
+--- a/src/identity/store.py
++++ b/src/identity/store.py
+@@ -1292,6 +1292,15 @@ class IdentityStore:
+         code_ids: list[UUID] = []
+ 
+         with self.connect() as conn, conn.transaction():
++            # Revoke prior unconsumed recovery codes for this user before inserting new batch
++            conn.execute(
++                """
++                UPDATE public.fc27_recovery_codes
++                SET consumed_at = now()
++                WHERE user_id = %s AND consumed_at IS NULL
++                """,
++                (user_id,),
++            )
+             for code in plaintext_codes:
+                 cid_code = uuid4()
+                 hashed = hash_recovery_code(code)
+@@ -1341,7 +1350,7 @@ class IdentityStore:
+             for r in rows:
+                 if verify_recovery_code(plaintext_code, r["code_hash"]):
+                     conn.execute(
+-                        "UPDATE public.fc27_recovery_codes SET consumed_at = now() WHERE code_id = %s",
++                        "UPDATE public.fc27_recovery_codes SET consumed_at = now() WHERE code_id = %s AND consumed_at IS NULL",
+                         (r["code_id"],),
+                     )
+                     _safe_record_event(

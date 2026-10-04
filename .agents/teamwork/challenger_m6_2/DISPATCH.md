@@ -1,67 +1,74 @@
-# DISPATCH — challenger_m6_2
+# DISPATCH: challenger_m6_2 (Phase 2 Tier 5 Adversarial Coverage Challenger)
 
-**Agent ID**: challenger_m6_2
-**Archetype**: teamwork_preview_challenger
-**Assigned Task**: Milestone 6 Challenger 2 (Tier 5 Adversarial Coverage Hardening: Boundary Invariants & Security Guarantees)
-**Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2
-**Parent**: orchestrator_phase1 (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)
-**Timestamp**: 2026-10-03T21:55:00Z
+**Role**: `teamwork_preview_challenger`
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2`
+**Authoritative Request**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+**Project Plan**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+**Worker Handoff**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
 
-## MANDATORY Context Files to Read Before Starting:
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
-4. Published Security Changes: `c:\Users\iwadev\dev\iwa.dev.fcbuild\SECURITY_CHANGES.md`
-5. Published Test Results: `c:\Users\iwadev\dev\iwa.dev.fcbuild\TEST_RESULTS.md`
-6. Scope Enforcement: `tests/test_phase1_scope.py`, `tests/test_compose_isolation.py`
+---
 
-## Adversarial Challenge Task:
-Perform Tier 5 Adversarial Coverage Hardening on Phase 1 Boundary Enforcement, Section 1A Guarantees, and Security Invariants:
-1. Challenge Phase 1 Boundary Enforcement:
-   - Verify `DISPATCH_ENABLED=false` is enforced across all environments, configuration files, and Compose topologies.
-   - Run or inspect `tests/test_phase1_scope.py` checks:
-     - Ensure NO Phase 2+ runtime code exists in `src/` (`src/dashboard`, `src/identity`, dispatch workers, trackers).
-     - Ensure NO `webauthn` or `py_webauthn` imports exist anywhere in `src/`.
-     - Ensure NO companion tracking writes (`player_observations`, etc.) occur outside tests.
-2. Challenge Section 1A Human Authority & Player Consent Guarantees:
-   - Challenge whether agent actors can ever approve or decide (must fail closed).
-   - Challenge whether inactivity or timeout can ever constitute approval (must result in expiry, never approval).
-   - Challenge multi-player package fallback to player consent (must be barred).
-3. Challenge Database Least Privilege & Role Separation:
-   - Verify `fc27_owner` is NOLOGIN in production.
-   - Verify `fc27_migrator` has DDL but no app runtime grants.
-   - Verify `fc27_app` cannot modify audit tables or execute disallowed dispatch transitions.
-   - Verify `fc27_dispatch` has no access to approval logs or activation gate logs.
-4. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-5. Write `challenge_report.md` and `handoff.md` in your working directory.
-6. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code or test files.
+## Non-Negotiable Invariants
+1. Universal dormancy: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced across all environments, settings, and endpoints.
+2. Zero player delivery; Phase 2 must NEVER activate player dispatch, delivery adapters, or outbox relay.
+3. No Phase 3 dispatch worker, outbox relay, or player-agent execution pipeline.
+4. Preserve Phase 1 baseline commit `3339d6d672bbc59f251e1e2a6977bc9ea65edffe`.
+5. PostgreSQL is authoritative for all identity and authorization state.
+6. No agent-human impersonation (automated services/LLM nodes cannot authenticate or decide for humans; `require_human_principal` enforced).
+7. Gamertags and display names are presentation data only; use immutable local user UUIDs and numeric player IDs as primary identity.
+8. Inactivity and timeouts alter escalation state but NEVER create approvals or decisions (G-TIMEOUT invariant).
 
-## 2026-10-03T21:54:07Z
-From: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-Priority: MESSAGE_PRIORITY_HIGH
+---
 
-You are challenger_m6_2, a teamwork_preview_challenger agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2
+## Adversarial Challenge Mandate
+Empirically stress-test the Tier 5 Adversarial Coverage Hardening suite across the 10 security tracks:
+1. **Adversarial Tracks Stress-Testing**:
+   - Track 1: Object-level player isolation (cross-player view, challenge, decision, token rejection).
+   - Track 2: G-TIMEOUT invariant (`system:timeout` actions, `timeout_approved` attributes, expired requests).
+   - Track 3: Service anti-impersonation (service tokens on human endpoints, forged headers).
+   - Track 4: Universal dormancy (`DISPATCH_ENABLED=false`, zero player delivery, empty outbox).
+   - Track 5: PostgreSQL authoritative state (7 triggers, row locks, DDL rejection).
+   - Track 6: Decision step-up replay & scope lockout (package ID, version, hash binding).
+   - Track 7: Scoped action tokens (single-use, expiry, revocation, scope confusion).
+   - Track 8: Commissioner bootstrap ceremony lock (one-time lock, HTTP 409).
+   - Track 9: Commissioner account recovery (Crockford Base32, Argon2id, atomic regeneration revocation).
+   - Track 10: Legacy HMAC kill switch (`cli_hmac_enabled = False` default, HTTP 403 `proof_type_disabled`).
+2. **Execute Empirical Tests**:
+   ```powershell
+   .\.venv\Scripts\pytest.exe tests/adversarial/test_adversarial_phase2.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   ```
+   (Set `WaitMsBeforeAsync: 10000`). If permission prompt times out, document honestly and verify via AST / static analysis.
+3. Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
+4. Deliver report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2\handoff.md`.
+5. Notify orchestrator via `send_message` when complete.
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2\DISPATCH.md
 
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. Worker Handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md
-4. c:\Users\iwadev\dev\iwa.dev.fcbuild\SECURITY_CHANGES.md
-5. c:\Users\iwadev\dev\iwa.dev.fcbuild\TEST_RESULTS.md
-6. tests/test_phase1_scope.py
-7. tests/test_compose_isolation.py
+## 2026-10-04T10:46:38Z
+You are challenger_m6_2, an adversarial verifier agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md
 
-Task:
-Perform Tier 5 Adversarial Coverage Hardening on Phase 1 Boundary Enforcement, Section 1A, and Security Invariants:
-1. Challenge boundary enforcement: DISPATCH_ENABLED=false everywhere; no Phase 2+ code in src/, no webauthn, no tracking table writes.
-2. Challenge Section 1A: agent actors barred from deciding; timeout/inactivity never approves; multi-player packages barred from player fallback.
-3. Challenge least privilege: fc27_owner NOLOGIN, role privilege matrix strictly enforced.
-4. Formulate explicit verdict: APPROVE or REQUEST_CHANGES.
-5. Write challenge_report.md and handoff.md in your working directory.
-6. Notify orchestrator via send_message when done.
-Do NOT modify production source code or test files.
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2\DISPATCH.md before starting work.
+
+Your task:
+Empirically stress-test the Tier 5 Adversarial Coverage Hardening suite across the 10 security tracks:
+1. Adversarial Tracks Stress-Testing:
+   - Track 1: Object-level player isolation (cross-player view, challenge, decision, token rejection).
+   - Track 2: G-TIMEOUT invariant (system:timeout actions, timeout_approved attributes, expired requests).
+   - Track 3: Service anti-impersonation (service tokens on human endpoints, forged headers).
+   - Track 4: Universal dormancy (DISPATCH_ENABLED=false, zero player delivery, empty outbox).
+   - Track 5: PostgreSQL authoritative state (7 triggers, row locks, DDL rejection).
+   - Track 6: Decision step-up replay & scope lockout (package ID, version, hash binding).
+   - Track 7: Scoped action tokens (single-use, expiry, revocation, scope confusion).
+   - Track 8: Commissioner bootstrap ceremony lock (one-time lock, HTTP 409).
+   - Track 9: Commissioner account recovery (Crockford Base32, Argon2id, atomic regeneration revocation).
+   - Track 10: Legacy HMAC kill switch (cli_hmac_enabled = False default, HTTP 403 proof_type_disabled).
+2. Execute empirical tests:
+   .\.venv\Scripts\pytest.exe tests/adversarial/test_adversarial_phase2.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via AST / static analysis.
+3. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m6_2\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.

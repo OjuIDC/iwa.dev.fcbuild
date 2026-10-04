@@ -1,0 +1,103 @@
+--- a/src/identity/store.py
++++ b/src/identity/store.py
+@@ -243,7 +243,7 @@ class IdentityStore:
+         role: str,
+         *,
+         granted_by: str = "system",
+-        actor: str,
++        actor: str = "system",
+         correlation_id: UUID | None = None,
+     ) -> None:
+         """Assigns an application role to a user."""
+@@ -274,6 +274,25 @@ class IdentityStore:
+                 source_id=str(user_id),
+             )
+ 
++    def assign_user_role(
++        self,
++        user_id: UUID,
++        role: str,
++        *,
++        granted_by: str = "system",
++        actor: str = "system",
++        correlation_id: UUID | None = None,
++        **kwargs: Any,
++    ) -> None:
++        """Alias forwarding to assign_role with default actor='system'."""
++        self.assign_role(
++            user_id=user_id,
++            role=role,
++            granted_by=granted_by,
++            actor=actor,
++            correlation_id=correlation_id,
++        )
++
+     def revoke_role(
+         self,
+         user_id: UUID,
+@@ -722,12 +741,14 @@ class IdentityStore:
+         user_id: UUID,
+         auth_level: str,
+         auth_method: str,
++        club_id: str | None = None,
+         ip_address: str | None = None,
+         user_agent: str | None = None,
+         idle_ttl_minutes: int = 30,
+         absolute_ttl_hours: int = 24,
+         actor: str = "system",
+         correlation_id: UUID | None = None,
++        **kwargs: Any,
+     ) -> tuple[str, dict[str, Any]]:
+         """Creates a server-side session with dual idle and absolute timeouts."""
+         if auth_level not in self.VALID_AUTH_LEVELS:
+@@ -764,11 +785,14 @@ class IdentityStore:
+                 actor=actor,
+                 correlation_id=cid,
+                 visibility="audit_only",
+-                scope_club_id=None,
++                scope_club_id=club_id,
+                 source_table="fc27_sessions",
+                 source_id=str(session_id),
+             )
+-            return raw_token, dict(row)
++            res_dict = dict(row)
++            if club_id is not None and "club_id" not in res_dict:
++                res_dict["club_id"] = club_id
++            return raw_token, res_dict
+ 
+     def get_session_by_token(
+         self,
+@@ -824,16 +848,19 @@ class IdentityStore:
+         user_agent: str | None = None,
+         actor: str = "system",
+         correlation_id: UUID | None = None,
++        **kwargs: Any,
+     ) -> tuple[str, dict[str, Any]]:
+         """Atomically revokes the old session and creates a new rotated session."""
+         old_sess = self.get_session_by_token(old_token, touch=False)
+         if not old_sess:
+             raise IdentityStoreError(401, "invalid or expired session for rotation")
+ 
+         cid = correlation_id or uuid4()
+         with self.connect() as conn, conn.transaction():
+-            # Revoke old session
+-            conn.execute(
+-                "UPDATE public.fc27_sessions SET revoked_at = now() WHERE session_id = %s",
++            # Revoke old session with concurrency locking
++            res = conn.execute(
++                "UPDATE public.fc27_sessions SET revoked_at = now() WHERE session_id = %s AND revoked_at IS NULL",
+                 (old_sess["session_id"],),
+             )
++            if res.rowcount == 0:
++                raise IdentityStoreError(409, "session already rotated or revoked")
+ 
+             # Create new session
+@@ -882,4 +909,7 @@ class IdentityStore:
+                 source_table="fc27_sessions",
+                 source_id=str(new_session_id),
+             )
+-            return raw_new_token, dict(new_row)
++            ret = dict(new_row)
++            if "club_id" not in ret and old_sess.get("club_id"):
++                ret["club_id"] = old_sess["club_id"]
++            return raw_new_token, ret

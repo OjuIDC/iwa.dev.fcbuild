@@ -1588,3 +1588,1182 @@ Preserve:
 Persistent design decision
 I will carry this combined design forward in this conversation as:
 Club-level actions use Commissioner or explicitly delegated human authorization. Player-specific assignments use authenticated player consent. After policy-defined escalation, an affected player may provide fallback authorization only for their own eligible assignment. Inactivity never constitutes approval, and no agent may decide for a human.
+
+
+## 2026-10-04T02:30:08Z
+
+# Teamwork Project Prompt: Phase 2 Identity and Authorization
+
+Status: Ready for execution after Phase 1 acceptance
+Programme: FC27 Player Dispatch
+Phase: 2 of 6
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild
+Integrity mode: development
+Requested team: Full implementation, security, testing, adversarial-review,
+and integration team
+
+## 0. Mission
+
+Implement Phase 2: Identity and Authorization.
+
+Phase 1 established the secure data foundation, authoritative approval
+lifecycle, audit/event infrastructure, Graph persistence/API, authority-policy
+foundation, delegation compatibility, player-assignment compatibility, and
+dispatch safety controls.
+
+Phase 2 establishes authenticated HUMAN and SERVICE identities and the
+authorization mechanisms required by Phases 3 through 6.
+
+Phase 2 must implement:
+
+1. local user accounts;
+2. roles and object-scoped authorization;
+3. invitations and account activation;
+4. server-side sessions;
+5. Commissioner WebAuthn/passkey registration and sign-in;
+6. Commissioner WebAuthn decision step-up;
+7. player passkey registration and sign-in;
+8. authenticated player decision capability;
+9. scoped action tokens and decision challenges;
+10. applicable staff TOTP;
+11. encrypted identity secrets;
+12. BFF service identity;
+13. Graph/service identities;
+14. explicit human delegation authorization;
+15. Commissioner bootstrap;
+16. Commissioner recovery;
+17. authentication and authorization audit evidence.
+
+Phase 2 MUST NOT activate player dispatch.
+
+Phase 2 MUST NOT implement the Phase 3 dispatch worker, transactional outbox
+relay, player-agent execution pipeline, personalized-plan generation/delivery,
+or production player delivery.
+
+At Phase 2 completion:
+
+DISPATCH_ENABLED=false
+
+and:
+
+DISPATCH_WORKER_ENABLED=false
+
+must remain enforced.
+
+No player delivery may occur.
+
+## 1. Required completion statement
+
+When Phase 2 legitimately passes all applicable acceptance criteria, use:
+
+"Identity and authorization foundation complete. Human and service identities
+are authenticated and scope-authorized. Dispatch remains disabled.
+No player delivery has occurred."
+
+Do not call the overall player-dispatch programme complete.
+
+## 2. Preserve Phase 1
+
+Before editing:
+
+1. inspect the final Phase 1 branch and acceptance artifacts;
+2. identify the exact Phase 1 baseline commit;
+3. run the relevant Phase 1 regression suites;
+4. inspect existing migrations;
+5. inspect approval, authority-policy, delegation, assignment, nonce, event,
+   audit, Graph API, database-role, dispatch-schema, activation-gate, and
+   security implementations;
+6. preserve Phase 1 invariants unless an explicitly documented Phase 2 change
+   requires an extension.
+
+Do not replace working Phase 1 security controls with weaker Phase 2 controls.
+
+No Phase 1 authoritative history may be rewritten.
+
+Phase 2 migrations must extend Phase 1 without destructively recreating
+existing authoritative data.
+
+## 3. Non-negotiable invariants
+
+### 3.1 Dispatch safety
+
+Throughout Phase 2:
+
+- DISPATCH_ENABLED=false;
+- DISPATCH_WORKER_ENABLED=false;
+- no production outbox relay;
+- no player delivery adapter;
+- no Graph transition to delivered;
+- no player-agent execution;
+- no acknowledgment may be treated as delivery activation;
+- no successful authentication event may enable dispatch;
+- no WebAuthn ceremony may enable dispatch;
+- no player acceptance may directly enable dispatch;
+- no delegation may enable global dispatch;
+- no synthetic test gate may authorize production delivery.
+
+Phase 2 builds authorization required by later phases. It does not execute
+Phase 3 dispatch.
+
+### 3.2 PostgreSQL authority
+
+PostgreSQL remains authoritative for:
+
+- users;
+- roles;
+- invitations;
+- sessions;
+- credentials;
+- identity bindings;
+- delegations;
+- authentication evidence;
+- action-token state;
+- authoritative human decisions;
+- audit/domain events.
+
+LangGraph checkpoints remain workflow state, not identity or authorization
+state.
+
+Redis, WebSocket events, agents, LLMs, browser state, cookies without valid
+server-side session state, and Graph resume payloads are not authoritative
+human identity evidence.
+
+### 3.3 No agent-human impersonation
+
+No agent may authenticate or decide for a human.
+
+This includes:
+
+- player agents;
+- Coach agents;
+- Commissioner-facing agents;
+- model agents;
+- LangGraph;
+- MCP tools;
+- background workers;
+- BFF service;
+- WebSocket service;
+- Redis subscribers.
+
+Agents may assist humans. Agents cannot become the human actor.
+
+### 3.4 Identity is not display name
+
+Gamertags and display names are presentation data.
+
+Do not use a mutable display name as the internal authorization identity.
+
+Internally use immutable local user identifiers.
+
+Keep EA player identity evidence separate from local authentication identity.
+
+If stable EA numeric player identity is still unverified, preserve that state
+and do not invent, infer, or substitute a gamertag as the missing identifier.
+
+### 3.5 Inactivity never authorizes
+
+No timeout, absence, inactivity period, unread notification, offline status,
+failed delivery, session expiry, lack of response, or escalation event may
+automatically create:
+
+- approval;
+- delegation;
+- player acceptance;
+- player acknowledgment;
+- dispatch;
+- activation.
+
+Escalation changes which authenticated human MAY become eligible to act.
+
+It does not create the decision.
+
+## 4. Human authority model
+
+Phase 2 must implement identity and authorization compatible with four distinct
+authority bases:
+
+1. primary;
+2. explicit_delegate;
+3. affected_player_consent;
+4. affected_player_fallback.
+
+These must remain distinguishable in storage, authorization logic, API
+contracts, and audit evidence.
+
+### 4.1 Commissioner
+
+The Commissioner remains primary club-level authority.
+
+Applicable high-value Commissioner actions must require successful
+authentication and an appropriate step-up ceremony.
+
+### 4.2 Human delegate
+
+A human delegate may act only if an explicit delegation is:
+
+- active;
+- not expired;
+- not revoked;
+- associated with that authenticated user;
+- applicable to the current club;
+- applicable to the action type;
+- applicable to the decision scope;
+- compatible with the requested authority level.
+
+Role membership alone must not magically expand a delegation.
+
+### 4.3 Player consent
+
+An authenticated player may decide only player-specific objects that the
+authorization policy allows that player to access.
+
+Player decisions include:
+
+- accepted;
+- rejected;
+- changes_requested;
+- paused;
+- acknowledged, when acknowledgment rather than consent is applicable.
+
+accepted != acknowledged
+
+An agent must not transform acknowledgment into acceptance.
+
+### 4.4 Affected-player fallback
+
+Phase 2 must implement the IDENTITY AND AUTHORIZATION prerequisites for
+affected-player fallback.
+
+A future fallback decision is eligible only for the affected player's own
+eligible player-specific assignment.
+
+Player fallback may never authorize:
+
+- club-wide tactics;
+- formations;
+- transfers;
+- recruitment;
+- roster changes;
+- fair-play determinations;
+- disciplinary decisions;
+- policy exceptions;
+- another player's assignment;
+- multi-player packages;
+- mixed-scope packages;
+- global dispatch;
+- access-control changes;
+- identity administration.
+
+Phase 2 may implement the authenticated decision mechanism necessary for this
+policy.
+
+Phase 2 must NOT turn such a decision into player delivery.
+
+## 5. Agent A: Identity database and migrations
+
+Implement a new versioned Phase 2 identity migration or migrations following
+the repository's established migration policy.
+
+Inspect existing Phase 1 structures first and extend rather than duplicate them.
+
+### 5.1 Users
+
+Implement an authoritative users model supporting:
+
+- immutable user ID;
+- club scope;
+- normalized login identifier;
+- display name;
+- account status;
+- account creation timestamp;
+- activation timestamp;
+- suspension state;
+- recovery state;
+- audit linkage.
+
+Recommended statuses:
+
+invited
+active
+suspended
+recovery_required
+disabled
+
+Do not use gamertag as the primary key.
+
+### 5.2 Roles and grants
+
+Implement role assignment separately from user identity.
+
+Minimum conceptual application roles:
+
+- commissioner;
+- commissioner_delegate;
+- coach;
+- analyst;
+- staff;
+- player;
+- bff_service;
+- graph_service.
+
+Do not confuse application roles with PostgreSQL roles.
+
+A user's application role must not grant direct database-owner capability.
+
+### 5.3 Invitations
+
+Implement invitations with:
+
+- opaque random token;
+- token stored only in irreversible form;
+- invited user or destination binding;
+- intended role;
+- club scope;
+- creator identity;
+- issued timestamp;
+- expiry timestamp;
+- single use;
+- revocation;
+- consumed timestamp.
+
+Expired, revoked, or consumed invitations fail closed.
+
+### 5.4 Sessions
+
+Implement server-side sessions with:
+
+- opaque random session identifier;
+- session identifier stored safely;
+- user ID;
+- authentication level;
+- creation time;
+- last-used time;
+- idle expiry;
+- absolute expiry;
+- revocation;
+- credential/version binding where applicable;
+- correlation/audit linkage.
+
+Client state must not be sufficient to reconstruct or forge authorization.
+
+### 5.5 WebAuthn credentials
+
+Persist WebAuthn credential records with appropriate:
+
+- credential identifier;
+- user binding;
+- public-key material;
+- sign-counter or applicable authenticator state;
+- credential creation;
+- last use;
+- revocation;
+- credential label;
+- authentication evidence/audit information.
+
+Never store private authenticator key material supplied by the authenticator.
+
+### 5.6 Player identity binding
+
+Represent separately:
+
+local authenticated player account
+        |
+        v
+local player record
+        |
+        v
+EA player identity evidence
+
+Do not falsify this relationship if EA stable numeric identity remains
+unverified.
+
+No gamertag fallback.
+
+### 5.7 TOTP credential state
+
+For the staff roles where policy requires TOTP, support:
+
+- encrypted seed;
+- enrollment state;
+- verification state;
+- revocation;
+- recovery/re-enrollment metadata;
+- audit evidence.
+
+Do not log raw seeds.
+
+### 5.8 Recovery material
+
+Recovery codes, if used, must be:
+
+- high entropy;
+- stored irreversibly;
+- one-time use;
+- individually revocable/consumable;
+- auditable without logging the secret.
+
+### 5.9 Identity audit
+
+Authentication and identity administration must generate authoritative,
+append-only audit/domain events.
+
+At minimum cover:
+
+- invitation issued;
+- invitation revoked;
+- invitation consumed;
+- account activated;
+- role granted;
+- role revoked;
+- session created;
+- session rotated;
+- session revoked;
+- session expired;
+- passkey registered;
+- passkey revoked;
+- sign-in success;
+- sign-in failure;
+- step-up success;
+- step-up failure;
+- delegation granted;
+- delegation revoked;
+- recovery initiated;
+- recovery completed.
+
+Never store credentials or recoverable authentication secrets in audit payloads.
+
+## 6. Agent B: Authentication service
+
+Create a reusable authentication module independent of the Phase 4 dashboard.
+
+### 6.1 Sign-in abstraction
+
+Implement server-side authentication primitives that produce an authenticated
+principal containing only authoritative identity data.
+
+At minimum:
+
+user_id
+club_id
+role/scopes
+authentication_method
+authentication_level
+session_id
+authentication_time
+
+Do not trust caller-supplied roles or user IDs.
+
+### 6.2 WebAuthn registration
+
+Implement Commissioner and player passkey registration using server-generated
+challenges.
+
+Registration challenges must be:
+
+- high entropy;
+- time limited;
+- single use;
+- bound to the intended user;
+- bound to the ceremony type;
+- invalid after consumption.
+
+### 6.3 WebAuthn authentication
+
+Implement sign-in verification and server-side session creation.
+
+Authentication failure must not expose sensitive credential internals.
+
+### 6.4 Step-up authentication
+
+High-value human decisions must support decision-specific step-up.
+
+The step-up must bind to the authoritative operation being approved.
+
+For a Commissioner decision, include authoritative identifiers such as:
+
+approval_request_id
+package_id
+package_version
+package_hash
+decision
+actor_id
+authority_basis
+
+For a player decision, include:
+
+player_id
+assignment_id
+assignment_version
+assignment_hash
+package_id
+package_version
+package_hash
+decision
+actor_id
+authority_basis
+
+A successful sign-in alone is not equivalent to decision approval.
+
+### 6.5 Replay prevention
+
+A successful decision challenge cannot be reused for another:
+
+- decision;
+- package version;
+- assignment;
+- actor;
+- authority basis;
+- action scope.
+
+## 7. Agent C: Authorization service
+
+Implement centralized authorization rather than duplicating role checks in
+individual routes.
+
+Conceptual API:
+
+authorize(
+    principal,
+    action,
+    resource,
+    authority_basis=None
+)
+
+Authorization must evaluate both subject and object.
+
+### 7.1 Required checks
+
+Evaluate as applicable:
+
+- authenticated user ID;
+- application role;
+- club scope;
+- action;
+- resource type;
+- resource owner;
+- subject player;
+- authority policy;
+- delegation;
+- authentication level;
+- step-up freshness/evidence;
+- assignment ownership;
+- package scope;
+- package/version validity;
+- conflict state.
+
+### 7.2 Player isolation
+
+A player must not:
+
+- read another player's private assignment;
+- submit another player's decision;
+- obtain another player's decision challenge;
+- revoke another player's credential;
+- access staff-only authorization data.
+
+Test this as object-level authorization, not merely route-role authorization.
+
+### 7.3 Delegation
+
+Activate the explicit human delegation foundation created in Phase 1.
+
+Delegation validation must check:
+
+principal
+→ delegation holder
+→ active
+→ not expired
+→ not revoked
+→ club scope
+→ action scope
+→ resource scope
+→ required authentication strength
+
+A delegation cannot be broadened through interpretation.
+
+No matching authorization means deny.
+
+## 8. Agent D: Player consent authentication
+
+Implement player-authenticated decision capability without activating delivery.
+
+### 8.1 Player decision challenge
+
+The server must issue a single-use decision challenge bound to the exact
+player-specific assignment.
+
+The player must be authenticated and authorized for that assignment first.
+
+### 8.2 Player decisions
+
+Implement:
+
+accepted
+rejected
+changes_requested
+paused
+acknowledged
+
+No default choice.
+
+No preselection.
+
+No automatic conversion of:
+
+acknowledged -> accepted
+
+or:
+
+timeout -> accepted
+
+### 8.3 Player agent boundary
+
+Do not give logical player agents credentials that allow them to impersonate
+the player.
+
+Player-agent code may eventually call safe read interfaces, but the player
+must personally satisfy the authentication ceremony required to commit a human
+decision.
+
+## 9. Agent E: Commissioner bootstrap and recovery
+
+### 9.1 Bootstrap
+
+Implement a one-time bootstrap mechanism for establishing the first
+Commissioner identity.
+
+Requirements:
+
+- inaccessible once bootstrap completes;
+- cannot silently replace an existing Commissioner;
+- audited;
+- must establish a strong authentication credential;
+- bootstrap secrets must not remain reusable.
+
+### 9.2 Recovery
+
+Build Commissioner recovery so it restores account access without allowing an
+attacker, agent, service, coach, or administrator to forge an existing
+Commissioner decision.
+
+Recovery must not rewrite prior approval audit records.
+
+Recovery must not recover old WebAuthn private keys.
+
+Recovery should result in issuance/registration of new credential material and
+an auditable identity transition.
+
+High-risk decisions after recovery may require renewed step-up according to the
+policy implemented by the team.
+
+## 10. Agent F: Staff TOTP
+
+Implement TOTP only for applicable approved staff roles.
+
+TOTP is not a universal substitute for WebAuthn.
+
+Commissioner high-value decision authorization should use the required
+Commissioner step-up mechanism.
+
+Tests must cover:
+
+- valid TOTP;
+- invalid TOTP;
+- expired/out-of-window value;
+- replay where applicable;
+- revoked enrollment;
+- recovery/re-enrollment;
+- rate limiting;
+- no logging of seeds or current codes.
+
+## 11. Agent G: BFF and internal service identity
+
+Create the authentication/authorization foundation required by the future
+Phase 4 BFF.
+
+Do not build the Phase 4 dashboard now.
+
+The BFF service identity must have:
+
+- unique service identity;
+- narrow API scope;
+- separate credential;
+- credential rotation path;
+- audit identity;
+- no authority to impersonate users;
+- no authority to submit human decisions without authoritative human
+  authentication evidence.
+
+The BFF must have no direct PostgreSQL access in the final architecture.
+
+Where Phase 2 introduces the identity now, maintain that trust boundary.
+
+Similarly maintain separate identities for:
+
+- Graph API/service;
+- BFF;
+- future dispatch worker;
+- operational tooling.
+
+Do not reuse one omnipotent shared service credential.
+
+## 12. Agent H: Secrets and cryptographic material
+
+Centralize identity-secret handling.
+
+Requirements:
+
+- no secrets committed to Git;
+- no secrets emitted through logs;
+- no secrets returned by APIs;
+- no secrets included in exception text;
+- encrypted-at-rest storage for recoverable sensitive values;
+- irreversible hashing for tokens/code values that do not need recovery;
+- explicit key/secret versioning;
+- rotation support;
+- fail-closed startup when required key material is unavailable.
+
+Do not print `.env` contents as a test.
+
+## 13. API surface
+
+Implement a versioned authentication API.
+
+Exact route organization may be adapted to the existing repository style, but
+the following conceptual capabilities are required:
+
+### Invitations
+
+POST   /v1/auth/invitations
+DELETE /v1/auth/invitations/{id}
+POST   /v1/auth/invitations/{token}/accept
+
+### Sessions
+
+GET    /v1/auth/session
+POST   /v1/auth/logout
+DELETE /v1/auth/sessions/{id}
+
+### WebAuthn
+
+POST /v1/auth/passkeys/register/options
+POST /v1/auth/passkeys/register/verify
+POST /v1/auth/passkeys/login/options
+POST /v1/auth/passkeys/login/verify
+GET  /v1/auth/passkeys
+DELETE /v1/auth/passkeys/{credential_id}
+
+### Decision step-up
+
+POST /v1/auth/step-up/options
+POST /v1/auth/step-up/verify
+
+### Player decisions
+
+POST /v1/player-assignments/{assignment_id}/decision-challenge
+POST /v1/player-assignments/{assignment_id}/decision
+
+### Delegations
+
+Create/read/revoke only through authorized human administrative paths.
+
+### Recovery
+
+Expose only the minimal endpoints needed by the approved recovery design.
+
+All mutations require server-side authorization.
+
+Do not expose database-driven administration directly to browser clients.
+
+## 14. Existing Graph API integration
+
+Migrate the Phase 1 decision boundary from bootstrap Commissioner proof toward
+Phase 2 authenticated-human evidence.
+
+Preserve this invariant:
+
+decision authentication succeeds
+→ authorization succeeds
+→ authoritative decision commits
+→ audit event commits
+→ transaction commits
+→ Graph resumes
+→ Graph rereads PostgreSQL decision
+
+Never:
+
+WebAuthn response
+→ resume Graph with "approved=true"
+
+Graph resume remains workflow control only.
+
+It never becomes authorization.
+
+The Phase 1 CLI/HMAC mechanism may be retained temporarily only if the reviewed
+migration design explicitly requires it.
+
+If retained:
+
+- isolate it;
+- keep its kill switch;
+- document its status;
+- do not silently treat it as equivalent to the final browser authentication
+  path.
+
+## 15. Phase 2 security tests
+
+Build a dedicated adversarial test suite.
+
+### 15.1 User isolation
+
+- [ ] Player A cannot read Player B's assignments.
+- [ ] Player A cannot request a challenge for Player B.
+- [ ] Player A cannot submit a decision for Player B.
+- [ ] Player role cannot access Commissioner endpoints.
+- [ ] Staff role cannot impersonate a player.
+
+### 15.2 WebAuthn
+
+- [ ] Registration challenge is single use.
+- [ ] Authentication challenge is single use.
+- [ ] Expired challenge fails.
+- [ ] Foreign-user challenge fails.
+- [ ] Wrong origin/RP validation fails according to implementation policy.
+- [ ] Credential for another user cannot authenticate current user.
+- [ ] Revoked credential fails.
+- [ ] Replayed authentication evidence fails where replay protection applies.
+- [ ] Decision step-up is bound to the exact target decision.
+
+### 15.3 Invitations
+
+- [ ] Invitation replay fails.
+- [ ] Expired invitation fails.
+- [ ] Revoked invitation fails.
+- [ ] Invitation cannot escalate its intended role.
+- [ ] Invitation cannot switch clubs.
+- [ ] User input cannot select a stronger role than the invitation grants.
+
+### 15.4 Sessions
+
+- [ ] Unknown session fails.
+- [ ] Revoked session fails.
+- [ ] Expired session fails.
+- [ ] Session rotation invalidates the appropriate prior state.
+- [ ] Suspended user session fails authorization.
+- [ ] Logout invalidates server-side session.
+- [ ] Browser mutation protection is tested.
+
+### 15.5 Delegation
+
+- [ ] Expired delegation fails.
+- [ ] Revoked delegation fails.
+- [ ] Delegate cannot exceed action scope.
+- [ ] Delegate cannot exceed club scope.
+- [ ] Delegate cannot expand their own authority.
+- [ ] Delegate cannot create unauthorized recursive delegation.
+- [ ] Absence of delegation fails closed.
+
+### 15.6 Player decisions
+
+- [ ] Player may decide only own assignment.
+- [ ] Player acceptance binds exact assignment/version/hash.
+- [ ] Player rejection binds exact assignment/version/hash.
+- [ ] Changes requested do not activate assignment.
+- [ ] Pause does not activate assignment.
+- [ ] Acknowledgment is not acceptance.
+- [ ] Superseded version cannot be accepted.
+- [ ] Materially changed package requires new future consent.
+- [ ] Player agent cannot submit the decision for the player.
+- [ ] BFF cannot manufacture player acceptance.
+- [ ] Commissioner cannot be recorded as player acceptance.
+- [ ] Player cannot be recorded as Commissioner authorization.
+
+### 15.7 Affected-player fallback foundation
+
+- [ ] No timeout creates fallback acceptance.
+- [ ] No inactivity creates fallback acceptance.
+- [ ] Multi-player package cannot use affected-player fallback.
+- [ ] Mixed-scope package cannot use affected-player fallback.
+- [ ] Player cannot fallback-authorize club-wide action.
+- [ ] Player cannot fallback-authorize another player's assignment.
+- [ ] Unsupported fallback policy fails closed.
+
+### 15.8 TOTP
+
+- [ ] Invalid TOTP fails.
+- [ ] Revoked TOTP enrollment fails.
+- [ ] Rate limiting works.
+- [ ] Secret is never returned after enrollment.
+- [ ] Logs contain no usable TOTP secret.
+
+### 15.9 Recovery
+
+- [ ] Recovery cannot rewrite old decisions.
+- [ ] Recovery cannot reactivate revoked credentials.
+- [ ] Used recovery code fails.
+- [ ] Invalid recovery attempt fails.
+- [ ] Recovery event is audited.
+- [ ] Recovery cannot activate dispatch.
+
+### 15.10 Service boundaries
+
+- [ ] BFF service cannot impersonate Commissioner.
+- [ ] Graph service cannot impersonate human.
+- [ ] Player agent cannot impersonate player.
+- [ ] Internal service credentials are scope-limited.
+- [ ] No Phase 2 service can enable production dispatch.
+
+## 16. Phase 1 regression gate
+
+The complete accepted Phase 1 regression suite must remain passing.
+
+Specifically prove that Phase 2 does not break:
+
+- PostgreSQL-authoritative approval;
+- immutable packages;
+- approval request/package version/hash binding;
+- single Graph interrupt;
+- forged-resume rejection;
+- append-only domain/audit history;
+- least-privilege database roles;
+- activation gates;
+- player identity fail-closed behavior;
+- no-dispatch terminal states;
+- transactional outbox foundation;
+- Section 1A timeout-not-approval invariant.
+
+Security failures must be fixed.
+
+Do not delete or weaken Phase 1 tests to make Phase 2 pass.
+
+## 17. Migration and rollback verification
+
+Test:
+
+- fresh Phase 1 -> Phase 2 migration;
+- fully fresh database through all migrations;
+- migration idempotency as designed;
+- migration tamper detection;
+- grant policy version update;
+- runtime identity cannot perform migration DDL;
+- identity tables are owned by the intended database owner;
+- runtime APIs retain least privilege;
+- failed Phase 2 migration leaves the system recoverable.
+
+## 18. Documentation updates
+
+Update the authoritative programme documentation.
+
+Remove stale Commissioner-only statements that conflict with the accepted
+authority model.
+
+Use:
+
+"Club-level actions require authorization from the Commissioner or an
+explicitly authorized human delegate under the applicable authority policy.
+Player-specific assignments require the affected player's authenticated
+decision when the consent policy requires it. After policy-defined escalation,
+affected-player fallback may apply only to that player's eligible assignment.
+No agent may decide for a human, and inactivity never constitutes approval."
+
+Document clearly that:
+
+Commissioner authorization != player consent
+delegated authorization != player fallback
+acceptance != acknowledgment
+sign-in != decision authorization
+step-up != automatic approval
+escalation != authorization
+timeout != approval
+agent assistance != human decision
+Phase 2 authentication != dispatch activation
+
+## 19. Programme roadmap
+
+Preserve:
+
+- [x] Phase 1: Secure data foundation
+- [ ] Phase 2: Identity and authorization
+- [ ] Phase 3: Dispatch worker and player-agent pipeline
+- [ ] Phase 4: Dashboard UI and real-time delivery
+- [ ] Phase 5: Tracking and analytics
+- [ ] Phase 6: Operations, audit, and rollout
+
+Do not collapse later phases into Phase 2.
+
+## 20. Phase 3 preservation requirements
+
+Ensure the Phase 2 handoff preserves Phase 3 requirements for:
+
+- transactional outbox relay;
+- dispatch worker;
+- worker heartbeat and reconciliation;
+- logical per-player agents;
+- authenticated player-agent projections;
+- typed personalized plans;
+- deterministic policy validation;
+- schema-invalid outcome;
+- policy-invalid outcome;
+- unavailable outcome;
+- valid outcome;
+- material-change outcome;
+- reapproval/reconsent on material change;
+- dashboard-storage delivery adapter;
+- authenticated WebSocket notification adapter;
+- stable EA player-ID evidence;
+- dispatch activation gates;
+- affected-player fallback evaluation;
+- no activation until every required authorization and consent gate passes.
+
+Do not implement the production Phase 3 relay or worker in Phase 2.
+
+## 21. Independent review
+
+After implementation, deploy independent reviewers/challengers for:
+
+1. identity schema and cryptographic storage;
+2. WebAuthn challenge lifecycle;
+3. object-level authorization;
+4. player isolation;
+5. delegation escalation;
+6. session security;
+7. decision step-up;
+8. account recovery;
+9. service impersonation;
+10. Phase 1 regression and no-dispatch invariants.
+
+At least one adversarial track must explicitly attempt:
+
+- cross-player access;
+- Commissioner impersonation;
+- delegate privilege escalation;
+- replay;
+- session fixation;
+- stale challenge reuse;
+- BFF-to-human impersonation;
+- player-agent-to-player impersonation;
+- timeout-to-approval;
+- fallback-scope escalation.
+
+Do not accept self-certification by the implementing agent as sufficient.
+
+## 22. Acceptance trace
+
+Produce a Phase 2 acceptance report containing:
+
+1. baseline Phase 1 commit;
+2. final Phase 2 commit;
+3. file inventory;
+4. migration inventory;
+5. identity-schema inventory;
+6. role/authorization matrix;
+7. encrypted/hashed secret inventory by category, with values redacted;
+8. Commissioner bootstrap trace;
+9. Commissioner WebAuthn registration trace;
+10. Commissioner sign-in trace;
+11. Commissioner decision-step-up trace;
+12. player passkey registration trace;
+13. player sign-in trace;
+14. own-assignment authorization trace;
+15. cross-player denial trace;
+16. player-decision trace;
+17. delegation success trace;
+18. delegation scope denial trace;
+19. delegation expiry/revocation evidence;
+20. invitation lifecycle evidence;
+21. session lifecycle evidence;
+22. TOTP evidence;
+23. recovery evidence;
+24. service-identity boundary evidence;
+25. replay-attack evidence;
+26. stale challenge evidence;
+27. timeout-does-not-approve evidence;
+28. Graph-resume-still-cannot-authorize evidence;
+29. Phase 1 regression result;
+30. focused Phase 2 test results;
+31. full repository test result;
+32. Compose/configuration validation;
+33. no-secret-leak evidence;
+34. DISPATCH_ENABLED=false evidence;
+35. DISPATCH_WORKER_ENABLED=false evidence;
+36. explicit zero-player-delivery evidence;
+37. remaining known limitations;
+38. Phase 3 handoff;
+39. preserved Phases 4-6 roadmap.
+
+Never report a criterion as passing without evidence.
+
+## 23. Phase boundary
+
+When all applicable Phase 2 criteria legitimately pass:
+
+STOP IMPLEMENTATION.
+
+Do not automatically begin Phase 3.
+
+Produce the detailed Phase 3 implementation plan for review.
+
+The Phase 3 plan must cover the dispatch worker, transactional outbox relay,
+logical per-player agents, typed personalized plans, deterministic policy
+validation, player assignments, material-change reapproval/reconsent,
+authenticated delivery adapters, activation gates, reconciliation,
+and stable EA player identity evidence.
+
+## 24. Final output required from the team
+
+Report:
+
+### Implemented
+Only functionality actually present in the integrated branch.
+
+### Tests executed
+Actual commands and actual results.
+
+### Security review
+Independent reviewer/challenger findings.
+
+### Identity invariants
+Explicit PASS/FAIL for:
+
+- Commissioner WebAuthn;
+- decision step-up;
+- player passkeys;
+- object-level player isolation;
+- delegate scoping;
+- invitation safety;
+- session safety;
+- recovery safety;
+- player-agent non-impersonation;
+- BFF non-impersonation;
+- inactivity never approves.
+
+### Phase 1 regression
+PASS or FAIL.
+
+### Dispatch safety
+Explicitly report:
+
+DISPATCH_ENABLED
+DISPATCH_WORKER_ENABLED
+production outbox relay active/inactive
+player delivery count/evidence
+
+### Phase 2 status
+
+Use only one:
+
+"Phase 2 accepted. Identity and authorization foundation complete.
+Human and service identities are authenticated and scope-authorized.
+Dispatch remains disabled. No player delivery has occurred."
+
+or:
+
+"Phase 2 not yet accepted."
+
+### Next deliverable
+
+If Phase 2 is accepted:
+
+"Detailed Phase 3 Dispatch Worker and Player-Agent Pipeline plan for review."
+
+Do not begin Phase 3 implementation automatically.

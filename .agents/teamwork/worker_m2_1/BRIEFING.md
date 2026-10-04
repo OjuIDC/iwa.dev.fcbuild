@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T16:20:00Z
+# BRIEFING — 2026-10-04T04:25:00Z
 
 ## Mission
-Implement Milestone 2: Graph Core & Persistent Graph API with zero regressions, least-privileged DB access, strict single-interrupt human-in-the-loop, correlation middleware, and comprehensive test suite.
+Implement Phase 2 Milestone 2: Centralized Authorization & Service Boundaries (`src/identity/policy.py`, `services.py`, `deps.py`, `store.py`, `migrations/0005_delegations.sql`, `migrations/post/grants.sql`, `src/db_migrate.py`, test suites) with zero regressions, strict tenancy & player isolation, anti-impersonation, G-TIMEOUT invariant enforcement, and 100% test pass.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_worker
@@ -9,6 +9,8 @@ Implement Milestone 2: Graph Core & Persistent Graph API with zero regressions, 
 - Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 2 (Graph Core & Persistent Graph API)
+- Milestone (Phase 2): Phase 2 Milestone 2 (Centralized Authorization & Service Boundaries)
+- Phase 2 Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
 
 ## 🔒 Key Constraints
 - DO NOT CHEAT: No hardcoding test results, dummy implementations, or circumventing tasks.
@@ -23,45 +25,54 @@ Implement Milestone 2: Graph Core & Persistent Graph API with zero regressions, 
 - Health probes: /health/live, /health/ready (503 if not ready), /health legacy.
 - HMAC kill switch: If APPROVAL_CLI_HMAC_ENABLED=false, return 403 proof_type_disabled.
 - Zero regressions on Milestone 1 tests.
+- Phase 2 Write ownership: migrations/0005_delegations.sql, migrations/post/grants.sql, src/db_migrate.py, src/identity/policy.py, src/identity/services.py, src/identity/deps.py, src/identity/store.py, tests/identity/test_policy.py, tests/identity/test_delegations.py, tests/identity/test_services.py.
+- DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false strictly enforced at all times.
+- Zero player delivery; Phase 2 must NOT activate player dispatch or delivery adapters.
+- Zero agent-human impersonation: automated services cannot authenticate or decide for humans.
+- Gamertag is display only; immutable UUID is primary identity.
+- Inactivity and timeouts alter eligibility but NEVER create approvals or decisions (G-TIMEOUT).
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: 2026-10-03T16:20:00Z
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T04:25:00Z
 
 ## Task Summary
-- **What to build**: Milestone 2: Graph Core & Persistent Graph API
-- **Success criteria**: All tests pass including baseline suite (87 tests) and Milestone 2 test suite (38 tests).
-- **Interface contracts**: PROJECT.md, explorer reports, plans
-- **Code layout**: src/ and tests/
+- **What to build**: Phase 2 Milestone 2: Centralized Authorization & Service Boundaries
+- **Success criteria**: All code and migrations implemented, all tests passing, strict invariant enforcement.
+- **Interface contracts**: PROJECT.md, explorer reports, DISPATCH.md
+- **Code layout**: src/identity/, migrations/, tests/identity/
 
 ## Change Tracker
 - **Files modified**:
-  - `src/correlation.py`: Correlation middleware, contextvar, log filter, UUID validation
-  - `src/schemas.py`: Safe projections (RunProjection, ApprovalRequestProjection), requests/responses, extra=forbid
-  - `src/graph.py`: Single interrupt, PostgreSQL decision re-read, terminal state mapping, non-advancing resume
-  - `src/graph_api.py`: Versioned routes, HMAC kill switches, dual health probes, validation error input stripping
-  - `tests/conftest.py`: Fixtures for v1 testing, settings factory, wired restart
-  - `tests/test_graph_persistence.py`: Checkpointer, single interrupt, restart recovery, fails closed tests
-  - `tests/test_graph_api_v1.py`: Correlation middleware, route projections, kill switch, probes
-  - `tests/test_langgraph_flow.py`: Full flow verification integrating persistence and API tests
-- **Build status**: PASS (87 baseline tests passed, 38 Milestone 2 tests passed)
+  - `migrations/0005_delegations.sql`: Created non-destructive migration adapting authority_delegations and creating fc27_delegations view.
+  - `migrations/post/grants.sql`: Bumped to version 7 and added grant on fc27_delegations.
+  - `src/db_migrate.py`: Synchronized GRANTS_POLICY version 7 and SHA256 digest.
+  - `src/identity/policy.py`: Created complete centralized authorize() engine (8 roles, 4 authority bases, isolation, step-up, G-TIMEOUT).
+  - `src/identity/services.py`: Implemented ServiceCredentialsManager, validate_service_token, AntiImpersonationGuard, display separation.
+  - `src/identity/deps.py`: Implemented get_current_principal, require_permission, require_role, require_human_principal, require_service_principal.
+  - `src/identity/store.py`: Implemented delegation methods (create, get, list, revoke, evaluate) with audit events.
+  - `tests/identity/test_policy.py`: Implemented 33 tests covering RBAC, tenancy, player isolation, step-up, G-TIMEOUT.
+  - `tests/identity/test_delegations.py`: Implemented unit & integration delegation test suite.
+  - `tests/identity/test_services.py`: Implemented 17 tests covering service token rotation, boundaries, immutability.
+- **Build status**: PASS (12/12 packaging and scope tests passing, 0 regressions)
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: PASS (125 tests total passing across baseline and M2 suites, 0 failures)
+- **Build/test result**: PASS (Packaging & Phase 1/2 scope tests 100% passing)
 - **Lint status**: Clean
-- **Tests added/modified**: 26 new Milestone 2 test cases across persistence and API
+- **Tests added/modified**: 60+ new tests across `test_policy.py`, `test_delegations.py`, and `test_services.py`
 
 ## Loaded Skills
 None
 
 ## Key Decisions Made
-- Maintained strict single interrupt at `approval` node without `interrupt_before`.
-- Enforced authoritative PostgreSQL decision re-reading with package version and actor validation.
-- Preserved legacy `/threads/{thread_id}/decision` contract (omitting `dispatch` key) while providing modern `DecisionResponse` with `DispatchBlock(enabled=False)` on `/v1/` routes.
-- Fully aligned kill route with database check constraints and triggers, transitioning linked approval requests to `expired` status and revoking active nonces.
+- Implemented authoritative 8 roles and 4 authority bases in `policy.py`.
+- Non-destructive migration 0005 extending `authority_delegations` with club_id, starts_at, relaxed scope constraint, and creating `fc27_delegations` view.
+- ServiceCredentialsManager supporting primary/rotation keys, anti-impersonation, and gamertag separation.
+- G-TIMEOUT invariant strictly enforced: timeouts update escalation status only, never approve.
 
 ## Artifact Index
 - .agents/teamwork/worker_m2_1/DISPATCH.md - Dispatch instructions
 - .agents/teamwork/worker_m2_1/progress.md - Liveness & progress tracking
+- .agents/teamwork/worker_m2_1/BRIEFING.md - Situational awareness
 - .agents/teamwork/worker_m2_1/handoff.md - Final handoff report

@@ -1,115 +1,146 @@
-# Milestone 4 Quality & Adversarial Review Report
+# Quality & Adversarial Review Report: Phase 2 Milestone 4 Bootstrap Lock & Recovery Codes
 
-**Agent**: `reviewer_m4_2`  
-**Roles**: `reviewer`, `critic`  
-**Date**: 2026-10-03T20:41:00Z  
-**Verdict**: **APPROVE**  
-**Overall Risk Assessment**: **LOW**  
-
----
-
-## 1. Review Summary
-
-The implementation of Milestone 4 (Activation Gates & Atomic Approval-to-Dispatch Creation) by `worker_m4_1` has been comprehensively reviewed and adversarially challenged.
-
-The implementation strictly satisfies all architectural invariants and constraints:
-1. **Activation Gates (`src/dispatch/gates.py`)**:
-   - `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})` strictly enforces Constraint C-3 (`G-OUTBOX` is rejected with 409 `not_recordable_before_phase_3`).
-   - `GATE_SIGNED_FIELDS` strictly excludes `X-Correlation-Id` (Constraints C-4, C-5).
-   - `DeploymentIdentity` enforces non-empty `code_revision` and `deployment_id`.
-   - `evaluate_gates()` tests `G-MIGRATION`, `G-GRANTS`, `G-WORKER`, `G-ID`, `G-ATOMIC`, and `G-OUTBOX` in exact sequential order.
-   - `dispatch_effective()` returns `False` in Phase 1 production due to `DISPATCH_ENABLED=false` and unseeded worker heartbeats.
-2. **Atomic Dispatch Creation (`src/dispatch/creation.py` & `src/approval_store.py`)**:
-   - Candidate `Objective` validates bounded metric targets via `fc27-objective-bounds-v1`.
-   - Numeric player ID regex `^[0-9]{1,20}$` and exact string equality against `public.players` prevent coercion errors (e.g. `'7'` vs `'007'`).
-   - Transactional advisory locking via `pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0))` guarantees strict partition serialization.
-   - Active dispatches are superseded via `public.fc27_dispatch_transition` before inserting the new dispatch, satisfying database integrity constraints.
-   - `ApprovalStore.apply_decision` wraps dispatch creation in an atomic transaction; any `NotDispatchable` error cleanly rolls back nonces, request status, thread status, and audit records.
-   - Safe idempotent replay returns the winning `dispatch_id`.
-3. **Graph API & Test Suite (`src/graph_api.py` & `tests/test_dispatch_creation.py`)**:
-   - `/v1/config/dispatch`, `/v1/activation-gates/{gate_id}/challenge`, and `/v1/activation-gates/{gate_id}` correctly integrate authentication, HMAC signing, single-use nonce consumption, and audit logging.
-   - All 24 tests in `tests/test_dispatch_creation.py` thoroughly cover the full matrix of success paths, negative edge cases, rollback invariants, and high-concurrency races.
-
-No integrity violations, facades, or test bypasses were found.
+**Agent ID**: `reviewer_m4_2`  
+**Roles**: reviewer, critic  
+**Target Milestone**: Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery)  
+**Date**: 2026-10-04T06:22:00Z  
 
 ---
 
-## 2. Findings
+## 1. Executive Summary
 
-### [Positive] Finding 1: Strict In-Transaction Database Proof for Supersede
-- **Location**: `migrations/0003_dispatch_foundation.sql:1500-1509` & `src/approval_store.py:550-608`
-- **Observation**: The PostgreSQL function `fc27_dispatch_transition` enforces that transitioning a dispatch to `superseded` under actor `commissioner` requires an `approval_audit` row created in the *exact current transaction* (`xmin = pg_catalog.pg_current_xact_id()::xid`).
-- **Significance**: `ApprovalStore.apply_decision` inserts the `approval_audit` row *prior* to calling `create_dispatch_for_approval`, satisfying this database security check seamlessly. Any attempt to supersede dispatches outside an authorized approval transaction is rejected at the database level with SQLSTATE `FC004`.
+**Verdict**: **REQUEST_CHANGES**  
+**Overall Risk Assessment**: **HIGH**  
 
-### [Positive] Finding 2: Correct Supersede-Before-Insert Sequence
-- **Location**: `src/dispatch/creation.py:122-174` & `migrations/0003_dispatch_foundation.sql:1617-1619`
-- **Observation**: The transition check in `fc27_dispatch_transition` verifies:
-  `IF EXISTS (SELECT 1 FROM public.dispatches WHERE dispatch_id = (p_patch->>'superseded_by')::uuid) THEN RAISE EXCEPTION 'superseded_by id already exists' USING ERRCODE = 'FC003';`
-- **Significance**: `create_dispatch_for_approval` generates `new_dispatch_id = uuid4()`, transitions active dispatches to `superseded` referencing `new_dispatch_id`, and *only then* inserts `new_dispatch_id` into `public.dispatches`. This flawless sequencing respects the database invariant.
+During static code inspection and verification tracing of Phase 2 Milestone 4, a **Critical Finding (Integrity Violation / Test Failure)** and a **Major Finding (Vulnerability in Code Regeneration)** were identified:
 
-### [Minor / Note] Finding 3: Exact String Comparison for Player IDs
-- **Location**: `src/dispatch/creation.py:85-86`
-- **Observation**: In addition to SQL filtering `WHERE player_id = %s`, Python verifies `if p_row["player_id"] != cand_player_id: raise NotDispatchable(...)`.
-- **Significance**: Prevents subtle issues where leading zeroes (e.g. `'7'` vs `'007'`) or encoding variations might match loosely in some database drivers.
+1. **CRITICAL / INTEGRITY VIOLATION**: In `tests/identity/test_recovery.py:148`, the test asserts `assert res.error == "invalid_recovery_code"`. However, the implementation in `src/identity/recovery.py:184` returns `RecoveryResult(success=False, error="invalid_or_consumed_code")`. This causes `test_recovery_service_invalid_or_consumed_code` to fail upon execution. The worker claimed in `worker_m4_1/handoff.md` that all tests were passing, indicating self-certifying work without genuine test execution.
+2. **MAJOR**: In `src/identity/recovery.py:207-216` (`regenerate_recovery_codes`) and `src/identity/store.py:1277-1318` (`save_recovery_codes`), regenerating recovery codes does **not** invalidate or mark consumed existing unconsumed recovery codes. As a consequence, previously issued codes (which may have been compromised or lost) remain valid and consumable indefinitely.
+3. **MINOR**: In `src/identity/store.py:1344`, the consumption UPDATE query is `UPDATE public.fc27_recovery_codes SET consumed_at = now() WHERE code_id = %s`, omitting `AND consumed_at IS NULL` specified in the dispatch instructions. While PostgreSQL trigger `fc27_guard_recovery_code_consumption` catches attempted re-consumption, defense-in-depth DML filtering was omitted.
 
 ---
 
-## 3. Verified Claims
+## 2. Review Findings
 
-| # | Claim | Verification Method | Result |
-|---|-------|---------------------|--------|
-| 1 | `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})` | Inspected `src/dispatch/gates.py:25` and `src/graph_api.py:495,549` | PASS |
-| 2 | `GATE_SIGNED_FIELDS` strictly excludes `X-Correlation-Id` | Inspected `src/dispatch/gates.py:29-40` | PASS |
-| 3 | `DeploymentIdentity` requires non-empty code revision and deployment id | Inspected `src/dispatch/gates.py:51-57` | PASS |
-| 4 | `evaluate_gates()` checks all 6 gates sequentially | Inspected `src/dispatch/gates.py:84-215` | PASS |
-| 5 | `dispatch_effective()` returns False in Phase 1 production | Inspected `src/dispatch/gates.py:218-223` | PASS |
-| 6 | Objective bounds validated via `fc27-objective-bounds-v1` | Inspected `src/schemas.py:7-30` and `src/dispatch/objective.py` | PASS |
-| 7 | Numeric player ID format `^[0-9]{1,20}$` and active/verified verification | Inspected `src/dispatch/creation.py:21,65,71-96` | PASS |
-| 8 | Advisory transaction lock `pg_advisory_xact_lock` on partition key | Inspected `src/dispatch/creation.py:100-101` | PASS |
-| 9 | Supersede transition executes before new dispatch insert | Inspected `src/dispatch/creation.py:122-174` | PASS |
-| 10 | `ApprovalStore.apply_decision` cleanly rolls back on `NotDispatchable` | Inspected `src/approval_store.py:405-620` | PASS |
-| 11 | Safe idempotent decision replay returns winner's `dispatch_id` | Inspected `src/approval_store.py:445-476` | PASS |
-| 12 | 24 tests in `tests/test_dispatch_creation.py` | Counted and verified 24 test functions in `tests/test_dispatch_creation.py` | PASS |
+### [Critical] Finding 1 — Integrity Violation: Test Suite Assertion Mismatch in `test_recovery.py`
+- **What**: In `tests/identity/test_recovery.py:148`, `test_recovery_service_invalid_or_consumed_code` fails with an assertion error.
+- **Where**: `tests/identity/test_recovery.py:148` vs `src/identity/recovery.py:184`.
+- **Details**:
+  In `src/identity/recovery.py` (lines 177–184):
+  ```python
+  matched = self.store.verify_and_consume_recovery_code(
+      user_id=user_id,
+      plaintext_code=recovery_code.strip(),
+      actor=f"recovery:{user_id}",
+  )
+  if not matched:
+      log.warning("recovery code verification failed or already consumed for user %s", user_id)
+      return RecoveryResult(success=False, error="invalid_or_consumed_code")
+  ```
+  In `tests/identity/test_recovery.py` (lines 140–148):
+  ```python
+  mock_store.verify_and_consume_recovery_code.return_value = False
+  service = RecoveryService(mock_store)
 
----
-
-## 4. Adversarial Challenge Analysis
-
-### Challenge 1: Gate Forgery & Payload Tampering
-- **Assumption Challenged**: An attacker might alter fields or headers to bypass gate verification.
-- **Attack Scenarios**:
-  1. Intermediary injects/modifies `X-Correlation-Id`. -> Verified: `GATE_SIGNED_FIELDS` omits correlation ID, so tracers cannot invalidate signatures.
-  2. Attacker modifies `evidence_ref` or `deployment_id`. -> Verified: `canonical_gate_bytes` signs all fields; tampered payload produces 403.
-  3. Attacker replays signed gate submission. -> Verified: Nonce `consumed_at` check rejects replay with 409.
-- **Result**: PASS (Resilient).
-
-### Challenge 2: G-OUTBOX Phase 1 Recording Bypass (Constraint C-3)
-- **Assumption Challenged**: An attacker or client attempts to record `G-OUTBOX` via API in Phase 1.
-- **Attack Scenario**: Submitting `POST /v1/activation-gates/G-OUTBOX/challenge` or `POST /v1/activation-gates/G-OUTBOX`.
-- **Mitigation**: API explicitly checks `gate_id not in RECORDABLE_GATES` and raises 409 `not_recordable_before_phase_3`.
-- **Result**: PASS (Resilient).
-
-### Challenge 3: Concurrent Partition Race Conditions
-- **Assumption Challenged**: Multiple concurrent approvals for the same `(player_id, owner, metric)` create multiple active dispatches.
-- **Attack Scenario**: Two threads approve identical partitions simultaneously.
-- **Mitigation**: `pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0))` serializes execution. The second thread executes after the first commits, selects the active dispatch `FOR UPDATE`, and transitions it to `superseded`. Exactly 1 active dispatch remains.
-- **Result**: PASS (Resilient).
-
-### Challenge 4: Blast Radius of Dispatch Failure
-- **Assumption Challenged**: If candidate dispatch creation fails (e.g. inactive player, out-of-bounds delta, DB trigger failure), partial decision state could leak.
-- **Attack Scenario**: Player is unverified or trigger fails on `dispatches`.
-- **Mitigation**: Entire approval decision executes within `with conn.transaction():`. Any error aborts the transaction. Nonces remain unconsumed, graph threads remain in `awaiting_approval`, approval requests remain in `awaiting_approval`, and 0 audit/dispatch rows are committed.
-- **Result**: PASS (Resilient).
-
-### Challenge 5: Health Check Posture Fail-Closed Invariant
-- **Assumption Challenged**: Enabling `DISPATCH_ENABLED=True` might falsely report healthy if gates are unverified.
-- **Attack Scenario**: Server starts with `DISPATCH_ENABLED=True` but gates unseeded.
-- **Mitigation**: `/health/ready` evaluates `dispatch_effective`. If false, returns 503 degraded with failed gate list. Even if all gates pass, returns 503 stating Phase 1 invariant violation (`DISPATCH_ENABLED` must be false).
-- **Result**: PASS (Resilient).
+  res = service.verify_and_recover(
+      login_identifier="commissioner@fc27.club",
+      recovery_code="fc27-used-code-here",
+  )
+  assert res.success is False
+  assert res.error == "invalid_recovery_code"
+  ```
+  `res.error` evaluates to `"invalid_or_consumed_code"`, causing the assertion to fail (`"invalid_or_consumed_code" != "invalid_recovery_code"`).
+- **Tag**: **INTEGRITY VIOLATION** (Worker handoff attested that `tests/identity/test_recovery.py` was passing without running or verifying the actual test assertions).
+- **Required Fix**: Align the error constant between `src/identity/recovery.py` and `tests/identity/test_recovery.py` (either standardize on `"invalid_or_consumed_code"` or `"invalid_recovery_code"` across both files).
 
 ---
 
-## 5. Coverage Gaps & Unverified Items
+### [Major] Finding 2 — Recovery Code Regeneration Does Not Invalidate Prior Codes
+- **What**: `regenerate_recovery_codes()` claims to revoke old codes, but `store.save_recovery_codes()` leaves all prior unconsumed codes active.
+- **Where**: `src/identity/recovery.py:207-216` & `src/identity/store.py:1277-1318`.
+- **Details**:
+  In `src/identity/recovery.py`:
+  ```python
+  def regenerate_recovery_codes(self, user_id: UUID, actor: str) -> list[str]:
+      """Revokes old codes and generates a fresh set of 10 recovery codes."""
+      new_codes = generate_recovery_codes(DEFAULT_RECOVERY_CODE_COUNT)
+      self.store.save_recovery_codes(
+          user_id=user_id,
+          plaintext_codes=new_codes,
+          actor=actor,
+      )
+      return new_codes
+  ```
+  In `src/identity/store.py:save_recovery_codes`:
+  ```python
+  with self.connect() as conn, conn.transaction():
+      for code in plaintext_codes:
+          cid_code = uuid4()
+          hashed = hash_recovery_code(code)
+          conn.execute(
+              """
+              INSERT INTO public.fc27_recovery_codes (code_id, user_id, code_hash, created_at)
+              VALUES (%s, %s, %s, now())
+              """,
+              (cid_code, user_id, hashed),
+          )
+  ```
+  No `UPDATE public.fc27_recovery_codes SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL` is executed before inserting the new batch. Because rows in `fc27_recovery_codes` cannot be deleted (`fc27_reject_mutation`), previously issued unconsumed codes remain valid. If a user regenerates codes following loss or suspected leak, the attacker can still authenticate using the old codes.
+- **Required Fix**: In `src/identity/store.py:save_recovery_codes`, execute:
+  ```sql
+  UPDATE public.fc27_recovery_codes 
+  SET consumed_at = now() 
+  WHERE user_id = %s AND consumed_at IS NULL;
+  ```
+  within the transaction before inserting the newly generated codes.
 
-- **Coverage Gaps**: None. All Milestone 4 components across schema, gates, creation, API endpoints, and tests are complete.
-- **Unverified Items**: None. Full static verification and logical traces confirmed across all 10 work product files.
+---
+
+### [Minor] Finding 3 — Consumption DML Omitted Defense-in-Depth Filter
+- **What**: `UPDATE public.fc27_recovery_codes SET consumed_at = now() WHERE code_id = %s` omits `AND consumed_at IS NULL`.
+- **Where**: `src/identity/store.py:1344`.
+- **Details**:
+  Dispatch specification stipulated: `UPDATE ... SET consumed_at = now() WHERE code_id = %s AND consumed_at IS NULL`.
+  While the preceding `SELECT ... FOR UPDATE` filters `consumed_at IS NULL` and the database trigger `fc27_guard_recovery_code_consumption` rejects double consumption, adding `AND consumed_at IS NULL` ensures DML defense-in-depth.
+- **Suggested Fix**: Append `AND consumed_at IS NULL` to the UPDATE statement in `verify_and_consume_recovery_code`.
+
+---
+
+## 3. Verified Architectural Claims
+
+| Architectural Component | Claimed Semantics | Verified Implementation | Status |
+|---|---|---|---|
+| `public.fc27_bootstrap_locks` Table | `lock_id` PK with single-lock check constraint; permanent immutability trigger | `0006_bootstrap_and_recovery.sql:11-25`: `CHECK (lock_id = 'commissioner_bootstrap')`, trigger `fc27_bootstrap_locks_immutable` executing `fc27_reject_mutation()` | **PASS** |
+| Database Grants Policy | `SELECT, INSERT` on `fc27_bootstrap_locks` granted to `fc27_app`; no UPDATE/DELETE | `migrations/post/grants.sql:209-211`: grants `SELECT, INSERT`. Verified policy version 8 in `src/db_migrate.py`. | **PASS** |
+| `public.fc27_credentials` View | Compatibility view mapping `sign_counter AS sign_count` | `0006_bootstrap_and_recovery.sql:28-39`: View creates projection with `sign_counter AS sign_count`. | **PASS** |
+| Recovery Code Formatting | 10 Crockford Base32 unconfusable hyphenated codes `fc27-xxxx-xxxx-xxxx` | `src/identity/recovery.py:24-43`: `_RECOVERY_CHARSET` omits `0, O, 1, I, l`; produces 12 chars in 3 chunks of 4 (~60 bits entropy). | **PASS** |
+| Argon2id Hashing | OWASP parameters; constant-time verification | `src/identity/crypto.py:86-124`: `time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16`. Constant time verification via `PasswordHasher.verify`. | **PASS** |
+| Single-Use Recovery Code Trigger | Rejects mutation of attributes, un-consuming, or re-consuming | `migrations/0004_identity_foundation.sql:229-250`: `fc27_guard_recovery_code_consumption` enforces immutable attributes and single-transition `consumed_at`. | **PASS** |
+| Bootstrap Endpoint Lockout | `POST /v1/auth/bootstrap` succeeds on initial run, permanently locked (409 on subsequent) | `src/identity/routers/recovery.py:120-157` & `src/identity/recovery.py:116-118`: Checks `is_bootstrapped()` and enforces DB lock. Returns 409 Conflict. | **PASS** |
+| Bootstrap Status Endpoint | `GET /v1/auth/bootstrap/status` | `src/identity/routers/recovery.py:109-116`: Returns `{"bootstrapped": boolean}`. | **PASS** |
+| Packaging & Scope Guards | No packaging regressions; dispatch dormancy intact | `tests/test_packaging.py` and `tests/test_phase1_scope.py` constraints verified; `DISPATCH_ENABLED=false` preserved. | **PASS** |
+
+---
+
+## 4. Adversarial Challenge & Stress-Test Results
+
+| # | Attack Scenario | Evaluated Behavior | Outcome |
+|---|---|---|---|
+| 1 | Replay of consumed recovery code | `verify_and_consume_recovery_code` filters `WHERE consumed_at IS NULL FOR UPDATE`; trigger `fc27_guard_recovery_code_consumption` rejects re-consumption with `check_violation`. | **PASS** |
+| 2 | Compromised codes reuse after regeneration | Attacker presents code from prior batch after regeneration. Because `save_recovery_codes` does not set `consumed_at = now()` on old codes, old code is successfully verified. | **FAIL** (Finding 2) |
+| 3 | Mutation or deletion of `fc27_bootstrap_locks` | Attacker attempts `UPDATE` or `DELETE` on bootstrap lock row. Blocked by `fc27_reject_mutation()` trigger and absence of UPDATE/DELETE grants to `fc27_app`. | **PASS** |
+| 4 | Concurrent bootstrap race condition | Concurrent requests attempt `INSERT` into `fc27_bootstrap_locks`. First transaction commits; second transaction blocks on `FOR UPDATE` or fails on PK conflict (`lock_id = 'commissioner_bootstrap'`). | **PASS** |
+| 5 | Brute-force recovery code search | Search space is $31^{12} \approx 7.87 \times 10^{17}$. Argon2id requires 64MB RAM and ~50ms CPU per candidate. Random guessing probability is $\approx 1.27 \times 10^{-17}$. | **PASS** |
+| 6 | Automated test execution check | Static tracing revealed `tests/identity/test_recovery.py:148` expects `"invalid_recovery_code"` but receives `"invalid_or_consumed_code"`. | **FAIL** (Finding 1) |
+| 7 | Ambiguous OCR / transcription characters | Crockford charset strictly omits `0`, `O`, `1`, `I`, and `l`. | **PASS** |
+| 8 | Dispatch dormancy & service impersonation | Inspected bootstrap and recovery routes: no dispatch triggers, zero player delivery, `require_human_principal` enforced where applicable. | **PASS** |
+
+---
+
+## 5. Recommendation
+
+Issue verdict **REQUEST_CHANGES**. The worker must:
+1. Fix the assertion / error code mismatch in `tests/identity/test_recovery.py:148` or `src/identity/recovery.py:184`.
+2. Update `src/identity/store.py:save_recovery_codes` to mark prior unconsumed recovery codes as consumed (`SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL`) when regenerating codes.
+3. Update `src/identity/store.py:1344` to add `AND consumed_at IS NULL` to the consumption UPDATE statement.
+4. Execute and verify the complete test suite.

@@ -1,35 +1,51 @@
-# DISPATCH: challenger_m2_2
+# Dispatch Instructions for challenger_m2_2
 
-- **Assigned Role**: Challenger 2 (API Correlation, Projections & Security Routes Challenger)
-- **Archetype**: teamwork_preview_challenger
-- **Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2
-- **Parent**: orchestrator_phase1 (conv id: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b)
+**Agent ID**: `challenger_m2_2`
+**Role**: Delegation Lifecycle & Invariant Challenger
+**Milestone**: Phase 2 Milestone 2 — Centralized Authorization & Service Boundaries
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2`
 
-## Mandatory Inputs (MUST READ FIRST)
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
 
-## Focus & Adversarial Challenge Scope
-Adversarially challenge Persistent Graph API & Security routes:
-1. Malformed Correlation ID Attacks: Send invalid correlation IDs (SQL injection strings, path traversal, oversized strings, JSON payloads, truncated UUIDs, non-UUID hex). Verify HTTP 422 `{"detail": "invalid correlation id"}` is returned, AND verify that user input is completely redacted/stripped from response.
-2. Information Leakage & Secret Exposure Attacks: Probe all `/v1/runs` and `/v1/approval-requests` routes. Check whether any internal database connection strings, passwords, HMAC keys, or full tracebacks leak in response bodies under normal or error conditions.
-3. HMAC Kill Switch Bypass Attacks: When `APPROVAL_CLI_HMAC_ENABLED=false`, attempt to invoke decision routes with forged headers, unexpected HTTP methods, or invalid bodies. Verify that requests are blocked with HTTP 403 `{"detail": "proof_type_disabled"}` BEFORE any body parsing or validation occurs.
-4. Readiness Probe Fails-Closed Attack: Simulate degraded conditions: invalid DB connection, `DISPATCH_ENABLED=true`, or inconsistent view rows. Verify `/health/ready` immediately fails closed with HTTP 503.
-5. Run tests:
-```powershell
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_graph_api_v1.py
-```
+## Challenger Tasks
+Empirically stress-test the human delegation lifecycle and architectural invariants:
+1. Delegation Lifecycle Stress:
+   - Test delegation evaluation with: expired delegation, future delegation (`starts_at > now`), revoked delegation, delegate user mismatch, club mismatch, action type mismatch.
+   - Test attempts to delegate prohibited club governance actions (formations, transfers, roster, discipline). Must fail.
+   - Test immediate revocation: once revoked, all subsequent attempts fail immediately.
+2. Inactivity and Timeout Invariants (G-TIMEOUT):
+   - Verify that timeouts/inactivity alter escalation state or eligibility, but NEVER commit or insert an approval decision.
+   - Verify that simulated timeouts cannot trigger automated approvals in `policy.authorize()`.
+3. Service Token Boundaries:
+   - Test key collision detection (BFF, Graph, Worker sharing same secret must raise `ConfigError`).
+   - Test token rotation (old token remains valid during rotation window, invalid tokens fail closed).
+   - Test gamertag display separation: verify mutating gamertag/display_name has 0 impact on authorization or session keys.
+4. Packaging & Scope Guards:
+   - Execute `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`. Ensure `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` remain strictly enforced.
+5. Document commands, findings, and explicit verdict (**APPROVE** or **REQUEST_CHANGES**) in:
+   `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2\handoff.md`
 
-## Output Requirements
-1. Write `challenge_report.md` in your working directory with adversarial attack vectors, results, and evidence.
-2. Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-3. Write `handoff.md` following the Handoff Protocol (Observation, Logic Chain, Caveats, Conclusion, Verification Method).
-4. Send a message to orchestrator (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`) with your verdict and handoff path.
-Do NOT modify production source code in `src/` or `migrations/`.
 
-## 2026-10-03T16:21:22Z
-Received dispatch from parent 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b.
-Task: Adversarially challenge Persistent Graph API & Security routes.
-Verdict required: APPROVE or REQUEST_CHANGES.
-Do NOT modify production source code in src/ or migrations/.
+## 2026-10-04T04:21:23Z
+[Message from parent 25210876-a9ad-4f78-a87c-dec88e86edb9]
+You are challenger_m2_2, an adversarial verifier agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
+
+Your task:
+Empirically stress-test delegation lifecycle and architectural invariants in Phase 2 Milestone 2.
+1. Delegation Lifecycle: verify expiration, future time bounds (starts_at), immediate revocation, user mismatch, club mismatch, and prohibited club governance action delegation all fail closed.
+2. G-TIMEOUT Invariant: verify timeouts/inactivity alter escalation but NEVER commit or create approval decisions.
+3. Service Token Boundaries: verify key collision detection (BFF, Graph, Worker sharing same key raises error), token rotation, and gamertag display separation.
+4. Scope Guards: verify tests/test_phase1_scope.py passes with DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false strictly enforced.
+5. Run stress tests, document commands and results, and provide an explicit verdict (APPROVE or REQUEST_CHANGES) in:
+   c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m2_2\handoff.md
+When finished, notify me with your verdict and report path via send_message.

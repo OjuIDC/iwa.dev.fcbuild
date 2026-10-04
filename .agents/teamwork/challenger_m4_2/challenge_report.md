@@ -1,184 +1,124 @@
-# Adversarial Challenge Report — Milestone 4: Atomic Approval-to-Dispatch Creation, Rollback & Concurrency
+# Adversarial Challenge Report: Phase 2 Milestone 4
 
-**Agent**: `challenger_m4_2`  
-**Archetype**: `teamwork_preview_challenger`  
-**Roles**: `critic`, `specialist`  
-**Date**: 2026-10-03T20:47:00Z  
-**Target Milestone**: Milestone 4 (Activation Gates, Atomic Dispatch Creation & Rollback Guarantees)  
-**Parent**: `7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`
+**Agent ID**: `challenger_m4_2`  
+**Role**: Adversarial Challenger (critic, specialist)  
+**Milestone**: Phase 2 Milestone 4 — WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery  
+**Date**: 2026-10-04T06:30:00Z  
 
 ---
 
-## 1. Challenge Summary
+## Challenge Summary
 
-**Overall Risk Assessment**: **LOW**
-
-An exhaustive adversarial audit and stress-test evaluation was conducted across Milestone 4 implementation files:
-- `src/dispatch/creation.py`
-- `src/approval_store.py`
-- `src/dispatch/transition.py`
-- `src/dispatch/gates.py`
-- `migrations/0003_dispatch_foundation.sql` (Section E, dispatch schema, `fc27_dispatch_transition`)
-- `tests/test_dispatch_creation.py`
-
-The architecture, transaction boundaries, cryptographic verifications, and advisory lock partitioning were subjected to adversarial failure mode analysis, edge-case probing, and concurrency race condition analysis. All 4 primary challenge dimensions passed rigorous verification.
+**Overall risk assessment**: **MEDIUM**  
+The database triggers, least-privilege grants, and cryptographic design (Argon2id hashing, constant-time token comparison, permanent bootstrap locking) are robust and fail closed. However, an empirical verification defect was discovered: unit test `tests/identity/test_recovery.py::test_recovery_service_invalid_or_consumed_code` contains a contract mismatch assertion bug (`res.error == "invalid_recovery_code"` vs actual `"invalid_or_consumed_code"`), invalidating the worker's claim of 100% test pass.
 
 ---
 
-## 2. Adversarial Challenges & Attack Surface Analysis
+## Challenges
 
-### [Low Risk] Challenge 1: Atomic Rollback Guarantee Under Partial Failure Modes
+### [Medium] Challenge 1: Unit Test Assertion Mismatch on Consumed Recovery Code
 
-- **Assumption Challenged**:
-  If candidate validation or dispatch creation fails midway during an approval transaction, partial state modifications (such as consumed nonces, modified `approval_requests`, modified `graph_threads`, or leaked audit/event rows) might persist or cause state divergence.
-- **Attack Scenarios**:
-  1. **Missing Objective**: Candidate dictionary lacks an `objective` key or has `None`.
-  2. **Malformed Objective**: Objective parameters fail Pydantic bounds policy `fc27-objective-bounds-v1` validation (e.g. negative bounds, illegal target delta).
-  3. **Gamertag Player String**: Candidate `player_id` is a non-numeric string (e.g. `'GamerTag99'`), violating the numeric identifier contract.
-  4. **Unknown Player**: Candidate `player_id` is numeric but absent from `public.players`.
-  5. **Player Club Mismatch**: Candidate player exists in `public.players` but belongs to a different `club_id` than the thread.
-  6. **Inactive Player**: Candidate player exists but has `active = false` or `status != 'active'`.
-  7. **Unverified Player**: Candidate player exists but has `identity_verified_at IS NULL`.
-  8. **Exact String Collation Mismatch**: Candidate `player_id` is `'007'` while `players.player_id` is `'7'`.
-  9. **Database Trigger / Constraint Failure**: Injected trigger `trg_fail_dispatch` on `public.dispatches` `BEFORE INSERT` raising a simulated database exception.
-- **Code & Logic Verification**:
-  - In `src/dispatch/creation.py:52–96`: All validation checks execute prior to inserting into `public.dispatches`. Any discrepancy raises `NotDispatchable`.
-  - In `src/approval_store.py:609–613`: `NotDispatchable` is caught and re-raised as `StoreError(409, f"not_dispatchable: {exc}")`.
-  - Any database exception (such as trigger failure or SQL check violation) bubbles up directly.
-  - Both exception types cleanly escape `with self.connect() as conn, conn.transaction():`.
-  - Psycopg's transaction manager issues an immediate `ROLLBACK` to PostgreSQL.
-  - **Verified Rollback State**:
-    - `public.approval_audit`: 0 rows inserted.
-    - `public.dispatches`: 0 rows inserted.
-    - `public.domain_events` & `public.outbox`: 0 rows inserted.
-    - `public.graph_threads`: Remains in `awaiting_approval` status; `decision_payload` unchanged.
-    - `public.approval_requests`: Remains in `awaiting_approval` status; `version` unchanged.
-    - `public.approval_nonces`: `consumed_at` remains `NULL`; nonce remains unconsumed and reusable for valid retries.
-    - Deferred trigger `fc27_check_approval_pair_consistency`: Not violated because the transaction aborts before commit.
-- **Blast Radius**: Zero. State remains 100% clean and consistent.
-- **Mitigation Assessment**: Existing transaction boundary in `ApprovalStore.apply_decision` is airtight.
+- **Assumption challenged**: Worker `worker_m4_1` claimed in `handoff.md` that all unit tests (`tests/identity/test_recovery.py`, `tests/identity/test_bootstrap.py`) pass cleanly.
+- **Attack scenario / Defect**: In `src/identity/recovery.py` line 184:
+  ```python
+  matched = self.store.verify_and_consume_recovery_code(
+      user_id=user_id,
+      plaintext_code=recovery_code.strip(),
+      actor=f"recovery:{user_id}",
+  )
+  if not matched:
+      log.warning("recovery code verification failed or already consumed for user %s", user_id)
+      return RecoveryResult(success=False, error="invalid_or_consumed_code")
+  ```
+  However, `tests/identity/test_recovery.py` lines 140–149 asserts:
+  ```python
+  def test_recovery_service_invalid_or_consumed_code():
+      uid = uuid4()
+      mock_store = MagicMock(spec=IdentityStore)
+      mock_store.get_user_by_login.return_value = {
+          "user_id": uid,
+          "login_identifier": "commissioner@fc27.club",
+          "status": "active",
+          "club_id": "330323",
+      }
+      mock_store.verify_and_consume_recovery_code.return_value = False
+      service = RecoveryService(mock_store)
 
----
+      res = service.verify_and_recover(
+          login_identifier="commissioner@fc27.club",
+          recovery_code="fc27-used-code-here",
+      )
+      assert res.success is False
+      assert res.error == "invalid_recovery_code"
+  ```
+  Notice that line 148 asserts `res.error == "invalid_recovery_code"`. But `RecoveryService` returns `error="invalid_or_consumed_code"` (`"invalid_recovery_code"` is only returned when the recovery code parameter is empty, line 164). This causes `AssertionError: assert 'invalid_or_consumed_code' == 'invalid_recovery_code'`.
+- **Blast radius**: The unit test suite `tests/identity/test_recovery.py` fails when executed in CI/CD or local test runs.
+- **Mitigation**: Update line 148 in `tests/identity/test_recovery.py` to:
+  `assert res.error == "invalid_or_consumed_code"`.
 
-### [Low Risk] Challenge 2: Advisory Lock & Concurrency Serialization
+### [Low] Challenge 2: Direct Database Tampering of Bootstrap Lock Table
 
-- **Assumption Challenged**:
-  Two concurrent Commissioner approval requests targeting the same `(player_id, owner, metric)` partition could race, leading to deadlocks, primary key errors, or constraint violations on the partial unique index `dispatches_one_active_per_objective`.
-- **Attack Scenario**:
-  - Two parallel threads submit valid approvals for the same `(player_id, owner, metric)` partition simultaneously.
-  - Race condition where both observe 0 active dispatches, both attempt to insert `status = 'pending'`, violating `dispatches_one_active_per_objective`.
-- **Code & Logic Verification**:
-  - In `src/dispatch/creation.py:100–101`:
-    ```python
-    lock_key = f"{cand_player_id}|{intent.owner.value}|{objective.metric}"
-    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
-    ```
-  - `hashtextextended(text, 0)` computes a deterministic 64-bit integer hash of the partition key.
-  - `pg_advisory_xact_lock(int8)` acquires an exclusive transaction-level advisory lock, serializing concurrent transactions targeting that specific partition.
-  - The first transaction acquires the lock, queries active dispatches `FOR UPDATE`, supersedes existing active rows via `transition(..., to_status="superseded")`, inserts the new `pending` dispatch, and commits.
-  - The second transaction unblocks, acquires the lock, queries active dispatches `FOR UPDATE` (now observing the first transaction's newly committed dispatch), supersedes it, inserts its new dispatch, and commits.
-  - **Verified Outcome**:
-    - Exactly 1 dispatch remains active (`pending`), while the older dispatch is transitioned to `superseded`.
-    - Partial unique index `dispatches_one_active_per_objective` is never violated because prior active rows are transitioned to `superseded` before the new active row is inserted.
-    - Advisory locks are strictly transaction-scoped (`xact`), preventing lock leakage on abort or disconnect.
-    - Because advisory locks are acquired before any row locks on `dispatches`, no circular deadlock is possible between concurrent partition transactions.
-- **Blast Radius**: Fully mitigated.
-- **Mitigation Assessment**: Partition locking design is mathematically and functionally sound.
+- **Assumption challenged**: Can an attacker with database access modify or remove `public.fc27_bootstrap_locks` to re-execute the bootstrap ceremony and hijack the Commissioner account?
+- **Attack scenario**: Attacker executes `DELETE FROM public.fc27_bootstrap_locks` or `UPDATE public.fc27_bootstrap_locks SET commissioner_user_id = ...`.
+- **Blast radius**: If successful, root identity takeover.
+- **Defense Verified**:
+  1. Trigger `fc27_bootstrap_locks_immutable` on `BEFORE UPDATE OR DELETE ON public.fc27_bootstrap_locks` executes `public.fc27_reject_mutation()`, raising `check_violation: fc27_bootstrap_locks is append-only`.
+  2. In `migrations/post/grants.sql`, application role `fc27_app` is only granted `SELECT, INSERT` on `public.fc27_bootstrap_locks`. Zero `UPDATE` or `DELETE` privileges exist.
+  3. Table has `CONSTRAINT single_bootstrap_lock CHECK (lock_id = 'commissioner_bootstrap')`, preventing insertion of rogue secondary locks.
+- **Result**: Defended. Multi-layered defense-in-depth fails closed.
 
----
+### [Low] Challenge 3: Recovery Code Replay and Unconsumption Attack
 
-### [Low Risk] Challenge 3: Supersede Atomicity & Foreign Key Integrity
+- **Assumption challenged**: Can an attacker replay an already-consumed recovery code, or un-consume it via direct database UPDATE (`consumed_at = NULL`)?
+- **Attack scenario**:
+  1. Replay attack: Send `POST /v1/auth/recovery/verify` with a code that has already set `consumed_at IS NOT NULL`.
+  2. SQL unconsume: Execute `UPDATE public.fc27_recovery_codes SET consumed_at = NULL WHERE code_id = ...`.
+- **Blast radius**: Infinite account recovery, bypassing single-use guarantees.
+- **Defense Verified**:
+  1. In `src/identity/store.py`, `verify_and_consume_recovery_code` queries `WHERE user_id = %s AND consumed_at IS NULL FOR UPDATE`. A consumed code matches zero candidate rows, returning `False` and resulting in HTTP 400 Bad Request.
+  2. Trigger `fc27_recovery_codes_update_guard` executes `fc27_guard_recovery_code_consumption()`:
+     - `IF OLD.consumed_at IS NOT NULL THEN RAISE check_violation 'recovery code is already consumed'`
+     - `IF NEW.consumed_at IS NULL THEN RAISE check_violation 'cannot un-consume recovery code'`
+     - `IF NEW.code_hash <> OLD.code_hash ... THEN RAISE check_violation 'recovery code attributes are immutable'`
+  3. Trigger `fc27_recovery_codes_immutable` executes `fc27_reject_mutation()` on `BEFORE DELETE`.
+- **Result**: Defended. All mutation paths fail closed.
 
-- **Assumption Challenged**:
-  Calling `transition(..., to_status="superseded", patch={"superseded_by": str(new_dispatch_id)})` prior to inserting `new_dispatch_id` into `public.dispatches` could violate foreign key constraints or leave dangling references if subsequent steps fail.
-- **Attack Scenario**:
-  - Transition requires `superseded_by` to point to a valid dispatch ID. If the foreign key constraint is evaluated immediately, `transition()` would raise a foreign key violation because `new_dispatch_id` does not exist yet.
-  - Conversely, if `new_dispatch_id` were inserted first, `fc27_dispatch_transition` Check 8 (`IF EXISTS ... RAISE EXCEPTION 'superseded_by id already exists'`) would abort the transition.
-- **Code & Logic Verification**:
-  - In `migrations/0003_dispatch_foundation.sql:899`:
-    ```sql
-    superseded_by uuid REFERENCES public.dispatches(dispatch_id) DEFERRABLE INITIALLY DEFERRED
-    ```
-    The foreign key constraint is explicitly configured as `DEFERRABLE INITIALLY DEFERRED`. PostgreSQL defers validation until transaction `COMMIT`.
-  - In `migrations/0003_dispatch_foundation.sql:1617–1619`:
-    `fc27_dispatch_transition` asserts that `new_dispatch_id` does NOT exist in `public.dispatches` at the time of the transition call.
-  - In `src/dispatch/creation.py:106–191`:
-    1. `new_dispatch_id = uuid4()` is generated.
-    2. Prior dispatch is transitioned to `superseded` with `patch={"superseded_by": str(new_dispatch_id)}`. Check 8 passes because `new_dispatch_id` does not yet exist.
-    3. `new_dispatch_id` is inserted into `public.dispatches`.
-    4. At transaction commit, PostgreSQL verifies the deferred foreign key constraint, which succeeds because `new_dispatch_id` is now present.
-    5. If any failure occurs during insertion, the entire transaction rolls back, restoring the prior dispatch to its active state.
-- **Blast Radius**: Zero. Integrity is preserved by PostgreSQL constraint deferral and atomic transaction guarantees.
-- **Mitigation Assessment**: Design conforms perfectly to PostgreSQL deferred FK mechanics and state transition preconditions.
+### [Low] Challenge 4: Plaintext Recovery Code Exposure
+
+- **Assumption challenged**: Are recovery codes readable in plaintext from database tables or domain events audit trail?
+- **Attack scenario**: Attacker reads `public.fc27_recovery_codes` or `public.domain_events` to harvest unconsumed recovery codes.
+- **Blast radius**: Unauthorized Commissioner recovery by anyone with read access to the database.
+- **Defense Verified**:
+  1. In `src/identity/store.py` (`save_recovery_codes` and `execute_commissioner_bootstrap`), every code is hashed via `hash_recovery_code(code)` using Argon2id (`$argon2id$v=19$m=65536,t=3,p=4$...`).
+  2. Table `public.fc27_recovery_codes` stores only `code_hash text`. Zero plaintext code columns exist.
+  3. `_safe_record_event` logs only `reason=f"count:{len(code_ids)}"`. No codes or code fragments are emitted.
+- **Result**: Defended. Zero plaintext codes in database or logs.
 
 ---
 
-### [Low Risk] Challenge 4: Idempotent Replay Protocol (10-Way Parallel Concurrency)
+## Stress Test Results
 
-- **Assumption Challenged**:
-  A burst of 10 concurrent duplicate requests submitting the exact same signed decision nonce could result in duplicate audit rows, duplicate dispatch rows, race conditions, or unhandled 500 errors.
-- **Attack Scenario**:
-  - 10 simultaneous threads submit identical HTTP `POST /threads/{tid}/decision` payloads with the identical valid nonce and signature.
-- **Code & Logic Verification**:
-  - In `src/approval_store.py:405–417`:
-    ```python
-    with self.connect() as conn, conn.transaction():
-        nonce = conn.execute(
-            """SELECT ... FROM public.approval_nonces WHERE nonce = %s FOR UPDATE""",
-            (signed.nonce,),
-        ).fetchone()
-    ```
-  - All 10 concurrent requests serialize on the `approval_nonces` row lock.
-  - Worker 1 (the winner):
-    - Observes `nonce["consumed_at"] IS NULL`.
-    - Marks nonce consumed: `UPDATE public.approval_nonces SET consumed_at = now()`.
-    - Commits `approval_audit` and creates `public.dispatches` row.
-    - Commits transaction and releases row lock.
-  - Workers 2 through 10 (the replay runners-up):
-    - Each sequentially acquires the row lock on `nonce`.
-    - Observes `nonce["consumed_at"] IS NOT NULL`.
-    - Enters the safe replay branch (`lines 445–476`):
-      - Verifies byte-level and semantic identity against `public.approval_audit`.
-      - Queries `SELECT dispatch_id FROM public.dispatches WHERE approval_id = %s`.
-      - Attaches `dispatch_id` to replayed state.
-      - Returns HTTP 200 with the exact winner's `dispatch_id`.
-  - **Verified Outcome**:
-    - Exactly 1 `approval_audit` row created.
-    - Exactly 1 `dispatches` row created.
-    - All 9 replays return HTTP 200 with identical winner `dispatch_id`.
-    - Zero duplicate rows, zero race conditions, zero 500 errors.
-- **Blast Radius**: Prevented.
-- **Mitigation Assessment**: Nonce row locking combined with database-backed dispatch resolution provides complete idempotent replay safety.
+| # | Stress Scenario | Expected Behavior | Actual Behavior | Verdict |
+|---|---|---|---|---|
+| 1 | POST /v1/auth/bootstrap when bootstrapped | HTTP 409 Conflict | HTTP 409 Conflict raised | **PASS** |
+| 2 | POST /v1/auth/bootstrap with tampered token | HTTP 401 Unauthorized | HTTP 401 Unauthorized raised | **PASS** |
+| 3 | POST /v1/auth/bootstrap with empty fields | HTTP 422 Unprocessable Entity | HTTP 422 Unprocessable Entity raised | **PASS** |
+| 4 | UPDATE/DELETE on `public.fc27_bootstrap_locks` | Trigger `fc27_reject_mutation` aborts | Trigger defined and verified | **PASS** |
+| 5 | `fc27_app` grants on `fc27_bootstrap_locks` | SELECT, INSERT only (no UPDATE/DELETE) | Verified in `grants.sql` | **PASS** |
+| 6 | Replay of consumed recovery code | HTTP 400 Bad Request | HTTP 400 Bad Request returned | **PASS** |
+| 7 | Unconsume recovery code (`consumed_at = NULL`) | Trigger `fc27_guard_recovery_code_consumption` aborts | Trigger defined and verified | **PASS** |
+| 8 | Mutate attributes of `fc27_recovery_codes` | Trigger rejects attribute modification | Trigger defined and verified | **PASS** |
+| 9 | DELETE on `fc27_recovery_codes` | Trigger `fc27_recovery_codes_immutable` aborts | Trigger defined and verified | **PASS** |
+| 10 | Recovery code storage format in DB | Argon2id `$argon2id$` hashes only | Verified in store & migrations | **PASS** |
+| 11 | Crockford Base32 charset & entropy | 12 unconfusable chars, 60 bits entropy | Verified in `generate_recovery_codes` | **PASS** |
+| 12 | Ineligible account recovery (disabled/suspended) | Rejection with `account_not_eligible` | Verified in `RecoveryService` | **PASS** |
+| 13 | Packaging parity (pyproject vs requirements) | Exact match | Exact match | **PASS** |
+| 14 | Grants policy version synchronization | Version 8 in db_migrate.py & grants.sql | Version 8 confirmed | **PASS** |
+| 15 | Dormancy invariants | DISPATCH_ENABLED=false, DISPATCH_WORKER_ENABLED=false | Both false | **PASS** |
+| 16 | **Unit test `tests/identity/test_recovery.py:148`** | Test assertion matches `RecoveryService` return value | **FAILS**: asserts `"invalid_recovery_code"`, service returns `"invalid_or_consumed_code"` | **FAIL** |
 
 ---
 
-## 3. Stress Test Results Summary
+## Unchallenged Areas
 
-| # | Stress Test Scenario | Expected Behavior | Verification Status | Result |
-|---|----------------------|-------------------|---------------------|--------|
-| 1 | Candidate missing `objective` | Rejects with 409 `not_dispatchable`; 0 audit rows; thread remains `awaiting_approval`; nonce unconsumed | Covered in `test_not_dispatchable_without_objective` & static AST check | **PASS** |
-| 2 | Candidate with non-numeric gamertag player ID (`GamerTag99`) | Rejects with 409 `not_dispatchable`; transaction rolled back; 0 dispatch rows | Covered in `test_not_dispatchable_gamertag_player` & regex `_PLAYER_ID_RE` check | **PASS** |
-| 3 | Candidate with unverified player (`identity_verified_at IS NULL`) | Rejects with 409 `not_dispatchable`; transaction rolled back | Covered in `test_not_dispatchable_unverified_player` & SQL check | **PASS** |
-| 4 | Exact player ID mismatch (`'7'` vs `'007'`) | Rejects with 409 `not_dispatchable`; exact string match enforced | Covered in `test_player_id_is_compared_exactly` & exact string check | **PASS** |
-| 5 | Unknown player ID (absent from `players`) | Rejects with 409 `not_dispatchable`; transaction rolled back | Covered in `test_not_dispatchable_unknown_player` & SQL check | **PASS** |
-| 6 | Injected trigger failure on `dispatches` `BEFORE INSERT` | Aborts transaction; 0 audit rows; 0 dispatches; thread awaiting; nonce unconsumed | Covered in `test_dispatch_failure_rolls_back_decision` | **PASS** |
-| 7 | REJECT decision submitted with effective dispatch enabled | Updates thread to `rejected`; creates 0 dispatches | Covered in `test_reject_creates_no_dispatch` | **PASS** |
-| 8 | Sequential supersession for same partition | Prior dispatch transitions to `superseded` (`superseded_by=new_id`); new dispatch is `pending` | Covered in `test_supersede_is_atomic` | **PASS** |
-| 9 | Concurrent approval submissions for same partition | Advisory lock serializes execution; exactly 1 active dispatch, 1 superseded dispatch; no 500 or deadlock | Covered in `test_concurrent_supersede_is_serialized` | **PASS** |
-| 10 | 10 parallel duplicate decision submissions with same nonce | Exactly 1 winner commits; 1 audit row; 1 dispatch row; all 9 duplicate replays return winner's `dispatch_id` | Covered in `test_parallel_duplicate_approvals_single_dispatch` | **PASS** |
-
----
-
-## 4. Unchallenged / Out-of-Scope Areas
-
-- **Phase 2 Player Passkeys / WebAuthn**: Out of scope for Phase 1 per `ORIGINAL_REQUEST.md`.
-- **Phase 3 Dispatch Worker Relay Execution**: Out of scope for Phase 1. `G-WORKER` fails closed by default in Phase 1 production environments.
-- **Live Delivery to External Consumers**: Blocked by Phase 1 Invariant #1 (`DISPATCH_ENABLED=false`) and SQL transition guard (`Phase 1 invariant violation: transition to delivered is disabled`).
-
----
-
-## 5. Explicit Recommendation & Verdict
-
-**Verdict: APPROVE**
-
-The Milestone 4 atomic dispatch creation, transaction rollback guarantees, partition-level advisory locking, supersede mechanics, and idempotent replay protocol are robust, cryptographically sound, and mathematically secure against race conditions and partial write vulnerabilities.
+- Hardware WebAuthn authenticator attestation: Tested via cryptographic simulation and CBOR/COSE mocks; physical USB FIDO2 tokens require live browser/hardware interactions.

@@ -1,7 +1,18 @@
-# BRIEFING — 2026-10-03T20:48:30Z
+# BRIEFING — 2026-10-04T06:30:00Z
 
 ## Mission
-Adversarially challenge Milestone 4 atomic approval-to-dispatch creation, transaction rollback guarantees, advisory lock partition serialization, supersede atomicity, player validation, and duplicate replay deduplication.
+Adversarially stress-test recovery code immutability, replay prevention, and bootstrap locks for Phase 2 Milestone 4:
+1. Bootstrap Lock Immutability:
+   - Once bootstrapped, subsequent calls to POST /v1/auth/bootstrap fail closed with HTTP 409 Conflict.
+   - UPDATE or DELETE rows in public.fc27_bootstrap_locks trigger fc27_reject_mutation() and fail closed.
+   - Tampered bootstrap tokens fail with 401/403.
+2. Recovery Code Single-Use & Immutability:
+   - Consumed recovery code cannot be reused (fails with 400/401/404).
+   - Attempts to unconsume (consumed_at = NULL), update other attributes, or delete rows in public.fc27_recovery_codes trigger triggers and fail closed.
+   - Zero plaintext recovery codes stored in DB (Argon2id hashes only).
+3. Scope Guards:
+   - Packaging and Phase 1 scope tests pass.
+   - Recovery and bootstrap test suites pass.
 
 ## 🔒 My Identity
 - Archetype: challenger (empirical challenger)
@@ -10,55 +21,65 @@ Adversarially challenge Milestone 4 atomic approval-to-dispatch creation, transa
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 4
 - Instance: 2 of 2 (challenger_m4_2)
+- Phase 2 Parent: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Phase 2 Milestone: Phase 2 Milestone 4
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify production source code in `src/` or `migrations/`
 - Empirical verification mandatory — must run verification tests and stress harnesses directly
 - Write all findings to `challenge_report.md` and `handoff.md` in working directory
 - Communicate via `send_message` with recipient `7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`
+- Phase 2 recipient: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Do not modify implementation code; report any failures as findings
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: 2026-10-03T20:48:30Z
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T06:30:00Z
 
 ## Review Scope
-- **Files reviewed**:
-  - `src/dispatch/creation.py`
-  - `src/approval_store.py`
-  - `src/dispatch/transition.py`
-  - `src/dispatch/gates.py`
-  - `migrations/0003_dispatch_foundation.sql` (Section E, dispatch schema, `fc27_dispatch_transition`)
-  - `tests/test_dispatch_creation.py`
-  - Worker handoff: `.agents/teamwork/worker_m4_1/handoff.md`
-  - Reviewer handoffs: `reviewer_m4_1/handoff.md`, `reviewer_m4_2/handoff.md`
-- **Adversarial focus**:
-  - Atomic rollback guarantees (candidate failure, DB triggers, player validation)
-  - Advisory lock & concurrency serialization (`pg_advisory_xact_lock`)
-  - Supersede atomicity and foreign key integrity
-  - Idempotent replay protocol (10 parallel duplicate submissions with same nonce)
-- **Review criteria**: Empirical correctness, resilience under concurrency, rollback integrity, zero partial state leaks.
+- **Files to review**:
+  - `src/identity/recovery.py`
+  - `src/identity/store.py`
+  - `src/identity/routers/recovery.py`
+  - `src/identity/crypto.py`
+  - `migrations/0004_identity_foundation.sql`
+  - `migrations/0006_bootstrap_and_recovery.sql`
+  - `migrations/post/grants.sql`
+  - `tests/identity/test_recovery.py`
+  - `tests/identity/test_bootstrap.py`
+- **Interface contracts**: `PROJECT.md`, `worker_m4_1/handoff.md`
+- **Review criteria**:
+  - Bootstrap lock immutability, 409 conflict, trigger protection, token tampering rejection
+  - Recovery code single-use, unconsume rejection, trigger protection, Argon2id hashing
+  - Scope guards & packaging verification
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Partial failure during dispatch creation leaves unconsumed nonces and clean rollback (VERIFIED).
-  - Advisory xact lock serializes partition transactions preventing race conditions and index conflicts on `dispatches_one_active_per_objective` (VERIFIED).
-  - Supersede transition with deferred foreign key constraint `superseded_by` prevents orphaned states (VERIFIED).
-  - 10-way parallel duplicate submissions serialize on nonce row lock, yielding 1 winner and returning winner's `dispatch_id` to all 9 replays (VERIFIED).
-- **Vulnerabilities found**: None. Architecture and implementation are watertight.
-- **Untested angles**: Phase 2/3 delivery execution (intentionally disabled in Phase 1 by design).
+  - Subsequent bootstrap calls fail with HTTP 409 Conflict (VERIFIED).
+  - DB UPDATE/DELETE on `public.fc27_bootstrap_locks` rejected by trigger `fc27_reject_mutation()` (VERIFIED).
+  - Tampered bootstrap tokens fail with HTTP 401 Unauthorized (VERIFIED).
+  - Reused recovery codes fail verification and return HTTP 400 Bad Request (VERIFIED).
+  - Attempts to unconsume or mutate recovery codes rejected by `fc27_guard_recovery_code_consumption()` (VERIFIED).
+  - Deletions on `public.fc27_recovery_codes` rejected by `fc27_recovery_codes_immutable` (VERIFIED).
+  - Zero plaintext recovery codes stored in DB (VERIFIED).
+  - Packaging parity & dormancy invariants enforced (VERIFIED).
+- **Vulnerabilities / Defects found**:
+  - **Defect in `tests/identity/test_recovery.py:148`**: Line 148 asserts `assert res.error == "invalid_recovery_code"`, but `RecoveryService.verify_and_recover` returns `error="invalid_or_consumed_code"`. This causes `test_recovery_service_invalid_or_consumed_code` to fail with `AssertionError`.
+- **Untested angles**: None within Phase 2 Milestone 4 scope.
 
 ## Loaded Skills
-- None specified by orchestrator.
+- None
 
 ## Key Decisions Made
-- [2026-10-03] Initialized challenger_m4_2 briefing and progress tracking.
-- [2026-10-03] Completed code inspection, transaction trace analysis, and adversarial audit across 4 challenge dimensions.
-- [2026-10-03] Formulated explicit verdict: **APPROVE**.
-- [2026-10-03] Published `challenge_report.md` and `handoff.md`.
+- [2026-10-04] Executed adversarial audit across bootstrap locks, recovery codes, database triggers, grants policy, and scope guards.
+- [2026-10-04] Authored permanent adversarial stress suite `tests/test_m4_phase2_adversarial.py`.
+- [2026-10-04] Identified test contract mismatch in `tests/identity/test_recovery.py:148`.
+- [2026-10-04] Formulated explicit verdict: **REQUEST_CHANGES**.
 
 ## Artifact Index
 - `DISPATCH.md` — Dispatch instructions
-- `BRIEFING.md` — Working memory and status
+- `BRIEFING.md` — Persistent working memory
 - `progress.md` — Liveness and execution log
 - `challenge_report.md` — Detailed adversarial challenge report
 - `handoff.md` — 5-component handoff report
+- `tests/test_m4_phase2_adversarial.py` — Adversarial stress test suite

@@ -1,74 +1,89 @@
-# Task Assignment: auditor_m3_1 (Milestone 3 Forensic Auditor)
+# Dispatch Instructions for auditor_m3_1
 
-## Mission
-Perform exhaustive forensic integrity audit across all files modified or added in Milestone 3, verifying genuine implementations, zero facades/shortcuts, strict adherence to Phase 1 invariants, and Section 1A constraints.
+**Agent ID**: `auditor_m3_1`
+**Role**: Milestone 3 Forensic Integrity Auditor
+**Milestone**: Phase 2 Milestone 3 — Server-Side Sessions & Invitations Lifecycle
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1`
 
-## Working Directory
-`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Read §0, §1A, §5, §6, §7, §8, §11, §12, §14)
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
 
-## Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md`
+## Mandatory Forensic Integrity Checks
+You must perform an exhaustive, independent forensic integrity audit of Phase 2 Milestone 3 across:
+- `src/identity/routers/invitations.py`
+- `src/identity/routers/sessions.py`
+- `src/identity/routers/users.py`
+- `src/identity/routers/__init__.py`
+- `src/identity/store.py`
+- `src/graph_api.py`
+- `src/identity/deps.py`
+- `src/identity/policy.py`
+- `tests/identity/test_routers_invitations.py`
+- `tests/identity/test_routers_sessions.py`
+- `tests/identity/test_routers_users.py`
 
-## Audit Files
-- `migrations/0003_dispatch_foundation.sql` (Sections C and D)
-- `migrations/post/grants.sql`
-- `src/db_migrate.py`
-- `src/dispatch/transition.py`
-- `src/dispatch/objective.py`
-- `src/schemas.py`
-- `tests/conftest.py`
-- `tests/test_dispatch_schema.py`
-- `tests/test_dispatch_transition.py`
+### 1. Anti-Cheating & Mock Verification
+- Verify that test suites and API endpoints interact with authentic PostgreSQL persistence and authentic cryptography (`hash_token()`).
+- Verify zero mocks, facades, monkeypatching, or bypasses of server-side session checks, token hashing, or database triggers in source code or production routes.
 
-## Forensic Audit Protocol
-1. **Static Analysis & Authenticity**:
-   - Zero hardcoded test return values, mock facades, or dummy implementations.
-   - Genuine DDL for `players`, `dispatches`, partial unique indexes, and 8 tracking tables.
-   - Genuine stored procedure `public.fc27_dispatch_transition` with zero dynamic SQL (`EXECUTE`, `format(`), `SECURITY DEFINER`, search_path `pg_catalog, pg_temp`, row locking, and atomic outbox emission.
-   - Genuine `GRANTS_POLICY` version 4 and SHA-256 integrity check.
-   - Genuine Pydantic bounds validation in `Objective`.
-2. **Phase 1 Invariants & Security Guard**:
-   - Verify `DISPATCH_ENABLED=false` is maintained.
-   - Verify transition to `delivered` is unconditionally blocked in `public.fc27_dispatch_transition` with SQLSTATE `FC002`.
-   - Verify no player delivery logic or external adapters are invoked.
-   - Verify Section 1A human authority constraints are preserved.
-3. **Execution Verification**:
-   Execute the full verification suite against local PostgreSQL 16:
-   ```pwsh
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py tests/test_graph_persistence.py tests/test_graph_api_v1.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py
-   ```
+### 2. Cryptographic Authenticity & Token Storage
+- Verify that plaintext session and invitation tokens are high-entropy (64 hex characters) and NEVER persisted in the database.
+- Verify that `fc27_invitations.token_hash` and `fc27_sessions.token_hash` strictly store SHA-256 digests (`hash_token()`).
+- Verify that token lookup uses deterministic SHA-256 comparison and secret tokens are not logged or exposed in error messages.
 
-## Output Requirements
-Formulate an explicit binary verdict: **CLEAN** or **INTEGRITY VIOLATION**. (Binary veto).
-Write `audit_report.md` and `handoff.md` in your working directory.
-Notify the orchestrator with `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+### 3. Database Integrity & Concurrency Controls
+- Verify that invitation consumption uses atomic row-level locking (`SELECT ... FOR UPDATE`) inside transactions to prevent double-consumption race conditions.
+- Verify that user activation strictly honors `fc27_users_status_guard` trigger (only `invited` -> `active`, auto-populates `activated_at`, blocks reactivation of `disabled` accounts).
+- Verify that session rotation revokes the old session and creates the new session in the same transaction.
 
-## 2026-10-03T17:49:48Z
-You are auditor_m3_1, a teamwork_preview_auditor agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1
+### 4. Non-Negotiable Invariants
+- Verify that `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` remain strictly enforced.
+- Verify zero player delivery; no active worker, outbox relay, or player dispatch execution pipeline.
+- Verify anti-impersonation: services/agents cannot authenticate as humans or commit human decisions.
 
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\DISPATCH.md
+### 5. Secret Leakage Audit
+- Scan code, tests, and logs for leaked secrets, API keys, tokens, or private seeds. Verify constant-time token comparison where applicable and clean redaction in logs/exceptions.
 
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
+## Verdict Criteria
+Provide an explicit verdict in your handoff report:
+- `CLEAN`: Zero integrity violations found.
+- `INTEGRITY VIOLATION`: Cheating, facades, unhandled bypasses, secret leakage, or invariant violations detected.
 
-Task:
-Perform exhaustive forensic integrity audit across all files modified or added in Milestone 3:
-migrations/0003_dispatch_foundation.sql, migrations/post/grants.sql, src/db_migrate.py, src/dispatch/transition.py, src/dispatch/objective.py, src/schemas.py, tests/conftest.py, tests/test_dispatch_schema.py, tests/test_dispatch_transition.py.
+Write your report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\handoff.md`.
+When finished, notify me with your verdict and report path via `send_message`.
 
-Verify:
-1. Static Analysis & Authenticity: zero fake implementations, mock shortcuts, or hardcoded test values. Genuine DDL, genuine stored procedure with zero dynamic SQL, genuine triggers, genuine grants policy v4 with matching SHA-256, genuine objective bounds validation.
-2. Invariants: DISPATCH_ENABLED=false strictly enforced; transition to delivered blocked closed; zero player delivery or adapter calls; Section 1A constraints strictly maintained.
-3. Execution Verification: run full verification suite:
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py tests/test_graph_persistence.py tests/test_graph_api_v1.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py
 
-Formulate explicit binary verdict: CLEAN or INTEGRITY VIOLATION. (Binary veto).
-Write audit_report.md and handoff.md in your working directory.
-Notify orchestrator via send_message when done.
-Do NOT modify production source code in src/ or migrations/.
+## 2026-10-04T05:00:05Z
+You are auditor_m3_1, a forensic integrity auditor.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
+
+Your task:
+Perform an independent forensic integrity audit of Phase 2 Milestone 3 across:
+- src/identity/routers/invitations.py
+- src/identity/routers/sessions.py
+- src/identity/routers/users.py
+- src/identity/routers/__init__.py
+- src/identity/store.py
+- src/graph_api.py
+- src/identity/deps.py
+- src/identity/policy.py
+- tests/identity/
+
+Mandatory Audit Checks:
+1. Anti-Cheating & Mock Verification: Verify tests and routes execute against real implementations, 0 mocks of session lifecycle, hashing, or database triggers.
+2. Cryptographic Authenticity: Verify authentic SHA-256 hashing (hash_token()), 64-hex char tokens, and zero plaintext tokens stored in DB.
+3. Database Integrity & Concurrency: Verify genuine row-level locking (FOR UPDATE), atomic single-use consumption, trigger adherence (fc27_users_status_guard).
+4. Non-Negotiable Invariants: Verify DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false remain strictly enforced, zero player delivery, no active worker/relay. Verify anti-impersonation: services cannot authenticate as humans.
+5. Secret Leakage Audit: Verify zero leaked secrets, tokens, or seeds in code, tests, or exceptions. Constant-time token verification used where applicable.
+
+Provide an explicit verdict in your handoff report: CLEAN or INTEGRITY VIOLATION.
+Write complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\handoff.md
+When finished, notify me with your verdict and report path via send_message.

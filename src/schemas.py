@@ -1,7 +1,8 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from uuid import UUID
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from src.dispatch.objective import METRIC_BOUNDS, validate_metric_bounds
 
 class Objective(BaseModel):
@@ -110,6 +111,64 @@ class SignedDecision(DecisionIntent):
     def _window(self):
         if self.expires_at <= self.issued_at:
             raise ValueError("invalid approval window")
+        return self
+
+
+class DecisionSubmission(BaseModel):
+    """Authoritative decision submission payload for Phase 2 Milestone 5.
+
+    Supports:
+    1. WebAuthn step-up evidence (proof_type="webauthn", default)
+    2. Legacy Phase 1 HMAC signature (proof_type="hmac", permitted only when APPROVAL_CLI_HMAC_ENABLED=true)
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    decision: Literal[
+        "approved", "rejected", "revision_requested",
+        "APPROVE", "REJECT", "REQUEST_REVISION"
+    ]
+    notes: str | None = Field(default="", max_length=2000)
+    proof_type: Literal["webauthn", "hmac"] = "webauthn"
+    authentication_evidence_id: UUID | None = None
+
+    # Delegated authority parameters
+    delegation_id: UUID | None = None
+    authority_basis: Literal["primary", "explicit_delegate"] | None = None
+
+    # Legacy Phase 1 HMAC parameters (used when proof_type="hmac")
+    hmac_signature: str | None = None
+    signature: str | None = None
+    nonce: str | None = None
+    thread_id: str | None = None
+    package_version: str | None = None
+    issued_at: int | None = None
+    expires_at: int | None = None
+    owner: str | None = None
+    selection: str | None = None
+    candidate_id: str | None = None
+    player_id: str | None = None
+
+    @field_validator("decision", mode="before")
+    @classmethod
+    def normalize_decision(cls, v: Any) -> str:
+        s = str(v).strip().lower()
+        if s in ("approve", "approved"):
+            return "approved"
+        if s in ("reject", "rejected"):
+            return "rejected"
+        if s in ("request_revision", "revision_requested"):
+            return "revision_requested"
+        return s
+
+    @model_validator(mode="after")
+    def validate_proof(self) -> "DecisionSubmission":
+        # Auto-detect legacy HMAC if signature supplied but proof_type was defaulted
+        if (self.hmac_signature or self.signature) and self.proof_type == "webauthn" and self.authentication_evidence_id is None:
+            self.proof_type = "hmac"
+
+        if self.proof_type == "webauthn":
+            if self.authentication_evidence_id is None:
+                raise ValueError("authentication_evidence_id required for webauthn proof_type")
         return self
 
 

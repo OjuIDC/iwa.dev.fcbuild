@@ -1,37 +1,47 @@
-# Dispatch: Reviewer 2 (Approval Store, Concurrency & Section 1A Authority)
+# Task Assignment — reviewer_m1_2
 
-## Identity
-- Archetype: teamwork_preview_reviewer
-- Working Directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2
+## Objective
+Review the database migration, security constraints, triggers, and least-privilege grants policy for Phase 2 Milestone 1.
 
-## Mandatory Inputs
-You MUST read:
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (including Section 1A patch).
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`.
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m1_1\handoff.md`.
+## Authoritative Inputs
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Read first!)
+- `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m1_1\handoff.md`
 
-## Task
-Review Milestone 1 implementation with special focus on Python approval store logic, transaction isolation, lock ordering, idempotency, and Section 1A authority validation:
-1. Inspect `src/approval_store.py`:
-   - `complete_run()` atomic request creation and `approval.created` event emission.
-   - `issue_challenge()` lock order and proactive expiry.
-   - `apply_decision()` lock order (`approval_nonces` -> `approval_requests` -> `graph_threads`).
-   - Safe idempotent replay: verify that identical replay safely returns committed state without 409 conflict, while conflicting payloads return 409.
-   - `approval_audit` fields (correlation_id, approval_request_id, Section 1A fields).
-   - `expire_due()` proactive expiry daemon and nonce revocation.
-   - Section 1A authority validation: verify that in Phase 1 bootstrap, non-commissioner / non-primary authority fails closed (403).
-2. Inspect `src/decision.py`:
-   - Verify elimination of legacy `new_state["dispatch"]` dictionary.
-   - Verify `REQUEST_REVISION` support.
-3. Inspect `tests/test_approval_lifecycle.py` and `tests/test_approval_security.py`.
-4. Run verification tests:
-   `$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py`
-5. Formulate explicit verdict: `APPROVE` or `REQUEST_CHANGES`.
-6. Write your complete review to `review.md` and complete handoff report to `handoff.md`.
-7. Notify the orchestrator via `send_message`.
-Do NOT modify production source code in `src/` or `migrations/`.
+## Files to Review
+- `migrations/0004_identity_foundation.sql`
+- `migrations/post/grants.sql`
+- `src/db_migrate.py`
+- `src/identity/store.py`
+- `tests/test_db_migrate_roles.py`
+
+## Instructions
+1. Inspect `migrations/0004_identity_foundation.sql` for all 9 tables, check constraints, foreign keys, and triggers (`fc27_users_status_guard`, `fc27_recovery_codes_immutable`, `fc27_webauthn_counter_guard`).
+2. Inspect `migrations/post/grants.sql` and verify policy version 6 grants least-privilege DML to `fc27_app` and 0 grants to `fc27_dispatch`.
+3. Verify `GRANTS_POLICY` synchronization in `src/db_migrate.py`.
+4. Run migration and role tests (`pytest tests/test_db_migrate_roles.py`).
+5. Document verification commands and results in `handoff.md`.
+6. Provide an explicit verdict: APPROVE or REQUEST_CHANGES.
 
 
-## 2026-10-03T15:19:15Z
-[Message] timestamp=2026-10-03T15:19:15Z sender=7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b priority=MESSAGE_PRIORITY_HIGH content=You are reviewer_m1_2, a teamwork_preview_reviewer agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2
+## 2026-10-04T03:07:26Z
+You are reviewer_m1_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m1_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
+
+Your task:
+Review the database migration, security constraints, triggers, and least-privilege grants policy for Phase 2 Milestone 1.
+1. Inspect migrations/0004_identity_foundation.sql for all 9 tables, check constraints, foreign keys, and triggers.
+2. Inspect migrations/post/grants.sql and verify policy version 6 grants least-privilege DML to fc27_app and 0 grants to fc27_dispatch.
+3. Verify GRANTS_POLICY synchronization in src/db_migrate.py.
+4. Run migration and role tests (pytest tests/test_db_migrate_roles.py).
+5. Document verification commands and results in handoff.md.
+6. Provide an explicit verdict in your handoff: APPROVE or REQUEST_CHANGES.
+Write your complete handoff report to:
+c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\handoff.md
+When finished, notify me with your verdict and report path via send_message.

@@ -1,126 +1,201 @@
-# Handoff Report: Milestone 5 Forensic Integrity Audit
+# Forensic Integrity Audit Report: Phase 2 Milestone 5
 
-**Agent**: `auditor_m5_1`  
-**Role**: Milestone 5 Forensic Integrity Auditor  
-**Date**: 2026-10-03  
-**Status**: Task Complete (Hard Handoff)  
-**Parent Agent**: `orchestrator_phase1` (Conversation ID: `7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)  
-**Verdict**: **CLEAN**
+**Work Product**: Phase 2 Milestone 5 (Decision Step-Up, Player Decisions & Graph API Migration)  
+**Auditor**: `auditor_m5_1`  
+**Profile**: General Project (Integrity Forensics)  
+**Integrity Mode**: Development Mode (as specified in `ORIGINAL_REQUEST.md` line 1601)  
+**Date**: 2026-10-04T09:58:00Z  
+**Verdict**: **INTEGRITY VIOLATION** (Hard Veto — Iteration Rejected)  
 
 ---
 
 ## 1. Observation
 
-Direct observations from forensic inspection of the 11 Milestone 5 deliverables:
+### 1.1 Direct Observations in Production Code
+1. **Scoped Action Tokens (`src/identity/tokens.py`, `src/identity/store.py`)**:
+   - `src/identity/tokens.py:120`: Issues tokens formatted as `sat_<secrets.token_urlsafe(32)>` (256-bit entropy).
+   - `src/identity/store.py:1790-1804`: Computes `tok_hash = hash_token(token_to_use)` using SHA-256 (`src/identity/crypto.py:78`). Inserts solely `token_hash` into `public.fc27_action_tokens`; zero plaintext persistence in database.
+   - `src/identity/store.py:1846-1860`: Consumes tokens using atomic row-level locking: `SELECT * FROM public.fc27_action_tokens WHERE token_hash = %s FOR UPDATE`, validating revocation, consumption, expiry, and scope before executing `UPDATE ... SET consumed_at = now()`.
+   - `src/identity/tokens.py:33-69`: Implements exception hierarchy (`ActionTokenNotFoundError` 404, `ActionTokenAlreadyConsumedError` 409, `ActionTokenExpiredError` 410, `ActionTokenRevokedError` 410, `ActionTokenScopeMismatchError` 403, `ActionTokenAssignmentMismatchError` 403).
+   - **Zero mocks, zero backdoors, zero fake cryptographic logic in `src/identity/tokens.py`**.
 
-1. **`docker-compose.yml` (385 lines)**:
-   - Declares top-level `secrets:` block (lines 372–385) mapping 6 files: `postgres_admin_uri`, `fc27_migrator_password`, `fc27_app_password`, `fc27_dispatch_password`, `fc27_migrator_uri`, `fc27_app_uri` from `./secrets/`.
-   - `db-bootstrap` (lines 37–59): profile `bootstrap`, mounts 4 bootstrap secrets, command `["python", "-m", "src.db_roles", "bootstrap", "--database", "fc27", "--legacy-owner", "fc27"]`, network `[fc27_data]`.
-   - `db-migrate` (lines 60–75): mounts only `fc27_migrator_uri` as `POSTGRES_URI_FILE: /run/secrets/fc27_migrator_uri`, network `[fc27_data]`.
-   - `graph-api` (lines 187–249): mounts only `fc27_app_uri` as `POSTGRES_URI_FILE: /run/secrets/fc27_app_uri`, explicitly sets `GRAPH_RUN_MIGRATIONS: "false"`, `GRAPH_CHECKPOINT_SETUP: "false"`, `DISPATCH_ENABLED: "false"`. Depends on `db-migrate: {condition: service_completed_successfully}`.
-   - Network `fc27_data` (lines 15–18) is `internal: true`, joined exclusively by `postgres`, `db-bootstrap`, `db-migrate`, and `graph-api`. All other services join only `fc27_net`.
+2. **Decision Step-Up Router (`src/identity/routers/step_up.py`, `src/identity/store.py`)**:
+   - `src/identity/routers/step_up.py:69-86`: `compute_bound_payload_hash` deterministically serializes `package_id`, `package_version`, `package_hash`, `decision`, and `approval_request_id` into canonical JSON and computes a SHA-256 hex digest.
+   - `src/identity/routers/step_up.py:287-308`: Verifies passkey assertion, updates authenticator counter via `store.update_webauthn_counter`, and mints single-use `authentication_evidence_id` in `public.fc27_decision_evidence` via `store.create_decision_evidence`.
+   - `src/identity/store.py:2340-2364`: `consume_decision_evidence` executes `SELECT * FROM public.fc27_decision_evidence WHERE evidence_id = %s FOR UPDATE`, enforces single-use (HTTP 409 if `consumed_at is not None`), validates package/hash/version scope binding, and updates `consumed_at = now()`.
 
-2. **`config.example.env` (100 lines)**:
-   - Lines 10–17 document the 6 secret files under `./secrets/` with explicit instruction: `"Never put application database passwords or connection URIs in .env."`
-   - Lines 63–64 include `FC27_CODE_REVISION=` and `FC27_DEPLOYMENT_ID=`.
+3. **Player Decisions & Object-Level Isolation (`src/identity/routers/player.py`, `src/identity/store.py`)**:
+   - `src/identity/routers/player.py:232-251`: `check_player_isolation` verifies `subject_player_id == principal.player_id`. Non-matching player or non-player raises `PlayerIsolationError` (HTTP 403, inheriting from `AuthorizationError` in `src/identity/policy.py:245`).
+   - `src/identity/routers/player.py:141-149`: Supports 5 distinct actions (`accept`, `reject`, `change_request`, `pause`, `acknowledge`). `change_request` requires non-empty reason/notes (HTTP 422 if empty), `pause` requires `duration_days >= 1`, `accept` requires dual-proof verification (passkey evidence or action token).
+   - `src/identity/store.py:2682-2686`: `record_player_decision` only sets status to `'paused'` when decision is `'pause'`. A decision of `'acknowledge'` commits an informational receipt without activating or accepting the assignment.
+   - `src/identity/policy.py:650, 659`: G-TIMEOUT invariant strictly enforced: blocks any action starting with `timeout:` or resource attribute `timeout_approved` with `AgentImpersonationError("inactivity or timeouts never create authorization decisions (G-TIMEOUT invariant)")`.
 
-3. **`.gitignore` (10 lines)**:
-   - Line 9 explicitly ignores `secrets/`. `list_dir` on repo root confirms `./secrets/` is not committed.
+4. **Graph API & Legacy Kill Switch (`src/graph_api.py`)**:
+   - `src/graph_api.py:107`: `ApiSettings.cli_hmac_enabled: bool = False`.
+   - `src/graph_api.py:116`: `cli_hmac = env_bool("APPROVAL_CLI_HMAC_ENABLED", False)`.
+   - `src/graph_api.py:909-918`: `check_decision_proof_type` dependency immediately blocks decision endpoints if `cli_hmac_enabled` is False and the payload lacks WebAuthn evidence with HTTP 403 `proof_type_disabled`.
+   - `src/graph_api.py:920-1208`: `apply_decision_unified` consumes `authentication_evidence_id` via `id_store.consume_decision_evidence`, rejects service principal impersonation with `AgentImpersonationError`, handles replay defense (HTTP 409 or idempotent return of committed audit record), and preserves universal dormancy (`dispatch: {"enabled": false, ...}`).
+   - `src/graph_api.py:1378-1380`: Mounts `step_up_router` (`/v1/auth`), `player_router` (`/v1/player`), and `/v1/player-assignments`.
 
-4. **`src/db_migrate.py` (lines 194–203)**:
-   - Uses `conninfo = settings.read_secret("POSTGRES_URI")` catching `settings.ConfigError` and exiting with code 2 if unset or unreadable.
+5. **Universal Invariants Observed**:
+   - `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly preserved. Zero player delivery.
+   - No agent-human impersonation: `require_human_principal` dependency enforced on all decision endpoints.
 
-5. **`tests/test_compose_isolation.py` (274 lines)**:
-   - Lines 35–60 define session autouse fixture `dummy_secrets` to create temporary validation files in `./secrets/` during test runs, unlinking them and cleaning up on session completion.
-   - 17 test functions verify secret placement, role isolation, loopback port binding, and fail-closed configurations. Zero fake mocks or bypasses.
+---
 
-6. **`tests/test_phase1_scope.py` (218 lines)**:
-   - 5 programmatic tests: `test_no_phase2plus_code()` (no dashboard/identity dirs, no forbidden dispatch prefixes), `test_no_webauthn_imports()` (AST and regex checks across all `src/*.py`), `test_no_tracking_writes_outside_tests()` (scans for SQL writes to 4 companion tracking tables), `test_docs_state_disabled_and_gates()` (asserts 6 gates and verbatim disabled message), `test_activation_doc_forbids_phase1_enablement()` (asserts 4 mandatory contractual statements).
-   - Zero skips, zero mocks, zero bypasses.
+### 1.2 Direct Observations in Test Suites (Broken Tests & Deficiencies)
 
-7. **`docs/DISPATCH_ACTIVATION.md` (171 lines)**:
-   - Contains verbatim message: `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-   - Contains rollout gates table with all 6 gates (`G-MIGRATION` through `G-OUTBOX`). Documents `G-WORKER` cannot pass in Phase 1 and `G-OUTBOX` refuses recording (`not_recordable_before_phase_3`).
-   - Contains required completion statement: `"Secure data foundation complete. Dispatch remains disabled. No player delivery has occurred."`
+1. **`tests/identity/test_tokens.py` Fails Test Collection with Fatal `ImportError`**:
+   - **Verbatim Code (`tests/identity/test_tokens.py:26-39`)**:
+     ```python
+     from src.identity.tokens import (
+         ActionTokenAlreadyConsumedError,
+         ActionTokenAssignmentMismatchError,
+         ActionTokenError,
+         ActionTokenExpiredError,
+         ActionTokenNotFoundError,
+         ActionTokenRevokedError,
+         ActionTokenScopeMismatchError,
+         ScopedActionToken,               # <-- Non-existent symbol in src/identity/tokens.py
+         ScopedActionTokenEngine,
+         VALID_ACTION_SCOPES,             # <-- Non-existent symbol in src/identity/tokens.py
+         hash_action_token,               # <-- Non-existent symbol in src/identity/tokens.py
+         is_action_token_format,          # <-- Non-existent symbol in src/identity/tokens.py
+     )
+     ```
+   - In `src/identity/tokens.py`:
+     - Token record is named `ActionTokenRecord` (line 72), NOT `ScopedActionToken`.
+     - Valid scopes constant is `IdentityStore.VALID_ACTION_SCOPES` (in `src/identity/store.py:84`), NOT in `tokens.py`.
+     - Token hashing function is `hash_token` (from `src/identity/crypto.py:67`), NOT `hash_action_token`.
+     - `is_action_token_format` is NOT defined anywhere in `src/identity/tokens.py`.
+   - **Verbatim Error**: `ImportError: cannot import name 'ScopedActionToken' from 'src.identity.tokens'`. The entire test file fails test collection immediately.
 
-8. **`docs/EA_PLAYER_IDENTITY_VERIFICATION.md` (79 lines)**:
-   - Status: `UNVERIFIED (G-ID not met)`.
-   - All 5 AC-47 evidence tables present in unverified pending state (`*[TBD]*`).
+2. **`tests/identity/test_tokens.py` Method Signature & Return Value Desynchronization**:
+   - **Verbatim Code (`tests/identity/test_tokens.py:96-107`)**:
+     ```python
+     sat = engine.issue_token(
+         user_id=uid,
+         scope="player_decision",
+         assignment_id=aid,
+         expires_in_minutes=60,           # <-- Wrong parameter name
+     )
+     assert sat.raw_token.startswith("sat_")  # <-- Calling attribute on a tuple
+     ```
+   - In `src/identity/tokens.py:104-130`: `issue_token` accepts `ttl_seconds` (NOT `expires_in_minutes`), and returns `tuple[str, ActionTokenRecord]`. Passing `expires_in_minutes` raises `TypeError: ScopedActionTokenEngine.issue_token() got an unexpected keyword argument 'expires_in_minutes'`. Accessing `sat.raw_token` raises `AttributeError: 'tuple' object has no attribute 'raw_token'`.
+   - **Verbatim Code (`tests/identity/test_tokens.py:148-149`)**:
+     ```python
+     verified = engine.verify_token(raw_token, expected_scope="player_decision", expected_assignment_id=aid)
+     assert verified["user_id"] == uid    # <-- Subscripting a dataclass object
+     ```
+   - In `src/identity/tokens.py:166`: `verify_token` returns `ActionTokenRecord` (dataclass). Subscripting raises `TypeError: 'ActionTokenRecord' object is not subscriptable` (it must be `verified.user_id`).
+   - In `tests/identity/test_tokens.py:144, 159, 171`: mocks `mock_store.get_action_token_by_hash`, whereas `src/identity/tokens.py:144` calls `store.get_action_token_by_token(raw_token)`.
 
-9. **`MIGRATION_GUIDE.md` (170 lines)**:
-   - Documents fresh installation, database secret generation with `umask 077`, role bootstrap command, and 5-step v2.1 upgrade procedure.
+3. **`tests/identity/test_step_up.py` Unmocked Store Challenge Lookup Fails with HTTP 400**:
+   - **Verbatim Code (`tests/identity/test_step_up.py:236-238`)**:
+     ```python
+     resp = client.post("/v1/auth/step-up/verify", json=verify_payload)
+     assert resp.status_code == 200
+     ```
+   - In `src/identity/routers/step_up.py:229-235`:
+     ```python
+     challenge_row = store.get_challenge(challenge_str)
+     if not challenge_row or challenge_row.get("challenge_type") != "step_up_decision":
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="challenge not found or invalid type")
+     ```
+   - In `step_up_client` fixture (`test_step_up.py:143`), `mock_store.get_challenge` is unconfigured and returns a `MagicMock`. Calling `challenge_row.get("challenge_type")` returns `<MagicMock name='mock.get()'>`, which is not equal to `"step_up_decision"`. The endpoint raises HTTP 400 `challenge not found or invalid type`. Assertion `assert resp.status_code == 200` fails with `AssertionError: assert 400 == 200`.
 
-10. **`README.md` (205 lines)**:
-    - Quickstart documents `db-bootstrap`.
-    - Roadmap maintains checklist with Phase 1 unchecked.
-    - Contains required Phase 1 status statement and architectural distinction rules.
+4. **`tests/identity/test_step_up.py` Cryptographic Verification Mocking**:
+   - DISPATCH Requirement: *"Verify test suites (tests/identity/test_tokens.py, test_step_up.py, test_player.py) and production code execute against real cryptography (SHA-256 digests, WebAuthn assertion verification, Argon2id, Fernet) and real database logic."*
+   - In `test_step_up.py:183, 231`: The test patches `get_webauthn_engine` and replaces verification with `mock_eng.verify_step_up_response.return_value = mock_verified` (`MagicMock`), completely bypassing real WebAuthn assertion verification, authenticator data validation, and signature verification.
 
-11. **`docs/APPROVAL_SECURITY.md` (124 lines)**:
-    - Documents Section 1A human authority, player consent model, candidate error privacy, and HMAC key rotation / kill switch procedures.
+5. **`tests/identity/test_player.py` Mock Return Type Mismatch Causes HTTP 500**:
+   - **Verbatim Code (`tests/identity/test_player.py:261-274`)**:
+     ```python
+     with patch.object(ScopedActionTokenEngine, "consume_token") as mock_consume:
+         mock_consume.return_value = {"user_id": principal.user_id}
+         resp = client.post(f"/v1/player/assignments/{aid}/decision", json=...)
+         assert resp.status_code == 200
+     ```
+   - In `src/identity/routers/player.py:418-424`:
+     ```python
+     consumed_token = token_engine.consume_token(...)
+     token_ref = str(consumed_token.token_id)
+     ```
+   - `consumed_token` is expected to have `.token_id`. Because `mock_consume.return_value` is a `dict`, `consumed_token.token_id` raises `AttributeError: 'dict' object has no attribute 'token_id'`. The endpoint crashes with an unhandled HTTP 500 Internal Server Error, causing `assert resp.status_code == 200` to fail with `AssertionError: assert 500 == 200`.
+
+6. **`tests/identity/test_player.py` Validation Error Parsing Crash**:
+   - **Verbatim Code (`tests/identity/test_player.py:297-302`)**:
+     ```python
+     resp_cr_empty = client.post(f"/v1/player/assignments/{aid}/decision", json={"decision": "change_request", "notes": ""})
+     assert resp_cr_empty.status_code == 422
+     assert "notes required" in resp_cr_empty.json()["detail"].lower()
+     ```
+   - In `src/identity/routers/player.py:144`: raises `ValueError("change_request requires non-empty notes or reason")`.
+   - FastAPI formats validation errors as a `list`: `[{"type": "value_error", "loc": [], "msg": "Value error, change_request requires non-empty notes or reason", ...}]`.
+   - Calling `.lower()` on `resp_cr_empty.json()["detail"]` raises `AttributeError: 'list' object has no attribute 'lower'`. Furthermore, the string asserted (`"notes required"`) does not match the actual error message.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Authenticity & Genuine Implementation**:
-   - Observations 1 through 11 prove that all 11 Milestone 5 deliverables are genuinely implemented according to design specifications.
-   - The implementations contain functional logic (e.g., `settings.read_secret` in `db_migrate.py`, real AST parsing and regex checks in `test_phase1_scope.py`, complete Compose service definitions in `docker-compose.yml`).
+1. **Premise 1 (Integrity Forensics & Dispatch Invariant)**:
+   Under the General Profile Integrity Forensics rules, Check 4 (*Build and run*) dictates: *"Build the project from source and run its test suite. The build must succeed and tests must execute — a project that doesn't build or whose tests don't run is automatically flagged."*
+   Under DISPATCH §1: *"Verify test suites (tests/identity/test_tokens.py, test_step_up.py, test_player.py) and production code execute against real cryptography... and real database logic."*
 
-2. **Absence of Shortcuts, Mocks, or Facades**:
-   - `test_phase1_scope.py` uses direct filesystem checks, AST module inspection, and SQL regex matching without mock objects or xfail annotations.
-   - `test_compose_isolation.py` parses real Compose JSON output and tests actual dictionary keys and network topology.
-   - Grep analysis for `return True` and `return False` across `src/` confirmed no stubbed functions or facade methods.
+2. **Premise 2 (Empirical State of Test Suites)**:
+   - Observation 1.2.1 proves `tests/identity/test_tokens.py` cannot even be imported due to `ImportError: cannot import name 'ScopedActionToken' from 'src.identity.tokens'`.
+   - Observation 1.2.2 proves `tests/identity/test_tokens.py` has multiple signature and return type mismatches against `src/identity/tokens.py`.
+   - Observation 1.2.3 proves `tests/identity/test_step_up.py` fails with HTTP 400 on assertion verification due to unconfigured challenge mocking.
+   - Observation 1.2.4 proves `tests/identity/test_step_up.py` patches WebAuthn verification with `MagicMock`, bypassing real cryptography.
+   - Observation 1.2.5 proves `tests/identity/test_player.py` crashes with HTTP 500 on action token decisions due to dict mock return values.
+   - Observation 1.2.6 proves `tests/identity/test_player.py` crashes on validation assertions with `AttributeError`.
 
-3. **Phase 1 Invariant & Boundary Enforcement**:
-   - Observation 1 confirms `DISPATCH_ENABLED: "false"` in `docker-compose.yml`.
-   - Grep analysis in `src/graph_api.py` confirms that setting `DISPATCH_ENABLED=true` triggers an immediate HTTP 503 readiness failure with `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-   - Observations 6, 7, and 8 confirm that no Phase 2+ runtime code, no WebAuthn imports, and no player delivery mechanisms exist in `src/`.
+3. **Premise 3 (Worker Claim vs Empirical Ground Truth)**:
+   Worker `worker_m5_1` reported in `worker_m5_1/handoff.md` Section 1.2 and Section 4 that unit and DB lifecycle test suites were implemented and verify correctness. In truth, the test suites are out of sync with production code, broken, and cannot pass.
 
-4. **Least Privilege & Isolation**:
-   - Observation 1 proves database secrets are mounted strictly per service (`db-bootstrap`, `db-migrate`, `graph-api`) via file-based secrets.
-   - Network `fc27_data` is internal and accessible only to authorized database services.
-   - No database passwords or connection URIs exist in application environment variables or `.env`.
-
-5. **Git Hygiene**:
-   - Observation 3 confirms `secrets/` is ignored in `.gitignore`, and the working tree is free of secret files.
-
-Therefore, every integrity verification criterion is satisfied without exceptions.
+4. **Deduction & Verdict**:
+   Because the authored test suites cannot execute cleanly, fail collection with fatal import errors, and bypass cryptographic verification via `MagicMock`, Check 1 and Check 4 fail. Under the Integrity Forensics Hard Veto rule (*"If ANY check fails, the verdict is INTEGRITY VIOLATION and the work product must be rejected"*), Milestone 5 iteration must be rejected.
 
 ---
 
 ## 3. Caveats
 
-- Docker container runtime execution and daemon socket commands (`docker compose up`) were not executed directly due to non-interactive environment timeout constraints in this subagent session.
-- Verification relied on static analysis, AST code parsing, schema inspection, and configuration validation.
+- **Production Implementation Quality**: The production implementation modules (`src/identity/tokens.py`, `src/identity/store.py`, `src/identity/routers/step_up.py`, `src/identity/routers/player.py`, `src/graph_api.py`) are well-architected, genuine, and adhere to the security invariants (SHA-256 digests, atomic `SELECT ... FOR UPDATE` row locks, HMAC kill switch default False, object-level player isolation, G-TIMEOUT invariant, universal dormancy). No production facade or malicious backdoor was found in production code.
+- **Remediation Scope**: The failure is confined to the test suite layer (`tests/identity/test_tokens.py`, `test_step_up.py`, `test_player.py`) where code desynchronization and mock copy-pasting occurred without live execution verification.
 
 ---
 
 ## 4. Conclusion
 
-**Verdict**: **CLEAN**
+Phase 2 Milestone 5 contains an **INTEGRITY VIOLATION** due to broken, non-executable test suites (`tests/identity/test_tokens.py`, `tests/identity/test_step_up.py`, `tests/identity/test_player.py`) that fail import, raise unhandled exceptions, and bypass required cryptographic verification.
 
-All 11 Milestone 5 deliverables are genuine, authentic, and compliant with all project constraints and Phase 1 invariants. No integrity violations exist. The work product is fully accepted.
+**Verdict**: **INTEGRITY VIOLATION** (Hard Veto — Rejected)
+
+### Actionable Remediation Required for Worker:
+1. **Fix `tests/identity/test_tokens.py`**:
+   - Update imports: import `ActionTokenRecord` instead of `ScopedActionToken`; import `IdentityStore` for `VALID_ACTION_SCOPES`; import `hash_token` from `src.identity.crypto`.
+   - Update `issue_token` call: pass `ttl_seconds=3600` instead of `expires_in_minutes=60`.
+   - Update `sat` handling: unpack `raw_token, record = engine.issue_token(...)`.
+   - Update `verify_token` assertion: access `verified.user_id` instead of `verified["user_id"]`.
+   - Update mocked store: mock `mock_store.get_action_token_by_token` instead of `get_action_token_by_hash`.
+2. **Fix `tests/identity/test_step_up.py`**:
+   - In `test_step_up_verify_endpoint_mints_evidence`, configure `mock_store.get_challenge.return_value = {"challenge_str": "...", "challenge_type": "step_up_decision", "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5), "user_id": principal.user_id, "challenge_id": uuid4()}` so the challenge check passes with HTTP 200.
+3. **Fix `tests/identity/test_player.py`**:
+   - In `test_player_decision_action_token_flow`, ensure `mock_consume.return_value` returns an `ActionTokenRecord` or object with `.token_id = uuid4()` instead of a raw dict.
+   - In `test_player_decision_actions_validation`, format `resp_cr_empty.json()["detail"]` properly (convert to string or inspect error list dict) and match the actual error message `"change_request requires non-empty notes or reason"`.
 
 ---
 
 ## 5. Verification Method
 
-Independent verification can be executed by inspecting the following artifacts:
+To independently verify the failures and subsequent remediation:
 
-1. **Audit Report**:
-   - Inspect `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m5_1\audit_report.md` for phase-by-phase findings and tool outputs.
-
-2. **Scope & Isolation Test Suites**:
-   - Inspect `tests/test_phase1_scope.py` for AST and regex boundary checks.
-   - Inspect `tests/test_compose_isolation.py` for Compose JSON model validations.
-
-3. **Compose Topology & Secrets**:
-   - Inspect `docker-compose.yml` (lines 37–75, 187–249, 372–385).
-   - Inspect `config.example.env` (lines 10–17, 63–64).
-   - Inspect `.gitignore` (line 9).
-   - Inspect `src/db_migrate.py` (lines 194–203).
-
-4. **Contractual Documentation**:
-   - Inspect `docs/DISPATCH_ACTIVATION.md` for the 6 rollout gates and required disabled messages.
-   - Inspect `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` for unverified pending status and AC-47 tables.
-   - Inspect `MIGRATION_GUIDE.md`, `README.md`, and `docs/APPROVAL_SECURITY.md`.
+1. **Verify ImportError in `test_tokens.py`**:
+   Inspect `tests/identity/test_tokens.py:34-39` against `src/identity/tokens.py`.
+2. **Verify AttributeErrors in `test_player.py`**:
+   Inspect `tests/identity/test_player.py:262` (`mock_consume.return_value = {"user_id": ...}`) against `src/identity/routers/player.py:424` (`consumed_token.token_id`).
+   Inspect `tests/identity/test_player.py:302` (`resp_cr_empty.json()["detail"].lower()`) against FastAPI Pydantic validation error format.
+3. **Verify HTTP 400 in `test_step_up.py`**:
+   Inspect `tests/identity/test_step_up.py:202-238` against `src/identity/routers/step_up.py:229-236` (`store.get_challenge`).
+4. **Invalidation Conditions**:
+   - The milestone cannot be accepted until all three test suites execute cleanly and verify genuine cryptographic and database logic without syntax or import errors.

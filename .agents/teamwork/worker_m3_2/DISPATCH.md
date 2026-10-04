@@ -1,137 +1,173 @@
-# Task Assignment: worker_m3_2 (Milestone 3 Iteration 2 Worker)
+# Dispatch Instructions for worker_m3_2
 
-## Mission
-Implement the agreed fixes for Milestone 3 Iteration 2 to resolve the defects identified during adversarial challenge:
-1. Fix test fixtures in `tests/conftest.py` (`sample_approved_dispatch_prereqs`, `make_dispatch`, and psycopg `_sqlcodes` registration).
-2. Fix `src/schemas.py` and `src/dispatch/objective.py` (`hide_input_in_errors=True` on `Objective` and `Candidate`, and pure-Python `validate_metric_bounds`).
-3. Fix Step 7 in `migrations/0003_dispatch_foundation.sql` (`fc27_dispatch_transition`) to allow commissioner retry (`failed -> queued`) while keeping in-transaction audit proof for `superseded`.
-4. Re-run migration and verify that all 40 tests across `tests/test_dispatch_schema.py` and `tests/test_dispatch_transition.py` pass cleanly with zero errors and zero regressions.
+**Agent ID**: `worker_m3_2`
+**Role**: Milestone 3 Iteration 2 Remediation Worker
+**Milestone**: Phase 2 Milestone 3 — Server-Side Sessions & Invitations Lifecycle (Remediation)
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2`
 
-## Working Directory
-`c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2`
+## Full Forensic Audit & Review Evidence (MANDATORY TO READ)
+1. Forensic Audit Report: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\handoff.md`
+2. Reviewer Report: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m3_1\handoff.md`
+3. Challenger Reports:
+   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_1\handoff.md`
+   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_2\handoff.md`
+4. Iteration 2 Explorer Blueprints & Patch Proposals:
+   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_store_1\handoff.md` (and `store_fixes.patch`)
+   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_policy_1\handoff.md`
+   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_suite_1\handoff.md`
+5. Authoritative Request: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+6. Project Plan: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
 
-## Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Challenger 2 Failure Report: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_2\challenge_report.md`
-4. The 3 Iteration 2 Explorer Reports:
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_fixtures_1\fixtures_fix_analysis.md`
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_schemas_1\schemas_fix_analysis.md`
-   - `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_tests_1\tests_fix_analysis.md`
-
-## MANDATORY INTEGRITY WARNING
-DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A teamwork_preview_auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
-
-## Write Ownership
-You hold exclusive write ownership of the following files:
-- `tests/conftest.py`
-- `src/schemas.py`
-- `src/dispatch/objective.py`
-- `migrations/0003_dispatch_foundation.sql` (Step 7 fix in `fc27_dispatch_transition`)
-- `tests/test_dispatch_schema.py`
-- `tests/test_dispatch_transition.py`
-
-## Implementation Steps
-
-### 1. `src/schemas.py` and `src/dispatch/objective.py`
-- In `src/schemas.py`:
-  - On `Objective`: set `model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)`.
-  - On `Candidate`: set `model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)`.
-  - Delegate bounds check in `Objective` to `validate_metric_bounds`.
-- In `src/dispatch/objective.py`:
-  - Implement standalone `validate_metric_bounds(metric: str, target_delta: float | int, policy: str = "fc27-objective-bounds-v1")`.
-
-### 2. `tests/conftest.py`
-- Add dynamic mapping of custom SQLSTATEs to `psycopg.errors._sqlcodes`:
-  ```python
-  import psycopg.errors
-  for _code in ("FC001", "FC002", "FC003", "FC004", "FC005", "FC006", "FC007"):
-      psycopg.errors._sqlcodes[_code] = psycopg.errors.RaiseException
-  ```
-- Replace lines 260–382 in `tests/conftest.py` following the drop-in design in `fixtures_fix_analysis.md`:
-  - `sample_approved_dispatch_prereqs`: wrap in `with conn.transaction():`, provide terminal fields (`approved_by='batmanL8'`, `approved_at=now()`, `decision_payload='{"decision":"approved"}'::jsonb`), and use distinct paired threads (`tid` for `audit_id_1`, `tid_2` for `audit_id_2`) so `approval_audit_one_decision_per_thread` is never violated.
-  - `make_dispatch`: generate distinct `d_tid` and paired `d_req_id` on each call to prevent unique constraint collisions on `approval_audit(thread_id)`.
-
-### 3. `migrations/0003_dispatch_foundation.sql`
-- In Step 7 of `fc27_dispatch_transition` (around lines 1499–1514):
-  Change:
-  ```sql
-  IF v_actor_kind = 'commissioner' THEN
-      IF p_to_status = 'superseded' THEN
-          ...
-      ELSE
-          RAISE EXCEPTION 'commissioner edge to % deferred to Phase 2', p_to_status USING ERRCODE = 'FC004';
-      END IF;
-  END IF;
-  ```
-  to:
-  ```sql
-  IF v_actor_kind = 'commissioner' AND p_to_status = 'superseded' THEN
-      SELECT EXISTS (
-          SELECT 1 FROM public.approval_audit
-           WHERE xmin = pg_catalog.pg_current_xact_id()::xid
-             AND approved_by = substring(v_actor from 14)
-      ) INTO v_has_audit;
-      IF NOT v_has_audit THEN
-          RAISE EXCEPTION 'supersede requires approval_audit committed in current transaction'
-              USING ERRCODE = 'FC004';
-      END IF;
-  END IF;
-  ```
-
-## Verification Commands
-Execute the full test verification suite against local PostgreSQL 16:
-```pwsh
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py tests/test_graph_persistence.py tests/test_graph_api_v1.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py
-```
-
-## Completion Criteria
-1. All 18 tests in `tests/test_dispatch_schema.py` pass.
-2. All 22 tests in `tests/test_dispatch_transition.py` pass.
-3. Zero regressions across baseline suites (`test_db_roles`, `test_approval_lifecycle`, `test_graph_persistence`, `test_graph_api_v1`).
-4. Write detailed `handoff.md` in your working directory and notify the orchestrator via `send_message`.
-
-
-## 2026-10-03T18:25:28Z
-You are worker_m3_2, a teamwork_preview_worker agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2
-
-Read your instructions in:
-c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2\DISPATCH.md
-
-MANDATORY: You MUST read:
-1. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md (authoritative user request + Section 1A patch)
-2. c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-3. Challenger 2 Failure Report: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\challenger_m3_2\challenge_report.md
-4. The 3 Iteration 2 Explorer Reports:
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_fixtures_1\fixtures_fix_analysis.md
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_schemas_1\schemas_fix_analysis.md
-   - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_it2_tests_1\tests_fix_analysis.md
+## Mandatory Non-Negotiable Invariants
+- `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced at all times.
+- Zero player delivery; no active worker or relay.
+- Plaintext tokens (sessions and invitations) are NEVER stored in PostgreSQL; only deterministic SHA-256 hashes (`hash_token()`).
+- Single-use invitation consumption enforced under atomic `FOR UPDATE` lock.
+- User account status transition strictly respects `fc27_users_status_guard`: `invited` -> `active`.
+- Dual session timeouts: 30-minute idle expiration strictly capped at 24-hour absolute expiration.
+- Suspended or disabled accounts fail closed immediately on session validation (HTTP 401).
 
 MANDATORY INTEGRITY WARNING:
 DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A teamwork_preview_auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
 
-Write ownership:
-- tests/conftest.py
-- src/schemas.py
-- src/dispatch/objective.py
-- migrations/0003_dispatch_foundation.sql (Step 7 in fc27_dispatch_transition)
-- tests/test_dispatch_schema.py
-- tests/test_dispatch_transition.py
+## File Ownership
+You exclusively own and may edit:
+- `src/identity/store.py`
+- `src/identity/policy.py`
+- `src/identity/routers/sessions.py`
+- `src/identity/routers/invitations.py`
+- `src/identity/routers/users.py`
+- `tests/identity/test_routers_invitations.py`
+- `tests/identity/test_routers_sessions.py`
+- `tests/identity/test_routers_users.py`
+- `tests/identity/test_policy.py`
 
-Task:
-Implement the agreed fixes across your owned files:
-1. tests/conftest.py:
-   - Register custom SQLSTATEs in psycopg.errors._sqlcodes:
-     for _code in ("FC001", "FC002", "FC003", "FC004", "FC005", "FC006", "FC007"): psycopg.errors._sqlcodes[_code] = psycopg.errors.RaiseException
-   - Replace sample_approved_dispatch_prereqs and make_dispatch per fixtures_fix_analysis.md: provide terminal fields (approved_by, approved_at, decision_payload), wrap in conn.transaction(), use dedicated paired thread per decision.
-2. src/schemas.py & src/dispatch/objective.py:
-   - Set model_config = ConfigDict(extra="forbid", hide_input_in_errors=True) on Objective and Candidate.
-   - Implement validate_metric_bounds in src/dispatch/objective.py.
-3. migrations/0003_dispatch_foundation.sql:
-   - Change Step 7 condition to IF v_actor_kind = 'commissioner' AND p_to_status = 'superseded' THEN ... END IF; to permit commissioner retry (failed -> queued).
+## Remediation Tasks
 
-Execute verification tests:
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_db_roles.py tests/test_db_migrate_roles.py tests/test_events_outbox.py tests/test_migration_0003.py tests/test_approval_lifecycle.py tests/test_approval_security.py tests/test_graph_persistence.py tests/test_graph_api_v1.py tests/test_dispatch_schema.py tests/test_dispatch_transition.py
+### 1. Store Updates (`src/identity/store.py`)
+- In `create_session`:
+  - Add `club_id: str | None = None` and `**kwargs: Any` to the signature.
+  - Forward `scope_club_id=club_id` to `_safe_record_event`.
+  - When `club_id` is supplied, include `"club_id": club_id` in the returned session dict.
+- In `rotate_session`:
+  - Enforce atomic concurrency locking:
+    ```python
+    res = conn.execute(
+        "UPDATE public.fc27_sessions SET revoked_at = now() WHERE session_id = %s AND revoked_at IS NULL",
+        (old_sess["session_id"],),
+    )
+    if res.rowcount == 0:
+        raise IdentityStoreError(409, "session already rotated or revoked")
+    ```
+- In `assign_role`:
+  - Make `actor: str = "system"` default.
+  - Add alias method:
+    ```python
+    def assign_user_role(self, user_id: UUID, role: str, *, granted_by: str = "system", actor: str = "system", correlation_id: UUID | None = None) -> dict[str, Any]:
+        return self.assign_role(user_id=user_id, role=role, granted_by=granted_by, actor=actor, correlation_id=correlation_id)
+    ```
 
-Write handoff.md in your working directory and notify the orchestrator with send_message when done.
+### 2. Policy Updates (`src/identity/policy.py`)
+- In `authorize()` Step 5:
+  - Enforce session ownership isolation: for `ActionType.SESSION_VIEW`, `ActionType.SESSION_REVOKE`, and `ActionType.SESSION_REVOKE_ALL`:
+    - If `principal.is_player` and not (commissioner or delegate): check `player_matches or user_matches`, raise `PlayerIsolationError` if not matched.
+    - If not player, check if `res.owner_user_id is not None` and `str(res.owner_user_id) != str(principal.user_id)`. If so, require `principal.is_commissioner or principal.is_delegate`. If neither, raise:
+      ```python
+      raise RoleNotPermittedError(
+          "only commissioner or delegate can view or revoke another user's session",
+          role=",".join(r.value for r in principal.roles),
+          action=act.value,
+          resource_type=res.resource_type,
+      )
+      ```
+    - Self-session access (`res.owner_user_id == principal.user_id`) remains permitted for all roles possessing base permissions.
+
+### 3. Session Router Updates (`src/identity/routers/sessions.py`)
+- In `rotate_session`:
+  - Guard against arbitrary client elevation: if `body and body.new_auth_level`:
+    - Disallow self-elevation to `step_up_passkey` (and `mfa_totp`) without proof:
+      ```python
+      if body.new_auth_level in {"step_up_passkey", "mfa_totp"} and principal.auth_level != body.new_auth_level:
+          raise HTTPException(
+              status_code=status.HTTP_403_FORBIDDEN,
+              detail=f"cannot elevate session to '{body.new_auth_level}' without step-up verification evidence",
+          )
+      ```
+  - In `SessionRotateResponse`: ensure field aliases support both `session_token` and `new_session_token`, `session_id`, `old_session_id`.
+- Anti-Impersonation:
+  - Enforce `Depends(require_human_principal)` across all human session routes (`/session`, `/sessions`, `/touch`, `/rotate`, `/logout`, `/me`, `/{session_id}`).
+  - In `_build_session_response`: remove synthetic commissioner creation for service tokens; if `principal.is_service` raise `AgentImpersonationError`.
+
+### 4. Test Suite Repairs
+- In `tests/identity/test_routers_sessions.py`:
+  - Line 154: change `SET expires_at = ...` to `SET absolute_expires_at = ...`.
+  - Line 165: change `data["expires_at"]` to `data["absolute_expires_at"]`.
+  - Verify `test_user_cannot_revoke_other_user_session` asserts `res.status_code == 403` and passes with the hardened policy.
+- Clean up test call sites passing `club_id` to `create_session` across all test files (even with store `create_session` accepting `club_id`, clean them up for consistency).
+- Ensure all 3 test files (`test_routers_invitations.py`, `test_routers_sessions.py`, `test_routers_users.py`) and adversarial suites execute cleanly.
+
+### 5. Verification Commands
+- `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`
+- `pytest tests/identity/test_routers_invitations.py tests/identity/test_routers_sessions.py tests/identity/test_routers_users.py -v`
+- `pytest tests/identity/test_policy.py tests/identity/test_store.py -v`
+- `pytest tests/identity/test_session_lifecycle_adversarial.py tests/identity/test_adversarial_m3_2.py -v`
+
+### 6. Deliver Hard Handoff Report
+- Write your complete handoff report to:
+  `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2\handoff.md`.
+When finished, notify me with your report path and verification results via `send_message`.
+
+
+## 2026-10-04T05:21:58Z
+You are worker_m3_2, a versatile worker agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+
+Explorer handoffs and patches to implement:
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_store_1\handoff.md
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_store_1\store_fixes.patch
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_policy_1\handoff.md
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\explorer_m3_i2_suite_1\handoff.md
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\auditor_m3_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2\DISPATCH.md before starting work.
+
+MANDATORY INTEGRITY WARNING:
+DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A teamwork_preview_auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
+
+File ownership:
+You exclusively own and may edit:
+- src/identity/store.py
+- src/identity/policy.py
+- src/identity/routers/sessions.py
+- src/identity/routers/invitations.py
+- src/identity/routers/users.py
+- tests/identity/test_routers_invitations.py
+- tests/identity/test_routers_sessions.py
+- tests/identity/test_routers_users.py
+- tests/identity/test_policy.py
+
+Implement Milestone 3 Iteration 2 Remediation per your DISPATCH.md:
+1. In src/identity/store.py:
+   - create_session signature: accept club_id: str | None = None and **kwargs: Any. Forward scope_club_id=club_id to _safe_record_event. Include club_id in returned dict if present.
+   - rotate_session: enforce atomic concurrency locking with AND revoked_at IS NULL on UPDATE and raise IdentityStoreError(409) if res.rowcount == 0.
+   - assign_role / assign_user_role: make actor="system" default and add alias method assign_user_role.
+2. In src/identity/policy.py:
+   - In authorize() Step 5: enforce session ownership isolation for SESSION_VIEW, SESSION_REVOKE, SESSION_REVOKE_ALL. If res.owner_user_id is not None and != principal.user_id, require principal is commissioner or delegate, else raise RoleNotPermittedError (403). Player isolation applies to player principals.
+3. In src/identity/routers/sessions.py:
+   - In rotate_session: guard against client self-elevation to step_up_passkey without proof (raise 403 Forbidden). Ensure SessionRotateResponse supports session_token and new_session_token.
+   - Enforce Depends(require_human_principal) on all human session endpoints. Disallow service principals.
+4. Repair test suites:
+   - In tests/identity/test_routers_sessions.py: update line 154 to SET absolute_expires_at and line 165 to data["absolute_expires_at"].
+   - In test_user_cannot_revoke_other_user_session: assert res.status_code == 403.
+   - Clean up test call sites passing club_id to create_session.
+5. Execute verification commands:
+   - .\.venv\Scripts\pytest.exe tests/test_packaging.py tests/test_phase1_scope.py -v
+   - .\.venv\Scripts\pytest.exe tests/identity/test_routers_invitations.py tests/identity/test_routers_sessions.py tests/identity/test_routers_users.py -v
+   - .\.venv\Scripts\pytest.exe tests/identity/test_policy.py tests/identity/test_store.py -v
+   - .\.venv\Scripts\pytest.exe tests/identity/test_session_lifecycle_adversarial.py tests/identity/test_adversarial_m3_2.py -v
+6. Deliver complete hard handoff report to:
+   c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m3_2\handoff.md
+When finished, notify me with your report path and verification results via send_message.

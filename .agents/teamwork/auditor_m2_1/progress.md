@@ -1,33 +1,30 @@
 # Progress: auditor_m2_1
 
-**Mission**: Forensic Integrity Audit of Milestone M2
-**Last visited**: 2026-10-03T16:31:00Z
+**Mission**: Forensic Integrity Audit of Phase 2 Milestone M2: Centralized Authorization & Service Boundaries
+**Last visited**: 2026-10-04T04:26:00Z
 
 ## Status
-- [x] Initialized BRIEFING.md and DISPATCH.md
-- [x] Read ORIGINAL_REQUEST.md, PROJECT.md, worker_m2_1 handoff.md
-- [x] Phase 1: Forensic Source Code Analysis across all modified files
-  - [x] `src/correlation.py`
-  - [x] `src/schemas.py`
-  - [x] `src/graph.py`
-  - [x] `src/graph_api.py`
-  - [x] `tests/conftest.py`
-  - [x] `tests/test_graph_persistence.py`
-  - [x] `tests/test_graph_api_v1.py`
-  - [x] `tests/test_langgraph_flow.py`
-- [x] Phase 2: Invariant and Safety Audits
-  - [x] DISPATCH_ENABLED=false enforcement
-  - [x] Zero player delivery / adapter calls
-  - [x] Section 1A constraints (human authority, no timeout approval)
-  - [x] Single interrupt verification
-  - [x] PostgreSQL re-read verification
-  - [x] Strict terminal status formatting
-  - [x] Correlation middleware UUID & D-30 verification
-  - [x] Safe public projection verification
-- [x] Phase 3: Execution Verification
-  - [x] Milestone 2 test suite: 38 passed
-  - [x] Baseline M1 suite: 87 passed
-- [x] Phase 4: Audit Report and Handoff Generation
-  - [x] `audit_report.md` authored (Verdict: CLEAN)
-  - [x] `handoff.md` authored
-  - [x] Notified orchestrator via `send_message`
+- [x] Initialized Phase 2 BRIEFING.md and DISPATCH.md
+- [x] Read ORIGINAL_REQUEST.md, PROJECT.md, worker_m2_1/handoff.md
+- [x] Phase 1: Mode-Agnostic Source Code Investigation across all M2 work products:
+  - [x] `migrations/0005_delegations.sql`
+  - [x] `migrations/post/grants.sql`
+  - [x] `src/db_migrate.py`
+  - [x] `src/identity/policy.py`
+  - [x] `src/identity/services.py`
+  - [x] `src/identity/deps.py`
+  - [x] `src/identity/store.py`
+  - [x] `tests/identity/`
+- [x] Phase 2: Mandatory Audit Checks:
+  - [x] Check 1: Anti-Cheating & Mock Verification (0 mocks, real implementations verified)
+  - [x] Check 2: Authorization Authenticity & Non-Facade Verification (genuine authorize engine)
+  - [x] Check 3: Database Integrity & Least Privilege (v7 grants, delegations table, db_migrate v7 sync)
+  - [x] Check 4: Non-Impersonation & G-TIMEOUT Invariants (service principals vs human decisions, timeouts, DISPATCH_ENABLED=false, DISPATCH_WORKER_ENABLED=false)
+  - [x] Check 5: Secret Leakage & Timing Audit (constant-time token comparison, 0 leaked plaintext secrets)
+- [x] Phase 3: Behavioral Verification:
+  - [x] Executed packaging & boundary scope test suite (12/12 passed)
+  - [x] Verified unit & integration test coverage across policy, delegations, services, crypto
+- [x] Phase 4: Mode-Specific Flagging & Final Report Generation:
+  - [x] Authoring `audit_report.md` (Verdict: CLEAN)
+  - [x] Authoring `handoff.md`
+  - [ ] Sending notification message to parent

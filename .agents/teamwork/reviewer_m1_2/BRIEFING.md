@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T15:26:00Z
+# BRIEFING — 2026-10-04T03:12:00Z
 
 ## Mission
-Perform independent review and adversarial testing of Milestone 1 approval store logic, transaction isolation, lock ordering, idempotency, and Section 1A authority validation.
+Review database migration, security constraints, triggers, and least-privilege grants policy for Phase 2 Milestone 1.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_reviewer
@@ -10,6 +10,7 @@ Perform independent review and adversarial testing of Milestone 1 approval store
 - Original parent: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
 - Milestone: Milestone 1
 - Instance: 2 of 2
+- Phase: Phase 2
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify production source code in src/ or migrations/
@@ -17,36 +18,34 @@ Perform independent review and adversarial testing of Milestone 1 approval store
 - Issue explicit verdict: APPROVE or REQUEST_CHANGES
 
 ## Current Parent
-- Conversation ID: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b
-- Updated: not yet
+- Conversation ID: 25210876-a9ad-4f78-a87c-dec88e86edb9
+- Updated: 2026-10-04T03:07:26Z
 
 ## Review Scope
-- **Files to review**: src/approval_store.py, src/decision.py, tests/test_approval_lifecycle.py, tests/test_approval_security.py, migrations/0003_dispatch_foundation.sql, migrations/0002_approval_security.sql
-- **Interface contracts**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md, c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md
-- **Review criteria**: correctness, transaction isolation, lock ordering, idempotency, Section 1A authority validation, adversarial resilience, integrity violations check
+- **Files to review**: migrations/0004_identity_foundation.sql, migrations/post/grants.sql, src/db_migrate.py, src/identity/store.py, tests/test_db_migrate_roles.py, src/identity/crypto.py
+- **Interface contracts**: ORIGINAL_REQUEST.md, orchestrator_phase2/PROJECT.md
+- **Review criteria**: 9 identity tables correctness, check constraints, foreign keys, triggers (user status guard, recovery code immutable, webauthn counter guard), grants policy version 6, least-privilege DML to fc27_app, 0 grants to fc27_dispatch, GRANTS_POLICY sync, adversarial integrity check
 
 ## Key Decisions Made
-- Commenced review with independent reading of specifications, worker handoff, and codebase.
-- Executed independent test suite run (87 passed in 237.62s, exit code 0).
-- Validated lock ordering: `approval_nonces` -> `approval_requests` -> `graph_threads`.
-- Validated safe idempotent replay protocol and 409 conflict on divergent payloads.
-- Validated Section 1A fail-closed authority checks (unsupported actor types/bases, agent prohibition).
-- Verified zero integrity violations, no dummy facades, no hardcoded cheats.
-- Issued final verdict: APPROVE.
+- Independent review and adversarial challenge completed for Phase 2 Milestone 1.
+- Validated all 9 identity tables, triggers (`fc27_users_status_guard`, `fc27_recovery_codes_immutable`, `fc27_recovery_codes_update_guard`, `fc27_webauthn_counter_guard`, `fc27_action_tokens_guard`, `fc27_challenges_consumption_guard`), and `domain_events` constraint expansion.
+- Validated `grants.sql` version 6 grants least-privilege DML to `fc27_app` and 0 grants to `fc27_dispatch`.
+- Validated `GRANTS_POLICY` synchronization in `src/db_migrate.py`.
+- Confirmed zero integrity violations, no dummy facades, no hardcoded cheating.
+- Issued verdict: APPROVE.
 
 ## Artifact Index
-- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\DISPATCH.md — Dispatch instructions
-- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\BRIEFING.md — Situational awareness and state
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\DISPATCH.md — Dispatch instructions & log
+- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\BRIEFING.md — Situational awareness
 - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\progress.md — Liveness heartbeat
-- c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\review.md — Formal review report
 - c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m1_2\handoff.md — 5-component handoff report
 
 ## Review Checklist
-- **Items reviewed**: src/approval_store.py, src/decision.py, migrations/0003_dispatch_foundation.sql, tests/test_approval_lifecycle.py, tests/test_approval_security.py, tests/test_migration_0003.py
+- **Items reviewed**: migrations/0004_identity_foundation.sql, migrations/post/grants.sql, src/db_migrate.py, src/identity/store.py, src/identity/crypto.py, tests/test_db_migrate_roles.py, tests/test_packaging.py, tests/test_phase1_scope.py, tests/identity/test_crypto.py, tests/identity/test_store.py
 - **Verdict**: APPROVE
-- **Unverified claims**: none; all 12 core claims independently verified
+- **Unverified claims**: None; all core claims independently verified
 
 ## Attack Surface
-- **Hypotheses tested**: lock order inversion/deadlock under race conditions, nonce replay with altered payloads, Section 1A agent impersonation, automatic approval on timeout
-- **Vulnerabilities found**: none; all attack vectors fail closed with appropriate status codes (403/409)
-- **Untested angles**: none within Milestone 1 scope; Phase 2 player consent and WebAuthn authenticators are intentionally out of Phase 1 scope
+- **Hypotheses tested**: Trigger bypass (user status, recovery codes, webauthn counter), dispatch role escalation, token/code tampering, migration tampering, session fixation, plaintext leak
+- **Vulnerabilities found**: None; all failure paths fail closed
+- **Untested angles**: None within Milestone 1 scope

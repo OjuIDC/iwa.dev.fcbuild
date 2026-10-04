@@ -6,6 +6,7 @@ generators, and test client factories for Tiers 1-4.
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from typing import Any, Callable
 
@@ -16,7 +17,13 @@ from fastapi.testclient import TestClient
 from src import approval
 from src.approval_store import ApprovalStore
 from src.graph_api import ApiSettings, create_app
+from src.identity.services import reset_service_credentials_for_testing
 from src.security import Authenticator
+from tests.e2e.phase2_helpers import (
+    BFF_SERVICE_TOKEN,
+    GRAPH_SERVICE_TOKEN,
+    WORKER_SERVICE_TOKEN,
+)
 from tests.helpers import (
     COMMISSIONER_ID,
     COMMISSIONER_TOKEN,
@@ -27,6 +34,25 @@ from tests.helpers import (
     settings,
     signed,
 )
+
+# Ensure default service credentials and security configuration in test environment
+os.environ.setdefault("BFF_SERVICE_TOKEN", BFF_SERVICE_TOKEN)
+os.environ.setdefault("GRAPH_SERVICE_TOKEN", GRAPH_SERVICE_TOKEN)
+os.environ.setdefault("WORKER_SERVICE_TOKEN", WORKER_SERVICE_TOKEN)
+os.environ.setdefault("APPROVAL_CLI_HMAC_ENABLED", "false")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def configure_test_service_tokens():
+    """Ensures service credential loader does not fail on missing environment variables."""
+    os.environ.setdefault("BFF_SERVICE_TOKEN", BFF_SERVICE_TOKEN)
+    os.environ.setdefault("GRAPH_SERVICE_TOKEN", GRAPH_SERVICE_TOKEN)
+    os.environ.setdefault("WORKER_SERVICE_TOKEN", WORKER_SERVICE_TOKEN)
+    os.environ.setdefault("APPROVAL_CLI_HMAC_ENABLED", "false")
+    reset_service_credentials_for_testing(None)
+    yield
+    reset_service_credentials_for_testing(None)
+
 
 E2E_SERVICE_TOKEN = SERVICE_TOKEN
 E2E_COMMISSIONER_TOKEN = COMMISSIONER_TOKEN

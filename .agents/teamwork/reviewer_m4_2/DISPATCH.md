@@ -1,48 +1,58 @@
-# Dispatch: Milestone 4 Reviewer 2 (Gates, Creation, Graph API & Test Suite)
+# Dispatch Instructions for reviewer_m4_2
 
-**Agent**: `reviewer_m4_2`
-**Role**: Milestone 4 Reviewer 2 (Gates, Creation, Graph API & Test Suite)
+**Agent ID**: `reviewer_m4_2`
+**Role**: Bootstrap Lock & Recovery Reviewer
+**Milestone**: Phase 2 Milestone 4 — WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery
 **Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2`
-**Timestamp**: 2026-10-03T20:36:00Z
 
----
+## Authoritative Inputs
+- Authoritative Request: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (MANDATORY TO READ)
+- Project Plan: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+- Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md`
 
-## 1. Objective
-Objectively review and challenge Milestone 4 gate evaluation logic, atomic approval-to-dispatch creation, Graph API routes, and the 24-test suite.
+## Review Tasks
+1. Inspect `migrations/0006_bootstrap_and_recovery.sql`, `migrations/post/grants.sql` (v8), and `src/db_migrate.py`:
+   - `public.fc27_bootstrap_locks` with trigger `fc27_reject_mutation()` on UPDATE/DELETE.
+   - Grants: `SELECT, INSERT` on `fc27_bootstrap_locks` granted to `fc27_app`.
+   - View `public.fc27_credentials` mapping `sign_counter AS sign_count`.
+2. Inspect `src/identity/recovery.py` and `src/identity/routers/recovery.py`:
+   - `generate_recovery_codes`: 10 Crockford Base32 unconfusable hyphenated codes `fc27-xxxx-xxxx-xxxx`.
+   - Argon2id hashing via `src/identity/crypto.py:hash_recovery_code`.
+   - Atomic consumption under trigger `fc27_guard_recovery_code_consumption` (`UPDATE ... SET consumed_at = now() WHERE code_id = %s AND consumed_at IS NULL`).
+   - One-time bootstrap lock: `POST /v1/auth/bootstrap` succeeds on first run, permanently locked; subsequent calls return HTTP 409 Conflict.
+   - `GET /v1/auth/bootstrap/status` returns correct state.
+3. Execute verification tests:
+   - `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`
+   - `pytest tests/identity/test_recovery.py tests/identity/test_bootstrap.py -v`
+4. Provide explicit verdict: APPROVE or REQUEST_CHANGES.
+5. Deliver complete handoff report to:
+   `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\handoff.md`.
 
-## 2. Mandatory Reading
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md`
-4. `src/dispatch/gates.py`
-5. `src/dispatch/creation.py`
-6. `src/approval_store.py`
-7. `src/graph_api.py`
-8. `tests/helpers.py`, `tests/conftest.py`, `tests/test_dispatch_creation.py`
+## 2026-10-04T06:14:13Z
+You are reviewer_m4_2, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m4_1\handoff.md
 
-## 3. Scope of Review
-1. **Activation Gates Logic (`src/dispatch/gates.py`)**:
-   - Verify `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})` (`G-OUTBOX` rejected in Phase 1; C-3).
-   - Verify `GATE_SIGNED_FIELDS` strictly excludes `X-Correlation-Id` (C-4, C-5).
-   - Verify `DeploymentIdentity` validation and gate matching.
-   - Verify `evaluate_gates()` checks G-MIGRATION, G-GRANTS, G-WORKER, G-ID, G-ATOMIC, G-OUTBOX.
-   - Verify `dispatch_effective()` returns False in Phase 1 production.
-2. **Atomic Dispatch Creation (`src/dispatch/creation.py` & `src/approval_store.py`)**:
-   - Verify candidate objective model/bounds check.
-   - Verify numeric player ID format `^[0-9]{1,20}$` and exact matching in `public.players` with active/verified status.
-   - Verify advisory transaction lock `pg_advisory_xact_lock(hashtextextended(player_id || '|' || owner || '|' || metric, 0))`.
-   - Verify supersede transition before new dispatch insert.
-   - Verify `ApprovalStore.apply_decision` runs dispatch creation in transaction block with clean rollback on `NotDispatchable`.
-   - Verify idempotent replay returns winner's `dispatch_id`.
-3. **Graph API Endpoints & Test Suite**:
-   - Verify `/v1/config/dispatch`, `/v1/activation-gates/{gate_id}/challenge`, `/v1/activation-gates/{gate_id}`.
-   - Verify all 24 tests in `tests/test_dispatch_creation.py`.
-4. **Execution Verification**:
-   Run tests:
-   ```powershell
-   $env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_dispatch_creation.py tests/test_dispatch_transition.py
-   ```
-5. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-6. Write `review.md` and `handoff.md` in your working directory.
-7. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code in `src/` or `migrations/`.
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\DISPATCH.md before starting work.
+
+Your task:
+Review the Commissioner Bootstrap Lock and Recovery Codes implementation for Phase 2 Milestone 4:
+1. Inspect migrations/0006_bootstrap_and_recovery.sql, migrations/post/grants.sql (v8), and src/db_migrate.py:
+   - public.fc27_bootstrap_locks with trigger fc27_reject_mutation() on UPDATE/DELETE.
+   - Grants: SELECT, INSERT on fc27_bootstrap_locks granted to fc27_app.
+   - View public.fc27_credentials mapping sign_counter AS sign_count.
+2. Inspect src/identity/recovery.py and src/identity/routers/recovery.py:
+   - generate_recovery_codes: 10 Crockford Base32 unconfusable hyphenated codes fc27-xxxx-xxxx-xxxx.
+   - Argon2id hashing via src/identity/crypto.py:hash_recovery_code.
+   - Atomic consumption under trigger fc27_guard_recovery_code_consumption (UPDATE ... SET consumed_at = now() WHERE code_id = %s AND consumed_at IS NULL).
+   - One-time bootstrap lock: POST /v1/auth/bootstrap succeeds on first run, permanently locked; subsequent calls return HTTP 409 Conflict.
+   - GET /v1/auth/bootstrap/status returns correct state.
+3. Execute verification tests:
+   - pytest tests/test_packaging.py tests/test_phase1_scope.py -v
+   - pytest tests/identity/test_recovery.py tests/identity/test_bootstrap.py -v
+4. Document all commands, test outputs, findings, and explicit verdict (APPROVE or REQUEST_CHANGES) in:
+   c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m4_2\handoff.md
+When finished, notify me with your verdict and report path via send_message.

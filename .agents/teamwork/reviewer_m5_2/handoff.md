@@ -1,114 +1,208 @@
-# Handoff Report: Milestone 5 Phase 1 Scope Protection & Documentation Review
+# Milestone 5 Review Report & Handoff: Decision Step-Up, Player Decisions & Graph API Migration
 
-**Agent**: `reviewer_m5_2`  
-**Roles**: Reviewer, Adversarial Critic  
-**Date**: 2026-10-03  
-**Status**: Task Complete (Hard Handoff)  
-**Parent Agent**: `orchestrator_phase1` (Conversation ID: `7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)  
+**Agent**: `reviewer_m5_2` (Reviewer & Adversarial Critic)  
+**Milestone**: Phase 2 Milestone 5  
+**Review Target**: Work products of `worker_m5_1`  
+**Verdict**: **REQUEST_CHANGES**  
+**Timestamp**: 2026-10-04T10:00:00Z  
+**File Location**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m5_2\handoff.md`  
+
+---
+
+## Review Summary
+
+**Verdict**: **REQUEST_CHANGES**
+
+Worker `worker_m5_1` successfully implemented the core architecture for Milestone 5 (player decision router, object-level isolation logic, 5 decision actions, dual proof branching, WebAuthn step-up router, `DecisionSubmission` schema unification, and HMAC kill switch default `false` in `src/graph_api.py`). Universal dormancy (`DISPATCH_ENABLED=false`, zero player delivery) is fully maintained.
+
+However, comprehensive adversarial and static AST review identified **3 Critical** defects and **2 Major** defects that prevent approval:
+1. **[Critical] Broken Unit Test Suite `tests/identity/test_tokens.py`**: Imports 4 nonexistent identifiers (`ScopedActionToken`, `VALID_ACTION_SCOPES`, `hash_action_token`, `is_action_token_format`) and calls `issue_token` with mismatched keyword arguments and return types. The test file cannot even be imported.
+2. **[Critical] Broken Mocks & Unhandled Crashes in `tests/identity/test_player.py`**:
+   - `test_player_decision_action_token_flow`: Mocks `consume_token` returning a `dict`; router calls `consumed_token.token_id`, causing `AttributeError: 'dict' object has no attribute 'token_id'` and HTTP 500.
+   - `test_player_decision_actions_validation`: Calls `.lower()` on `resp_cr_empty.json()["detail"]` which is a `list`, causing `AttributeError: 'list' object has no attribute 'lower'`. Furthermore, asserted string `"notes required"` does not match validator message `"change_request requires non-empty notes or reason"`.
+   - `test_g_timeout_invariant_rejection`: Passes `"timeout:auto_approve"` to `authorize()`; router raises `ValueError` (invalid `ActionType`) instead of expected `AgentImpersonationError`.
+3. **[Critical] Unhandled `NameError` and Type Violation in `src/graph_api.py` HMAC Fallback Branch**: `apply_decision_unified` lines 1063-1064 reference `datetime`, `timezone`, and `timedelta` which are **not imported** in `src/graph_api.py`. Furthermore, `SignedDecision` requires integer timestamps, not `datetime` objects.
+4. **[Major] Missing Validation & Consumption of `authentication_evidence_id` in `src/identity/routers/player.py`**: Lines 434-436 blindly assign `evidence_id = body.authentication_evidence_id` without verifying existence, expiry, player binding, or calling `consume_decision_evidence` to prevent replay attacks.
+5. **[Major] Broken Mock in `tests/identity/test_step_up.py`**: In `test_step_up_verify_endpoint_mints_evidence`, `mock_store.get_challenge` is not configured, returning a default `MagicMock` where `challenge_type != 'step_up_decision'`, causing HTTP 400 instead of HTTP 200.
 
 ---
 
 ## 1. Observation
 
-Direct observations from inspection of Milestone 5 work products and codebase:
+### 1.1 Direct Source Code Observations
 
-1. **`tests/test_phase1_scope.py` Structure & Contents**:
-   - `test_no_phase2plus_code()` (lines 52-84): Validates that neither `src/dashboard` nor `src/identity` exist (dir or file). Checks that no item under `src/dispatch/` begins with any of `FORBIDDEN_DISPATCH_PREFIXES`: `("worker", "relay", "tracker", "tracking", "ingest", "assess", "baseline", "analytics", "personalize", "agent")`.
-   - `test_no_webauthn_imports()` (lines 86-125): Inspects all `.py` files in `src/` via text regex (`^\s*(import\s+webauthn\b|from\s+webauthn\b|import\s+.*py_webauthn|from\s+.*py_webauthn)`) and `ast.walk` to assert no WebAuthn imports.
-   - `test_no_tracking_writes_outside_tests()` (lines 127-157): Inspects all `.py` files in `src/` for regex matches of `INSERT INTO`, `UPDATE`, `DELETE FROM`, or `TRUNCATE` targeting `player_observations`, `dispatch_assessments`, `dispatch_plans`, or `dispatch_delivery_attempts`.
-   - `test_docs_state_disabled_and_gates()` (lines 159-175): Checks that `docs/DISPATCH_ACTIVATION.md` exists, contains all 6 gates `("G-MIGRATION", "G-GRANTS", "G-WORKER", "G-ID", "G-ATOMIC", "G-OUTBOX")`, and contains the verbatim string `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-   - `test_activation_doc_forbids_phase1_enablement()` (lines 177-217): Verifies that `docs/DISPATCH_ACTIVATION.md` contains the 4 mandatory statements:
-     - `"Phase 1 MUST NOT be enabled in any deployed environment"`
-     - `"Passing the Phase 1 tests alone does not authorize activation"`
-     - `"There is no production dispatch-worker in Phase 1, so G-WORKER cannot pass"`
-     - `"G-OUTBOX cannot be satisfied before Phase 3"` along with error code `"not_recordable_before_phase_3"`.
+#### Observation 1: Broken Imports and Contract Mismatch in `tests/identity/test_tokens.py`
+In `tests/identity/test_tokens.py` lines 26-39:
+```python
+from src.identity.tokens import (
+    ActionTokenAlreadyConsumedError,
+    ActionTokenAssignmentMismatchError,
+    ActionTokenError,
+    ActionTokenExpiredError,
+    ActionTokenNotFoundError,
+    ActionTokenRevokedError,
+    ActionTokenScopeMismatchError,
+    ScopedActionToken,
+    ScopedActionTokenEngine,
+    VALID_ACTION_SCOPES,
+    hash_action_token,
+    is_action_token_format,
+)
+```
+In `src/identity/tokens.py`:
+- Line 72 defines `@dataclass(frozen=True) class ActionTokenRecord:`, NOT `ScopedActionToken`.
+- `VALID_ACTION_SCOPES` is defined on `IdentityStore.VALID_ACTION_SCOPES` (`src/identity/store.py` line 84), NOT in `src/identity/tokens.py`.
+- Line 23 imports `hash_token`, NOT `hash_action_token`.
+- `is_action_token_format` is NOT defined anywhere in `src/identity/tokens.py`.
+- Line 104 defines:
+  `issue_token(self, *, user_id: UUID, scope: str, assignment_id: UUID | None = None, ttl_seconds: int = DEFAULT_TOKEN_TTL_SECONDS, actor: str = "system", correlation_id: UUID | None = None) -> tuple[str, ActionTokenRecord]:`
+  Whereas `tests/identity/test_tokens.py` line 100 calls `engine.issue_token(user_id=uid, scope="player_decision", assignment_id=aid, expires_in_minutes=60)` and accesses `sat.raw_token`.
 
-2. **Filesystem Reality in `src/`**:
-   - Directory listing of `src/` confirms `src/dashboard` and `src/identity` do not exist.
-   - Directory listing of `src/dispatch/` contains only `__init__.py`, `creation.py`, `gates.py`, `objective.py`, `transition.py`. None match the forbidden prefixes.
-   - Ripgrep searches across `src/` for `webauthn`, `player_observations`, `dispatch_assessments`, `dispatch_plans`, and `dispatch_delivery_attempts` returned zero matches.
+#### Observation 2: Test Crashes and Assertion Errors in `tests/identity/test_player.py`
+1. Line 261-264:
+   ```python
+   with patch.object(ScopedActionTokenEngine, "consume_token") as mock_consume:
+       mock_consume.return_value = {"user_id": principal.user_id}
+   ```
+   In `src/identity/routers/player.py` line 424:
+   ```python
+   token_ref = str(consumed_token.token_id)
+   ```
+   Calling `.token_id` on a `dict` raises `AttributeError: 'dict' object has no attribute 'token_id'`.
+2. Lines 297-302:
+   ```python
+   resp_cr_empty = client.post(
+       f"/v1/player/assignments/{aid}/decision",
+       json={"decision": "change_request", "notes": ""},
+   )
+   assert resp_cr_empty.status_code == 422
+   assert "notes required" in resp_cr_empty.json()["detail"].lower()
+   ```
+   In FastAPI, `resp_cr_empty.json()["detail"]` is a `list[dict]` (`[{'type': 'value_error', 'loc': ['body'], 'msg': 'Value error, change_request requires non-empty notes or reason'}]`). Calling `.lower()` on a `list` raises `AttributeError: 'list' object has no attribute 'lower'`. Furthermore, the string `"notes required"` is not in `"change_request requires non-empty notes or reason"`.
+3. Lines 351-353:
+   ```python
+   with pytest.raises(AgentImpersonationError, match="G-TIMEOUT invariant"):
+       authorize(principal, "timeout:auto_approve", res)
+   ```
+   In `src/identity/policy.py` line 649:
+   ```python
+   if isinstance(action, str):
+       if action.startswith("system:timeout") or action == "timeout":
+           raise AgentImpersonationError("inactivity or timeouts never create authorization decisions (G-TIMEOUT invariant)")
+       act = ActionType(action)
+   ```
+   Action `"timeout:auto_approve"` does not start with `"system:timeout"`. It evaluates `ActionType("timeout:auto_approve")`, raising `ValueError: 'timeout:auto_approve' is not a valid ActionType` instead of `AgentImpersonationError`.
 
-3. **`docs/DISPATCH_ACTIVATION.md` Contents**:
-   - Line 20: Phase 1 Completion Statement: `"Secure data foundation complete. Dispatch remains disabled. No player delivery has occurred."`
-   - Lines 41 & 45: Exact disabled message: `"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"`.
-   - Section 3 Table: All 6 gates documented with evaluation requirements and Phase 1 statuses.
-   - Section 4: Gate Recording Protocol detailing deployment binding (`FC27_CODE_REVISION`, `FC27_DEPLOYMENT_ID`), single-use nonce challenge/response, and RFC-8785 canonical JSON HMAC-SHA256 signature calculation across `GATE_SIGNED_FIELDS`.
-   - Section 5: Clarifies that per-player identity verification has no route in Phase 1.
+#### Observation 3: Missing Imports & Schema Type Violation in `src/graph_api.py`
+In `src/graph_api.py` lines 1063-1064:
+```python
+            signed_obj = SignedDecision(
+                thread_id=target_thread_id,
+                decision=body.decision,
+                notes=body.notes or "",
+                package_version=body.package_version or target_pkg_version or 1,
+                nonce=body.nonce or "",
+                issued_at=body.issued_at or datetime.now(timezone.utc),
+                expires_at=body.expires_at or (datetime.now(timezone.utc) + timedelta(minutes=5)),
+                signature=body.signature or body.hmac_signature or "",
+            )
+```
+Lines 15-30 of `src/graph_api.py` do NOT import `datetime`, `timezone`, or `timedelta`. Calling this branch raises `NameError: name 'datetime' is not defined`. Additionally, `SignedDecision` in `src/schemas.py` lines 106-107 defines `issued_at: int` and `expires_at: int` (integers `gt=0`), which rejects `datetime` objects.
 
-4. **`docs/EA_PLAYER_IDENTITY_VERIFICATION.md` Contents**:
-   - Line 3: `Status: UNVERIFIED (G-ID not met)`
-   - Sections 2.1 through 2.5: All 5 AC-47 criteria tables are present with empty/placeholder entries (`*[TBD]*`, `*Pending...*`). No fabricated data or dummy pass records exist.
+#### Observation 4: Unverified & Unconsumed Evidence in `src/identity/routers/player.py`
+In `src/identity/routers/player.py` lines 434-436:
+```python
+    else:
+        # Passkey path
+        if body.authentication_evidence_id:
+            evidence_id = body.authentication_evidence_id
+        elif body.passkey_response:
+            ...
+```
+`body.authentication_evidence_id` is assigned directly to `evidence_id` without calling `store.get_decision_evidence()`, without verifying its presence, expiry, or assignment binding, and without calling `store.consume_decision_evidence()`.
 
-5. **`MIGRATION_GUIDE.md`, `README.md`, `docs/APPROVAL_SECURITY.md` Contents**:
-   - `MIGRATION_GUIDE.md` (lines 7-33, 54-72): Fresh install commands including role bootstrap (`docker compose --profile bootstrap run --rm db-bootstrap --confirm`), database secret files table for the 6 secret files, and generation script using `umask 077`.
-   - `README.md`: Quick start commands referencing `db-bootstrap --confirm`, "Implemented vs planned" table with data foundation status, Programme Roadmap checklist with 6 phases, required status statement, and 5 architectural invariant distinctions (`Approval != Activation`, `Approval != Dispatch`, `Graph Resume != Authorization`, `Redis Publication != Authoritative Delivery`, `Phase 1 Completion != Programme Completion`).
-   - `docs/APPROVAL_SECURITY.md` (lines 15-81): Section 1A Human Authority model (5 tiers), mandatory human decision rule ("No agent may approve or reject for a human", "Inactivity never constitutes approval"), zero-echo candidate error privacy (stripping `input` from validation errors, HTTP 409 without leaking package structure), and HMAC key rotation / CLI kill switch (`APPROVAL_CLI_HMAC_ENABLED=false`).
+#### Observation 5: Broken Mock in `tests/identity/test_step_up.py`
+In `tests/identity/test_step_up.py` lines 202-243 (`test_step_up_verify_endpoint_mints_evidence`), `mock_store.get_challenge` is unmocked. In `src/identity/routers/step_up.py` line 231, `challenge_row.get("challenge_type") != "step_up_decision"` evaluates to true (MagicMock != string), raising `HTTPException(400, "challenge not found or invalid type")`.
 
-6. **Compose & Migration Hygiene**:
-   - `docker-compose.yml`: Top-level `secrets:` defining the 6 file mounts from `./secrets/`. `db-bootstrap` mounts bootstrap secrets, `db-migrate` mounts migrator URI, `graph-api` mounts app URI. `POSTGRES_URI` is eliminated from application environment variables.
-   - `.gitignore`: Contains `secrets/` at line 9.
-   - `src/db_migrate.py`: Line 197 reads `settings.read_secret("POSTGRES_URI")`, supporting `POSTGRES_URI_FILE`.
+### 1.2 Tool Execution Output
+- Command attempted:
+  ```pwsh
+  .\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+  ```
+- Output received:
+  ```
+  Encountered error in tool execution: permission check failed for command ".\\.venv\\Scripts\\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v": Permission prompt for action 'command' on target '.\.venv\Scripts\pytest.exe tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v' timed out waiting for user response. The user was not able to provide permission on time. You should proceed as much as possible without access to this resource.
+  ```
 
 ---
 
 ## 2. Logic Chain
 
-1. **Verification of Scope Boundary Enforcement**:
-   - From Observation 1, `test_phase1_scope.py` defines automated checks preventing future-phase code creep.
-   - From Observation 2, direct static inspection of `src/` and `src/dispatch/` confirms that no Phase 2+ modules, no WebAuthn imports, and no tracking table mutations are present in the current codebase.
-   - Therefore, the test suite accurately reflects and enforces the Phase 1 scope boundary without false positives or negatives.
-
-2. **Verification of Operator & Activation Documentation**:
-   - From Observation 3, `docs/DISPATCH_ACTIVATION.md` contains the exact invariant message required by spec, defines all 6 gates, provides the HMAC challenge/response specification, and explicitly embeds the 4 mandatory statements forbidding Phase 1 enablement.
-   - Therefore, contractual requirements C-2, C-3, and Spec §31.2 are completely satisfied.
-
-3. **Verification of Player ID Status & Anti-Fabrication Invariant**:
-   - From Observation 4, `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` explicitly designates gate `G-ID` as `UNVERIFIED` and retains unpopulated evidence tables for all 5 AC-47 criteria.
-   - Therefore, the work adheres to the core integrity rule forbidding premature self-certification or fabricated evidence before real EA API integration.
-
-4. **Verification of Operational Security, Human Authority & Privacy Documentation**:
-   - From Observation 5, all operator guides (`MIGRATION_GUIDE.md`, `README.md`, `docs/APPROVAL_SECURITY.md`) reflect the role bootstrap procedures, secure file secret generation (`umask 077`, C-7), Section 1A human authority & player consent policies, candidate error privacy, and HMAC kill-switch procedures.
-   - From Observation 6, Compose configuration and git ignore rules align with least-privilege role isolation and credential hygiene.
-   - Therefore, operational security documentation and configuration topology meet all Phase 1 acceptance criteria.
-
-5. **Adversarial & Integrity Review**:
-   - No hardcoded test cheating, dummy facades, premature activation routes, or fabricated logs were found.
-   - The implementation worker accurately reported environment constraints and did not falsify test runs.
-   - All assertions hold true under rigorous static analysis.
+1. **Test Suite Viability (Observation 1 -> Import Failure)**:
+   - `test_tokens.py` imports identifiers that do not exist in `tokens.py`. Python imports fail at module load time. Therefore, `pytest tests/identity/test_tokens.py` cannot execute.
+2. **Player Decision Test Suite Failures (Observation 2 -> Runtime Errors)**:
+   - Returning a dictionary from `consume_token` causes an unhandled `AttributeError` on line 424 of `player.py`.
+   - Calling `.lower()` on a list causes an `AttributeError` in `test_player_decision_actions_validation`.
+   - Passing `"timeout:auto_approve"` to `authorize()` raises `ValueError`, causing `test_g_timeout_invariant_rejection` to fail.
+3. **HMAC Kill Switch & Fallback Reliability (Observation 3 -> Unhandled NameError)**:
+   - Although `cli_hmac_enabled = False` by default, when enabled for migration compatibility, any request routed to the HMAC branch crashes with `NameError: name 'datetime' is not defined`.
+4. **Player Step-Up Security Gap (Observation 4 -> Replay Vulnerability)**:
+   - While `graph_api.py` strictly validates and burns `authentication_evidence_id`, `player.py` leaves `body.authentication_evidence_id` unverified and unburned. A malicious actor or compromised frontend could submit arbitrary or replayed evidence IDs.
+5. **Worker Verification Validity (Observation 1, 2, 3, 5 -> Incomplete Verification)**:
+   - Worker `worker_m5_1` documented that the terminal command timed out. However, claiming that complete test suites were implemented and verified without running AST or static validation allowed severe syntax, import, and logic bugs into the codebase.
 
 ---
 
 ## 3. Caveats
 
-- **Docker daemon & container execution**: Live container boot (`docker compose up`) was not executed in this environment. Verification was performed via complete static syntax, model parsing, and schema trace.
-- No other caveats.
+- **Runtime Test Execution**: Live execution of `pytest` in this environment timed out waiting for user terminal permission. All findings were independently substantiated through thorough AST inspection, cross-referencing module exports, and tracing runtime execution paths across `FastAPI`, `Pydantic v2`, and `psycopg`.
+- **Phase 1 Invariants**: No Phase 1 tests or scope invariants were weakened. `test_packaging.py` and `test_phase1_scope.py` remain compliant.
 
 ---
 
 ## 4. Conclusion
 
-**Verdict: APPROVE**
+**Verdict**: **REQUEST_CHANGES**
 
-Milestone 5 (Scope Protection & Documentation) is fully and genuinely implemented. All 5 test functions in `tests/test_phase1_scope.py`, the activation runbook in `docs/DISPATCH_ACTIVATION.md`, the player ID runbook in `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`, and the operator security documentation in `MIGRATION_GUIDE.md`, `README.md`, and `docs/APPROVAL_SECURITY.md` satisfy 100% of the Phase 1 requirements, Section 1A invariants, and AC-58 / C-2 / C-3 / C-7 / C-8 contractual constraints.
+The worker must address the findings before Milestone 5 can be approved:
+
+### Required Changes:
+1. **Fix `src/graph_api.py`**:
+   - Add `from datetime import datetime, timedelta, timezone` to imports.
+   - In lines 1063-1064, convert `datetime` objects to integer UNIX timestamps:
+     ```python
+     now_ts = int(datetime.now(timezone.utc).timestamp())
+     issued_at=body.issued_at or now_ts,
+     expires_at=body.expires_at or (now_ts + 300),
+     ```
+2. **Fix `src/identity/routers/player.py`**:
+   - When `body.authentication_evidence_id` is supplied in `execute_player_decision`, validate it against `store.get_decision_evidence`, check for replay (`consumed_at is None`), verify bound parameters, and call `store.consume_decision_evidence(evidence_id)`.
+3. **Fix `tests/identity/test_tokens.py`**:
+   - Reconcile imports with `src/identity/tokens.py`: import `ActionTokenRecord`, `hash_token`, etc.
+   - Adjust `test_engine_issue_token` to unpack the returned `(raw_token, record)` tuple and pass `ttl_seconds=3600`.
+4. **Fix `tests/identity/test_player.py`**:
+   - In `test_player_decision_action_token_flow`: mock `consume_token` returning an object with `token_id = uuid4()`.
+   - In `test_player_decision_actions_validation`: assert `resp_cr_empty.status_code == 422` and check `resp_cr_empty.json()["detail"]` properly as a list:
+     ```python
+     err_text = str(resp_cr_empty.json()["detail"]).lower()
+     assert "notes or reason" in err_text or "change_request" in err_text
+     ```
+   - In `test_g_timeout_invariant_rejection`: pass an action matching `action.startswith("system:timeout")` (e.g. `"system:timeout:auto_approve"`) or update `policy.py` line 649 to check `action.startswith("timeout")`.
+5. **Fix `tests/identity/test_step_up.py`**:
+   - In `test_step_up_verify_endpoint_mints_evidence`: configure `mock_store.get_challenge.return_value = {"challenge_id": uuid4(), "challenge_type": "step_up_decision", "consumed_at": None, "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5), "user_id": principal.user_id, "bound_payload_hash": ""}`.
 
 ---
 
 ## 5. Verification Method
 
-Independent verification can be executed via:
+Once the fixes are implemented, run:
+```pwsh
+.\.venv\Scripts\pytest.exe tests/identity/test_tokens.py tests/identity/test_step_up.py tests/identity/test_player.py tests/test_packaging.py tests/test_phase1_scope.py -v
+```
 
-1. **Inspect Test Suite**:
-   - Check all 5 functions in `tests/test_phase1_scope.py`.
-   - Run: `pytest -q tests/test_phase1_scope.py tests/test_compose_isolation.py` (when interactive or elevated shell is available).
-
-2. **Inspect Documentation Artifacts**:
-   - `docs/DISPATCH_ACTIVATION.md`: Verify lines 13-16, 20, 41, 45, and Section 3 table.
-   - `docs/EA_PLAYER_IDENTITY_VERIFICATION.md`: Verify line 3 (`Status: UNVERIFIED (G-ID not met)`) and Sections 2.1-2.5 empty tables.
-   - `MIGRATION_GUIDE.md`: Verify lines 7-33 (fresh install) and lines 54-72 (`umask 077` secrets).
-   - `README.md`: Verify lines 52-67 (quick start), line 37 (data foundation status), lines 151-172 (roadmap checklist and architectural distinctions).
-   - `docs/APPROVAL_SECURITY.md`: Verify lines 15-50 (Section 1A), lines 51-57 (error privacy), lines 58-81 (HMAC kill switch).
-
-3. **Invalidation Conditions**:
-   - Any commit introducing `src/dashboard`, `src/identity`, or Phase 2+ worker/tracking code into `src/`.
-   - Any modification changing `docs/EA_PLAYER_IDENTITY_VERIFICATION.md` status to verified without empirical EA match data.
-   - Any configuration changing `DISPATCH_ENABLED` to true or removing `secrets/` from `.gitignore`.
+### Invalidation Conditions:
+- Any `ImportError` when importing `tests/identity/test_tokens.py`.
+- Any `AttributeError` when running `tests/identity/test_player.py`.
+- Any `NameError` or schema validation error when testing HMAC fallback in `src/graph_api.py`.
+- Unconsumed `authentication_evidence_id`s in `src/identity/routers/player.py`.
+- Any player delivery or violation of `DISPATCH_ENABLED=false`.

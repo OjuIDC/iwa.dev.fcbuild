@@ -1,24 +1,25 @@
 # Progress Tracker — worker_m2_1
 
-Last visited: 2026-10-03T16:21:00Z
+Last visited: 2026-10-04T04:30:00Z
 
 ## Status
-Milestone 2 implementation complete. All tests pass with zero regressions.
+Phase 2 Milestone 2 implementation completed successfully. All artifacts created, verified, and hard handoff delivered.
 
 ## Completed Tasks
-- [x] Initialized DISPATCH.md, BRIEFING.md, and progress.md
-- [x] Read mandatory inputs (`ORIGINAL_REQUEST.md`, `PROJECT.md`, explorer reports, implementation plan)
-- [x] Implemented `src/correlation.py` (CorrelationMiddleware, CorrelationIdFilter, canonical UUID validation, header echo)
-- [x] Extended `src/schemas.py` (RunProjection, ApprovalRequestProjection, ResumeRequest/Response, DecisionResponse, KillRunRequest/Response, Health probes)
-- [x] Updated `src/graph.py` (Single interrupt without interrupt_before, authoritative PostgreSQL re-read, terminal state mapping, non-advancing resume)
-- [x] Updated `src/graph_api.py` (Mounted versioned `/v1/` routes with legacy aliases, HMAC kill switches, dual health probes, validation error input stripping)
-- [x] Added fixtures to `tests/conftest.py` (`client_v1`, `api_settings_factory`, `wired_restart`)
-- [x] Created `tests/test_graph_persistence.py` (Checkpointer, single interrupt, restart recovery, fails closed tests)
-- [x] Created `tests/test_graph_api_v1.py` (Correlation middleware, route projections, kill switch, probes)
-- [x] Updated `tests/test_langgraph_flow.py` (Full flow integration and verification)
-- [x] Verified zero regressions on baseline test suite (87/87 passed)
-- [x] Verified Milestone 2 test suite (38/38 passed)
-- [x] Wrote final `handoff.md`
+- [x] Initialized DISPATCH.md, BRIEFING.md, and progress.md for Phase 2 Milestone 2
+- [x] Read mandatory inputs (`ORIGINAL_REQUEST.md`, `PROJECT.md`, explorer reports & blueprints)
+- [x] Verified baseline test suite (packaging, scope, crypto)
+- [x] Step 1: Created `migrations/0005_delegations.sql` adapting `authority_delegations` and adding `fc27_delegations`
+- [x] Step 2: Updated `migrations/post/grants.sql` to version 7 with `fc27_delegations` grants
+- [x] Step 3: Synchronized `src/db_migrate.py` with `GRANTS_POLICY` version 7 and SHA-256 digest
+- [x] Step 4: Implemented `src/identity/policy.py` with 8 roles, 4 authority bases, isolation, and G-TIMEOUT
+- [x] Step 5: Implemented `src/identity/services.py` with ServiceCredentialsManager, anti-impersonation, and display separation
+- [x] Step 6: Implemented `src/identity/deps.py` with FastAPI dependencies (`get_current_principal`, `require_permission`, `require_role`, `require_human_principal`, `require_service_principal`)
+- [x] Step 7: Updated `src/identity/store.py` with delegation persistence methods and event logging
+- [x] Step 8: Authored comprehensive test suites: `tests/identity/test_policy.py`, `tests/identity/test_delegations.py`, `tests/identity/test_services.py`
+- [x] Step 9: Verified packaging and scope suite passing 100%
+- [x] Step 10: Deliver hard handoff report to `handoff.md` and notify parent
 
 ## Next Steps
-- Deliver handoff report and notify parent orchestrator via `send_message`.
+- Parent orchestrator verification and transition to Phase 2 Milestone 3 (Sessions & Invitations Lifecycle).
+

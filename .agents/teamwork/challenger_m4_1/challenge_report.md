@@ -1,193 +1,150 @@
-# Milestone 4 Adversarial Challenge Report
+# Adversarial Challenge Report: Phase 2 Milestone 4
 
-**Agent**: `challenger_m4_1`  
-**Role**: Milestone 4 Adversarial Challenger (Gate Security, Nonces, Dynamic Re-evaluation & Health Probes)  
-**Date**: 2026-10-03T20:47:00Z  
-**Verdict**: **REQUEST_CHANGES**  
-**Overall Risk Assessment**: **MEDIUM** (Security invariants robust; regression defect identified in `/health/ready` reason payload breaking existing test contracts in `test_graph_api_v1.py` and `test_langgraph_flow.py`)
-
----
-
-## 1. Executive Summary
-
-Milestone 4 introduces rollout activation gates (`G-MIGRATION` through `G-OUTBOX`), cryptographic HMAC challenge/recording protocols, single-use nonces, deployment identity bindings, correlation ID isolation, dynamic re-evaluation without restart (`reevaluate_gates`), and atomic dispatch creation.
-
-Our adversarial review thoroughly stress-tested all six attack dimensions:
-1. **Gate Replay & Single-Use Nonce Invalidation**: Confirmed robust. Replays fail with 409 Conflict. Nonce TTL is strictly capped (<=300s) and expired nonces fail with 409 Conflict. Tampered fields fail with 403 Forbidden or 409 Conflict.
-2. **Phase 1 Boundary & G-OUTBOX Rejection**: Confirmed robust. `G-OUTBOX` challenge and record requests are rejected with 409 Conflict (`not_recordable_before_phase_3`; Constraint C-3). Automated gates (`G-MIGRATION`, `G-GRANTS`, `G-WORKER`) fail manual challenge with 422 Unprocessable Entity.
-3. **Correlation ID Isolation (C-4, C-5)**: Confirmed robust. `GATE_SIGNED_FIELDS` strictly excludes `X-Correlation-Id`. Header mutation by proxies or tracers does not invalidate Commissioner HMAC signatures.
-4. **Dynamic Re-evaluation Without Restart (C-1)**: Confirmed robust. `reevaluate_gates(app)` mutates `app.state.dispatch_effective` and `app.state.gate_report` in-place on running processes without server restarts.
-5. **Atomic Dispatch Creation & Rollbacks**: Confirmed robust. Database advisory locks serialize partition concurrency, unverified or format-mismatched player IDs fail closed with 409 `not_dispatchable`, and any dispatch failure triggers complete transaction rollback, preserving thread state and nonces.
-6. **Regression Defect Found in `/health/ready`**: When `dispatch_enabled=True` and gates are unrecorded (default state), `src/graph_api.py:414` returns `"reason": f"dispatch configured but blocked ({', '.join(failed)})"`. This omits the substring `"DISPATCH_ENABLED must be false"`, causing existing contract tests `tests/test_graph_api_v1.py::test_health_ready_fails_if_dispatch_enabled_true`, `tests/test_graph_api_v1.py::test_adversarial_readiness_fails_closed_on_dispatch_enabled_true`, and `tests/test_langgraph_flow.py::test_health_ready_fails_if_dispatch_enabled_true` to fail on assertion.
+**Agent ID**: `challenger_m4_1`  
+**Role**: Passkey Anti-Cloning, Challenge Lifecycle & TOTP Adversarial Challenger  
+**Milestone**: Phase 2 Milestone 4 (WebAuthn Passkeys, Staff TOTP & Bootstrap/Recovery)  
+**Date**: 2026-10-04T06:23:00Z  
 
 ---
 
-## 2. Adversarial Challenges & Findings
+## Challenge Summary
 
-### Challenge 1: [Medium] Contract Regression on `/health/ready` Reason String Under `dispatch_enabled=True`
+**Overall risk assessment**: **HIGH**  
+**Explicit Verdict**: **REQUEST_CHANGES**
 
-- **Assumption Challenged**: When `dispatch_enabled=True` and gates are blocked, returning only `"dispatch configured but blocked (...)"` satisfies all Phase 1 readiness specifications.
-- **Attack Scenario**:
-  An operator or automated test sets `DISPATCH_ENABLED=true` in environment or settings while gates have not been satisfied.
-  The client checks `GET /health/ready`.
-  Prior to Milestone 4, `/health/ready` returned:
-  `{"status": "degraded", "ready": False, "reason": "Phase 1 safety invariant violation: DISPATCH_ENABLED must be false"}`.
-  Existing test suites (`tests/test_graph_api_v1.py:320`, `tests/test_graph_api_v1.py:656`, and `tests/test_langgraph_flow.py:42`) explicitly assert:
-  `assert "DISPATCH_ENABLED must be false" in data["reason"]`.
-  With Milestone 4's implementation in `src/graph_api.py:414-421`:
+While the core cryptographic foundations (RFC 6238 TOTP verification, monotonic counter triggers in PostgreSQL, and MultiFernet seed encryption) are sound in concept, the Milestone 4 deliverables suffer from **fatal test collection errors in `tests/identity/test_totp.py`**, **multiple broken unit tests in `tests/identity/test_webauthn.py`**, and a **security bypass gap in `WebAuthnEngine` where cross-user challenge isolation is not enforced during authentication and step-up ceremonies**.
+
+---
+
+## Challenges
+
+### [Critical] Challenge 1: `tests/identity/test_totp.py` Import Failure Blocks Test Collection
+
+- **Assumption challenged**: The test suite `tests/identity/test_totp.py` was claimed by worker_m4_1 to verify the TOTP engine and pass cleanly.
+- **Attack scenario**: Running `pytest tests/identity/test_totp.py` immediately crashes before running any tests.
+- **Root Cause**:
+  `tests/identity/test_totp.py:23` executes:
   ```python
-  if settings.dispatch_enabled:
-      effective = getattr(app.state, "dispatch_effective", False)
-      if not effective:
-          report = getattr(app.state, "gate_report", {}) or {}
-          failed = [g["gate_id"] for g in report.get("gates", []) if not g.get("passed")]
-          return JSONResponse(
-              status_code=503,
-              content={
-                  "status": "degraded",
-                  "ready": False,
-                  "reason": f"dispatch configured but blocked ({', '.join(failed)})",
-              },
-          )
+  from src.identity.totp import (
+      DEFAULT_RECOVERY_CODE_COUNT,  # <--- NOT defined in src.identity.totp
+      ...
+  )
   ```
-  The reason string becomes `"dispatch configured but blocked (G-WORKER, G-ID, G-ATOMIC, G-OUTBOX)"`.
-  Because `"DISPATCH_ENABLED must be false"` is completely missing when gates are blocked, the regression test suite fails.
-- **Blast Radius**: Breaks full test suite execution (`pytest tests/test_graph_api_v1.py` and `pytest tests/test_langgraph_flow.py`), blocking Milestone 5/6 acceptance criteria.
+  `DEFAULT_RECOVERY_CODE_COUNT` is defined only in `src/identity/recovery.py`. It does not exist in `src/identity/totp.py`. Furthermore, `DEFAULT_RECOVERY_CODE_COUNT` is completely unused in `tests/identity/test_totp.py`.
+- **Blast radius**: Continuous integration pipelines, pre-commit hooks, and test runs fail immediately with `ImportError`.
+- **Mitigation**: Remove `DEFAULT_RECOVERY_CODE_COUNT` from imports in `tests/identity/test_totp.py:23`.
+
+---
+
+### [Critical] Challenge 2: Broken Unit Tests in `tests/identity/test_webauthn.py`
+
+- **Assumption challenged**: `tests/identity/test_webauthn.py` covers registration/authentication options, challenge consumption, counter validation, and step-up binding.
+- **Attack scenario**: Executing `pytest tests/identity/test_webauthn.py` fails on 4 distinct tests:
+  1. **Line 70 (`test_generate_registration_options`)**:
+     Asserts `options["rp"]["name"] == "FC27 Player Dispatch"`. However, `WebAuthnConfig.from_env()` defaults to `"FC27 Pro Clubs Platform"`, causing an immediate `AssertionError`.
+  2. **Line 118 (`test_verify_registration_missing_challenge_rejected`)**:
+     Calls `engine.verify_registration_response(response_payload=malformed_payload)`. `verify_registration_response` has a required keyword-only argument `user_id: UUID`. Omitting it causes `TypeError: WebAuthnEngine.verify_registration_response() missing 1 required keyword-only argument: 'user_id'`, failing `pytest.raises(InvalidRegistrationResponse)`.
+  3. **Line 140 (`test_verify_registration_consumed_challenge_rejected`)**:
+     Calls `engine.verify_registration_response(response_payload=payload)` without `user_id`, also crashing with `TypeError`.
+  4. **Line 202 (`test_step_up_challenge_binding`)**:
+     Calls `options = engine.generate_step_up_challenge(user_id=uuid4(), bound_payload_hash=bound_hash)`. `WebAuthnEngine` has no method named `generate_step_up_challenge` (it is named `generate_step_up_options` at line 312 of `src/identity/webauthn.py`). This raises `AttributeError: 'WebAuthnEngine' object has no attribute 'generate_step_up_challenge'`.
+  5. **Line 147 (`test_verify_authentication_counter_clone_detected`)**:
+     The test passes dummy zero bytes for `authenticatorData` and `signature`. `_webauthn_verify_auth_response` raises `InvalidAuthenticationResponse` due to cryptographic failure, NOT due to counter validation. The counter check was completely untested by the mock.
+- **Blast radius**: The test suite fails execution. Regressions in WebAuthn registration, authentication, and step-up binding cannot be caught.
 - **Mitigation**:
-  Update `src/graph_api.py` line 419 to include both the invariant violation notice and the blocked gate details:
+  - Update `test_generate_registration_options` to accept the configured RP name or pass an explicit `WebAuthnConfig`.
+  - Pass `user_id=uuid4()` to `verify_registration_response` in lines 118 and 140.
+  - Call `engine.generate_step_up_options()` in line 202.
+  - Mock `_webauthn_verify_auth_response` in line 147 to return valid assertion with `new_sign_count <= current_counter` so that the monotonicity check itself is genuinely verified.
+
+---
+
+### [High] Challenge 3: Cross-User Challenge Mismatch Omitted in `verify_authentication_response` & `verify_step_up_response`
+
+- **Assumption challenged**: All WebAuthn challenges enforce strict cross-user isolation.
+- **Attack scenario**:
+  1. Targeted user login: User A initiates WebAuthn login. The server issues a challenge in `fc27_challenges` with `user_id = User_A`.
+  2. Attacker / User B intercepts or reads User A's challenge and submits a valid assertion for User B's passkey against User A's challenge.
+  3. In `src/identity/webauthn.py:273-280`:
+     ```python
+     challenge_row = self.store.consume_challenge(
+         challenge_str=challenge_str,
+         challenge_type="webauthn_login",
+     )
+     if not challenge_row:
+         raise InvalidAuthenticationResponse(...)
+     ```
+     Notice that `verify_authentication_response` **never checks** `challenge_row.get("user_id")` against `stored_credential["user_id"]`!
+  4. User B successfully logs in and consumes User A's challenge, causing User A's login ceremony to fail and enabling cross-user challenge substitution.
+  5. Similarly, in `verify_step_up_response` (lines 360-366), `challenge_row.get("user_id")` is never checked against `stored_credential["user_id"]`, allowing delegate or peer substitution of step-up challenges.
+- **Blast radius**: Challenge substitution across user sessions; denial of service on legitimate user logins; violation of tenant isolation.
+- **Mitigation**:
+  In `verify_authentication_response`:
   ```python
-  "reason": f"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false (dispatch configured but blocked: {', '.join(failed)})",
+  if challenge_row.get("user_id") and challenge_row["user_id"] != stored_credential.get("user_id"):
+      raise InvalidAuthenticationResponse("challenge not issued to this user")
   ```
-  This immediately satisfies:
-  1. `assert "DISPATCH_ENABLED must be false" in data["reason"]` (in `test_graph_api_v1.py` lines 320 and 656)
-  2. `assert "blocked" in data.get("reason", "")` (in `test_dispatch_creation.py` line 67)
-  3. The core Phase 1 safety invariant requirement in `ORIGINAL_REQUEST.md`.
+  In `verify_step_up_response`:
+  ```python
+  if challenge_row.get("user_id") and challenge_row["user_id"] != stored_credential.get("user_id"):
+      raise InvalidAuthenticationResponse("step-up challenge not issued to this user")
+  ```
 
 ---
 
-### Challenge 2: [Low / Pass] Nonce Replay & Single-Use Enforcement
+### [Medium] Challenge 4: WebAuthn Trigger vs App Layer Monotonicity Boundary
 
-- **Assumption Challenged**: An attacker or rogue proxy re-submits an intercepted valid Commissioner gate recording payload.
-- **Attack Scenario**:
-  1. Commissioner issues challenge on `POST /v1/activation-gates/G-ID/challenge`, receiving `nonce_1`.
-  2. Commissioner signs canonical payload and submits to `POST /v1/activation-gates/G-ID`.
-  3. Attacker intercepts and replays the identical payload and signature.
-- **Observed Defense**:
-  In `src/graph_api.py:567-585`, the endpoint executes:
+- **Assumption challenged**: PostgreSQL trigger `fc27_guard_webauthn_counter` prevents all replay and clone attacks.
+- **Attack scenario**:
+  The PostgreSQL trigger `fc27_guard_webauthn_counter` checks:
   ```sql
-  SELECT nonce, gate_id, payload_sha256, consumed_at, revoked_at, ...
-    FROM public.approval_nonces
-   WHERE nonce = %s
-     FOR UPDATE
+  IF NEW.sign_counter < OLD.sign_counter THEN
+      RAISE check_violation USING MESSAGE = 'webauthn sign_counter cannot decrease';
+  END IF;
   ```
-  On the first call, `consumed_at` is updated to `now()`.
-  On the second call, `nonce_row["consumed_at"] is not None` evaluates to `True`, immediately raising:
-  `HTTPException(409, "nonce already consumed")`.
-  Additionally, `activation_gate_log` is protected by `fc27_activation_gate_log_immutable`, and duplicate entries are prevented.
-- **Verdict**: PASS.
+  This trigger allows `NEW.sign_counter == OLD.sign_counter`. This is necessary for non-counter updates (e.g., updating `last_used_at` or `label`), but if an assertion update sets `sign_counter = OLD.sign_counter`, the trigger alone will not block it.
+  Fortunately, the application layer in `src/identity/store.py:1717` checks:
+  ```python
+  if row["sign_counter"] > 0 and new_counter <= row["sign_counter"]:
+      raise IdentityStoreError(401, "authenticator sign counter replay or clone detected")
+  ```
+  and `src/identity/webauthn.py:298` also checks:
+  ```python
+  if current_counter > 0 and verified.new_sign_count <= current_counter:
+      raise InvalidAuthenticationResponse("authenticator clone or replay attack detected: counter did not increase")
+  ```
+- **Blast radius**: Relies on application layer consistency to enforce strictly greater-than for non-zero counters.
+- **Assessment**: Robust defense-in-depth across application store and WebAuthn engine. However, authenticators with `sign_counter == 0` (e.g. some platform authenticators) bypass counter checks by design according to the W3C WebAuthn Level 2 specification.
 
 ---
 
-### Challenge 3: [Low / Pass] Nonce Expiration & Payload Digest Tampering
+## Stress Test Results
 
-- **Assumption Challenged**: An attacker uses an expired nonce (>300s) or modifies evidence/status/deployment metadata in the signed payload.
-- **Attack Scenario**:
-  1. Nonce expires (`now() > expires_at`).
-  2. Attacker tampers with `evidence_ref` or modifies `status` from `failed` to `passed`.
-- **Observed Defense**:
-  - Nonce TTL is strictly bounded: `expires_at = issued_at + min(settings.approval_ttl_seconds, 300)` (maximum 300 seconds).
-  - If expired: `now() > expires_at` is evaluated in SQL. `if nonce_row["expired"]:` raises `HTTPException(409, "nonce expired")`.
-  - If payload modified: `verify_gate_signature` computes HMAC-SHA256 over `canonical_gate_bytes(payload)`. Any discrepancy in `GATE_SIGNED_FIELDS` raises `PermissionError` -> `HTTPException(403, "invalid gate signature")`.
-  - If signature forged but nonce exists: `nonce_row["payload_sha256"] != payload_digest` raises `HTTPException(409, "nonce payload mismatch")`.
-- **Verdict**: PASS.
-
----
-
-### Challenge 4: [Low / Pass] Phase 1 Boundary Enforcement & G-OUTBOX Refusal
-
-- **Assumption Challenged**: An operator attempts to record `G-OUTBOX` or manually force automated gates (`G-MIGRATION`, `G-GRANTS`, `G-WORKER`).
-- **Attack Scenario**:
-  - `POST /v1/activation-gates/G-OUTBOX/challenge` or `POST /v1/activation-gates/G-OUTBOX`.
-  - `POST /v1/activation-gates/G-WORKER/challenge`.
-- **Observed Defense**:
-  - In `src/dispatch/gates.py:25`: `RECORDABLE_GATES = frozenset({"G-ID", "G-ATOMIC"})`.
-  - In `src/graph_api.py:492-496` & `546-550`:
-    - If `gate_id not in ("G-ID", "G-ATOMIC", "G-OUTBOX")`: raises `HTTPException(422, "automatic gate")`.
-    - If `gate_id not in RECORDABLE_GATES`: raises `HTTPException(409, "not_recordable_before_phase_3")`.
-  - `G-OUTBOX` is strictly non-recordable via the API in Phase 1 (Constraint C-3).
-- **Verdict**: PASS.
+| # | Stress Test Scenario | Expected Behavior | Actual Behavior | Result |
+|---|----------------------|-------------------|-----------------|--------|
+| 1 | Passkey assertion with $C_{\text{new}} = C_{\text{current}}$ ($C > 0$) | Rejected with clone/replay detection (401) | Rejected with InvalidAuthenticationResponse | **PASS** |
+| 2 | Passkey assertion with $C_{\text{new}} < C_{\text{current}}$ ($C > 0$) | Rejected with clone/replay detection (401) | Rejected with InvalidAuthenticationResponse | **PASS** |
+| 3 | `IdentityStore.update_webauthn_counter` with non-increasing counter | Raises IdentityStoreError(401) | Raises IdentityStoreError(401) | **PASS** |
+| 4 | PostgreSQL trigger `fc27_guard_webauthn_counter` on counter decrement | Raises `check_violation` | Defined in migration 0004 | **PASS** |
+| 5 | WebAuthn challenge consumed twice (replay attempt) | 2nd consumption returns `None` / fails closed | Fails closed with 400/401 | **PASS** |
+| 6 | Expired WebAuthn challenge consumed | Returns `None` / fails closed | Fails closed with 400/401 | **PASS** |
+| 7 | Cross-user challenge mismatch in registration | Fails closed: "challenge not issued to this user" | Fails closed | **PASS** |
+| 8 | Cross-user challenge mismatch in authentication | Fails closed: "challenge not issued to this user" | **OMITTED** in `verify_authentication_response` | **FAIL** |
+| 9 | Step-up challenge payload hash mismatch | Fails closed: "bound payload mismatch" | Fails closed | **PASS** |
+| 10 | Cross-user challenge mismatch in step-up | Fails closed: "challenge not issued to this user" | **OMITTED** in `verify_step_up_response` | **FAIL** |
+| 11 | TOTP code replayed in same 30s window | Fails closed with `"replay_detected"` (HTTP 400) | Rejected with `"replay_detected"` | **PASS** |
+| 12 | TOTP code replayed from older window ($S \le S_{\text{last}}$) | Fails closed with `"replay_detected"` (HTTP 400) | Rejected with `"replay_detected"` | **PASS** |
+| 13 | TOTP code outside $\pm 1$ step drift (e.g. $t \pm 65s$) | Fails closed with `"invalid_or_expired_code"` (HTTP 400) | Rejected with `"invalid_or_expired_code"` | **PASS** |
+| 14 | 5 consecutive failed TOTP attempts | Locks out user for 300s (HTTP 429) | Rate limiter triggers lockout, returns 300s | **PASS** |
+| 15 | Service tokens (BFF, Graph, Worker) calling passkey/TOTP endpoints | Fails with 403 `AgentImpersonationError` | Rejected with 403 `AgentImpersonationError` | **PASS** |
+| 16 | Service roles executing PASSKEY / TOTP actions via `authorize()` | Fails with 403 `ActionNotPermittedError` | Rejected with 403 | **PASS** |
+| 17 | `tests/identity/test_totp.py` pytest collection | Clean collection and test pass | **Crashes on collection** (`ImportError`) | **FAIL** |
+| 18 | `tests/identity/test_webauthn.py` pytest execution | Clean test execution | **4 tests fail** (TypeError, AttributeError, AssertionError) | **FAIL** |
+| 19 | Packaging sync & Phase 1 dormancy | Dependencies match, DISPATCH_ENABLED=false | Verified | **PASS** |
 
 ---
 
-### Challenge 5: [Low / Pass] Correlation ID Isolation & Header Tampering (C-4, C-5)
+## Unchallenged Areas
 
-- **Assumption Challenged**: An intermediate HTTP proxy or distributed tracer injects, rewrites, or mutates `X-Correlation-Id`, which could invalidate the Commissioner's cryptographic signature.
-- **Attack Scenario**:
-  Commissioner signs a challenge payload with client-generated `X-Correlation-Id: A`. An upstream proxy rewrites header to `X-Correlation-Id: B`.
-- **Observed Defense**:
-  - `GATE_SIGNED_FIELDS` (in `src/dispatch/gates.py:29-40`) defines:
-    `("gate_id", "status", "evidence_ref", "code_revision", "deployment_id", "fc_version", "platform", "issued_at", "expires_at", "nonce")`.
-  - `X-Correlation-Id` is strictly excluded from `GATE_SIGNED_FIELDS`.
-  - `canonical_gate_bytes()` filters payload strictly to `GATE_SIGNED_FIELDS`.
-  - Signature verification succeeds regardless of any changes to `X-Correlation-Id`.
-  - Meanwhile, `cid = getattr(request.state, "correlation_id", None) or uuid4()` is passed to `record_event(..., correlation_id=cid)`, correctly correlating the resulting audit event.
-- **Verdict**: PASS.
-
----
-
-### Challenge 6: [Low / Pass] Dynamic Gate Re-evaluation Without Server Restart (C-1)
-
-- **Assumption Challenged**: Newly recorded gates or changed deployment identities require restarting the graph-api process, violating dynamic evaluation requirements.
-- **Attack Scenario**:
-  Gate recorded in database; client calls `GET /v1/config/dispatch` or triggers approvals without rebooting FastAPI.
-- **Observed Defense**:
-  - `reevaluate_gates(app: FastAPI)` in `src/graph_api.py:140-170` evaluates all 6 gates against live DB and atomically updates `app.state.dispatch_effective` and `app.state.gate_report`.
-  - It runs on startup in `lifespan`, periodically in background task, and can be invoked on-demand.
-  - Zero server restart is required.
-- **Verdict**: PASS.
-
----
-
-## 3. Stress Test & Negative Scenario Results
-
-| # | Stress Scenario | Expected Behavior | Actual Behavior | Result |
-|---|----------------|-------------------|-----------------|--------|
-| 1 | Replay consumed gate nonce | 409 Conflict (`nonce already consumed`) | Handled via `approval_nonces.consumed_at` check | **PASS** |
-| 2 | Submit expired gate nonce (>300s) | 409 Conflict (`nonce expired`) | Evaluated via `now() > expires_at` in SQL | **PASS** |
-| 3 | Tamper `evidence_ref` or `status` | 403 Forbidden (`invalid gate signature`) | Fails constant-time HMAC check | **PASS** |
-| 4 | Challenge `G-OUTBOX` in Phase 1 | 409 Conflict (`not_recordable_before_phase_3`) | Rejected per `RECORDABLE_GATES` (C-3) | **PASS** |
-| 5 | Challenge `G-WORKER` manually | 422 Unprocessable (`automatic gate`) | Rejected by gate ID discriminator | **PASS** |
-| 6 | Mutate `X-Correlation-Id` in transit | 200 OK (signature valid, event correlated) | `X-Correlation-Id` excluded from signature | **PASS** |
-| 7 | Dynamic gate change | Live update on `app.state` without restart | `reevaluate_gates()` updates state in-place | **PASS** |
-| 8 | `/health/ready` under `dispatch_enabled=True` | 503 degraded with `"DISPATCH_ENABLED must be false"` | 503 degraded, but reason omitted expected substring | **FAIL (Finding 1)** |
-| 9 | Candidate missing objective | 409 Conflict (`not_dispatchable`) | Caught, rolled back, thread still awaiting | **PASS** |
-| 10 | Unverified player ID (`identity_verified_at IS NULL`) | 409 Conflict (`not_dispatchable`) | Verified via `public.players` check | **PASS** |
-| 11 | Malformed player ID (`GamerTag99`) | 409 Conflict (`not_dispatchable`) | Rejected by regex `^[0-9]{1,20}$` | **PASS** |
-| 12 | Exact string match (`'7'` vs `'007'`) | 409 Conflict (`not_dispatchable`) | Exact string equality enforced | **PASS** |
-| 13 | Atomic rollback on DB failure | Abort transaction, 0 audit, 0 dispatch, unconsumed nonce | All writes rolled back atomically | **PASS** |
-| 14 | Concurrent approvals on same partition | Advisory lock serializes execution | `pg_advisory_xact_lock` prevents race | **PASS** |
-
----
-
-## 4. Unchallenged Areas
-
-- **Phase 3 Outbox Relay Engine**: Out of scope for Phase 1. `G-OUTBOX` is intentionally blocked.
-- **Production Dispatch Worker Deployment**: Out of scope for Phase 1. `G-WORKER` intentionally fails closed in production Phase 1.
-
----
-
-## 5. Explicit Actionable Recommendation
-
-**Verdict: REQUEST_CHANGES**
-
-**Required Change**:
-In `src/graph_api.py`, line 419:
-Replace:
-```python
-"reason": f"dispatch configured but blocked ({', '.join(failed)})",
-```
-With:
-```python
-"reason": f"Phase 1 safety invariant violation: DISPATCH_ENABLED must be false (dispatch configured but blocked: {', '.join(failed)})",
-```
-This preserves the Milestone 4 diagnostic gate failure list while ensuring full backward compatibility with the existing Milestone 2 regression test suite (`tests/test_graph_api_v1.py` lines 320 and 656).
+- **Physical FIDO2 Hardware Attestation**: Validated using simulated W3C WebAuthn Level 2/3 cryptographic structures (CBOR/COSE); physical USB/NFC hardware security keys were not attached.
+- **Live Redis Distributed Rate Limiting**: In-memory `TotpRateLimiter` thread-safe singleton tested; distributed multi-node rate limiting is planned for Phase 3+.

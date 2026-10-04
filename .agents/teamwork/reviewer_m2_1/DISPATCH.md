@@ -1,42 +1,53 @@
-# DISPATCH: reviewer_m2_1
+# Dispatch Instructions for reviewer_m2_1
 
-- **Assigned Role**: Reviewer 1 (Graph Core & Persistence)
-- **Archetype**: teamwork_preview_reviewer
-- **Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1
-- **Parent**: orchestrator_phase1 (conv id: 7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b)
+**Agent ID**: `reviewer_m2_1`
+**Role**: Policy & Service Boundaries Reviewer
+**Milestone**: Phase 2 Milestone 2 — Centralized Authorization & Service Boundaries
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1`
 
-## Mandatory Inputs (MUST READ FIRST)
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
+## Authoritative Inputs
+1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+3. Worker handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md`
 
-## Focus & Review Scope
-Perform independent review of Milestone 2 with focus on LangGraph Core & Persistence:
-1. Single Interrupt Verification: Verify exactly one `interrupt()` call inside the `approval` node in `src/graph.py`. Ensure there is NO `interrupt_before=["approval"]` anywhere.
-2. PostgreSQL Authoritative Decision Re-read on Resume: Verify that resuming the graph calls `deps.decision_reader(thread_id)` directly from PostgreSQL. Verify that resume payloads from callers/HTTP bodies are never trusted for authorization. Verify that `ApprovalNotCommitted` is raised if the decision is missing or package version mismatches.
-3. Terminal State Statements: Verify terminal graph state statements are formatted strictly as `"APPROVED, NOT DISPATCHED"`, `"REJECTED, NO ACTION TAKEN"`, and `"REVISION_REQUESTED, NO ACTION TAKEN"`. Check for zero occurrences of `"APPROVED and ACTIVE"`.
-4. LangGraph Checkpoint persistence role: Verify checkpoints represent workflow state, not authorization state.
-5. Inspect `tests/test_graph_persistence.py` and `tests/test_langgraph_flow.py`.
-
-## Verification Commands
-Run the tests:
-```powershell
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_graph_persistence.py tests/test_langgraph_flow.py
-```
-And verify baseline tests:
-```powershell
-$env:TEST_POSTGRES_URI="postgresql://fc27test@127.0.0.1:55432/postgres"; .venv\Scripts\python.exe -m pytest -o addopts="" -q tests/test_approval_lifecycle.py tests/test_approval_security.py
-```
-
-## Output Requirements
-1. Write `review.md` in your working directory with detailed findings, evidence citations, and rationale.
-2. Formulate an explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-3. Write `handoff.md` following the Handoff Protocol (Observation, Logic Chain, Caveats, Conclusion, Verification Method).
-4. Send a message to orchestrator (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`) with your verdict and handoff path.
-Do NOT modify production source code in `src/` or `migrations/`.
+## Review Tasks
+1. Review `src/identity/policy.py`:
+   - Complete implementation of `authorize(principal, action, resource, authority_basis, delegation)`
+   - All 8 application roles accurately modeled
+   - All 4 authority bases modeled
+   - Strict club tenancy (`CrossClubAccessError`) and object-level player isolation (`PlayerIsolationError`)
+   - Anti-impersonation guard (`AgentImpersonationError` on human decision actions by service)
+   - Step-up passkey verification requirement
+   - G-TIMEOUT invariant: timeouts/inactivity never authorize
+2. Review `src/identity/services.py` & `src/identity/deps.py`:
+   - `ServiceCredentialsManager` loading distinct keys with rotation support
+   - Constant-time token verification (`hmac.compare_digest`)
+   - Gamertag display separation (`DisplayIdentity`, immutable UUID keys)
+   - FastAPI `get_current_principal` dependency
+3. Execute verification tests:
+   - `pytest tests/test_packaging.py tests/test_phase1_scope.py -v`
+   - `pytest tests/identity/test_policy.py tests/identity/test_services.py -v`
+4. Document commands, findings, and explicit verdict (**APPROVE** or **REQUEST_CHANGES**) in:
+   `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1\handoff.md`
 
 
-## 2026-10-03T16:21:22Z
-You are reviewer_m2_1, a teamwork_preview_reviewer agent.
-Your working directory is: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1
-Task: Perform independent review of Milestone 2 focusing on Graph Core & Persistence.
+## 2026-10-04T04:21:22Z
+[Message] timestamp=2026-10-04T04:21:22Z sender=25210876-a9ad-4f78-a87c-dec88e86edb9 priority=MESSAGE_PRIORITY_HIGH content=You are reviewer_m2_1, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m2_1\handoff.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md before starting work.
+
+Your task:
+Review the implementation of Phase 2 Milestone 2: Centralized Authorization & Service Boundaries.
+1. Review src/identity/policy.py (authorize(), 8 roles, 4 authority bases, tenancy, player isolation, anti-impersonation, G-TIMEOUT).
+2. Review src/identity/services.py & src/identity/deps.py (ServiceCredentialsManager, token validation, gamertag separation, get_current_principal).
+3. Execute verification tests:
+   - pytest tests/test_packaging.py tests/test_phase1_scope.py -v
+   - pytest tests/identity/test_policy.py tests/identity/test_services.py -v
+4. Document commands, findings, and explicit verdict (APPROVE or REQUEST_CHANGES) in:
+   c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m2_1\handoff.md
+When finished, notify me with your verdict and report path via send_message.

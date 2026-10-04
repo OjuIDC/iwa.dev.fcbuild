@@ -1,39 +1,83 @@
-# DISPATCH — reviewer_m6_1
+# DISPATCH: reviewer_m6_1 (Phase 2 E2E Suites & Delegations Router Reviewer)
 
-**Agent ID**: reviewer_m6_1
-**Archetype**: teamwork_preview_reviewer
-**Assigned Task**: Milestone 6 Reviewer 1 (E2E Test Suite & Acceptance Trace)
-**Working Directory**: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1
-**Parent**: orchestrator_phase1 (`7e5a4c88-e92a-41d1-8d9f-3854d43d1f1b`)
-**Timestamp**: 2026-10-03T21:55:00Z
+**Role**: `teamwork_preview_reviewer`
+**Working Directory**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1`
+**Authoritative Request**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md`
+**Project Plan**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md`
+**Worker Handoff**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
+**Test Infra Specification**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\e2e_test_writer_phase2_1\TEST_INFRA.md`
+**Test Readiness Declaration**: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\e2e_test_writer_phase2_1\TEST_READY.md`
 
-## MANDATORY Context Files to Read Before Starting:
-1. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md` (Authoritative user request + Section 1A patch)
-2. `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase1\PROJECT.md`
-3. Worker Handoff: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md`
-4. Published Test Results: `c:\Users\iwadev\dev\iwa.dev.fcbuild\TEST_RESULTS.md`
-5. E2E Test Suite Files:
-   - `tests/e2e/test_tier1_features.py` (41 tests)
-   - `tests/e2e/test_tier2_boundaries.py` (25 tests)
-   - `tests/e2e/test_tier3_combinations.py` (5 tests)
-   - `tests/e2e/test_tier4_scenarios.py` (9 tests)
-   - `tests/e2e/conftest.py`
+---
 
-## Review Task:
-1. Inspect `TEST_RESULTS.md` at project root:
-   - Verify that all Phase 1 Acceptance Criteria in Spec §31.1 (AC-1..AC-58 Phase 1 subset) are present and mapped to valid test node IDs.
-   - Verify that all 10 Corrections C-1 through C-10 are traced to proving test nodes.
-   - Verify that Section 1A human authority & player consent requirements are traced.
-   - Verify that all 41 Features from `PROJECT.md` Feature Inventory are traced.
-   - Verify the 9-point Owner Success Condition Checklist.
-2. Inspect `tests/e2e/`:
-   - Verify Tier 1 (41 tests): 1:1 mapping with Features 1–41.
-   - Verify Tier 2 (25 tests): 5 domains of boundary condition tests.
-   - Verify Tier 3 (5 tests): race conditions, crash recovery, atomic outbox.
-   - Verify Tier 4 (9 tests): golden paths and Section 1A constraints.
-   - Confirm test node IDs cited in `TEST_RESULTS.md` correspond exactly to test functions in `tests/`.
-3. Verify test isolation & zero state leakage guarantees (unique `fc27_test_<uuidhex>` per test, teardown drops DB, `fc27_approval_inconsistencies == 0`).
-4. Formulate explicit verdict: **APPROVE** or **REQUEST_CHANGES**.
-5. Write `review.md` and `handoff.md` in your working directory.
-6. Notify orchestrator via `send_message` when done.
-Do NOT modify production source code or test files.
+## Non-Negotiable Invariants
+1. Universal dormancy: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` strictly enforced across all environments, settings, and endpoints.
+2. Zero player delivery; Phase 2 must NEVER activate player dispatch, delivery adapters, or outbox relay.
+3. No Phase 3 dispatch worker, outbox relay, or player-agent execution pipeline.
+4. Preserve Phase 1 baseline commit `3339d6d672bbc59f251e1e2a6977bc9ea65edffe`.
+5. PostgreSQL is authoritative for all identity and authorization state.
+6. No agent-human impersonation (automated services/LLM nodes cannot authenticate or decide for humans; `require_human_principal` enforced).
+7. Gamertags and display names are presentation data only; use immutable local user UUIDs and numeric player IDs as primary identity.
+8. Inactivity and timeouts alter escalation state but NEVER create approvals or decisions (G-TIMEOUT invariant).
+
+---
+
+## Review Scope & Instructions
+1. Inspect `src/identity/routers/delegations.py`:
+   - Verify `POST /v1/auth/delegations`: validation of prohibited delegation actions, human commissioner or staff enforcement via `require_human_principal`, club scope handling, calls `store.create_delegation`.
+   - Verify `GET /v1/auth/delegations`: tenant isolation by club ID, calls `store.list_delegations`.
+   - Verify `GET /v1/auth/delegations/{delegation_id}`: retrieval and tenant check.
+   - Verify `DELETE /v1/auth/delegations/{delegation_id}`: revocation call to `store.revoke_delegation`.
+2. Inspect `src/graph_api.py`:
+   - Verify `delegations_router` mounted at `/v1/auth/delegations`.
+3. Inspect `tests/e2e/conftest.py`:
+   - Verify default service credentials setup (`BFF_SERVICE_TOKEN`, `GRAPH_SERVICE_TOKEN`, `WORKER_SERVICE_TOKEN`).
+4. Inspect Phase 2 E2E test suites:
+   - `tests/e2e/test_phase2_tier1_features.py` (54 tests)
+   - `tests/e2e/test_phase2_tier2_boundaries.py` (54 tests)
+   - `tests/e2e/test_phase2_tier3_combinations.py` (10 tests)
+   - `tests/e2e/test_phase2_tier4_scenarios.py` (6 tests)
+5. Execute verification tests:
+   ```powershell
+   .\.venv\Scripts\pytest.exe tests/e2e/test_phase2_tier1_features.py tests/e2e/test_phase2_tier2_boundaries.py tests/e2e/test_phase2_tier3_combinations.py tests/e2e/test_phase2_tier4_scenarios.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   ```
+   (Set `WaitMsBeforeAsync: 10000`). If permission prompt times out, document honestly and verify via AST / static analysis.
+6. Provide an explicit verdict in your handoff report: **APPROVE** or **REQUEST_CHANGES**.
+7. Deliver report to: `c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1\handoff.md`.
+8. Notify orchestrator via `send_message` when complete.
+
+
+## 2026-10-04T10:46:37Z
+You are reviewer_m6_1, a high-reliability reviewer agent.
+Working directory: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1
+Authoritative request: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md
+Your dispatch instructions are at: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1\DISPATCH.md
+Project plan: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\orchestrator_phase2\PROJECT.md
+Worker handoff: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\worker_m6_1\handoff.md
+Test infra: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\e2e_test_writer_phase2_1\TEST_INFRA.md
+Test readiness: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\e2e_test_writer_phase2_1\TEST_READY.md
+
+MANDATORY: You MUST read c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\ORIGINAL_REQUEST.md and c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1\DISPATCH.md before starting work.
+
+Your task:
+Review the human delegations router, router mounting, and Phase 2 E2E test suites for Milestone 6:
+1. Inspect src/identity/routers/delegations.py:
+   - POST /v1/auth/delegations (checks prohibited actions, human commissioner/staff, store.create_delegation).
+   - GET /v1/auth/delegations (tenant isolation by club ID, store.list_delegations).
+   - GET /v1/auth/delegations/{delegation_id} (retrieval and tenant check).
+   - DELETE /v1/auth/delegations/{delegation_id} (revocation).
+2. Inspect src/graph_api.py:
+   - delegations_router mounted at /v1/auth/delegations.
+3. Inspect tests/e2e/conftest.py:
+   - default service credentials setup (BFF, Graph, Worker service tokens).
+4. Inspect Phase 2 E2E test suites:
+   - tests/e2e/test_phase2_tier1_features.py (54 tests)
+   - tests/e2e/test_phase2_tier2_boundaries.py (54 tests)
+   - tests/e2e/test_phase2_tier3_combinations.py (10 tests)
+   - tests/e2e/test_phase2_tier4_scenarios.py (6 tests)
+5. Execute verification tests:
+   .\.venv\Scripts\pytest.exe tests/e2e/test_phase2_tier1_features.py tests/e2e/test_phase2_tier2_boundaries.py tests/e2e/test_phase2_tier3_combinations.py tests/e2e/test_phase2_tier4_scenarios.py tests/test_packaging.py tests/test_phase1_scope.py -v
+   (Set WaitMsBeforeAsync=10000). If permission prompt times out, document honestly and verify via AST / static analysis.
+6. Provide an explicit verdict in your handoff report: APPROVE or REQUEST_CHANGES.
+Deliver complete report to: c:\Users\iwadev\dev\iwa.dev.fcbuild\.agents\teamwork\reviewer_m6_1\handoff.md
+When finished, notify orchestrator with your verdict and report path via send_message.
