@@ -326,7 +326,14 @@ def test_player_decision_actions_validation(player_app_ctx):
     )
     assert resp_accept_no_proof.status_code == 422
 
-    # 4. acknowledge does NOT require proof and confirms receipt
+    # 4. acknowledge requires proof: proofless is rejected with HTTP 422
+    resp_ack_no_proof = client.post(
+        f"/v1/player/assignments/{aid}/decision",
+        json={"decision": "acknowledge"},
+    )
+    assert resp_ack_no_proof.status_code == 422
+
+    # acknowledge with valid action token proof succeeds
     mock_store.get_active_decision_request.return_value = {
         "request_id": uuid4(),
         "status": "awaiting_player",
@@ -347,12 +354,18 @@ def test_player_decision_actions_validation(player_app_ctx):
         "decided_at": datetime.now(timezone.utc),
         "status": "decided",
     }
-    resp_ack = client.post(
-        f"/v1/player/assignments/{aid}/decision",
-        json={"decision": "acknowledge"},
-    )
-    assert resp_ack.status_code == 200
-    assert resp_ack.json()["decision"] == "acknowledge"
+    with patch.object(ScopedActionTokenEngine, "consume_token") as mock_consume:
+        mock_consume.return_value = MagicMock(token_id=uuid4(), user_id=principal.user_id)
+        resp_ack = client.post(
+            f"/v1/player/assignments/{aid}/decision",
+            json={
+                "decision": "acknowledge",
+                "proof_type": "action_token",
+                "action_token": f"sat_{secrets.token_urlsafe(32)}",
+            },
+        )
+        assert resp_ack.status_code == 200
+        assert resp_ack.json()["decision"] == "acknowledge"
 
 
 def test_g_timeout_invariant_rejection():
@@ -367,13 +380,13 @@ def test_g_timeout_invariant_rejection():
         auth_level=AuthLevel.AUTHENTICATED,
         auth_method=AuthMethod.PASSKEY,
     )
-    res = Resource.for_package("330323", "pkg_1", 1)
+    res = Resource.for_package(club_id="330323", package_id="pkg_1")
 
     with pytest.raises(AgentImpersonationError, match="G-TIMEOUT invariant"):
         authorize(principal, "system:timeout:auto_approve", res)
 
     # Also confirm resource timeout_approved attribute rejection
-    res_timeout = Resource.for_package("330323", "pkg_1", 1, attributes={"timeout_approved": True})
+    res_timeout = Resource.for_package(club_id="330323", package_id="pkg_1", attributes={"timeout_approved": True})
     with pytest.raises(AgentImpersonationError, match="G-TIMEOUT invariant"):
         authorize(principal, ActionType.PACKAGE_APPROVE, res_timeout)
 

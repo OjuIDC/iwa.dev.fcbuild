@@ -27,6 +27,12 @@ for _code in ("FC001", "FC002", "FC003", "FC004", "FC005", "FC006", "FC007"):
     psycopg.errors._sqlcodes[_code] = type(_code, (FCError,), {"sqlstate": _code})
 
 ADMIN_URI = os.getenv("TEST_POSTGRES_URI")
+if not ADMIN_URI:
+    try:
+        with psycopg.connect("postgresql://fc27test@127.0.0.1:55432/postgres", connect_timeout=1):
+            ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
+    except Exception:
+        pass
 
 
 def pytest_configure(config):

@@ -172,11 +172,20 @@ class TestSessionRotation:
         """Session rotation invalidates prior token and issues new active token."""
         user, old_token, old_sess = active_coach
 
-        # Rotate session
-        res = client.post(
+        # Client self-elevation to step_up_passkey MUST be rejected (403)
+        res_elevate = client.post(
             "/v1/auth/sessions/rotate",
             headers=session_header(old_token),
             json={"auth_level": "step_up_passkey", "auth_method": "passkey"},
+        )
+        assert res_elevate.status_code == 403
+        assert "cannot elevate session to 'step_up_passkey' without step-up verification evidence" in res_elevate.json().get("detail", "")
+
+        # Legitimate rotation without elevation succeeds
+        res = client.post(
+            "/v1/auth/sessions/rotate",
+            headers=session_header(old_token),
+            json={},
         )
         assert res.status_code == 200
         rot_data = res.json()
@@ -185,7 +194,7 @@ class TestSessionRotation:
         assert new_token != old_token
         assert len(new_token) == 64
         assert rot_data["prior_session_id"] == str(old_sess["session_id"])
-        assert rot_data["auth_level"] == "step_up_passkey"
+        assert rot_data["auth_level"] == "authenticated"
 
         # Old token MUST now be rejected (401)
         old_check = client.get("/v1/auth/session", headers=session_header(old_token))

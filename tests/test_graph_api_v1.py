@@ -580,6 +580,21 @@ def test_adversarial_hmac_kill_switch_blocks_before_body_parsing(pg_uri):
             (b'{"arbitrary": "value", "sub": [1, 2, 3]}', "application/json"),
         ]
 
+        # Explicit HMAC proof payloads are blocked by kill switch with 403 proof_type_disabled
+        hmac_bodies = [
+            b'{"decision": "approved", "proof_type": "hmac"}',
+            b'{"decision": "approved", "proof_type": "cli_hmac"}',
+        ]
+        for url in [f"/v1/runs/{tid}/decision", f"/v1/approval-requests/{req_id}/decisions", f"/threads/{tid}/decision"]:
+            for hmac_body in hmac_bodies:
+                resp = client.post(
+                    url,
+                    headers={**COM, "Content-Type": "application/json"},
+                    content=hmac_body,
+                )
+                assert resp.status_code == 403, f"Expected 403 on {url}, got {resp.status_code}: {resp.text}"
+                assert resp.json() == {"detail": "proof_type_disabled"}
+
         for url in decision_endpoints:
             for body_bytes, ctype in malicious_bodies:
                 resp = client.post(
@@ -587,11 +602,17 @@ def test_adversarial_hmac_kill_switch_blocks_before_body_parsing(pg_uri):
                     headers={**COM, "Content-Type": ctype},
                     content=body_bytes,
                 )
-                # MUST return 403 proof_type_disabled before schema validation
-                assert resp.status_code == 403, (
-                    f"Expected 403 on {url} with body {body_bytes[:20]!r}, got {resp.status_code}: {resp.text}"
-                )
-                assert resp.json() == {"detail": "proof_type_disabled"}
+                if url.endswith("decision-challenge"):
+                    # Decision-challenge endpoint requires HMAC dependency -> 403
+                    assert resp.status_code == 403, (
+                        f"Expected 403 on {url} with body {body_bytes[:20]!r}, got {resp.status_code}: {resp.text}"
+                    )
+                    assert resp.json() == {"detail": "proof_type_disabled"}
+                else:
+                    # Decision endpoints use Discriminated Union: missing proof_type fails validation with 422
+                    assert resp.status_code == 422, (
+                        f"Expected 422 on {url} with body {body_bytes[:20]!r}, got {resp.status_code}: {resp.text}"
+                    )
 
         # Empirical Adversarial Discovery:
         # When body bytes cannot be parsed as JSON syntax (e.g. malformed JSON syntax bytes),

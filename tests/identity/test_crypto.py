@@ -273,3 +273,71 @@ def test_module_convenience_functions(monkeypatch, sample_key):
     assert decrypted == "convenience_secret"
 
     reset_identity_crypto()
+
+
+# =====================================================================
+# 7. CLI Entrypoint Tests
+# =====================================================================
+
+def test_cli_help(capsys):
+    from src.identity.crypto import main
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "--rotate-keys" in captured.out
+    assert "--status" in captured.out
+    assert "--dry-run" in captured.out
+
+
+def test_cli_no_args_prints_help(capsys):
+    from src.identity.crypto import main
+    code = main([])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "--rotate-keys" in captured.out
+
+
+def test_cli_rotate_keys_missing_settings(monkeypatch, capsys):
+    from src.identity.crypto import main
+    monkeypatch.delenv("IDENTITY_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("IDENTITY_ENCRYPTION_KEY_FILE", raising=False)
+    code = main(["--rotate-keys"])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "Cryptographic configuration error" in captured.err
+
+
+def test_cli_rotate_keys_success_no_db(monkeypatch, sample_key, capsys):
+    from src.identity.crypto import main
+    monkeypatch.setenv("IDENTITY_ENCRYPTION_KEY", sample_key)
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+    code = main(["--rotate-keys"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Active key version: 1" in captured.out
+    assert "Fallback previous keys configured: 0" in captured.out
+    assert "Notice: POSTGRES_URI not set" in captured.out
+
+
+def test_cli_rotate_keys_with_fallback_keys(monkeypatch, sample_key, older_key, capsys):
+    from src.identity.crypto import main
+    monkeypatch.setenv("IDENTITY_ENCRYPTION_KEY", sample_key)
+    monkeypatch.setenv("IDENTITY_ENCRYPTION_KEYS_PREVIOUS", older_key)
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+    code = main(["--rotate-keys"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Active key version: 2" in captured.out
+    assert "Fallback previous keys configured: 1" in captured.out
+
+
+def test_cli_status_only(monkeypatch, sample_key, capsys):
+    from src.identity.crypto import main
+    monkeypatch.setenv("IDENTITY_ENCRYPTION_KEY", sample_key)
+    code = main(["--status"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Active key version: 1" in captured.out
+    assert "Rotation summary" not in captured.out
+

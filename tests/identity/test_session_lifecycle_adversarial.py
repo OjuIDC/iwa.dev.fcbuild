@@ -234,11 +234,19 @@ class TestSessionRotationAndInvalidationAdversarial:
         user, old_token, old_sess = active_coach
         old_sess_id = old_sess["session_id"]
 
-        # Execute rotation
-        res = client.post(
+        # Execute rotation: Client self-elevation to step_up_passkey MUST be rejected (403)
+        res_elevate = client.post(
             "/v1/auth/sessions/rotate",
             headers=session_header(old_token),
             json={"new_auth_level": "step_up_passkey", "new_auth_method": "passkey"},
+        )
+        assert res_elevate.status_code == 403
+
+        # Legitimate rotation without elevation succeeds
+        res = client.post(
+            "/v1/auth/sessions/rotate",
+            headers=session_header(old_token),
+            json={},
         )
         assert res.status_code == 200
         rot_data = res.json()
@@ -247,7 +255,7 @@ class TestSessionRotationAndInvalidationAdversarial:
         assert new_token != old_token
         assert len(new_token) == 64
         assert rot_data["old_session_id"] == str(old_sess_id)
-        assert rot_data["auth_level"] == "step_up_passkey"
+        assert rot_data["auth_level"] == "authenticated"
 
         # 1. Database Check: old session revoked_at IS NOT NULL
         with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
@@ -266,7 +274,7 @@ class TestSessionRotationAndInvalidationAdversarial:
         res_new = client.get("/v1/auth/session", headers=session_header(new_token))
         assert res_new.status_code == 200
         assert res_new.json()["user_id"] == str(user["user_id"])
-        assert res_new.json()["auth_level"] == "step_up_passkey"
+        assert res_new.json()["auth_level"] == "authenticated"
 
         # 4. Replay Rotation with old token MUST fail closed (401)
         res_replay = client.post(

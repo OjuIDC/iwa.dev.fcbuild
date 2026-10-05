@@ -34,7 +34,7 @@ import pytest
 from tests.e2e.conftest import COM_HEADERS
 from tests.e2e.phase2_helpers import TEST_CLUB_ID, session_header
 from src.identity.crypto import hash_token
-from src.identity.store import IdentityStore
+from src.identity.store import IdentityStore, IdentityStoreError
 
 
 @pytest.fixture
@@ -413,3 +413,68 @@ class TestInvitationsRevocation:
 
         del2 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
         assert del2.status_code == 409
+
+
+class TestInvitationsServiceRoleRejection:
+    """Service and machine identity roles must never be provisioned via invitations (R11)."""
+
+    @pytest.mark.parametrize("prohibited_role", [
+        "bff_service",
+        "graph_service",
+        "worker",
+        "worker_service",
+        "service",
+    ])
+    def test_router_rejects_machine_roles_with_422(self, client, prohibited_role: str):
+        """API rejects machine identity roles with HTTP 422 Unprocessable Entity."""
+        payload = {
+            "club_id": TEST_CLUB_ID,
+            "role": prohibited_role,
+            "login_identifier": f"bot_{uuid.uuid4().hex[:6]}@fc27.club",
+            "display_name": "Machine Identity",
+        }
+        res = client.post("/v1/auth/invitations", headers=COM_HEADERS, json=payload)
+        assert res.status_code == 422, f"Role {prohibited_role} should be rejected with 422, got {res.status_code}: {res.text}"
+
+    @pytest.mark.parametrize("prohibited_role", [
+        "bff_service",
+        "graph_service",
+        "worker",
+        "worker_service",
+        "service",
+    ])
+    def test_store_create_invitation_rejects_machine_roles_with_422(self, store: IdentityStore, prohibited_role: str):
+        """Store layer rejects machine identity roles with IdentityStoreError(422)."""
+        with pytest.raises(IdentityStoreError) as exc_info:
+            store.create_invitation(
+                club_id=TEST_CLUB_ID,
+                intended_role=prohibited_role,
+                login_identifier=f"bot_{uuid.uuid4().hex[:6]}@fc27.club",
+                creator_id="commissioner-1",
+                actor="commissioner-1",
+            )
+        assert exc_info.value.status_code == 422
+
+    def test_store_consume_invitation_rejects_prohibited_role_with_422(self, store: IdentityStore, pg_uri: str):
+        """Store layer rejects consuming an invitation if role was tampered to a machine role."""
+        raw_token = uuid.uuid4().hex + uuid.uuid4().hex
+        tok_hash = hash_token(raw_token)
+        inv_id = uuid.uuid4()
+        bot_email = f"bot_{uuid.uuid4().hex[:6]}@fc27.club"
+
+        # Manually seed a compromised row with machine role
+        with psycopg.connect(pg_uri, autocommit=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO public.fc27_invitations (
+                    invitation_id, club_id, token_hash, invited_email, intended_role,
+                    creator_id, expires_at
+                ) VALUES (%s, %s, %s, %s, 'bff_service', 'admin', now() + interval '1 day')
+                """,
+                (inv_id, TEST_CLUB_ID, tok_hash, bot_email),
+            )
+
+        with pytest.raises(IdentityStoreError) as exc_info:
+            store.consume_invitation_and_activate_user(raw_token)
+        assert exc_info.value.status_code == 422
+

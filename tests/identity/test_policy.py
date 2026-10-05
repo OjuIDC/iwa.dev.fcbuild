@@ -469,6 +469,23 @@ def test_commissioner_with_step_up_can_approve(commissioner_principal: Principal
     assert decision.authority_basis == AuthorityBasis.PRIMARY
 
 
+def test_all_step_up_required_actions_enforced():
+    """All actions in STEP_UP_REQUIRED_ACTIONS fail closed without step_up_passkey auth_level."""
+    from src.identity.policy import STEP_UP_REQUIRED_ACTIONS
+    comm_low_auth = PrincipalContext.create(
+        user_id=uuid4(),
+        club_id=CLUB_A,
+        roles=[UserRole.COMMISSIONER],
+        auth_level=AuthLevel.AUTHENTICATED,
+        auth_method=AuthMethod.PASSKEY,
+    )
+    for action in STEP_UP_REQUIRED_ACTIONS:
+        res = Resource(resource_type="general", club_id=CLUB_A)
+        with pytest.raises(StepUpRequiredError) as exc_info:
+            authorize(comm_low_auth, action, res)
+        assert "requires step-up passkey verification" in exc_info.value.detail
+
+
 # =====================================================================
 # 7. Coach and Analyst Role Tests
 # =====================================================================
