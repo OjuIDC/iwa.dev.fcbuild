@@ -1,4 +1,4 @@
--- grants-policy-version: 8
+-- grants-policy-version: 9
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -212,5 +212,10 @@ BEGIN
 
     IF to_regclass('public.fc27_credentials') IS NOT NULL THEN
         GRANT SELECT ON public.fc27_credentials TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_decision_evidence') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON public.fc27_decision_evidence TO fc27_app;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_decision_evidence TO fc27_migrator;
     END IF;
 END $$;

@@ -22,7 +22,7 @@ def _compute_grants_sha256() -> str:
     p = MIGRATIONS_DIR / "post" / "grants.sql"
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
-GRANTS_POLICY = GrantsPolicy(version=8, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=9, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass

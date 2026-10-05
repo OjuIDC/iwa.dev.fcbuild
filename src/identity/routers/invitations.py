@@ -55,6 +55,14 @@ def get_identity_store(request: Request) -> IdentityStore:
 # Pydantic Request & Response Schemas
 # ==============================================================================
 
+PROHIBITED_INVITATION_ROLES = frozenset({
+    "bff_service",
+    "graph_service",
+    "worker",
+    "worker_service",
+    "service",
+})
+
 VALID_APPLICATION_ROLES = frozenset({
     "commissioner",
     "commissioner_delegate",
@@ -62,8 +70,6 @@ VALID_APPLICATION_ROLES = frozenset({
     "analyst",
     "staff",
     "player",
-    "bff_service",
-    "graph_service",
 })
 
 
@@ -125,6 +131,8 @@ class InvitationCreateRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def _validate_role(cls, v: str) -> str:
+        if v in PROHIBITED_INVITATION_ROLES:
+            raise ValueError(f"machine identity role '{v}' cannot be provisioned via human invitation")
         if v not in VALID_APPLICATION_ROLES:
             raise ValueError(f"invalid application role '{v}'; must be one of {sorted(VALID_APPLICATION_ROLES)}")
         return v
@@ -163,7 +171,7 @@ class InvitationValidateResponse(BaseModel):
 
 class InvitationConsumeRequest(BaseModel):
     """Payload for consuming an invitation and activating account."""
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     display_name: str | None = Field(
         default=None,
@@ -229,6 +237,13 @@ def create_invitation(
     if principal.has_role(UserRole.STAFF) and not principal.is_commissioner:
         if payload.role in {"commissioner", "commissioner_delegate"}:
             raise RoleNotPermittedError("staff members cannot issue commissioner invitations")
+
+    # 4. Prohibited machine role guard (R11)
+    if payload.role in PROHIBITED_INVITATION_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"machine identity role '{payload.role}' cannot be provisioned via invitation",
+        )
 
     raw_token, inv_data = store.create_invitation(
         club_id=payload.club_id,
