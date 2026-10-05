@@ -17,10 +17,12 @@ Strict Invariants (ORIGINAL_REQUEST.md §12):
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import json
 import os
+import sys
 from typing import Sequence
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -41,6 +43,7 @@ __all__ = [
     "reset_identity_crypto",
     "encrypt_secret",
     "decrypt_secret",
+    "main",
 ]
 
 
@@ -318,3 +321,123 @@ def encrypt_secret(plaintext: str, key_version: int = 1) -> str:
 def decrypt_secret(ciphertext: str) -> str:
     """Module convenience function: decrypts secret using active IdentityCrypto."""
     return get_identity_crypto().decrypt_secret(ciphertext)
+
+
+# =====================================================================
+# 5. CLI Entrypoint & Key Rotation Utility
+# =====================================================================
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint for identity cryptography operations and key rotation."""
+    parser = argparse.ArgumentParser(
+        prog="python -m src.identity.crypto",
+        description="FC27 Phase 2 Identity Cryptography CLI & Key Rotation Utility",
+    )
+    parser.add_argument(
+        "--rotate-keys",
+        action="store_true",
+        help="Re-encrypt stored credentials (e.g. TOTP seeds) to the active encryption key.",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Display active key version and key rotation configuration status.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate key rotation without committing changes to the database.",
+    )
+    parser.add_argument(
+        "--db-uri",
+        dest="db_uri",
+        type=str,
+        default=None,
+        help="PostgreSQL connection URI (defaults to POSTGRES_URI environment variable/secret).",
+    )
+
+    args = parser.parse_args(argv)
+
+    if not args.rotate_keys and not args.status:
+        parser.print_help()
+        return 0
+
+    try:
+        crypto = IdentityCrypto.from_settings()
+    except CryptoKeyError as exc:
+        print(f"Cryptographic configuration error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Unexpected error loading cryptography settings: {exc}", file=sys.stderr)
+        return 1
+
+    num_prev = len(crypto._previous_fernets)
+    print("Identity crypto configuration loaded successfully:")
+    print(f"  Active key version: {crypto.active_key_version}")
+    print(f"  Fallback previous keys configured: {num_prev}")
+
+    if args.status and not args.rotate_keys:
+        return 0
+
+    conninfo = args.db_uri or read_secret("POSTGRES_URI", required=False) or os.getenv("POSTGRES_URI")
+    if not conninfo:
+        print("Notice: POSTGRES_URI not set. Multi-key configuration verified; skipped database credential rotation.")
+        return 0
+
+    try:
+        from src.identity.store import IdentityStore
+    except ImportError as exc:
+        print(f"Error importing IdentityStore: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        store = IdentityStore(conninfo, crypto=crypto)
+        with store.connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, encrypted_seed, key_version FROM public.fc27_totp_credentials"
+            ).fetchall()
+
+        total = len(rows)
+        rotated_count = 0
+        already_current = 0
+        failed_count = 0
+
+        print(f"Found {total} TOTP credential records in database.")
+        for row in rows:
+            uid = row["user_id"]
+            k_ver = row.get("key_version")
+            if k_ver == crypto.active_key_version:
+                already_current += 1
+                continue
+
+            try:
+                if args.dry_run:
+                    _, was_rotated = crypto.rotate_secret(row["encrypted_seed"])
+                    if was_rotated:
+                        rotated_count += 1
+                else:
+                    success = store.verify_and_rotate_totp_key(uid)
+                    if success:
+                        rotated_count += 1
+                    else:
+                        already_current += 1
+            except Exception as exc:
+                print(f"  Failed to rotate credentials for user {uid}: {exc}", file=sys.stderr)
+                failed_count += 1
+
+        action_word = "Would rotate" if args.dry_run else "Rotated"
+        print("Rotation summary:")
+        print(f"  Total records: {total}")
+        print(f"  {action_word}: {rotated_count}")
+        print(f"  Already active version: {already_current}")
+        print(f"  Failures: {failed_count}")
+
+        return 1 if failed_count > 0 else 0
+
+    except Exception as exc:
+        print(f"Database error during key rotation: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -84,12 +84,12 @@ def get_identity_store(request: Request) -> IdentityStore:
 # ==============================================================================
 
 class PasskeyRegisterOptionsRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     label: str | None = Field(default="Passkey", max_length=128)
 
 
 class PasskeyRegisterVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     id: str = Field(..., description="Credential ID base64url or hex")
     rawId: str | None = None
     type: Literal["public-key"] = "public-key"
@@ -106,13 +106,13 @@ class PasskeyRegisterVerifyResponse(BaseModel):
 
 
 class PasskeyLoginOptionsRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     login_identifier: str | None = None
     user_verification: Literal["preferred", "required", "discouraged"] = "preferred"
 
 
 class PasskeyLoginVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     id: str = Field(..., description="Credential ID base64url or hex")
     rawId: str | None = None
     type: Literal["public-key"] = "public-key"

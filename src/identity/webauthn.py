@@ -167,7 +167,7 @@ class WebAuthnEngine:
         """Verifies registration attestation response, consuming single-use challenge."""
         challenge_str = self._extract_challenge_from_response(response_payload)
         if not challenge_str:
-            raise InvalidRegistrationResponse("missing or unparseable challenge in clientDataJSON")
+            raise InvalidRegistrationResponse("missing challenge in clientDataJSON")
 
         # Atomically consume challenge
         challenge_row = self.store.consume_challenge(
@@ -350,7 +350,7 @@ class WebAuthnEngine:
             rp_id=self.config.rp_id,
             challenge=raw_challenge_bytes,
             allow_credentials=allow_descriptors,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
             timeout=60000,
         )
         options_dict = options_to_json_dict(options)
@@ -424,11 +424,15 @@ class WebAuthnEngine:
                 expected_origin=list(self.config.allowed_origins),
                 credential_public_key=pub_key,
                 credential_current_sign_count=current_counter,
-                require_user_verification=False,
+                require_user_verification=True,
             )
         except (InvalidAuthenticationResponse, InvalidJSONStructure) as exc:
             log.warning("webauthn step-up verification failed: %s", exc)
             raise
+
+        # Enforce user verification
+        if verified.user_verified is not True:
+            raise InvalidAuthenticationResponse("step-up assertion requires user verification (UV flag not set)")
 
         # Defense-in-depth: Re-check counter monotonicity
         if current_counter > 0 and verified.new_sign_count <= current_counter:

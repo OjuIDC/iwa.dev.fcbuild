@@ -1,6 +1,6 @@
 from __future__ import annotations
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from src.dispatch.objective import METRIC_BOUNDS, validate_metric_bounds
@@ -114,39 +114,24 @@ class SignedDecision(DecisionIntent):
         return self
 
 
-class DecisionSubmission(BaseModel):
-    """Authoritative decision submission payload for Phase 2 Milestone 5.
+class WebAuthnDecisionSubmission(BaseModel):
+    """Authoritative decision submission using WebAuthn step-up evidence."""
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    Supports:
-    1. WebAuthn step-up evidence (proof_type="webauthn", default)
-    2. Legacy Phase 1 HMAC signature (proof_type="hmac", permitted only when APPROVAL_CLI_HMAC_ENABLED=true)
-    """
-    model_config = ConfigDict(extra="ignore")
-
+    proof_type: Literal["webauthn"]
     decision: Literal[
         "approved", "rejected", "revision_requested",
         "APPROVE", "REJECT", "REQUEST_REVISION"
     ]
+    authentication_evidence_id: UUID = Field(
+        ...,
+        description="Authoritative WebAuthn decision step-up evidence ID",
+    )
     notes: str | None = Field(default="", max_length=2000)
-    proof_type: Literal["webauthn", "hmac"] = "webauthn"
-    authentication_evidence_id: UUID | None = None
 
     # Delegated authority parameters
     delegation_id: UUID | None = None
     authority_basis: Literal["primary", "explicit_delegate"] | None = None
-
-    # Legacy Phase 1 HMAC parameters (used when proof_type="hmac")
-    hmac_signature: str | None = None
-    signature: str | None = None
-    nonce: str | None = None
-    thread_id: str | None = None
-    package_version: str | None = None
-    issued_at: int | None = None
-    expires_at: int | None = None
-    owner: str | None = None
-    selection: str | None = None
-    candidate_id: str | None = None
-    player_id: str | None = None
 
     @field_validator("decision", mode="before")
     @classmethod
@@ -160,16 +145,60 @@ class DecisionSubmission(BaseModel):
             return "revision_requested"
         return s
 
-    @model_validator(mode="after")
-    def validate_proof(self) -> "DecisionSubmission":
-        # Auto-detect legacy HMAC if signature supplied but proof_type was defaulted
-        if (self.hmac_signature or self.signature) and self.proof_type == "webauthn" and self.authentication_evidence_id is None:
-            self.proof_type = "hmac"
 
-        if self.proof_type == "webauthn":
-            if self.authentication_evidence_id is None:
-                raise ValueError("authentication_evidence_id required for webauthn proof_type")
-        return self
+class _BaseHmacDecisionSubmission(BaseModel):
+    """Base model for legacy Phase 1 CLI HMAC decision submission."""
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    decision: Literal[
+        "approved", "rejected", "revision_requested",
+        "APPROVE", "REJECT", "REQUEST_REVISION"
+    ]
+    notes: str | None = Field(default="", max_length=2000)
+    hmac_signature: str | None = None
+    signature: str | None = None
+    nonce: str | None = None
+    thread_id: str | None = None
+    package_version: str | None = None
+    issued_at: int | None = None
+    expires_at: int | None = None
+    owner: str | None = None
+    selection: str | None = None
+    candidate_id: str | None = None
+    player_id: str | None = None
+
+    # Delegated authority parameters
+    delegation_id: UUID | None = None
+    authority_basis: Literal["primary", "explicit_delegate"] | None = None
+
+    @field_validator("decision", mode="before")
+    @classmethod
+    def normalize_decision(cls, v: Any) -> str:
+        s = str(v).strip().lower()
+        if s in ("approve", "approved"):
+            return "approved"
+        if s in ("reject", "rejected"):
+            return "rejected"
+        if s in ("request_revision", "revision_requested"):
+            return "revision_requested"
+        return s
+
+
+class CliHmacDecisionSubmission(_BaseHmacDecisionSubmission):
+    """CLI HMAC submission with proof_type='cli_hmac'."""
+    proof_type: Literal["cli_hmac"]
+
+
+class HmacDecisionSubmission(_BaseHmacDecisionSubmission):
+    """CLI HMAC submission with proof_type='hmac' (backward compatibility alias)."""
+    proof_type: Literal["hmac"]
+
+
+# Pydantic v2 Discriminated Union on proof_type
+DecisionSubmission = Annotated[
+    Union[WebAuthnDecisionSubmission, CliHmacDecisionSubmission, HmacDecisionSubmission],
+    Field(discriminator="proof_type"),
+]
 
 
 class DispatchBlock(BaseModel):

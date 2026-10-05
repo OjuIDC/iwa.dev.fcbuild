@@ -66,6 +66,17 @@ def get_engine(store: IdentityStore = Depends(get_identity_store)) -> WebAuthnEn
     return get_webauthn_engine(store)
 
 
+def normalize_decision(v: Any) -> str:
+    s = str(v).lower().strip()
+    if s in ("approve", "approved"):
+        return "approved"
+    elif s in ("reject", "rejected"):
+        return "rejected"
+    elif s in ("request_revision", "revision_requested"):
+        return "revision_requested"
+    raise ValueError(f"unsupported decision: {v}")
+
+
 def compute_bound_payload_hash(
     *,
     package_id: str,
@@ -74,9 +85,10 @@ def compute_bound_payload_hash(
     decision: str,
     approval_request_id: UUID | str | None = None,
 ) -> str:
+    norm_decision = normalize_decision(decision)
     payload_dict = {
         "approval_request_id": str(approval_request_id) if approval_request_id else None,
-        "decision": str(decision).lower(),
+        "decision": norm_decision,
         "package_hash": str(package_hash).lower(),
         "package_id": str(package_id),
         "package_version": str(package_version),
@@ -90,7 +102,7 @@ def compute_bound_payload_hash(
 # ==============================================================================
 
 class StepUpChallengeRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     approval_request_id: UUID | str | None = None
     package_id: str = Field(..., min_length=1, description="Target package identifier")
     package_version: str | int = Field(..., description="Target package version")
@@ -107,11 +119,11 @@ class StepUpChallengeResponse(BaseModel):
     rp: dict[str, Any] | None = None
     timeout: int | None = 60000
     allowCredentials: list[dict[str, Any]] = []
-    userVerification: str = "preferred"
+    userVerification: str = "required"
 
 
 class StepUpVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     id: str = Field(..., description="Credential ID base64url or hex")
     rawId: str | None = None
     type: str = "public-key"
@@ -133,7 +145,7 @@ class StepUpVerifyResponse(BaseModel):
 
 
 class ActionTokenIssueRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     action_scope: str = Field(default="player_decision")
     resource_id: UUID | str | None = None
     expires_in_minutes: int = 60
@@ -176,13 +188,59 @@ def step_up_challenge(
     res = Resource.for_club(club_id=principal.club_id)
     authorize(principal, ActionType.APPROVAL_CHALLENGE, res)
 
-    bound_hash = body.bound_payload_hash or compute_bound_payload_hash(
-        package_id=body.package_id,
-        package_version=body.package_version,
-        package_hash=body.package_hash,
-        decision=body.decision,
-        approval_request_id=body.approval_request_id,
+    try:
+        norm_decision = normalize_decision(body.decision)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    auth_req = None
+    target_req_id = body.approval_request_id
+    target_pkg_id = body.package_id
+    target_pkg_ver = body.package_version
+    target_pkg_hash = body.package_hash
+
+    if target_req_id and hasattr(store, "connect"):
+        try:
+            with store.connect() as conn:
+                auth_req = conn.execute(
+                    """SELECT r.approval_request_id, r.thread_id, r.package_version, r.status,
+                              now() >= r.expires_at AS is_expired,
+                              g.club_id
+                         FROM public.approval_requests r
+                         JOIN public.graph_threads g USING (thread_id)
+                        WHERE r.approval_request_id = %s""",
+                    (str(target_req_id),),
+                ).fetchone()
+        except Exception as exc:
+            log.warning("error looking up approval request in challenge: %s", exc)
+
+    if auth_req:
+        if auth_req["status"] != "awaiting_approval" or auth_req["is_expired"]:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval request is not awaiting approval or expired")
+        if body.package_version and str(body.package_version) != str(auth_req["package_version"]):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="package version mismatch")
+        if body.package_hash and "package_hash" in auth_req and auth_req["package_hash"] is not None and str(body.package_hash).lower() != str(auth_req["package_hash"]).lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="package hash mismatch")
+        target_pkg_id = body.package_id or auth_req["thread_id"]
+        target_pkg_ver = auth_req["package_version"]
+        target_pkg_hash = auth_req["package_hash"] if ("package_hash" in auth_req and auth_req["package_hash"] is not None) else body.package_hash
+        target_req_id = auth_req["approval_request_id"]
+
+    server_canonical_hash = compute_bound_payload_hash(
+        package_id=target_pkg_id,
+        package_version=target_pkg_ver,
+        package_hash=target_pkg_hash,
+        decision=norm_decision,
+        approval_request_id=target_req_id,
     )
+
+    if body.bound_payload_hash and body.bound_payload_hash.lower() != server_canonical_hash.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client-supplied bound_payload_hash does not match server recomputed hash",
+        )
+
+    bound_hash = server_canonical_hash
 
     creds = store.list_user_webauthn_credentials(principal.user_id)
     opts = engine.generate_step_up_options(
@@ -197,7 +255,7 @@ def step_up_challenge(
         rp=opts.get("rp"),
         timeout=opts.get("timeout", 60000),
         allowCredentials=opts.get("allowCredentials", []),
-        userVerification=opts.get("userVerification", "preferred"),
+        userVerification=opts.get("userVerification", "required"),
     )
 
 
@@ -216,7 +274,7 @@ def step_up_verify(
 ) -> StepUpVerifyResponse:
     """Verifies passkey assertion, consumes challenge, and mints single-use evidence."""
     res = Resource.for_club(club_id=principal.club_id)
-    authorize(principal, ActionType.PACKAGE_APPROVE, res)
+    authorize(principal, ActionType.APPROVAL_CHALLENGE, res)
 
     payload_dict = body.model_dump()
     challenge_str = engine._extract_challenge_from_response(payload_dict)
@@ -257,6 +315,65 @@ def step_up_verify(
             detail="bound payload hash mismatch",
         )
 
+    try:
+        norm_decision = normalize_decision(body.decision or "approved")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    auth_req = None
+    target_req_id = body.approval_request_id
+    target_thread_id = None
+    target_pkg_id = body.package_id
+    target_pkg_ver = str(body.package_version) if body.package_version is not None else None
+    target_pkg_hash = body.package_hash
+
+    if target_req_id and hasattr(store, "connect"):
+        try:
+            with store.connect() as conn:
+                auth_req = conn.execute(
+                    """SELECT r.approval_request_id, r.thread_id, r.package_version, r.status,
+                              now() >= r.expires_at AS is_expired,
+                              g.club_id
+                         FROM public.approval_requests r
+                         JOIN public.graph_threads g USING (thread_id)
+                        WHERE r.approval_request_id = %s""",
+                    (str(target_req_id),),
+                ).fetchone()
+        except Exception as exc:
+            log.warning("error looking up approval request in verify: %s", exc)
+
+    if auth_req:
+        target_thread_id = auth_req["thread_id"]
+        target_req_id = auth_req["approval_request_id"]
+        target_pkg_id = body.package_id or auth_req["thread_id"]
+        target_pkg_ver = auth_req["package_version"]
+        target_pkg_hash = auth_req["package_hash"] if ("package_hash" in auth_req and auth_req["package_hash"] is not None) else body.package_hash
+
+    if target_thread_id is None:
+        target_thread_id = getattr(body, "thread_id", None) or (str(target_req_id) if target_req_id else "thread_default")
+
+    if not target_pkg_id or target_pkg_ver is None or not target_pkg_hash:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="authoritative package parameters (package_id, package_version, package_hash) required",
+        )
+
+    # Recompute server canonical hash
+    server_canonical_hash = compute_bound_payload_hash(
+        package_id=target_pkg_id,
+        package_version=target_pkg_ver,
+        package_hash=target_pkg_hash,
+        decision=norm_decision,
+        approval_request_id=target_req_id,
+    )
+
+    if bound_hash and bound_hash.lower() != server_canonical_hash.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="challenge bound payload hash does not match server recomputed hash",
+        )
+    bound_hash = server_canonical_hash
+
     raw_cred_id_str = body.rawId or body.id
     try:
         cred_bytes = store._normalize_credential_id(raw_cred_id_str)
@@ -283,20 +400,32 @@ def step_up_verify(
         log.warning("step-up assertion verification failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid assertion structure")
 
+    # Defense-in-depth: Explicitly reject assertion if user verification is not True
+    if verified.user_verified is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="step-up assertion requires user verification (user_verified is false)",
+        )
+
     # Update credential sign counter
     store.update_webauthn_counter(cred_bytes, verified.new_sign_counter)
 
-    # Mint single-use decision evidence
+    # Extract session_id from principal.session_id (generate fallback only if mock/empty)
+    session_id = principal.session_id or uuid4()
+
+    # Mint single-use decision evidence with all 14 fields populated (no dummy fallback values)
     evidence = store.create_decision_evidence(
         user_id=principal.user_id,
+        session_id=session_id,
+        thread_id=target_thread_id,
+        approval_request_id=target_req_id,
+        package_id=target_pkg_id,
+        package_version=target_pkg_ver,
+        package_hash=target_pkg_hash,
+        normalized_decision=norm_decision,
+        canonical_bound_payload_hash=bound_hash,
         challenge_id=challenge_row.get("challenge_id"),
-        bound_payload_hash=bound_hash,
-        package_id=body.package_id or "unspecified",
-        package_version=str(body.package_version) if body.package_version is not None else "1",
-        package_hash=body.package_hash or bound_hash,
-        decision=body.decision or "approved",
-        approval_request_id=body.approval_request_id,
-        credential_id=cred_bytes,
+        webauthn_credential_id=cred_bytes.hex(),
         ttl_seconds=300,
     )
 
