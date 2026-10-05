@@ -7,3 +7,6 @@ reports/model_benchmark_results.json
 agent_workspace/
 *.egg-info/
 secrets/
+
+# Transient multi-agent runtime state (never commit)
+.agents/teamwork/
