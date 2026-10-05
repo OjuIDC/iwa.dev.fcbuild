@@ -16,11 +16,12 @@ Invariants enforced here (and backed by constraints/triggers in migrations 0002 
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
@@ -34,6 +35,7 @@ from .events import record_event
 from .schemas import DecisionIntent, DecisionKind, SignedDecision
 from .security import Principal, Role
 from .thread_ids import allocate_thread_id, is_valid_club_id, parse_thread_id
+from .identity.routers.step_up import compute_bound_payload_hash, normalize_decision
 
 MAX_APPROVAL_TTL_SECONDS = 300
 
@@ -525,13 +527,16 @@ class ApprovalStore:
 
             decision_payload = {**payload, "signature_sha256": sig_hash}
 
-            # Update approval_requests
-            conn.execute(
+            # Update approval_requests (R4 conditional transition with RETURNING)
+            ar_row = conn.execute(
                 """UPDATE public.approval_requests
                       SET status = %s, decided_at = now(), version = version + 1
-                    WHERE approval_request_id = %s AND status = 'awaiting_approval'""",
+                    WHERE approval_request_id = %s AND status = 'awaiting_approval'
+                RETURNING approval_request_id""",
                 (new_state["status"], req["approval_request_id"]),
-            )
+            ).fetchone()
+            if ar_row is None:
+                raise StoreError(409, "approval request is no longer awaiting approval")
 
             # Update graph_threads
             row = conn.execute(
@@ -620,6 +625,339 @@ class ApprovalStore:
 
         return new_state
 
+    def apply_webauthn_decision(
+        self,
+        *,
+        evidence_id: UUID | str,
+        decision: str,
+        thread_id: str | None = None,
+        principal: Any = None,
+        approval_request_id: UUID | str | None = None,
+        package_id: str | None = None,
+        package_version: str | None = None,
+        notes: str | None = None,
+        authority_basis: str = "primary",
+        delegation_id: UUID | str | None = None,
+        correlation_id: UUID | None = None,
+        dispatch_enabled: bool = False,
+        dispatch_creator: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Applies a WebAuthn decision in a single atomic transaction (R3 & R4).
+
+        Locks rows in deterministic order:
+        1. fc27_decision_evidence FOR UPDATE
+        2. approval_requests FOR UPDATE
+        3. graph_threads FOR UPDATE
+        """
+        norm_decision = normalize_decision(decision)
+        cid = correlation_id or uuid4()
+
+        with self.connect() as conn, conn.transaction():
+            # Lock order 1: fc27_decision_evidence FOR UPDATE
+            ev_row = conn.execute(
+                """SELECT evidence_id, user_id, session_id, thread_id, approval_request_id,
+                          package_id, package_version, package_hash, normalized_decision,
+                          canonical_bound_payload_hash, issued_at, expires_at, consumed_at,
+                          webauthn_credential_id, challenge_id,
+                          now() >= expires_at AS is_expired
+                     FROM public.fc27_decision_evidence
+                    WHERE evidence_id = %s
+                      FOR UPDATE""",
+                (str(evidence_id),),
+            ).fetchone()
+            if ev_row is None:
+                raise StoreError(400, "unknown or invalid authentication_evidence_id")
+            if ev_row["is_expired"]:
+                raise StoreError(400, "decision evidence expired")
+
+            # Cross-validate caller inputs against evidence row
+            if approval_request_id is not None and str(approval_request_id) != str(ev_row["approval_request_id"]):
+                raise StoreError(400, "caller approval_request_id does not match evidence approval_request_id")
+            if thread_id is not None and str(thread_id) != str(ev_row["thread_id"]):
+                raise StoreError(400, "caller thread_id does not match evidence thread_id")
+            if package_id is not None and str(package_id) != str(ev_row["package_id"]):
+                raise StoreError(400, "caller package_id does not match evidence package_id")
+            if package_version is not None:
+                if (
+                    str(package_version) != str(ev_row["package_version"])
+                    and str(package_version).lower() != str(ev_row["package_hash"]).lower()
+                ):
+                    raise StoreError(400, "caller package_version does not match evidence package parameters")
+
+            # Safe Idempotent Replay Evaluation Under Lock
+            if ev_row["consumed_at"] is not None:
+                existing_audit = conn.execute(
+                    """SELECT a.id, g.state, g.status, a.decision, a.package_version,
+                              a.approval_request_id, a.thread_id
+                         FROM public.approval_audit a
+                         JOIN public.graph_threads g USING (thread_id)
+                        WHERE a.authentication_evidence_id = %s
+                          AND a.thread_id = %s""",
+                    (str(evidence_id), ev_row["thread_id"]),
+                ).fetchone()
+                if existing_audit and existing_audit["status"].lower() == norm_decision:
+                    replayed_state = dict(existing_audit["state"]) if isinstance(existing_audit["state"], dict) else {}
+                    return {
+                        **replayed_state,
+                        "thread_id": ev_row["thread_id"],
+                        "status": existing_audit["status"],
+                        "package_version": ev_row["package_version"],
+                        "approval_audit_id": existing_audit["id"],
+                        "approval_request_id": str(ev_row["approval_request_id"]),
+                        "dispatch": {
+                            "enabled": False,
+                            "created": False,
+                            "message": "Dispatch is disabled. This approval records the selection only; nothing was delivered to any player.",
+                            "dispatch_id": None,
+                        },
+                        "dispatch_id": None,
+                        "replayed": True,
+                        "graph_resume": "resumed",
+                    }
+                raise StoreError(409, "replay: authentication evidence already consumed")
+
+            # Lock order 2: approval_requests FOR UPDATE
+            req_id = approval_request_id or ev_row["approval_request_id"]
+            req = conn.execute(
+                """SELECT approval_request_id, thread_id, package_version, status,
+                          expires_at, now() >= expires_at AS is_expired
+                     FROM public.approval_requests
+                    WHERE approval_request_id = %s
+                      FOR UPDATE""",
+                (str(req_id),),
+            ).fetchone()
+            if req is None:
+                raise StoreError(404, "approval request not found")
+            if req["status"] != "awaiting_approval" or req["is_expired"]:
+                raise StoreError(409, "approval request is no longer awaiting approval or expired")
+
+            # Lock order 3: graph_threads FOR UPDATE
+            th_id = thread_id or req["thread_id"]
+            thread = conn.execute(
+                """SELECT thread_id, state, status, package_version, club_id, decision_payload
+                     FROM public.graph_threads
+                    WHERE thread_id = %s
+                      FOR UPDATE""",
+                (str(th_id),),
+            ).fetchone()
+            if thread is None:
+                raise StoreError(404, "graph thread not found")
+            if thread["status"] != "awaiting_approval":
+                raise StoreError(409, f"graph thread is {thread['status']}, not awaiting_approval")
+
+            # Inconsistency check
+            inconsistency = conn.execute(
+                """SELECT 1 FROM public.fc27_approval_inconsistencies
+                    WHERE thread_id = %s AND kind <> 'legacy_unlinked'""",
+                (str(th_id),),
+            ).fetchone()
+            if inconsistency is not None:
+                raise StoreError(409, "inconsistent_state")
+
+            # Validate bindings and cross-validate against locked database rows
+            p_uid = getattr(principal, "user_id", None)
+            if p_uid and str(ev_row["user_id"]) != str(p_uid):
+                raise StoreError(403, "evidence bound to different user ID")
+
+            p_sess = getattr(principal, "session_id", None)
+            if p_sess and ev_row["session_id"] and str(ev_row["session_id"]) != str(p_sess):
+                raise StoreError(403, "evidence bound to different session ID")
+
+            if str(ev_row["approval_request_id"]) != str(req["approval_request_id"]):
+                raise StoreError(400, "evidence bound to different approval request ID")
+            if approval_request_id is not None and str(req["approval_request_id"]) != str(approval_request_id):
+                raise StoreError(400, "caller approval_request_id does not match locked approval request")
+
+            if str(ev_row["thread_id"]) != str(thread["thread_id"]):
+                raise StoreError(400, "evidence bound to different thread ID")
+            if str(req["thread_id"]) != str(thread["thread_id"]):
+                raise StoreError(400, "approval request bound to different thread ID")
+            if thread_id is not None and str(thread["thread_id"]) != str(thread_id):
+                raise StoreError(400, "caller thread_id does not match locked graph thread")
+
+            # Package version match: supports both version string matching and hex package_hash matching
+            if (
+                str(ev_row["package_version"]) != str(req["package_version"])
+                and str(ev_row["package_hash"]).lower() != str(req["package_version"]).lower()
+            ):
+                raise StoreError(400, "evidence bound to different package version")
+            if package_version is not None and (
+                str(package_version) != str(req["package_version"])
+                and str(package_version).lower() != str(req["package_version"]).lower()
+                and str(package_version) != str(ev_row["package_version"])
+            ):
+                raise StoreError(400, "caller package_version does not match locked approval request")
+
+            if ev_row["normalized_decision"].lower() != norm_decision:
+                raise StoreError(403, "evidence bound to different decision (bound decision mismatch)")
+
+            expected_hash = compute_bound_payload_hash(
+                approval_request_id=req["approval_request_id"],
+                package_id=ev_row["package_id"],
+                package_version=ev_row["package_version"],
+                package_hash=ev_row["package_hash"],
+                decision=norm_decision,
+            )
+            if ev_row["canonical_bound_payload_hash"].lower() != expected_hash.lower():
+                raise StoreError(400, "canonical bound payload hash verification failed")
+
+            # Consume evidence with conditional RETURNING
+            ev_consume = conn.execute(
+                """UPDATE public.fc27_decision_evidence
+                      SET consumed_at = now()
+                    WHERE evidence_id = %s
+                      AND consumed_at IS NULL
+                   RETURNING evidence_id, consumed_at""",
+                (str(evidence_id),),
+            ).fetchone()
+            if ev_consume is None:
+                raise StoreError(409, "conflict: evidence already consumed")
+
+            # Transition approval request with conditional RETURNING
+            ar_update = conn.execute(
+                """UPDATE public.approval_requests
+                      SET status = %s, decided_at = now(), version = version + 1
+                    WHERE approval_request_id = %s
+                      AND status = 'awaiting_approval'
+                   RETURNING approval_request_id, status, version""",
+                (norm_decision, req["approval_request_id"]),
+            ).fetchone()
+            if ar_update is None:
+                raise StoreError(409, "conflict: not awaiting_approval")
+
+            # Transition graph thread with conditional RETURNING
+            row_t = conn.execute(
+                "SELECT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS t"
+            ).fetchone()
+            decided_at = row_t["t"] if (row_t and "t" in row_t) else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            approved_by_name = getattr(principal, "display_name", None) or getattr(principal, "name", None) or "Commissioner"
+            is_approved = (norm_decision == "approved")
+            is_revision = (norm_decision == "revision_requested")
+            summary_str = "APPROVED" if is_approved else ("REVISION_REQUESTED" if is_revision else "REJECTED")
+
+            new_state = copy.deepcopy(thread["state"]) if isinstance(thread["state"], dict) else {}
+            new_state.update(
+                approved=is_approved,
+                status=norm_decision,
+                approved_by=approved_by_name,
+                commissioner_input=notes or "",
+            )
+            new_state["audit_log"] = list(new_state.get("audit_log", [])) + [
+                {"node": "approval", "ts": decided_at, "summary": summary_str, "approved_by": approved_by_name}
+            ]
+
+            decision_payload = {
+                "decision": norm_decision,
+                "proof_type": "webauthn",
+                "authentication_evidence_id": str(evidence_id),
+            }
+
+            gt_update = conn.execute(
+                """UPDATE public.graph_threads
+                      SET status = %s, state = %s, approved_by = %s, approved_at = now(),
+                          decision_payload = %s, updated_at = now()
+                    WHERE thread_id = %s
+                      AND status = 'awaiting_approval'
+                   RETURNING thread_id, status, approved_at""",
+                (norm_decision, Jsonb(new_state), approved_by_name, Jsonb(decision_payload), str(th_id)),
+            ).fetchone()
+            if gt_update is None:
+                raise StoreError(409, "conflict: thread not awaiting_approval")
+
+            # Insert into approval_audit
+            is_delegate = getattr(principal, "is_delegate", False)
+            auth_basis_str = authority_basis.value if hasattr(authority_basis, "value") else str(authority_basis)
+            actor_type_str = "delegate" if is_delegate else "commissioner"
+            auth_role_str = "commissioner_delegate" if is_delegate else "commissioner"
+            db_decision = "APPROVE" if norm_decision == "approved" else ("REQUEST_REVISION" if norm_decision == "revision_requested" else "REJECT")
+
+            audit_row = conn.execute(
+                """INSERT INTO public.approval_audit (
+                       thread_id, approved_by, decision, notes,
+                       package_version, proof_type, authentication_evidence_id,
+                       actor_type, authority_basis, authority_role, decision_scope,
+                       correlation_id, approval_request_id,
+                       actor_user_id, webauthn_credential_id, delegation_id,
+                       package_id, package_hash
+                   ) VALUES (
+                       %s, %s, %s, %s,
+                       %s, 'webauthn', %s,
+                       %s, %s, %s, 'club',
+                       %s, %s,
+                       %s, %s, %s,
+                       %s, %s
+                   ) RETURNING id""",
+                (
+                    str(th_id),
+                    approved_by_name,
+                    db_decision,
+                    notes or "",
+                    req["package_version"],
+                    str(evidence_id),
+                    actor_type_str,
+                    auth_basis_str,
+                    auth_role_str,
+                    cid,
+                    req["approval_request_id"],
+                    p_uid,
+                    ev_row.get("webauthn_credential_id"),
+                    delegation_id,
+                    ev_row["package_id"],
+                    ev_row["package_hash"],
+                ),
+            ).fetchone()
+
+            # Insert domain events
+            _safe_record_event(
+                conn,
+                event_type="identity.decision_evidence_consumed",
+                entity_type="decision_evidence",
+                entity_id=str(evidence_id),
+                actor=f"user:{p_uid}" if p_uid else approved_by_name,
+                correlation_id=cid,
+                visibility="audit_only",
+                scope_club_id=thread["club_id"],
+                reason=norm_decision,
+                source_table="fc27_decision_evidence",
+                source_id=str(evidence_id),
+            )
+
+            _safe_record_event(
+                conn,
+                event_type="approval.decided",
+                entity_type="approval_request",
+                entity_id=str(req["approval_request_id"]),
+                actor=f"user:{p_uid}" if p_uid else approved_by_name,
+                correlation_id=cid,
+                visibility="staff",
+                scope_club_id=thread["club_id"],
+                source_table="approval_audit",
+                source_id=str(audit_row["id"]),
+                from_status="awaiting_approval",
+                to_status=norm_decision,
+            )
+
+            # Respect DISPATCH_ENABLED=false: zero dispatches created
+
+        return {
+            **new_state,
+            "thread_id": str(th_id),
+            "status": norm_decision,
+            "package_version": req["package_version"],
+            "approval_audit_id": audit_row["id"],
+            "approval_request_id": str(req["approval_request_id"]),
+            "dispatch": {
+                "enabled": False,
+                "created": False,
+                "message": "Dispatch is disabled. This approval records the selection only; nothing was delivered to any player.",
+                "dispatch_id": None,
+            },
+            "dispatch_id": None,
+            "graph_resume": "resumed",
+        }
+
     def expire_due(self, *, thread_id: str | None = None, limit: int = 100) -> list[str]:
         query = """SELECT r.approval_request_id, r.thread_id
                      FROM public.approval_requests r
@@ -679,19 +1017,26 @@ class ApprovalStore:
                 if th is None or th["status"] != "awaiting_approval":
                     continue
 
-                # Set both records to expired
-                conn.execute(
+                # Set both records to expired (R4 conditional transition with RETURNING)
+                ar_row = conn.execute(
                     """UPDATE public.approval_requests
                           SET status = 'expired', expired_at = now(), version = version + 1
-                        WHERE approval_request_id = %s""",
+                        WHERE approval_request_id = %s AND status = 'awaiting_approval'
+                    RETURNING approval_request_id""",
                     (req_id,),
-                )
-                conn.execute(
+                ).fetchone()
+                if ar_row is None:
+                    continue
+
+                gt_row = conn.execute(
                     """UPDATE public.graph_threads
                           SET status = 'expired', updated_at = now()
-                        WHERE thread_id = %s AND status = 'awaiting_approval'""",
+                        WHERE thread_id = %s AND status = 'awaiting_approval'
+                    RETURNING thread_id""",
                     (tid,),
-                )
+                ).fetchone()
+                if gt_row is None:
+                    continue
 
                 # Revoke open nonces
                 conn.execute(

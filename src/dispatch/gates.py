@@ -112,7 +112,7 @@ def evaluate_gates(conn: psycopg.Connection, identity: DeploymentIdentity) -> li
                 grants_ok = False
                 grants_details.append(f"fc27_dispatch has unauthorized {priv} on dispatches")
 
-        cur.execute("SELECT has_function_privilege('fc27_dispatch', 'public.fc27_dispatch_transition', 'EXECUTE')")
+        cur.execute("SELECT has_function_privilege('fc27_dispatch', 'public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb)', 'EXECUTE')")
         if not cur.fetchone()["has_function_privilege"]:
             grants_ok = False
             grants_details.append("fc27_dispatch lacks EXECUTE on fc27_dispatch_transition")
@@ -144,7 +144,8 @@ def evaluate_gates(conn: psycopg.Connection, identity: DeploymentIdentity) -> li
 
         # 3. G-WORKER
         cur.execute("SELECT to_regclass('public.service_heartbeats')")
-        has_hb_table = cur.fetchone()[0] is not None
+        hb_row = cur.fetchone()
+        has_hb_table = bool(hb_row and hb_row.get("to_regclass") is not None)
         if not has_hb_table:
             results.append(GateResult(gate_id="G-WORKER", passed=False, detail="service_heartbeats table missing"))
         else:
@@ -169,7 +170,8 @@ def evaluate_gates(conn: psycopg.Connection, identity: DeploymentIdentity) -> li
 
         # 4, 5, 6: Manual Gates (G-ID, G-ATOMIC, G-OUTBOX)
         cur.execute("SELECT to_regclass('public.activation_gate_log')")
-        has_log_table = cur.fetchone()[0] is not None
+        log_row = cur.fetchone()
+        has_log_table = bool(log_row and log_row.get("to_regclass") is not None)
 
         for gate_id in ("G-ID", "G-ATOMIC", "G-OUTBOX"):
             if not identity.is_valid():

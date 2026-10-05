@@ -73,6 +73,7 @@ from src.identity.policy import (
     AuthorizationError,
     PrincipalContext,
     Resource,
+    UserRole,
     authorize,
 )
 from src.identity.routers import (
@@ -908,17 +909,6 @@ def create_app(
             "graph_resume": res,
         }
 
-    async def check_decision_proof_type(request: Request) -> None:
-        if settings.cli_hmac_enabled:
-            return
-        try:
-            raw_body = await request.body()
-            if b"webauthn" in raw_body or b"authentication_evidence_id" in raw_body:
-                return
-        except Exception:
-            pass
-        raise HTTPException(403, "proof_type_disabled")
-
     def apply_decision_unified(
         request: Request,
         body: DecisionSubmission,
@@ -929,11 +919,6 @@ def create_app(
         principal: PrincipalContext,
     ) -> dict[str, Any]:
         """Unified authoritative decision processing for Phase 2 Milestone 5."""
-        if principal.is_service:
-            raise AgentImpersonationError(
-                f"service principal '{principal.user_id}' cannot commit human decisions"
-            )
-
         target_thread_id: str
         target_req_id: Any = None
         target_pkg_version: Any = None
@@ -1017,44 +1002,15 @@ def create_app(
             AuthorityBasis.EXPLICIT_DELEGATE if principal.is_delegate else AuthorityBasis.PRIMARY
         )
 
-        eval_principal = principal
-        if body.proof_type == "webauthn":
-            eval_principal = PrincipalContext.create(
-                user_id=principal.user_id,
-                club_id=principal.club_id,
-                roles=list(principal.roles),
-                auth_level=AuthLevel.STEP_UP_PASSKEY,
-                auth_method=AuthMethod.PASSKEY,
-                session_id=principal.session_id,
-                display_name=principal.display_name,
-            )
-
-        res = Resource.for_package(
-            club_id=principal.club_id,
-            package_id=package_id or str(target_req_id),
-            version=target_pkg_version,
-        )
-        id_store: IdentityStore | None = getattr(request.app.state, "identity_store", None)
-        if id_store is None:
-            uri = getattr(settings, "postgres_uri", None) or os.environ.get("POSTGRES_URI")
-            if uri:
-                id_store = IdentityStore(uri)
-                request.app.state.identity_store = id_store
-
-        authorize(
-            eval_principal,
-            target_action,
-            res,
-            authority_basis=authority_basis,
-            delegation_id=body.delegation_id,
-            store=id_store,
-        )
-
-        if body.proof_type == "hmac":
+        if body.proof_type in ("cli_hmac", "hmac"):
             if not settings.cli_hmac_enabled:
                 raise HTTPException(
                     403,
                     "proof_type_disabled",
+                )
+            if principal.has_role(UserRole.BFF_SERVICE) or principal.has_role(UserRole.GRAPH_SERVICE):
+                raise AgentImpersonationError(
+                    f"service principal '{principal.user_id}' cannot commit decisions"
                 )
             now_ts = int(datetime.now(timezone.utc).timestamp())
             signed_obj = SignedDecision(
@@ -1075,124 +1031,72 @@ def create_app(
             return apply_decision_internal(request, target_thread_id, signed_obj, legacy_p)
 
         elif body.proof_type == "webauthn":
+            # Strict Invariant (§R5): Legacy bearer tokens and service principals cannot submit WebAuthn decisions
+            if principal.is_service or principal.auth_method == AuthMethod.CLI_HMAC:
+                raise AgentImpersonationError(
+                    f"legacy token / service principal '{principal.user_id}' cannot commit human WebAuthn decisions without passkey step-up proof"
+                )
+
             evidence_id = body.authentication_evidence_id
             if not evidence_id:
                 raise HTTPException(422, "authentication_evidence_id required for webauthn proof_type")
+
+            res = Resource.for_package(
+                club_id=principal.club_id,
+                package_id=package_id or str(target_req_id),
+                version=target_pkg_version,
+            )
+            id_store: IdentityStore | None = getattr(request.app.state, "identity_store", None)
             if id_store is None:
-                raise HTTPException(500, "identity store not available")
+                uri = getattr(settings, "postgres_uri", None) or os.environ.get("POSTGRES_URI")
+                if uri:
+                    id_store = IdentityStore(uri)
+                    request.app.state.identity_store = id_store
 
-            evidence = id_store.get_decision_evidence(evidence_id)
-            if not evidence:
-                raise HTTPException(400, "unknown or invalid authentication_evidence_id")
+            eval_principal = PrincipalContext.create(
+                user_id=principal.user_id,
+                club_id=principal.club_id,
+                roles=list(principal.roles),
+                auth_level=AuthLevel.STEP_UP_PASSKEY,
+                auth_method=AuthMethod.PASSKEY,
+                session_id=principal.session_id,
+                display_name=principal.display_name,
+                is_service=False,
+            )
 
-            if evidence.get("consumed_at") is not None:
-                with store.connect() as conn:
-                    existing_audit = conn.execute(
-                        """SELECT a.id, g.state, g.status
-                             FROM public.approval_audit a
-                             JOIN public.graph_threads g USING (thread_id)
-                            WHERE a.authentication_evidence_id = %s
-                              AND a.thread_id = %s""",
-                        (str(evidence_id), target_thread_id),
-                    ).fetchone()
-                    if existing_audit and existing_audit["status"].lower() == body.decision.lower():
-                        replayed = dict(existing_audit["state"]) if isinstance(existing_audit["state"], dict) else {}
-                        return {
-                            **replayed,
-                            "thread_id": target_thread_id,
-                            "status": existing_audit["status"],
-                            "package_version": target_pkg_version,
-                            "approval_audit_id": existing_audit["id"],
-                            "approval_request_id": str(target_req_id) if target_req_id else None,
-                            "dispatch": DispatchBlock(
-                                enabled=False,
-                                created=False,
-                                message="Dispatch is disabled. This approval records the selection only; nothing was delivered to any player.",
-                                dispatch_id=None,
-                            ).model_dump(mode="json"),
-                            "graph_resume": "resumed",
-                        }
-                raise HTTPException(409, "replay: authentication evidence already consumed")
-
-            if evidence.get("bound_payload_hash"):
-                if evidence.get("package_id") and package_id and evidence["package_id"] != package_id:
-                    raise HTTPException(403, "step-up evidence bound package mismatch")
-                if evidence.get("decision") and evidence["decision"].lower() != body.decision.lower():
-                    raise HTTPException(403, "step-up evidence bound decision mismatch")
-
-            target_package_id = package_id or evidence.get("package_id") or str(target_req_id)
-            target_package_version = str(body.package_version or target_pkg_version or evidence.get("package_version") or "1")
-            target_package_hash = str(evidence.get("package_hash") or target_pkg_version or "")
-
-            try:
-                id_store.consume_decision_evidence(
-                    evidence_id,
-                    expected_package_id=target_package_id,
-                    expected_package_version=target_package_version,
-                    expected_package_hash=target_package_hash,
-                )
-            except IdentityStoreError as err:
-                raise HTTPException(err.status_code, err.detail) from err
+            authorize(
+                eval_principal,
+                target_action,
+                res,
+                authority_basis=authority_basis,
+                delegation_id=body.delegation_id,
+                store=id_store,
+            )
 
             cid = getattr(request.state, "correlation_id", None) or uuid4()
-            with store.connect() as conn, conn.transaction():
-                if target_req_id:
-                    conn.execute(
-                        """UPDATE public.approval_requests
-                              SET status = %s, decided_at = now(), version = version + 1
-                            WHERE approval_request_id = %s AND status = 'awaiting_approval'""",
-                        (body.decision, target_req_id),
-                    )
+            dispatch_effective = getattr(request.app.state, "dispatch_effective", False)
+            from .dispatch.creation import create_dispatch_for_approval
 
-                conn.execute(
-                    """UPDATE public.graph_threads
-                          SET status = %s, approved_by = %s, approved_at = now(), updated_at = now()
-                        WHERE thread_id = %s AND status = 'awaiting_approval'""",
-                    (body.decision, principal.display_name or "Commissioner", target_thread_id),
-                )
-
-                audit_row = conn.execute(
-                    """INSERT INTO public.approval_audit (
-                           thread_id, approved_by, decision, notes,
-                           package_version, proof_type, authentication_evidence_id,
-                           actor_type, authority_basis, authority_role, decision_scope,
-                           correlation_id, approval_request_id
-                       ) VALUES (
-                           %s, %s, %s, %s,
-                           %s, 'webauthn', %s,
-                           %s, %s, %s, 'club',
-                           %s, %s
-                       ) RETURNING id""",
-                    (
-                        target_thread_id,
-                        principal.display_name or "Commissioner",
-                        body.decision.upper(),
-                        body.notes or "",
-                        target_pkg_version or 1,
-                        str(evidence_id),
-                        "delegate" if principal.is_delegate else "commissioner",
-                        authority_basis.value,
-                        "commissioner_delegate" if principal.is_delegate else "commissioner",
-                        cid,
-                        target_req_id,
-                    ),
-                ).fetchone()
-
-                _safe_record_event(
-                    conn,
-                    event_type="approval.decided",
-                    entity_type="approval_request",
-                    entity_id=str(target_req_id) if target_req_id else str(target_thread_id),
-                    actor=f"user:{principal.user_id}",
+            try:
+                state = store.apply_webauthn_decision(
+                    evidence_id=evidence_id,
+                    decision=body.decision,
+                    thread_id=target_thread_id,
+                    principal=principal,
+                    notes=body.notes or "",
+                    approval_request_id=target_req_id,
+                    package_id=package_id,
+                    package_version=body.package_version or target_pkg_version,
+                    authority_basis=authority_basis.value,
+                    delegation_id=body.delegation_id,
                     correlation_id=cid,
-                    visibility="staff",
-                    scope_club_id=principal.club_id,
-                    source_table="approval_audit",
-                    source_id=str(audit_row["id"]),
-                    to_status=body.decision,
+                    dispatch_enabled=dispatch_effective,
+                    dispatch_creator=create_dispatch_for_approval,
                 )
+            except StoreError as exc:
+                raise _store_error(exc) from exc
 
-            publish("fc27:approval:decided", {"thread_id": target_thread_id, "status": body.decision})
+            publish("fc27:approval:decided", {"thread_id": target_thread_id, "status": state["status"]})
             res = resume_graph(target_thread_id)
 
             dispatch_block = DispatchBlock(
@@ -1202,17 +1106,13 @@ def create_app(
                 dispatch_id=None,
             )
 
-            with store.connect() as conn:
-                th = conn.execute("SELECT state FROM public.graph_threads WHERE thread_id = %s", (target_thread_id,)).fetchone()
-                thread_state = dict(th["state"]) if th and isinstance(th["state"], dict) else {}
-
             return {
-                **thread_state,
+                **state,
                 "thread_id": target_thread_id,
-                "status": body.decision,
-                "package_version": target_pkg_version,
-                "approval_audit_id": audit_row["id"],
-                "approval_request_id": str(target_req_id) if target_req_id else None,
+                "status": state["status"],
+                "package_version": state.get("package_version"),
+                "approval_audit_id": state.get("approval_audit_id"),
+                "approval_request_id": str(state["approval_request_id"]) if state.get("approval_request_id") else None,
                 "dispatch": dispatch_block.model_dump(mode="json"),
                 "graph_resume": res,
             }
@@ -1223,14 +1123,12 @@ def create_app(
         "/approval/packages/{package_id}/decide",
         response_model=DecisionResponse,
         tags=["approval"],
-        dependencies=[Depends(check_decision_proof_type)],
     )
     @app.post(
         "/v1/approval/packages/{package_id}/decide",
         response_model=DecisionResponse,
         tags=["approval"],
         include_in_schema=False,
-        dependencies=[Depends(check_decision_proof_type)],
     )
     async def package_decide(
         request: Request,
@@ -1246,7 +1144,6 @@ def create_app(
         "/v1/approval-requests/{approval_request_id}/decisions",
         response_model=DecisionResponse,
         tags=["approval"],
-        dependencies=[Depends(check_decision_proof_type)],
     )
     async def approval_request_decision(
         request: Request,
@@ -1262,13 +1159,11 @@ def create_app(
         "/v1/runs/{thread_id}/decision",
         response_model=DecisionResponse,
         tags=["runs"],
-        dependencies=[Depends(check_decision_proof_type)],
     )
     @app.post(
         "/threads/{thread_id}/decision",
         response_model=DecisionResponse,
         include_in_schema=False,
-        dependencies=[Depends(check_decision_proof_type)],
     )
     async def v1_decision(
         request: Request,
