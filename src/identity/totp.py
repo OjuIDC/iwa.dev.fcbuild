@@ -125,6 +125,7 @@ def verify_totp_code(
     *,
     seed: str | None = None,
     last_verified_at: datetime | None = None,
+    last_consumed_step: int | None = None,
     valid_window: int = 1,
     current_time: datetime | None = None,
 ) -> tuple[bool, datetime | None, str | None]:
@@ -135,6 +136,7 @@ def verify_totp_code(
         code: 6-digit code string.
         seed: Alternative name for secret keyword argument.
         last_verified_at: Previous verification timestamp from DB.
+        last_consumed_step: Previous integer counter step from DB (authoritative).
         valid_window: Drift tolerance steps (default 1 = ±30 seconds).
         current_time: Optional current time (defaults to utcnow).
 
@@ -152,14 +154,18 @@ def verify_totp_code(
     current_epoch = int(now.timestamp())
     current_step = current_epoch // TOTP_INTERVAL
 
-    last_step = None
-    if last_verified_at is not None:
+    last_step = last_consumed_step
+    if last_step is None and last_verified_at is not None:
         last_step = int(last_verified_at.timestamp()) // TOTP_INTERVAL
 
     totp = pyotp.TOTP(sec, digits=TOTP_DIGITS, interval=TOTP_INTERVAL)
 
     matched_step: int | None = None
-    for offset in range(-valid_window, valid_window + 1):
+    candidate_offsets = [0]
+    for w in range(1, valid_window + 1):
+        candidate_offsets.extend([-w, w])
+
+    for offset in candidate_offsets:
         candidate_step = current_step + offset
         expected_code = totp.at(candidate_step * TOTP_INTERVAL)
         if hmac.compare_digest(code, expected_code):

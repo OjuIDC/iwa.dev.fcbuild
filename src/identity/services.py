@@ -89,7 +89,7 @@ class ServiceCredentials:
     bff_token_secondary: str | None = None
     graph_service_token: str = field(default="")
     worker_service_token: str | None = None
-    cli_hmac_enabled: bool = True
+    cli_hmac_enabled: bool = False
     dispatch_worker_enabled: bool = False
 
     @classmethod
@@ -112,7 +112,7 @@ class ServiceCredentials:
             raise ConfigError("WORKER_SERVICE_TOKEN must differ from both BFF and GRAPH tokens: shared worker credentials forbidden")
 
         # 5. Safety Flags
-        cli_hmac = env_bool("APPROVAL_CLI_HMAC_ENABLED", default=True)
+        cli_hmac = env_bool("APPROVAL_CLI_HMAC_ENABLED", default=False)
         dispatch_worker = env_bool("DISPATCH_WORKER_ENABLED", default=False)
         if dispatch_worker:
             log.warning("DISPATCH_WORKER_ENABLED is true! Phase 2 invariant mandates dispatch dormancy.")

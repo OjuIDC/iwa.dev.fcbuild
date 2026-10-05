@@ -59,7 +59,7 @@ class UserStatusUpdateRequest(BaseModel):
 
 
 class UserSuspendRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(default="administrative suspension", max_length=500)
 

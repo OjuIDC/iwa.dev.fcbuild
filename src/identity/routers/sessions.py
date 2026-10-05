@@ -28,6 +28,7 @@ from src.identity.policy import (
     ActionType,
     AgentImpersonationError,
     AuthLevel,
+    AuthMethod,
     CrossClubAccessError,
     PlayerIsolationError,
     PrincipalContext,
@@ -119,7 +120,7 @@ class SessionTouchResponse(BaseModel):
 
 class SessionRotateRequest(BaseModel):
     """Parameters for session rotation upon step-up or privilege change."""
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     new_auth_level: str | None = None
     new_auth_method: str | None = None
@@ -128,10 +129,16 @@ class SessionRotateRequest(BaseModel):
     @classmethod
     def _remap_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            if "new_auth_level" not in data and "auth_level" in data:
-                data["new_auth_level"] = data["auth_level"]
-            if "new_auth_method" not in data and "auth_method" in data:
-                data["new_auth_method"] = data["auth_method"]
+            d = dict(data)
+            if "auth_level" in d:
+                val = d.pop("auth_level")
+                if "new_auth_level" not in d:
+                    d["new_auth_level"] = val
+            if "auth_method" in d:
+                val = d.pop("auth_method")
+                if "new_auth_method" not in d:
+                    d["new_auth_method"] = val
+            return d
         return data
 
 
@@ -297,20 +304,44 @@ def rotate_session(
     new_level = body.new_auth_level if body else None
     new_method = body.new_auth_method if body else None
 
+    # Guard against bootstrap_enrollment escaping via rotation
+    if principal.auth_level in {AuthLevel.BOOTSTRAP_ENROLLMENT, AuthLevel.BOOTSTRAP_ENROLLMENT.value}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="bootstrap enrollment session cannot be rotated; must complete bootstrap ceremony",
+        )
+
     # Guard against unproven step_up_passkey / mfa_totp privilege escalation
     if new_level is not None:
         if new_level in {"step_up_passkey", AuthLevel.STEP_UP_PASSKEY.value}:
-            if principal.auth_level != AuthLevel.STEP_UP_PASSKEY and new_method != "passkey":
+            if principal.auth_level != AuthLevel.STEP_UP_PASSKEY:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="cannot elevate session to 'step_up_passkey' without step-up verification evidence",
                 )
         elif new_level in {"mfa_totp", AuthLevel.MFA_TOTP.value}:
-            if principal.auth_level != AuthLevel.MFA_TOTP and new_method != "totp":
+            if principal.auth_level not in {AuthLevel.MFA_TOTP, AuthLevel.STEP_UP_PASSKEY}:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="cannot elevate session to 'mfa_totp' without TOTP verification evidence",
                 )
+        elif new_level not in {AuthLevel.AUTHENTICATED.value, AuthLevel.MFA_TOTP.value, AuthLevel.STEP_UP_PASSKEY.value}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"invalid or unauthorized auth_level '{new_level}'",
+            )
+
+    if new_method is not None:
+        current_method = (
+            principal.auth_method.value
+            if isinstance(principal.auth_method, AuthMethod)
+            else principal.auth_method
+        )
+        if new_method != current_method and new_method in {"passkey", "totp"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"cannot alter auth_method to '{new_method}' via session rotation without credential ceremony",
+            )
 
     new_token, new_row = store.rotate_session(
         old_token=raw_token,

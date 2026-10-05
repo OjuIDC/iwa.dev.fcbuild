@@ -46,8 +46,21 @@ from src.identity.policy import (
     authorize,
 )
 from src.identity.store import IdentityStore, IdentityStoreError
-from src.identity.tokens import ScopedActionTokenEngine
-from src.identity.webauthn import WebAuthnEngine, get_webauthn_engine
+from src.identity.tokens import (
+    ActionTokenAlreadyConsumedError,
+    ActionTokenAssignmentMismatchError,
+    ActionTokenError,
+    ActionTokenExpiredError,
+    ActionTokenNotFoundError,
+    ActionTokenRevokedError,
+    ActionTokenScopeMismatchError,
+    ScopedActionTokenEngine,
+)
+from src.identity.webauthn import (
+    InvalidAuthenticationResponse,
+    WebAuthnEngine,
+    get_webauthn_engine,
+)
 
 log = logging.getLogger("fc27.identity.routers.player")
 
@@ -96,7 +109,7 @@ class ProofType(str, Enum):
 
 
 class PlayerDecisionChallengeRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     assignment_id: UUID | None = None
     decision: DecisionChoice = DecisionChoice.ACCEPT
     authority_basis: PlayerAuthorityBasis = PlayerAuthorityBasis.AFFECTED_PLAYER_CONSENT
@@ -119,7 +132,7 @@ class PlayerDecisionChallengeResponse(BaseModel):
 
 
 class PlayerDecisionSubmissionRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     assignment_id: UUID | None = None
     decision: DecisionChoice
     authority_basis: PlayerAuthorityBasis = PlayerAuthorityBasis.AFFECTED_PLAYER_CONSENT
@@ -190,7 +203,7 @@ class PlayerAssignmentProjection(BaseModel):
 
 
 class IssuePlayerActionTokenRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     assignment_id: UUID | None = None
     ttl_seconds: int = Field(default=3600, ge=300, le=86400)
 
@@ -338,6 +351,58 @@ async def generate_player_decision_challenge(
 
 
 @router.post(
+    "/tokens/decision",
+    response_model=IssuePlayerActionTokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Issue scoped action token for player decision",
+)
+@router.post(
+    "/assignments/{assignment_id}/tokens/decision",
+    response_model=IssuePlayerActionTokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+)
+@router.post(
+    "/{assignment_id}/tokens/decision",
+    response_model=IssuePlayerActionTokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+)
+async def issue_player_decision_token(
+    body: IssuePlayerActionTokenRequest,
+    assignment_id: UUID | None = None,
+    principal: PrincipalContext = Depends(require_human_principal),
+    store: IdentityStore = Depends(get_identity_store),
+) -> IssuePlayerActionTokenResponse:
+    target_id = assignment_id or body.assignment_id
+    if not target_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="assignment_id is required to issue scoped action token",
+        )
+    assignment = store.get_player_assignment(target_id)
+    if not assignment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment not found")
+    check_player_isolation(principal, assignment)
+
+    engine = ScopedActionTokenEngine(store)
+    raw_token, record = engine.issue_token(
+        user_id=principal.user_id,
+        scope="player_decision",
+        assignment_id=target_id,
+        ttl_seconds=body.ttl_seconds,
+        actor=principal.player_id or str(principal.user_id),
+    )
+    return IssuePlayerActionTokenResponse(
+        token=raw_token,
+        token_id=record.token_id,
+        assignment_id=target_id,
+        scope="player_decision",
+        expires_at=record.expires_at,
+    )
+
+
+@router.post(
     "/decisions",
     response_model=PlayerDecisionResponse,
     status_code=status.HTTP_200_OK,
@@ -388,106 +453,106 @@ async def execute_player_decision(
     # Resolve proof mechanism
     raw_action_token = body.action_token or x_action_token
     effective_proof = body.proof_type
-    if effective_proof is None:
-        effective_proof = ProofType.ACTION_TOKEN if raw_action_token else ProofType.PASSKEY
 
-    # Rule: accept requires passkey evidence or action token
-    if body.decision == DecisionChoice.ACCEPT:
-        if effective_proof == ProofType.PASSKEY and not (body.authentication_evidence_id or body.passkey_response):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="accept decision requires authentication_evidence_id or passkey_response",
-            )
-        if effective_proof == ProofType.ACTION_TOKEN and not raw_action_token:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="accept decision with action_token proof requires action_token",
-            )
+    has_action_token = bool(raw_action_token)
+    has_webauthn = bool(body.authentication_evidence_id or body.passkey_response)
+
+    if not has_action_token and not has_webauthn:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="player decision requires valid proof (passkey_response, authentication_evidence_id, or action_token)",
+        )
+
+    if effective_proof is None:
+        effective_proof = ProofType.ACTION_TOKEN if has_action_token else ProofType.PASSKEY
+
+    if effective_proof == ProofType.ACTION_TOKEN and not has_action_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="player decision requires valid proof (passkey_response, authentication_evidence_id, or action_token)",
+        )
+    if effective_proof == ProofType.PASSKEY and not has_webauthn:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="player decision requires valid proof (passkey_response, authentication_evidence_id, or action_token)",
+        )
 
     evidence_id: UUID | None = None
     token_ref: str | None = None
     request_id: UUID | None = None
 
     if effective_proof == ProofType.ACTION_TOKEN:
-        if not raw_action_token:
+        token_engine = ScopedActionTokenEngine(store)
+        try:
+            consumed_token = token_engine.consume_token(
+                raw_action_token,
+                expected_scope="player_decision",
+                expected_assignment_id=assignment["assignment_id"],
+                expected_user_id=principal.user_id,
+                actor=principal.player_id or str(principal.user_id),
+            )
+        except ActionTokenScopeMismatchError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail)
+        except ActionTokenAssignmentMismatchError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail)
+        except ActionTokenAlreadyConsumedError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.detail)
+        except ActionTokenExpiredError as exc:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail=exc.detail)
+        except ActionTokenRevokedError as exc:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail=exc.detail)
+        except ActionTokenNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.detail)
+        except ActionTokenError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        token_id_val = getattr(consumed_token, "token_id", None) or (
+            consumed_token.get("token_id") if isinstance(consumed_token, dict) else None
+        )
+        if not token_id_val:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="missing action token",
+                detail="invalid action token consumption response",
             )
-        token_engine = ScopedActionTokenEngine(store)
-        consumed_token = token_engine.consume_token(
-            raw_action_token,
-            expected_scope="player_decision",
-            expected_assignment_id=assignment["assignment_id"],
-            actor=principal.player_id or str(principal.user_id),
-        )
-        token_ref = str(
-            getattr(consumed_token, "token_id", None)
-            or (consumed_token.get("token_id") if isinstance(consumed_token, dict) else str(uuid4()))
-        )
-        dec_req = store.create_player_decision_request(
-            assignment_id=assignment["assignment_id"],
-            subject_player_id=assignment["subject_player_id"],
-            action_token_reference=token_ref,
-        )
-        request_id = dec_req["request_id"]
+        token_ref = str(token_id_val)
+        evidence_id = None
 
-    else:
-        # Passkey path
-        if body.authentication_evidence_id:
-            try:
-                consumed_ev = store.consume_decision_evidence(
-                    body.authentication_evidence_id,
-                    expected_package_id=assignment.get("package_id"),
-                    expected_package_version=str(assignment.get("package_version")) if assignment.get("package_version") is not None else None,
-                    expected_package_hash=assignment.get("package_hash"),
-                    actor=principal.player_id or str(principal.user_id),
-                )
-                evidence_id = (
-                    consumed_ev["evidence_id"]
-                    if isinstance(consumed_ev, dict)
-                    else getattr(consumed_ev, "evidence_id", body.authentication_evidence_id)
-                )
-            except IdentityStoreError as exc:
-                if exc.status_code == 404:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="decision evidence not found")
-                elif exc.status_code == 409:
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="decision evidence already consumed")
-                else:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
-        elif body.passkey_response:
-            cred_id = body.credential_id
-            if not cred_id:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="missing credential_id")
-            cred = store.get_webauthn_credential(cred_id)
-            if not cred:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="passkey credential not found")
-
-            bound_hash = compute_decision_bound_hash(
-                assignment_id=assignment["assignment_id"],
-                assignment_version=assignment["assignment_version"],
-                assignment_hash=assignment["assignment_hash"],
-                package_id=assignment["package_id"],
-                package_version=assignment["package_version"],
-                package_hash=assignment["package_hash"],
-                subject_player_id=assignment["subject_player_id"],
-                decision=body.decision.value,
-                authority_basis=body.authority_basis.value,
-            )
-            webauthn_eng = get_webauthn_engine(store)
-            try:
-                verified = webauthn_eng.verify_step_up_response(
-                    response_payload=body.passkey_response,
-                    bound_payload_hash=bound_hash,
-                    stored_credential=cred,
-                    user_id=principal.user_id,
-                )
-                store.update_webauthn_counter(verified.credential_id, verified.new_sign_counter)
-                evidence_id = uuid4()
-            except Exception as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"passkey verification failed: {exc}")
+        active_req = store.get_active_decision_request(assignment["assignment_id"])
+        if active_req:
+            request_id = active_req["request_id"]
         else:
-            evidence_id = uuid4()
+            dec_req = store.create_player_decision_request(
+                assignment_id=assignment["assignment_id"],
+                subject_player_id=assignment["subject_player_id"],
+                action_token_reference=token_ref,
+            )
+            request_id = dec_req["request_id"]
+
+    elif body.authentication_evidence_id:
+        try:
+            consumed_ev = store.consume_decision_evidence(
+                body.authentication_evidence_id,
+                expected_user_id=principal.user_id,
+                expected_package_id=assignment.get("package_id"),
+                expected_package_version=str(assignment.get("package_version")) if assignment.get("package_version") is not None else None,
+                expected_package_hash=assignment.get("package_hash"),
+                actor=principal.player_id or str(principal.user_id),
+            )
+            evidence_id = (
+                consumed_ev["evidence_id"]
+                if isinstance(consumed_ev, dict)
+                else getattr(consumed_ev, "evidence_id", body.authentication_evidence_id)
+            )
+            token_ref = None
+        except IdentityStoreError as exc:
+            if exc.status_code == 404:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="decision evidence not found")
+            elif exc.status_code == 409:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="decision evidence already consumed")
+            elif exc.status_code == 403:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
 
         active_req = store.get_active_decision_request(assignment["assignment_id"])
         if active_req:
@@ -498,6 +563,74 @@ async def execute_player_decision(
                 subject_player_id=assignment["subject_player_id"],
             )
             request_id = dec_req["request_id"]
+
+    elif body.passkey_response:
+        cred_id = body.credential_id
+        if not cred_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="missing credential_id")
+        cred = store.get_webauthn_credential(cred_id)
+        if not cred:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="passkey credential not found")
+        if cred.get("user_id") and str(cred["user_id"]) != str(principal.user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="credential does not belong to user")
+
+        bound_hash = compute_decision_bound_hash(
+            assignment_id=assignment["assignment_id"],
+            assignment_version=assignment["assignment_version"],
+            assignment_hash=assignment["assignment_hash"],
+            package_id=assignment["package_id"],
+            package_version=assignment["package_version"],
+            package_hash=assignment["package_hash"],
+            subject_player_id=assignment["subject_player_id"],
+            decision=body.decision.value,
+            authority_basis=body.authority_basis.value,
+        )
+        webauthn_eng = get_webauthn_engine(store)
+        try:
+            verified = webauthn_eng.verify_step_up_response(
+                response_payload=body.passkey_response,
+                bound_payload_hash=bound_hash,
+                stored_credential=cred,
+                user_id=principal.user_id,
+            )
+        except InvalidAuthenticationResponse as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"passkey verification failed: {exc}")
+
+        if verified.user_verified is not True:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="player decision assertion requires user verification (user_verified is false)",
+            )
+
+        store.update_webauthn_counter(verified.credential_id, verified.new_sign_counter)
+
+        challenge_str = webauthn_eng._extract_challenge_from_response(body.passkey_response)
+        chal_row = store.get_challenge(challenge_str) if challenge_str else None
+        if not chal_row or not chal_row.get("challenge_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="failed to bind verified WebAuthn challenge evidence",
+            )
+        evidence_id = chal_row["challenge_id"]
+        token_ref = None
+
+        active_req = store.get_active_decision_request(assignment["assignment_id"])
+        if active_req:
+            request_id = active_req["request_id"]
+        else:
+            dec_req = store.create_player_decision_request(
+                assignment_id=assignment["assignment_id"],
+                subject_player_id=assignment["subject_player_id"],
+                challenge_nonce=challenge_str,
+            )
+            request_id = dec_req["request_id"]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="player decision requires valid proof (passkey_response, authentication_evidence_id, or action_token)",
+        )
 
     combined_notes = (body.notes or "") + (f" Reason: {body.reason}" if body.reason else "")
 
@@ -522,7 +655,7 @@ async def execute_player_decision(
 
     return PlayerDecisionResponse(
         decision_id=decision_row["decision_id"],
-        request_id=decision_row.get("request_id") or request_id or uuid4(),
+        request_id=decision_row.get("request_id") or request_id,
         assignment_id=decision_row.get("assignment_id") or assignment["assignment_id"],
         subject_player_id=decision_row.get("subject_player_id") or assignment["subject_player_id"],
         decision=DecisionChoice(decision_row["decision"]),
@@ -598,51 +731,3 @@ async def get_player_assignment_detail(
 
     check_player_isolation(principal, assignment)
     return PlayerAssignmentProjection(**assignment)
-
-
-@router.post(
-    "/tokens/decision",
-    response_model=IssuePlayerActionTokenResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Issue scoped action token for player decision",
-)
-@router.post(
-    "/assignments/{assignment_id}/tokens/decision",
-    response_model=IssuePlayerActionTokenResponse,
-    status_code=status.HTTP_201_CREATED,
-    include_in_schema=False,
-)
-@router.post(
-    "/{assignment_id}/tokens/decision",
-    response_model=IssuePlayerActionTokenResponse,
-    status_code=status.HTTP_201_CREATED,
-    include_in_schema=False,
-)
-async def issue_player_decision_token(
-    body: IssuePlayerActionTokenRequest,
-    assignment_id: UUID | None = None,
-    principal: PrincipalContext = Depends(require_human_principal),
-    store: IdentityStore = Depends(get_identity_store),
-) -> IssuePlayerActionTokenResponse:
-    target_id = assignment_id or body.assignment_id
-    if target_id:
-        assignment = store.get_player_assignment(target_id)
-        if not assignment:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment not found")
-        check_player_isolation(principal, assignment)
-
-    engine = ScopedActionTokenEngine(store)
-    raw_token, record = engine.issue_token(
-        user_id=principal.user_id,
-        scope="player_decision",
-        assignment_id=target_id,
-        ttl_seconds=body.ttl_seconds,
-        actor=principal.player_id or str(principal.user_id),
-    )
-    return IssuePlayerActionTokenResponse(
-        token=raw_token,
-        token_id=record.token_id,
-        assignment_id=target_id,
-        scope="player_decision",
-        expires_at=record.expires_at,
-    )

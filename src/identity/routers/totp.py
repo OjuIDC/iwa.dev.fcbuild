@@ -197,30 +197,16 @@ def verify_totp(
             headers={"Retry-After": str(remaining)},
         )
 
-    cred = store.get_totp_credential(principal.user_id)
-    if not cred or cred.get("status") == "revoked":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="no active TOTP enrollment found",
+    try:
+        store.verify_and_consume_totp(
+            user_id=principal.user_id,
+            code=body.code,
+            allowed_statuses=("enrolled", "active"),
+            actor=principal.display_name or str(principal.user_id),
         )
-
-    seed = store.get_totp_seed(principal.user_id)
-    if not seed:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="unable to retrieve TOTP secret",
-        )
-
-    is_valid, matched_dt, error_reason = verify_totp_code(
-        secret=seed,
-        code=body.code,
-        last_verified_at=cred.get("last_verified_at"),
-        valid_window=1,
-    )
-
-    if not is_valid:
+    except IdentityStoreError as e:
         totp_rate_limiter.record_failure(user_key)
-        if error_reason == "replay_detected":
+        if e.status_code == 409 or "replay" in e.detail.lower():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="TOTP code already used in this time window",
@@ -230,14 +216,8 @@ def verify_totp(
             detail="invalid or expired TOTP code",
         )
 
-    # Success: clear limiter and record verification
+    # Success: clear limiter and return
     totp_rate_limiter.record_success(user_key)
-    store.record_totp_verification(
-        principal.user_id,
-        verified_at=matched_dt,
-        actor=principal.display_name or str(principal.user_id),
-    )
-
     return TotpVerifyResponse(verified=True, status="active")
 
 
@@ -266,40 +246,31 @@ def authenticate_totp(
             headers={"Retry-After": str(remaining)},
         )
 
-    cred = store.get_totp_credential(principal.user_id)
-    if not cred or cred.get("status") != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TOTP is not enrolled or active for this user",
+    try:
+        res_data = store.verify_and_consume_totp(
+            user_id=principal.user_id,
+            code=body.code,
+            allowed_statuses=("active",),
+            actor=principal.display_name or str(principal.user_id),
         )
-
-    seed = store.get_totp_seed(principal.user_id)
-    if not seed:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="unable to retrieve TOTP secret",
-        )
-
-    is_valid, matched_dt, error_reason = verify_totp_code(
-        secret=seed,
-        code=body.code,
-        last_verified_at=cred.get("last_verified_at"),
-        valid_window=1,
-    )
-
-    if not is_valid:
+    except IdentityStoreError as e:
         totp_rate_limiter.record_failure(user_key)
+        if e.status_code == 409 or "replay" in e.detail.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="TOTP code already used in this time window",
+            )
+        if "not enrolled or active" in e.detail or "enrolled" in e.detail or "not in allowed statuses" in e.detail:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="TOTP is not enrolled or active for this user",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid or expired TOTP code",
         )
 
     totp_rate_limiter.record_success(user_key)
-    store.record_totp_verification(
-        principal.user_id,
-        verified_at=matched_dt,
-        actor=principal.display_name or str(principal.user_id),
-    )
 
     new_token = None
     new_sess_id = None
@@ -322,7 +293,7 @@ def authenticate_totp(
         auth_level="mfa_totp",
         session_token=new_token,
         session_id=new_sess_id,
-        verified_at=matched_dt or datetime.now(timezone.utc),
+        verified_at=res_data.get("verified_at") or datetime.now(timezone.utc),
     )
 
 

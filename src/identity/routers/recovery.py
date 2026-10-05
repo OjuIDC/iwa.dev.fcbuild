@@ -25,9 +25,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.identity.deps import get_current_principal, require_role
-from src.identity.policy import PrincipalContext, UserRole
+from src.identity.deps import get_current_principal, require_human_principal, require_role
+from src.identity.policy import AuthLevel, PrincipalContext, UserRole
 from src.identity.recovery import BootstrapService, RecoveryService
+from src.identity.routers.sessions import get_raw_session_token
 from src.identity.store import IdentityStore, IdentityStoreError
 
 log = logging.getLogger("fc27.identity.routers.recovery")
@@ -58,7 +59,7 @@ def get_identity_store(request: Request) -> IdentityStore:
 # ==============================================================================
 
 class BootstrapRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     login_identifier: str = Field(..., min_length=1, description="Primary email or login ID")
     display_name: str = Field(..., min_length=1, description="Human display name")
     club_id: str = Field(..., min_length=1, description="Numeric club ID")
@@ -83,7 +84,7 @@ class BootstrapStatusResponse(BaseModel):
 
 
 class RecoveryRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     login_identifier: str = Field(..., min_length=1)
     recovery_code: str = Field(..., min_length=1)
 
@@ -190,11 +191,47 @@ async def init_bootstrap_ceremony(
     summary="Complete Multi-Step Bootstrap Ceremony",
 )
 async def complete_bootstrap_ceremony(
-    payload: BootstrapRequest,
+    principal: PrincipalContext = Depends(require_human_principal),
+    raw_token: str = Depends(get_raw_session_token),
     store: IdentityStore = Depends(get_identity_store),
 ) -> Any:
-    # Direct alias to execute_bootstrap with atomic lock & code generation
-    return await execute_bootstrap(payload, store)
+    # 1. Validate principal has bootstrap_enrollment session
+    if principal.auth_level not in {AuthLevel.BOOTSTRAP_ENROLLMENT, AuthLevel.BOOTSTRAP_ENROLLMENT.value}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="bootstrap completion requires bootstrap_enrollment session",
+        )
+
+    # 2. Verify registered passkey exists in fc27_webauthn_credentials
+    creds = store.list_user_webauthn_credentials(principal.user_id)
+    if not creds:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot complete bootstrap: passkey registration required before activation",
+        )
+
+    # 3. Complete bootstrap in store
+    try:
+        result = store.complete_commissioner_bootstrap(
+            user_id=principal.user_id,
+            club_id=principal.club_id,
+            enrollment_token=raw_token,
+            actor=principal.display_name or str(principal.user_id),
+        )
+    except IdentityStoreError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    user_rec = store.get_user(principal.user_id) or {}
+    return {
+        "user_id": principal.user_id,
+        "login_identifier": user_rec.get("login_id", ""),
+        "display_name": user_rec.get("display_name", ""),
+        "club_id": principal.club_id,
+        "role": "commissioner",
+        "status": "active",
+        "recovery_codes": [],
+        "session_token": result["session_token"],
+    }
 
 
 # ==============================================================================

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.identity.deps import get_current_principal, require_human_principal
 from src.identity.policy import (
+    ActionType,
     PrincipalContext,
     Resource,
     UserRole,
@@ -53,7 +54,7 @@ def get_identity_store(request: Request) -> IdentityStore:
 # ==============================================================================
 
 class CreateDelegationRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     delegate_user_id: UUID
     club_id: str
@@ -105,6 +106,9 @@ def create_delegation(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="cannot create delegation for another club",
         )
+
+    res = Resource.for_club(club_id=principal.club_id, resource_type="delegation")
+    authorize(principal, ActionType.DELEGATION_CREATE, res)
 
     actor = "commissioner" if principal.is_commissioner else ("staff" if principal.has_role(UserRole.STAFF) else "system")
 

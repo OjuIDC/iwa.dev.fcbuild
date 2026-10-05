@@ -21,11 +21,14 @@ Invariants:
 """
 from __future__ import annotations
 
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 from uuid import UUID, uuid4
+
+import pyotp
 
 import psycopg
 from psycopg.rows import dict_row, tuple_row
@@ -79,6 +82,21 @@ class IdentityStore:
         "bff_service",
         "graph_service",
     }
+    PROHIBITED_INVITATION_ROLES = frozenset({
+        "bff_service",
+        "graph_service",
+        "worker",
+        "worker_service",
+        "service",
+    })
+    VALID_INVITATION_ROLES = frozenset({
+        "commissioner",
+        "commissioner_delegate",
+        "coach",
+        "analyst",
+        "staff",
+        "player",
+    })
     VALID_AUTH_LEVELS = {"authenticated", "mfa_totp", "step_up_passkey"}
     VALID_AUTH_METHODS = {"passkey", "totp", "service_token", "recovery_code"}
     VALID_ACTION_SCOPES = {"player_decision", "step_up", "delegation", "invitation", "recovery"}
@@ -400,7 +418,9 @@ class IdentityStore:
         
         Also provisions the user record in fc27_users with status='invited' if not exists.
         """
-        if intended_role not in self.VALID_ROLES:
+        if intended_role in self.PROHIBITED_INVITATION_ROLES:
+            raise IdentityStoreError(422, f"machine identity role '{intended_role}' cannot be provisioned via invitation")
+        if intended_role not in self.VALID_INVITATION_ROLES:
             raise IdentityStoreError(422, f"invalid role '{intended_role}'")
         if ttl_hours <= 0 or ttl_hours > 720:
             raise IdentityStoreError(422, "ttl_hours must be positive and <= 720")
@@ -640,6 +660,8 @@ class IdentityStore:
                 ).fetchone()
 
             role = inv["intended_role"]
+            if role in self.PROHIBITED_INVITATION_ROLES:
+                raise IdentityStoreError(422, f"machine identity role '{role}' cannot be provisioned via invitation")
             conn.execute(
                 """
                 INSERT INTO public.fc27_user_roles (user_id, role, granted_at, granted_by)
@@ -835,7 +857,7 @@ class IdentityStore:
                 return None
             if row["revoked_at"] is not None:
                 return None
-            if row["user_status"] != "active":
+            if row["user_status"] != "active" and row["auth_level"] != "bootstrap_enrollment":
                 return None
             if now > row["absolute_expires_at"] or now > row["idle_expires_at"]:
                 return None
@@ -1092,6 +1114,7 @@ class IdentityStore:
                     status = 'enrolled',
                     enrolled_at = now(),
                     last_verified_at = NULL,
+                    last_consumed_step = NULL,
                     revoked_at = NULL
                 RETURNING user_id, key_version, status, enrolled_at
                 """,
@@ -1186,7 +1209,7 @@ class IdentityStore:
             row = conn.execute(
                 """
                 SELECT user_id, encrypted_seed, key_version, status,
-                       enrolled_at, last_verified_at, revoked_at
+                       enrolled_at, last_verified_at, last_consumed_step, revoked_at
                 FROM public.fc27_totp_credentials
                 WHERE user_id = %s
                 """,
@@ -1199,20 +1222,24 @@ class IdentityStore:
         user_id: UUID,
         *,
         verified_at: datetime | None = None,
+        consumed_step: int | None = None,
         actor: str = "system",
         correlation_id: UUID | None = None,
     ) -> None:
-        """Atomically updates last_verified_at to prevent code replay."""
+        """Atomically updates last_verified_at and last_consumed_step to prevent code replay."""
         v_time = verified_at or datetime.now(timezone.utc)
+        step = consumed_step if consumed_step is not None else int(v_time.timestamp()) // 30
         cid = correlation_id or uuid4()
         with self.connect() as conn, conn.transaction():
             conn.execute(
                 """
                 UPDATE public.fc27_totp_credentials
-                SET last_verified_at = %s, status = 'active'
+                SET last_verified_at = %s,
+                    last_consumed_step = COALESCE(%s, last_consumed_step),
+                    status = 'active'
                 WHERE user_id = %s
                 """,
-                (v_time, user_id),
+                (v_time, step, user_id),
             )
             _safe_record_event(
                 conn,
@@ -1226,6 +1253,124 @@ class IdentityStore:
                 source_table="fc27_totp_credentials",
                 source_id=str(user_id),
             )
+
+    def verify_and_consume_totp(
+        self,
+        user_id: UUID,
+        code: str,
+        *,
+        allowed_statuses: Sequence[str] = ("enrolled", "active"),
+        current_time: datetime | None = None,
+        valid_window: int = 1,
+        actor: str = "system",
+        correlation_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Atomically verifies and consumes a TOTP code under an exclusive row lock.
+
+        Guarantees:
+        - Holds explicit row lock (FOR UPDATE) on fc27_totp_credentials in an atomic transaction.
+        - Matches candidate code against candidate steps (drift tolerance: current step ± valid_window).
+        - Rejects any candidate step where candidate_step <= last_consumed_step (monotonicity).
+        - Persists updated last_consumed_step, last_verified_at, and status = 'active'.
+        - Emits identity.totp_verified domain event.
+        - Commits or rolls back atomically.
+        """
+        cid = correlation_id or uuid4()
+        now = current_time or datetime.now(timezone.utc)
+        current_epoch = int(now.timestamp())
+        totp_interval = 30
+        totp_digits = 6
+        current_step = current_epoch // totp_interval
+
+        if not isinstance(code, str) or len(code.strip()) != totp_digits or not code.strip().isdigit():
+            raise IdentityStoreError(400, "malformed_code")
+
+        clean_code = code.strip()
+
+        with self.connect() as conn, conn.transaction():
+            row = conn.execute(
+                """
+                SELECT user_id, encrypted_seed, key_version, status,
+                       last_consumed_step, last_verified_at, enrolled_at
+                FROM public.fc27_totp_credentials
+                WHERE user_id = %s
+                FOR UPDATE
+                """,
+                (user_id,),
+            ).fetchone()
+
+            if not row:
+                raise IdentityStoreError(400, "no active TOTP enrollment found")
+
+            if row["status"] == "revoked":
+                raise IdentityStoreError(400, "TOTP credential has been revoked")
+
+            if allowed_statuses and row["status"] not in allowed_statuses:
+                raise IdentityStoreError(400, f"TOTP credential status '{row['status']}' not in allowed statuses")
+
+            seed = self.crypto.decrypt_secret(row["encrypted_seed"])
+            if not seed:
+                raise IdentityStoreError(500, "unable to retrieve TOTP secret")
+
+            totp = pyotp.TOTP(seed, digits=totp_digits, interval=totp_interval)
+
+            matched_step: int | None = None
+            # Evaluate current step (offset 0) first, then backward (-1) and forward (+1)
+            candidate_offsets = [0]
+            for w in range(1, valid_window + 1):
+                candidate_offsets.extend([-w, w])
+
+            for offset in candidate_offsets:
+                cand_step = current_step + offset
+                expected_code = totp.at(cand_step * totp_interval)
+                if hmac.compare_digest(clean_code, expected_code):
+                    matched_step = cand_step
+                    break
+
+            if matched_step is None:
+                raise IdentityStoreError(400, "invalid_or_expired_code")
+
+            last_step = row["last_consumed_step"]
+            # Fallback to last_verified_at timestamp for legacy rows
+            if last_step is None and row["last_verified_at"] is not None:
+                last_step = int(row["last_verified_at"].timestamp()) // totp_interval
+
+            if last_step is not None and matched_step <= last_step:
+                raise IdentityStoreError(409, "replay_detected: TOTP code already used in this or earlier window")
+
+            matched_dt = datetime.fromtimestamp(matched_step * totp_interval, tz=timezone.utc)
+
+            conn.execute(
+                """
+                UPDATE public.fc27_totp_credentials
+                SET last_consumed_step = %s,
+                    last_verified_at = %s,
+                    status = 'active'
+                WHERE user_id = %s
+                """,
+                (matched_step, matched_dt, user_id),
+            )
+
+            _safe_record_event(
+                conn,
+                event_type="identity.totp_verified",
+                entity_type="totp_credential",
+                entity_id=str(user_id),
+                actor=actor,
+                correlation_id=cid,
+                visibility="audit_only",
+                scope_club_id=None,
+                source_table="fc27_totp_credentials",
+                source_id=str(user_id),
+            )
+
+            return {
+                "verified": True,
+                "user_id": user_id,
+                "consumed_step": matched_step,
+                "verified_at": matched_dt,
+                "status": "active",
+            }
 
     # -----------------------------------------------------------------
     # Compatibility Aliases for Secret Encryption Layer
@@ -1394,19 +1539,6 @@ class IdentityStore:
     # 5B. Commissioner Bootstrap & Recovery Engine
     # =================================================================
 
-    def _ensure_bootstrap_lock_table(self, conn: psycopg.Connection) -> None:
-        """Ensures fc27_bootstrap_locks exists with immutability triggers."""
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS public.fc27_bootstrap_locks (
-                lock_id text PRIMARY KEY DEFAULT 'commissioner_bootstrap',
-                commissioner_user_id uuid NOT NULL REFERENCES public.fc27_users(user_id) ON DELETE RESTRICT,
-                club_id text NOT NULL,
-                bootstrapped_at timestamptz NOT NULL DEFAULT now(),
-                actor text NOT NULL DEFAULT 'system',
-                metadata jsonb NOT NULL DEFAULT '{}'::jsonb
-            );
-        """)
-
     def is_bootstrapped(self, club_id: str | None = None) -> bool:
         """Checks whether the commissioner bootstrap ceremony has been permanently locked."""
         with self.connect() as conn:
@@ -1441,7 +1573,6 @@ class IdentityStore:
     ) -> None:
         """Records the permanent commissioner bootstrap lock."""
         with self.connect() as conn, conn.transaction():
-            self._ensure_bootstrap_lock_table(conn)
             import psycopg.types.json
             conn.execute(
                 """
@@ -1468,8 +1599,6 @@ class IdentityStore:
         norm_login = login_id.strip().lower()
 
         with self.connect() as conn, conn.transaction():
-            self._ensure_bootstrap_lock_table(conn)
-
             # 1. Acquire and verify bootstrap lock
             existing_lock = conn.execute(
                 "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap' FOR UPDATE"
@@ -1527,17 +1656,7 @@ class IdentityStore:
                     (cid_code, user_id, hashed),
                 )
 
-            # 6. Insert permanent bootstrap lock
-            conn.execute(
-                """
-                INSERT INTO public.fc27_bootstrap_locks (
-                    lock_id, commissioner_user_id, club_id, bootstrapped_at, actor
-                ) VALUES ('commissioner_bootstrap', %s, %s, now(), %s)
-                """,
-                (user_id, club_id, actor),
-            )
-
-            # 7. Create server-side session
+            # 6. Create restricted bootstrap enrollment session
             raw_token = secrets.token_hex(32)
             tok_hash = hash_token(raw_token)
             session_id = uuid4()
@@ -1550,15 +1669,15 @@ class IdentityStore:
                 INSERT INTO public.fc27_sessions (
                     session_id, token_hash, user_id, auth_level, auth_method,
                     created_at, last_used_at, idle_expires_at, absolute_expires_at
-                ) VALUES (%s, %s, %s, 'step_up_passkey', 'passkey', now(), now(), %s, %s)
+                ) VALUES (%s, %s, %s, 'bootstrap_enrollment', 'bootstrap', now(), now(), %s, %s)
                 """,
                 (session_id, tok_hash, user_id, idle_exp, abs_exp),
             )
 
-            # 8. Record authoritative audit event
+            # 7. Record authoritative audit event
             _safe_record_event(
                 conn,
-                event_type="identity.bootstrap_completed",
+                event_type="identity.bootstrap_initiated",
                 entity_type="user",
                 entity_id=str(user_id),
                 actor=actor,
@@ -1577,6 +1696,109 @@ class IdentityStore:
                 "user": user_dict,
                 "session_token": raw_token,
                 "session_id": session_id,
+            }
+
+    def complete_commissioner_bootstrap(
+        self,
+        *,
+        user_id: UUID,
+        club_id: str,
+        enrollment_token: str,
+        actor: str = "commissioner_bootstrap",
+        correlation_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Completes commissioner bootstrap after passkey registration.
+
+        Guarantees:
+        - Verifies at least one unrevoked WebAuthn credential exists for user.
+        - Inserts permanent lock into fc27_bootstrap_locks.
+        - Ensures commissioner role is granted.
+        - Revokes enrollment session.
+        - Mints active commissioner session with auth_level='step_up_passkey', auth_method='passkey'.
+        - Emits identity.bootstrap_completed event.
+        """
+        cid = correlation_id or uuid4()
+        now_dt = datetime.now(timezone.utc)
+        enrollment_tok_hash = hash_token(enrollment_token)
+
+        with self.connect() as conn, conn.transaction():
+            # 1. Acquire and verify bootstrap lock does not exist
+            existing_lock = conn.execute(
+                "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap' FOR UPDATE"
+            ).fetchone()
+            if existing_lock:
+                raise IdentityStoreError(409, "commissioner bootstrap ceremony is permanently locked")
+
+            # 2. Verify registered passkey exists
+            cred_row = conn.execute(
+                "SELECT 1 FROM public.fc27_webauthn_credentials WHERE user_id = %s AND revoked_at IS NULL",
+                (user_id,),
+            ).fetchone()
+            if not cred_row:
+                raise IdentityStoreError(400, "passkey registration required before completing bootstrap")
+
+            # 3. Insert permanent bootstrap lock
+            conn.execute(
+                """
+                INSERT INTO public.fc27_bootstrap_locks (
+                    lock_id, commissioner_user_id, club_id, bootstrapped_at, actor
+                ) VALUES ('commissioner_bootstrap', %s, %s, now(), %s)
+                """,
+                (user_id, club_id, actor),
+            )
+
+            # 4. Ensure commissioner role is assigned
+            conn.execute(
+                """
+                INSERT INTO public.fc27_user_roles (user_id, role, granted_by, granted_at)
+                VALUES (%s, 'commissioner', %s, now())
+                ON CONFLICT (user_id, role) DO NOTHING
+                """,
+                (user_id, actor),
+            )
+
+            # 5. Revoke enrollment session
+            conn.execute(
+                "UPDATE public.fc27_sessions SET revoked_at = now() WHERE token_hash = %s",
+                (enrollment_tok_hash,),
+            )
+
+            # 6. Mint active step_up_passkey session
+            raw_token = secrets.token_hex(32)
+            tok_hash = hash_token(raw_token)
+            session_id = uuid4()
+            idle_exp = now_dt + timedelta(minutes=30)
+            abs_exp = now_dt + timedelta(hours=24)
+
+            conn.execute(
+                """
+                INSERT INTO public.fc27_sessions (
+                    session_id, token_hash, user_id, auth_level, auth_method,
+                    created_at, last_used_at, idle_expires_at, absolute_expires_at
+                ) VALUES (%s, %s, %s, 'step_up_passkey', 'passkey', now(), now(), %s, %s)
+                """,
+                (session_id, tok_hash, user_id, idle_exp, abs_exp),
+            )
+
+            # 7. Record authoritative audit event
+            _safe_record_event(
+                conn,
+                event_type="identity.bootstrap_completed",
+                entity_type="user",
+                entity_id=str(user_id),
+                actor=actor,
+                correlation_id=cid,
+                visibility="audit_only",
+                scope_club_id=club_id,
+                source_table="fc27_users",
+                source_id=str(user_id),
+            )
+
+            return {
+                "session_token": raw_token,
+                "session_id": session_id,
+                "auth_level": "step_up_passkey",
+                "auth_method": "passkey",
             }
 
     # =================================================================
@@ -1739,6 +1961,71 @@ class IdentityStore:
         """Updates sign counter and last_used_at with clone detection."""
         self.update_webauthn_counter(credential_id, new_counter)
 
+    def consume_challenge_and_update_counter(
+        self,
+        *,
+        challenge_str: str,
+        challenge_type: str,
+        credential_id: bytes | str,
+        new_counter: int,
+        expected_payload_hash: str | None = None,
+        user_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Atomically locks and consumes challenge and updates authenticator counter in ONE transaction."""
+        cred_bytes = self._normalize_credential_id(credential_id)
+        now = datetime.now(timezone.utc)
+        with self.connect() as conn, conn.transaction():
+            # 1. Lock challenge row FOR UPDATE
+            chal_row = conn.execute(
+                """
+                SELECT * FROM public.fc27_challenges
+                WHERE challenge_str = %s AND challenge_type = %s AND consumed_at IS NULL
+                FOR UPDATE
+                """,
+                (challenge_str, challenge_type),
+            ).fetchone()
+            if not chal_row:
+                raise IdentityStoreError(400, "challenge expired, invalid, or already consumed")
+            if chal_row["expires_at"] <= now:
+                raise IdentityStoreError(400, "challenge has expired")
+            if expected_payload_hash and chal_row.get("bound_payload_hash") != expected_payload_hash:
+                raise IdentityStoreError(400, "bound payload hash mismatch")
+            if user_id and chal_row.get("user_id") and str(chal_row["user_id"]) != str(user_id):
+                raise IdentityStoreError(403, "challenge not issued to this user")
+
+            # 2. Lock credential row FOR UPDATE
+            cred_row = conn.execute(
+                "SELECT sign_counter, user_id FROM public.fc27_webauthn_credentials WHERE credential_id = %s AND revoked_at IS NULL FOR UPDATE",
+                (cred_bytes,),
+            ).fetchone()
+            if not cred_row:
+                raise IdentityStoreError(404, "credential not found or revoked")
+            if user_id and str(cred_row["user_id"]) != str(user_id):
+                raise IdentityStoreError(403, "credential does not belong to specified user")
+
+            current_counter = int(cred_row["sign_counter"] or 0)
+
+            # 3. Clone detection / monotonicity check
+            # Zero-counter authenticators (0 -> 0) are permitted.
+            # Initial counter setting (0 -> N) is permitted.
+            # Replay / clone rollback (current_counter > 0 and new_counter <= current_counter) fails closed.
+            if current_counter > 0 and new_counter <= current_counter:
+                raise IdentityStoreError(401, "authenticator sign counter replay or clone detected: counter did not increase")
+
+            # 4. Atomically consume challenge
+            conn.execute(
+                "UPDATE public.fc27_challenges SET consumed_at = now() WHERE challenge_id = %s",
+                (chal_row["challenge_id"],),
+            )
+
+            # 5. Atomically update sign counter
+            conn.execute(
+                "UPDATE public.fc27_webauthn_credentials SET sign_counter = %s, last_used_at = now() WHERE credential_id = %s",
+                (new_counter, cred_bytes),
+            )
+
+            return dict(chal_row)
+
     def revoke_webauthn_credential(
         self,
         credential_id: bytes | str,
@@ -1841,10 +2128,12 @@ class IdentityStore:
         token: str,
         *,
         expected_scope: str | None = None,
+        expected_user_id: UUID | str | None = None,
+        expected_assignment_id: UUID | str | None = None,
         actor: str = "system",
         correlation_id: UUID | None = None,
     ) -> dict[str, Any]:
-        """Consumes an action token, verifying single-use, expiry, revocation, and scope."""
+        """Consumes an action token, verifying single-use, expiry, revocation, scope, user, and assignment."""
         tok_hash = hash_token(token)
         cid = correlation_id or uuid4()
         now = datetime.now(timezone.utc)
@@ -1863,11 +2152,22 @@ class IdentityStore:
                 raise IdentityStoreError(410, "action token has expired")
             if expected_scope and tok["scope"] != expected_scope:
                 raise IdentityStoreError(403, f"token scope mismatch: expected {expected_scope}, found {tok['scope']}")
+            if expected_user_id and str(tok["user_id"]) != str(expected_user_id):
+                raise IdentityStoreError(403, "token user mismatch")
+            if expected_assignment_id and str(tok.get("assignment_id") or "") != str(expected_assignment_id):
+                raise IdentityStoreError(403, "token assignment mismatch")
 
             row = conn.execute(
-                "UPDATE public.fc27_action_tokens SET consumed_at = now() WHERE token_id = %s RETURNING *",
+                """
+                UPDATE public.fc27_action_tokens
+                SET consumed_at = now()
+                WHERE token_id = %s AND consumed_at IS NULL AND revoked_at IS NULL
+                RETURNING *
+                """,
                 (tok["token_id"],),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(409, "action token is already consumed or revoked")
 
             _safe_record_event(
                 conn,
@@ -2237,63 +2537,73 @@ class IdentityStore:
     # 10. Decision Evidence (WebAuthn Step-Up)
     # =================================================================
 
-    def _ensure_decision_evidence_table(self, conn: psycopg.Connection) -> None:
-        """Self-healing creation of fc27_decision_evidence table for test safety."""
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS public.fc27_decision_evidence (
-                evidence_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id uuid NOT NULL,
-                challenge_id uuid NULL,
-                bound_payload_hash text NOT NULL,
-                package_id text NOT NULL,
-                package_version text NOT NULL,
-                package_hash text NOT NULL,
-                decision text NOT NULL,
-                approval_request_id uuid NULL,
-                credential_id bytea NOT NULL,
-                issued_at timestamptz NOT NULL DEFAULT now(),
-                expires_at timestamptz NOT NULL,
-                consumed_at timestamptz NULL,
-                created_at timestamptz NOT NULL DEFAULT now()
-            );
-        """)
-
     def create_decision_evidence(
         self,
         *,
         user_id: UUID,
         package_id: str,
-        package_version: str,
+        package_version: str | int,
         package_hash: str,
-        decision: str,
-        challenge_id: UUID | None = None,
-        bound_payload_hash: str = "",
+        decision: str | None = None,
+        normalized_decision: str | None = None,
+        canonical_bound_payload_hash: str | None = None,
+        bound_payload_hash: str | None = None,
+        session_id: UUID | str | None = None,
+        thread_id: str | None = None,
         approval_request_id: UUID | str | None = None,
-        credential_id: bytes = b"",
+        challenge_id: UUID | str | None = None,
+        credential_id: bytes | None = None,
+        webauthn_credential_id: str | None = None,
         ttl_seconds: int = 300,
         actor: str = "system",
         correlation_id: UUID | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Creates a single-use decision evidence record bound to exact package parameters."""
         evidence_id = uuid4()
         cid = correlation_id or uuid4()
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl_seconds)
+        norm_decision = (normalized_decision or decision or "approved").lower().strip()
+        if norm_decision in ("approve", "approved"):
+            norm_decision = "approved"
+        elif norm_decision in ("reject", "rejected"):
+            norm_decision = "rejected"
+        elif norm_decision in ("request_revision", "revision_requested"):
+            norm_decision = "revision_requested"
+        bound_hash = canonical_bound_payload_hash or bound_payload_hash or ""
+        cred_str = webauthn_credential_id or (credential_id.hex() if credential_id else None)
+        sess_id = str(session_id) if session_id else None
+        th_id = str(thread_id) if thread_id else None
+        appr_id = str(approval_request_id) if approval_request_id else None
+        chal_id = str(challenge_id) if challenge_id else None
+
         with self.connect() as conn, conn.transaction():
-            self._ensure_decision_evidence_table(conn)
             row = conn.execute(
                 """
                 INSERT INTO public.fc27_decision_evidence (
-                    evidence_id, user_id, challenge_id, bound_payload_hash,
-                    package_id, package_version, package_hash, decision,
-                    approval_request_id, credential_id, issued_at, expires_at, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    evidence_id, user_id, session_id, thread_id, approval_request_id,
+                    package_id, package_version, package_hash, normalized_decision,
+                    canonical_bound_payload_hash, challenge_id, webauthn_credential_id,
+                    issued_at, expires_at, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 RETURNING *
                 """,
                 (
-                    evidence_id, user_id, challenge_id, bound_payload_hash,
-                    package_id, package_version, package_hash, decision,
-                    approval_request_id, credential_id, now, expires_at,
+                    evidence_id,
+                    str(user_id),
+                    sess_id,
+                    th_id,
+                    appr_id,
+                    package_id,
+                    str(package_version),
+                    package_hash,
+                    norm_decision,
+                    bound_hash,
+                    chal_id,
+                    cred_str,
+                    now,
+                    expires_at,
                 ),
             ).fetchone()
 
@@ -2306,7 +2616,7 @@ class IdentityStore:
                 correlation_id=cid,
                 visibility="audit_only",
                 scope_club_id=None,
-                reason=decision,
+                reason=norm_decision,
                 source_table="fc27_decision_evidence",
                 source_id=str(evidence_id),
             )
@@ -2315,7 +2625,6 @@ class IdentityStore:
     def get_decision_evidence(self, evidence_id: UUID | str) -> dict[str, Any] | None:
         """Retrieves evidence record by UUID."""
         with self.connect() as conn:
-            self._ensure_decision_evidence_table(conn)
             row = conn.execute(
                 "SELECT * FROM public.fc27_decision_evidence WHERE evidence_id = %s",
                 (str(evidence_id),),
@@ -2326,25 +2635,33 @@ class IdentityStore:
         self,
         evidence_id: UUID | str,
         *,
+        expected_user_id: UUID | str | None = None,
+        expected_session_id: UUID | str | None = None,
+        expected_approval_request_id: UUID | str | None = None,
+        expected_thread_id: str | None = None,
         expected_package_id: str | None = None,
         expected_package_hash: str | None = None,
         expected_package_version: str | None = None,
+        expected_decision: str | None = None,
+        expected_normalized_decision: str | None = None,
+        expected_canonical_bound_payload_hash: str | None = None,
         actor: str = "system",
         correlation_id: UUID | None = None,
+        conn: psycopg.Connection | None = None,
     ) -> dict[str, Any]:
-        """Atomically validates scope and consumes decision evidence (Feature 20).
+        """Atomically validates scope and consumes decision evidence (Feature 20 & Finding R2).
 
         Raises IdentityStoreError:
         - 404: Evidence not found
-        - 400/403: Scope mismatch (bound to a different package)
+        - 400/403: Scope/binding mismatch
         - 410/400: Evidence expired
         - 409: Evidence already consumed (replay attack)
         """
         now = datetime.now(timezone.utc)
         cid = correlation_id or uuid4()
-        with self.connect() as conn, conn.transaction():
-            self._ensure_decision_evidence_table(conn)
-            row = conn.execute(
+
+        def _do_consume(tx_conn: psycopg.Connection) -> dict[str, Any]:
+            row = tx_conn.execute(
                 "SELECT * FROM public.fc27_decision_evidence WHERE evidence_id = %s FOR UPDATE",
                 (str(evidence_id),),
             ).fetchone()
@@ -2359,22 +2676,47 @@ class IdentityStore:
             if row["expires_at"] <= now:
                 raise IdentityStoreError(400, "evidence expired")
 
-            # Scope lockout check
+            # Binding validations
+            if expected_user_id and str(row["user_id"]) != str(expected_user_id):
+                raise IdentityStoreError(403, "evidence bound to different user ID")
+            if expected_session_id and str(row["session_id"]) != str(expected_session_id):
+                raise IdentityStoreError(403, "evidence bound to different session ID")
+            if expected_approval_request_id and str(row["approval_request_id"]) != str(expected_approval_request_id):
+                raise IdentityStoreError(400, "evidence bound to different approval request ID")
+            if expected_thread_id and str(row["thread_id"]) != str(expected_thread_id):
+                raise IdentityStoreError(400, "evidence bound to different thread ID")
             if expected_package_id and row["package_id"] != expected_package_id:
                 raise IdentityStoreError(400, "evidence bound to different package ID")
-            if expected_package_hash and row["package_hash"] != expected_package_hash:
+            if expected_package_hash and str(row["package_hash"]).lower() != str(expected_package_hash).lower():
                 raise IdentityStoreError(400, "evidence bound to different package hash")
             if expected_package_version and str(row["package_version"]) != str(expected_package_version):
                 raise IdentityStoreError(400, "evidence bound to different package version")
 
+            exp_decision = expected_normalized_decision or expected_decision
+            if exp_decision:
+                norm_exp = exp_decision.lower().strip()
+                if norm_exp in ("approve", "approved"):
+                    norm_exp = "approved"
+                elif norm_exp in ("reject", "rejected"):
+                    norm_exp = "rejected"
+                elif norm_exp in ("request_revision", "revision_requested"):
+                    norm_exp = "revision_requested"
+                if row["normalized_decision"].lower() != norm_exp:
+                    raise IdentityStoreError(403, "evidence bound to different decision")
+
+            if expected_canonical_bound_payload_hash and row["canonical_bound_payload_hash"].lower() != str(expected_canonical_bound_payload_hash).lower():
+                raise IdentityStoreError(400, "canonical bound payload hash mismatch")
+
             # Mark consumed
-            updated = conn.execute(
-                "UPDATE public.fc27_decision_evidence SET consumed_at = now() WHERE evidence_id = %s RETURNING *",
+            updated = tx_conn.execute(
+                "UPDATE public.fc27_decision_evidence SET consumed_at = now() WHERE evidence_id = %s AND consumed_at IS NULL RETURNING *",
                 (str(evidence_id),),
             ).fetchone()
+            if not updated:
+                raise IdentityStoreError(409, "evidence already consumed")
 
             _safe_record_event(
-                conn,
+                tx_conn,
                 event_type="identity.decision_evidence_consumed",
                 entity_type="decision_evidence",
                 entity_id=str(evidence_id),
@@ -2382,78 +2724,25 @@ class IdentityStore:
                 correlation_id=cid,
                 visibility="audit_only",
                 scope_club_id=None,
-                reason=row["decision"],
+                reason=row["normalized_decision"],
                 source_table="fc27_decision_evidence",
                 source_id=str(evidence_id),
             )
             return dict(updated)
 
+        if conn is not None:
+            return _do_consume(conn)
+        else:
+            with self.connect() as new_conn, new_conn.transaction():
+                return _do_consume(new_conn)
+
     # =================================================================
     # 11. Player Assignments and Decisions
     # =================================================================
 
-    def _ensure_player_tables(self, conn: psycopg.Connection) -> None:
-        """Self-healing creation of player tables for test safety."""
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS public.player_assignments (
-                assignment_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                package_id text NOT NULL,
-                package_version text NOT NULL,
-                package_hash text NOT NULL,
-                subject_player_id text NOT NULL,
-                club_id text NOT NULL,
-                assignment_version integer NOT NULL DEFAULT 1,
-                assignment_hash text NOT NULL,
-                assignment_scope text NOT NULL DEFAULT 'player_specific',
-                action_type text NOT NULL,
-                status text NOT NULL DEFAULT 'active',
-                requires_player_consent boolean NOT NULL DEFAULT true,
-                fallback_eligible boolean NOT NULL DEFAULT false,
-                superseded_by uuid NULL,
-                created_at timestamptz NOT NULL DEFAULT now(),
-                updated_at timestamptz NOT NULL DEFAULT now()
-            );
-
-            CREATE TABLE IF NOT EXISTS public.player_decision_requests (
-                request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                assignment_id uuid NOT NULL,
-                subject_player_id text NOT NULL,
-                status text NOT NULL DEFAULT 'awaiting_player',
-                challenge_nonce text UNIQUE,
-                action_token_reference text UNIQUE,
-                created_at timestamptz NOT NULL DEFAULT now(),
-                expires_at timestamptz NOT NULL,
-                decided_at timestamptz NULL,
-                version integer NOT NULL DEFAULT 1
-            );
-
-            CREATE TABLE IF NOT EXISTS public.player_decisions (
-                decision_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                request_id uuid NOT NULL,
-                assignment_id uuid NOT NULL,
-                subject_player_id text NOT NULL,
-                actor_type text NOT NULL DEFAULT 'player',
-                actor_id text NOT NULL,
-                decision text NOT NULL,
-                authority_basis text NOT NULL,
-                assignment_version integer NOT NULL,
-                assignment_hash text NOT NULL,
-                package_id text NOT NULL,
-                package_version text NOT NULL,
-                package_hash text NOT NULL,
-                notes text NOT NULL DEFAULT '',
-                authentication_evidence_id uuid NULL,
-                action_token_reference text NULL,
-                idempotency_key text UNIQUE,
-                decided_at timestamptz NOT NULL DEFAULT now(),
-                created_at timestamptz NOT NULL DEFAULT now()
-            );
-        """)
-
     def get_player_assignment(self, assignment_id: UUID | str) -> dict[str, Any] | None:
         """Retrieves player_assignment record by UUID PK."""
         with self.connect() as conn:
-            self._ensure_player_tables(conn)
             row = conn.execute(
                 "SELECT * FROM public.player_assignments WHERE assignment_id = %s",
                 (str(assignment_id),),
@@ -2469,7 +2758,6 @@ class IdentityStore:
     ) -> list[dict[str, Any]]:
         """Lists player_assignments scoped to exact club_id and subject_player_id."""
         with self.connect() as conn:
-            self._ensure_player_tables(conn)
             if status:
                 rows = conn.execute(
                     """
@@ -2511,7 +2799,6 @@ class IdentityStore:
         assignment_id = uuid4()
         cid = correlation_id or uuid4()
         with self.connect() as conn, conn.transaction():
-            self._ensure_player_tables(conn)
             row = conn.execute(
                 """
                 INSERT INTO public.player_assignments (
@@ -2558,7 +2845,6 @@ class IdentityStore:
         request_id = uuid4()
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         with self.connect() as conn, conn.transaction():
-            self._ensure_player_tables(conn)
             row = conn.execute(
                 """
                 INSERT INTO public.player_decision_requests (
@@ -2574,7 +2860,6 @@ class IdentityStore:
     def get_player_decision_request(self, request_id: UUID | str) -> dict[str, Any] | None:
         """Retrieves player decision request by UUID."""
         with self.connect() as conn:
-            self._ensure_player_tables(conn)
             row = conn.execute(
                 "SELECT * FROM public.player_decision_requests WHERE request_id = %s",
                 (str(request_id),),
@@ -2585,7 +2870,6 @@ class IdentityStore:
         """Retrieves active awaiting_player decision request for assignment."""
         now = datetime.now(timezone.utc)
         with self.connect() as conn:
-            self._ensure_player_tables(conn)
             row = conn.execute(
                 """
                 SELECT * FROM public.player_decision_requests
@@ -2618,12 +2902,14 @@ class IdentityStore:
         correlation_id: UUID | None = None,
     ) -> dict[str, Any]:
         """Atomically commits player decision, updates request & assignment status, and records audit event."""
+        if not authentication_evidence_id and not action_token_reference:
+            raise IdentityStoreError(422, "player decision requires authentication evidence or action token reference")
+
         cid = correlation_id or uuid4()
         decision_id = uuid4()
         now = datetime.now(timezone.utc)
 
         with self.connect() as conn, conn.transaction():
-            self._ensure_player_tables(conn)
             if idempotency_key:
                 existing = conn.execute(
                     "SELECT * FROM public.player_decisions WHERE idempotency_key = %s",
@@ -2657,6 +2943,18 @@ class IdentityStore:
             if str(assign["subject_player_id"]) != str(subject_player_id) or str(subject_player_id) != str(actor_id):
                 raise IdentityStoreError(403, "player actor does not match assignment subject")
 
+            req_update = conn.execute(
+                """
+                UPDATE public.player_decision_requests
+                SET status = 'decided', decided_at = now()
+                WHERE request_id = %s AND status = 'awaiting_player'
+                RETURNING *
+                """,
+                (str(request_id),),
+            ).fetchone()
+            if not req_update:
+                raise IdentityStoreError(409, "player decision request is not awaiting player or already decided")
+
             row = conn.execute(
                 """
                 INSERT INTO public.player_decisions (
@@ -2682,14 +2980,14 @@ class IdentityStore:
                 ),
             ).fetchone()
 
-            conn.execute(
-                "UPDATE public.player_decision_requests SET status = 'decided', decided_at = now() WHERE request_id = %s",
-                (str(request_id),),
-            )
-
             if decision == "pause":
                 conn.execute(
-                    "UPDATE public.player_assignments SET status = 'paused', updated_at = now() WHERE assignment_id = %s",
+                    """
+                    UPDATE public.player_assignments
+                    SET status = 'paused', updated_at = now()
+                    WHERE assignment_id = %s AND status = 'active'
+                    RETURNING *
+                    """,
                     (str(assignment_id),),
                 )
 

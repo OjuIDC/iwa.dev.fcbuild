@@ -102,6 +102,7 @@ class AuthorityBasis(str, Enum):
 
 class AuthLevel(str, Enum):
     """Session and token authentication strength levels (fc27_sessions.auth_level)."""
+    BOOTSTRAP_ENROLLMENT = "bootstrap_enrollment"
     AUTHENTICATED = "authenticated"
     MFA_TOTP = "mfa_totp"
     STEP_UP_PASSKEY = "step_up_passkey"
@@ -109,10 +110,12 @@ class AuthLevel(str, Enum):
 
 class AuthMethod(str, Enum):
     """Credential method used to produce the session/assertion."""
+    BOOTSTRAP = "bootstrap"
     PASSKEY = "passkey"
     TOTP = "totp"
     SERVICE_TOKEN = "service_token"
     RECOVERY_CODE = "recovery_code"
+    CLI_HMAC = "cli_hmac"
 
 
 class ActionType(str, Enum):
@@ -189,6 +192,16 @@ HUMAN_DECISION_ACTIONS = frozenset({
     ActionType.ASSIGNMENT_ACKNOWLEDGE,
     ActionType.DELEGATION_CREATE,
     ActionType.DELEGATION_REVOKE,
+    ActionType.USER_ROLE_ASSIGN,
+    ActionType.USER_ROLE_REVOKE,
+})
+
+# Actions strictly requiring WebAuthn Step-Up passkey verification (AuthLevel.STEP_UP_PASSKEY)
+STEP_UP_REQUIRED_ACTIONS = frozenset({
+    ActionType.PACKAGE_APPROVE,
+    ActionType.PACKAGE_REJECT,
+    ActionType.PACKAGE_REQUEST_REVISION,
+    ActionType.DELEGATION_CREATE,
     ActionType.USER_ROLE_ASSIGN,
     ActionType.USER_ROLE_REVOKE,
 })
@@ -378,8 +391,8 @@ class Resource:
         return cls(resource_type=resource_type, club_id=club_id, scope="club")
 
     @classmethod
-    def for_package(cls, club_id: str, package_id: str, *, scope: str = "club", version: str | None = None) -> "Resource":
-        return cls(resource_type="package", club_id=club_id, resource_id=package_id, scope=scope, version=version)
+    def for_package(cls, club_id: str, package_id: str, *, scope: str = "club", version: str | None = None, attributes: dict[str, Any] | None = None) -> "Resource":
+        return cls(resource_type="package", club_id=club_id, resource_id=package_id, scope=scope, version=version, attributes=attributes or {})
 
     @classmethod
     def for_assignment(
@@ -571,6 +584,7 @@ _BASE_ROLE_PERMISSIONS: dict[UserRole, frozenset[ActionType]] = {
     }),
     UserRole.PLAYER: frozenset({
         # Strictly object-scoped to self
+        ActionType.PACKAGE_VIEW,
         ActionType.ASSIGNMENT_VIEW,
         ActionType.ASSIGNMENT_CHALLENGE,
         ActionType.ASSIGNMENT_ACCEPT,
@@ -657,6 +671,19 @@ def authorize(
     # G-TIMEOUT Invariant Check on Resource Attributes
     if res.attributes.get("timeout_approved") or res.attributes.get("inactivity_approved"):
         raise AgentImpersonationError("inactivity or timeouts never authorize decisions (G-TIMEOUT invariant)")
+
+    # 0. Bootstrap Enrollment Session Quarantine
+    if principal.auth_level in {AuthLevel.BOOTSTRAP_ENROLLMENT, AuthLevel.BOOTSTRAP_ENROLLMENT.value}:
+        allowed_enrollment_actions = {
+            ActionType.PASSKEY_REGISTER,
+            ActionType.PASSKEY_VIEW,
+        }
+        if act not in allowed_enrollment_actions:
+            raise RoleNotPermittedError(
+                f"session with auth_level='{principal.auth_level}' is restricted to passkey registration and bootstrap completion",
+                action=act.value if isinstance(act, ActionType) else str(act),
+                resource_type=res.resource_type,
+            )
 
     # 2. Tenancy Isolation Guard (Club Tenancy)
     if not res.club_id:
@@ -845,12 +872,18 @@ def authorize(
                     resource_type=res.resource_type,
                 )
 
-    # 8. Step-Up Passkey Requirement for High-Value Decisions
-    if act in {ActionType.PACKAGE_APPROVE, ActionType.PACKAGE_REJECT}:
+    # 8. Step-Up Passkey Requirement for High-Value Decisions & Commissioner Security Decisions
+    is_dispatch_activation = (
+        res.action_type in {"club_dispatch_activation", "dispatch_activation"}
+        or res.attributes.get("dispatch_activation") is True
+        or (isinstance(act, str) and act in {"dispatch:activate", "club_dispatch_activation"})
+    )
+    if act in STEP_UP_REQUIRED_ACTIONS or is_dispatch_activation:
         if principal.auth_level != AuthLevel.STEP_UP_PASSKEY:
+            act_str = act.value if isinstance(act, ActionType) else str(act)
             raise StepUpRequiredError(
-                f"action '{act.value}' requires step-up passkey verification (auth_level=step_up_passkey)",
-                action=act.value,
+                f"action '{act_str}' requires step-up passkey verification (auth_level=step_up_passkey)",
+                action=act_str,
                 resource_type=res.resource_type,
             )
 

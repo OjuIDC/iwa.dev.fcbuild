@@ -128,6 +128,8 @@ async def get_current_principal(
             log.warning("error validating session token: %s", type(exc).__name__)
 
     # Step 3: Legacy Phase 1 Compatibility (Commissioner Token SHA-256 match)
+    # Invariant (§R5): Legacy bearer tokens MUST NOT become passkey principals
+    # and MUST NOT carry STEP_UP_PASSKEY auth level.
     legacy_auth = getattr(getattr(request.app.state, "settings", None), "authenticator", None)
     if legacy_auth is not None and hasattr(legacy_auth, "authenticate"):
         try:
@@ -138,10 +140,10 @@ async def get_current_principal(
                     user_id=UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
                     club_id=comm_club,
                     roles=[UserRole.COMMISSIONER],
-                    auth_level=AuthLevel.STEP_UP_PASSKEY,
-                    auth_method=AuthMethod.PASSKEY,
-                    is_service=False,
-                    display_name="Commissioner",
+                    auth_level=AuthLevel.AUTHENTICATED,
+                    auth_method=AuthMethod.CLI_HMAC,
+                    is_service=True,
+                    display_name="Commissioner CLI",
                 )
 
         except HTTPException:
