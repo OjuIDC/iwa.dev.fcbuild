@@ -824,7 +824,12 @@ def create_app(
             raise HTTPException(409, "approval_not_committed")
 
         res = resume_graph(thread_id)
-        return {"thread_id": thread_id, "status": row["status"], "graph_resume": res}
+        return {
+            "thread_id": thread_id,
+            "status": row["status"],
+            "graph_resume": res,
+            "approval_request_id": row.get("approval_request_id"),
+        }
 
     # --------------------------------------------------------------------------
     # Decision Challenge Endpoints
