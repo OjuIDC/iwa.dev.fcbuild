@@ -598,7 +598,8 @@ class ApprovalStore:
 
             dispatch_id: UUID | None = None
             if dispatch_enabled and intent.decision is DecisionKind.APPROVE and dispatch_creator is not None:
-                candidate = resolve_candidate(thread["state"], intent)
+                resolved = resolve_candidate(thread["state"], intent)
+                candidate = resolved[2] if resolved else None
                 try:
                     dispatch_id = dispatch_creator(
                         conn,

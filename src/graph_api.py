@@ -61,6 +61,8 @@ from .schemas import (
     ResumeResponse,
     RunProjection,
     SignedDecision,
+    Selection,
+    SwarmRole,
     DecisionSubmission,
 )
 from .security import Authenticator, Principal, Role, require_role
@@ -1053,13 +1055,14 @@ def create_app(
             )
 
             # Validate against authoritative persisted state
-            authoritative_candidate = resolve_candidate(thread_state, intent)
+            resolved = resolve_candidate(thread_state, intent)
 
             # Determine authoritative values for SignedDecision
             if signed_decision is DecisionKind.APPROVE:
-                # authoritative_candidate is the persisted candidate dict
-                auth_owner = intent.owner
-                auth_selection = intent.selection
+                # resolved is (auth_owner_key, auth_selection_key, candidate_dict)
+                auth_owner_key, auth_selection_key, authoritative_candidate = resolved
+                auth_owner = SwarmRole(auth_owner_key)
+                auth_selection = Selection(auth_selection_key)
                 auth_candidate_id = authoritative_candidate["candidate_id"]
                 auth_player_id = authoritative_candidate["player_id"]
             else:

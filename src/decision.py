@@ -32,22 +32,26 @@ def package_version(lead_packages: dict[str, Any] | None) -> str | None:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def resolve_candidate(state: dict[str, Any], intent: DecisionIntent) -> dict[str, Any] | None:
-    """Return the persisted candidate an APPROVE refers to, or None for REJECT/REQUEST_REVISION."""
+def resolve_candidate(state: dict[str, Any], intent: DecisionIntent) -> tuple[str, str, dict[str, Any]] | None:
+    """Return (authoritative_owner, authoritative_selection, persisted_candidate) for APPROVE, or None for REJECT/REQUEST_REVISION."""
     if intent.decision is DecisionKind.REJECT or getattr(intent.decision, "value", None) == "REQUEST_REVISION" or intent.decision == "REQUEST_REVISION":
         return None
     packages = state.get("lead_packages") or {}
-    package = packages.get(intent.owner.value)
+    # Authoritative owner key from persisted state
+    auth_owner_key = intent.owner.value
+    package = packages.get(auth_owner_key)
     if not isinstance(package, dict):
-        raise DecisionConflict(f"no lead package for owner {intent.owner.value}")
+        raise DecisionConflict(f"no lead package for owner {auth_owner_key}")
     if package.get("approvable") is False:
         raise DecisionConflict("lead package has no approvable candidates")
-    candidate = package.get(intent.selection.value)
+    # Authoritative selection key from persisted state
+    auth_selection_key = intent.selection.value
+    candidate = package.get(auth_selection_key)
     if not isinstance(candidate, dict):
-        raise DecisionConflict(f"selection {intent.selection.value} is not available in this package")
+        raise DecisionConflict(f"selection {auth_selection_key} is not available in this package")
     if candidate.get("candidate_id") != intent.candidate_id or candidate.get("player_id") != intent.player_id:
         raise DecisionConflict("decision does not match the persisted lead package")
-    return candidate
+    return auth_owner_key, auth_selection_key, candidate
 
 
 def apply_decision_to_state(state: dict[str, Any], intent: DecisionIntent, approved_by: str, decided_at: str) -> dict[str, Any]:
