@@ -251,6 +251,7 @@ class ResumeResponse(BaseModel):
     thread_id: str
     status: str
     graph_resume: str
+    approval_request_id: str | None = None
 
 
 class DecisionResponse(BaseModel):

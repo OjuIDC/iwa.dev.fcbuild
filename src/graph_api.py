@@ -828,7 +828,7 @@ def create_app(
             "thread_id": thread_id,
             "status": row["status"],
             "graph_resume": res,
-            "approval_request_id": row.get("approval_request_id"),
+            "approval_request_id": str(row["approval_request_id"]) if row.get("approval_request_id") else None,
         }
 
     # --------------------------------------------------------------------------
