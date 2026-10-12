@@ -35,6 +35,7 @@ from .approval_store import ApprovalStore, StoreError, request_hash
 from .correlation import CorrelationMiddleware
 from .db_migrate import migrate
 from .db_roles import check_runtime_posture, redact_conninfo
+from .decision import DecisionConflict, resolve_candidate
 from .dispatch.gates import (
     RECORDABLE_GATES,
     DeploymentIdentity,
@@ -47,6 +48,7 @@ from .graph import DECIDED_STATUSES
 from .schemas import (
     ApprovalRequestProjection,
     DecisionIntent,
+    DecisionKind,
     DecisionResponse,
     DispatchBlock,
     DispatchConfigResponse,
@@ -1017,21 +1019,74 @@ def create_app(
                 raise AgentImpersonationError(
                     f"service principal '{principal.user_id}' cannot commit decisions"
                 )
+
+            # Load authoritative thread state to validate decision against persisted lead packages
+            with store.connect() as conn:
+                thread_row = conn.execute(
+                    """SELECT state, package_version FROM public.graph_threads WHERE thread_id = %s""",
+                    (target_thread_id,),
+                ).fetchone()
+                if thread_row is None:
+                    raise HTTPException(404, "thread not found")
+                thread_state = thread_row["state"]
+                authoritative_pkg_version = thread_row["package_version"]
+
+            # Convert normalized decision to DecisionKind enum
+            decision_map = {
+                "approved": DecisionKind.APPROVE,
+                "rejected": DecisionKind.REJECT,
+                "revision_requested": DecisionKind.REQUEST_REVISION,
+            }
+            try:
+                signed_decision = decision_map[body.decision.lower()]
+            except KeyError:
+                raise HTTPException(422, f"unsupported decision: {body.decision}")
+
+            # Build DecisionIntent for validation against authoritative state
+            intent = DecisionIntent(
+                decision=signed_decision,
+                owner=body.owner,
+                selection=body.selection,
+                candidate_id=body.candidate_id,
+                player_id=body.player_id,
+                notes=body.notes or "",
+            )
+
+            # Validate against authoritative persisted state
+            authoritative_candidate = resolve_candidate(thread_state, intent)
+
+            # Determine authoritative values for SignedDecision
+            if signed_decision is DecisionKind.APPROVE:
+                # authoritative_candidate is the persisted candidate dict
+                auth_owner = intent.owner
+                auth_selection = intent.selection
+                auth_candidate_id = authoritative_candidate["candidate_id"]
+                auth_player_id = authoritative_candidate["player_id"]
+            else:
+                # REJECT and REQUEST_REVISION apply to whole thread
+                auth_owner = None
+                auth_selection = None
+                auth_candidate_id = None
+                auth_player_id = None
+
             now_ts = int(datetime.now(timezone.utc).timestamp())
             signed_obj = SignedDecision(
                 thread_id=target_thread_id,
-                decision=body.decision,
+                decision=signed_decision,
                 notes=body.notes or "",
-                package_version=body.package_version or target_pkg_version or 1,
+                package_version=body.package_version or authoritative_pkg_version or target_pkg_version or 1,
                 nonce=body.nonce or "",
                 issued_at=body.issued_at or now_ts,
                 expires_at=body.expires_at or (now_ts + 300),
                 signature=body.signature or body.hmac_signature or "",
+                owner=auth_owner,
+                selection=auth_selection,
+                candidate_id=auth_candidate_id,
+                player_id=auth_player_id,
             )
             legacy_p = Principal(
                 name=principal.display_name or "commissioner",
                 role=Role.commissioner,
-                club_id=principal.club_id,
             )
             return apply_decision_internal(request, target_thread_id, signed_obj, legacy_p)
 
