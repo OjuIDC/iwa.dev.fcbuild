@@ -212,6 +212,25 @@ def client_v1(pg_uri):
 
 
 @pytest.fixture()
+def client_v1_hmac(pg_uri):
+    """TestClient wired with full /v1/ routes and HMAC decision endpoints enabled."""
+    import os
+    # Set required service tokens for testing
+    os.environ.setdefault("BFF_SERVICE_TOKEN", "test-bff-service-token-0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("GRAPH_SERVICE_TOKEN", "test-graph-service-token-0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("APPROVAL_CLI_HMAC_ENABLED", "true")
+    
+    from tests.helpers import settings as make_settings
+    from src.graph_api import create_app
+    from tests.helpers import StubPipeline
+
+    hmac_settings = make_settings(pg_uri, cli_hmac_enabled=True)
+    app = create_app(hmac_settings, pipeline=StubPipeline(), publisher=lambda ch, payload: None)
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture()
 def api_settings_factory(pg_uri):
     """Factory creating ApiSettings with parameterized overrides."""
     from tests.helpers import settings

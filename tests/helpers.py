@@ -69,9 +69,21 @@ def signed(challenge: dict, secret: str = SIGNING_SECRET) -> dict:
     return {**challenge, "signature": approval.sign(challenge, secret)}
 
 
+def signed_cli_hmac(challenge: dict, secret: str = SIGNING_SECRET) -> dict:
+    """Create a CliHmacDecisionSubmission payload with proof_type and HMAC signature."""
+    # The challenge response has all the fields needed for CliHmacDecisionSubmission
+    # except proof_type and signature/hmac_signature
+    return {
+        **challenge,
+        "proof_type": "cli_hmac",
+        "hmac_signature": approval.sign(challenge, secret),
+    }
+
+
 APPROVE_COACH_BEST = {"decision": "APPROVE", "owner": "coach", "selection": "best",
                       "candidate_id": "coach-best-p1", "player_id": "p1", "notes": "ok"}
 REJECT = {"decision": "REJECT", "notes": "no"}
+REQUEST_REVISION = {"decision": "REQUEST_REVISION", "notes": "Please revise the tactical formation."}
 
 
 def legacy_install(admin_db_uri: str) -> None:
