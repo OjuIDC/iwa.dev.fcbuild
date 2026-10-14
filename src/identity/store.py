@@ -69,6 +69,18 @@ def _safe_record_event(conn: psycopg.Connection[Any], **kwargs: Any) -> int:
         conn.row_factory = old_factory
 
 
+BOOTSTRAP_ADVISORY_LOCK_KEY = "fc27:commissioner_bootstrap"
+
+
+def _acquire_bootstrap_advisory_lock(conn: psycopg.Connection[Any]) -> None:
+    """Blocks until this transaction holds the commissioner-bootstrap advisory lock.
+
+    Released automatically at COMMIT or ROLLBACK, so a failed ceremony never
+    leaves the lock held.
+    """
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (BOOTSTRAP_ADVISORY_LOCK_KEY,))
+
+
 class IdentityStore:
     """Authoritative PostgreSQL persistence layer for Phase 2 identity tables."""
 
@@ -98,8 +110,8 @@ class IdentityStore:
         "staff",
         "player",
     })
-    VALID_AUTH_LEVELS = {"authenticated", "mfa_totp", "step_up_passkey"}
-    VALID_AUTH_METHODS = {"passkey", "totp", "service_token", "recovery_code"}
+    VALID_AUTH_LEVELS = {"authenticated", "mfa_totp", "step_up_passkey", "bootstrap_enrollment"}
+    VALID_AUTH_METHODS = {"passkey", "totp", "service_token", "recovery_code", "bootstrap"}
     VALID_ACTION_SCOPES = {"player_decision", "step_up", "delegation", "invitation", "recovery"}
     VALID_CHALLENGE_TYPES = {
         "webauthn_registration",
@@ -882,12 +894,14 @@ class IdentityStore:
 
             if not row:
                 return None
-            if row["revoked_at"] is not None:
-                return None
             if row["user_status"] != "active" and row["auth_level"] != "bootstrap_enrollment":
+                if row["user_status"] in ("suspended", "disabled"):
+                    raise IdentityStoreError(401, f"account {row['user_status']}")
                 return None
+            if row["revoked_at"] is not None:
+                raise IdentityStoreError(401, "session revoked")
             if now > row["absolute_expires_at"] or now > row["idle_expires_at"]:
-                return None
+                raise IdentityStoreError(401, "session expired")
 
             if touch:
                 new_idle = min(now + timedelta(minutes=idle_ttl_minutes), row["absolute_expires_at"])
@@ -1645,9 +1659,15 @@ class IdentityStore:
         norm_login = login_id.strip().lower()
 
         with self.connect() as conn, conn.transaction():
+            # 0. Serialize concurrent ceremonies. FOR UPDATE on a lock row that does
+            #    not exist yet locks nothing (and fc27_app deliberately holds only
+            #    SELECT/INSERT on the immutable lock table), so a transaction-scoped
+            #    advisory lock makes the existence checks below race-free.
+            _acquire_bootstrap_advisory_lock(conn)
+
             # 1. Acquire and verify bootstrap lock
             existing_lock = conn.execute(
-                "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap' FOR UPDATE"
+                "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap'"
             ).fetchone()
             if existing_lock:
                 raise IdentityStoreError(409, "commissioner bootstrap ceremony is permanently locked")
@@ -1770,9 +1790,11 @@ class IdentityStore:
         enrollment_tok_hash = hash_token(enrollment_token)
 
         with self.connect() as conn, conn.transaction():
+            _acquire_bootstrap_advisory_lock(conn)
+
             # 1. Acquire and verify bootstrap lock does not exist
             existing_lock = conn.execute(
-                "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap' FOR UPDATE"
+                "SELECT 1 FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap'"
             ).fetchone()
             if existing_lock:
                 raise IdentityStoreError(409, "commissioner bootstrap ceremony is permanently locked")

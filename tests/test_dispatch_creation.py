@@ -30,6 +30,7 @@ from tests.helpers import (
     seed_verified_players,
     settings,
     signed,
+    signed_cli_hmac,
     start,
 )
 
@@ -56,7 +57,7 @@ def test_gates_block_by_default(pg_uri):
 
 def test_configured_but_blocked_behaves_disabled(pg_uri):
     """AC-45: dispatch_enabled=True settings, no gate records -> no dispatch, health blocked."""
-    app_settings = settings(pg_uri, dispatch_enabled=True, code_revision="rev1", deployment_id="dep1")
+    app_settings = settings(pg_uri, dispatch_enabled=True, cli_hmac_enabled=True, code_revision="rev1", deployment_id="dep1")
     app = create_app(app_settings, pipeline=StubPipeline(packages=fake_packages_dispatchable()))
 
     with TestClient(app) as client:
@@ -68,7 +69,7 @@ def test_configured_but_blocked_behaves_disabled(pg_uri):
 
         # Run pipeline and approve -> behaves as disabled
         tid = start(client)
-        r_dec = decide(client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"})
+        r_dec = decide(client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}, proof_type="cli_hmac")
         assert r_dec.status_code == 200, r_dec.text
         assert r_dec.json()["dispatch"]["enabled"] is False
         assert r_dec.json()["dispatch"]["created"] is False
@@ -78,22 +79,22 @@ def test_configured_but_blocked_behaves_disabled(pg_uri):
 # 2. Gate Cryptographic Challenge & Recording Tests
 # ------------------------------------------------------------------------------
 
-def test_gate_recording_requires_commissioner_and_signature(client_v1, pg_uri):
+def test_gate_recording_requires_commissioner_and_signature(client_v1_hmac, pg_uri):
     """Service token -> 403; G-WORKER -> 422; bad sig -> 403; valid -> 200 with effective_after."""
     # Ensure deployment identity on app settings
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
     # Service token rejected
-    r = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=SVC, json={})
+    r = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=SVC, json={})
     assert r.status_code == 403
 
     # Automatic gate rejected
-    r = client_v1.post("/v1/activation-gates/G-WORKER/challenge", headers=COM, json={})
+    r = client_v1_hmac.post("/v1/activation-gates/G-WORKER/challenge", headers=COM, json={})
     assert r.status_code == 422
 
     # Request valid challenge
-    r_ch = client_v1.post(
+    r_ch = client_v1_hmac.post(
         "/v1/activation-gates/G-ID/challenge",
         headers=COM,
         json={"status": "passed", "evidence_ref": "audit-ref-1"},
@@ -103,12 +104,12 @@ def test_gate_recording_requires_commissioner_and_signature(client_v1, pg_uri):
 
     # Bad signature rejected
     bad_sub = {**ch_payload, "signature": "0" * 64}
-    assert client_v1.post("/v1/activation-gates/G-ID", headers=COM, json=bad_sub).status_code == 403
+    assert client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json=bad_sub).status_code == 403
 
     # Valid signature accepted
     valid_sig = sign_gate(ch_payload, SIGNING_SECRET)
     good_sub = {**ch_payload, "signature": valid_sig}
-    r_sub = client_v1.post("/v1/activation-gates/G-ID", headers=COM, json=good_sub)
+    r_sub = client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json=good_sub)
     assert r_sub.status_code == 200, r_sub.text
     res = r_sub.json()
     assert res["gate"] == "G-ID"
@@ -124,83 +125,83 @@ def test_gate_recording_requires_commissioner_and_signature(client_v1, pg_uri):
         assert ev[2] == "G-ID"
 
 
-def test_gate_nonce_replay_rejected(client_v1):
+def test_gate_nonce_replay_rejected(client_v1_hmac):
     """Replay of signed gate submission -> 409; exactly 1 row in activation_gate_log."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
     assert r_ch.status_code == 200
     ch_payload = r_ch.json()
     sig = sign_gate(ch_payload, SIGNING_SECRET)
     body = {**ch_payload, "signature": sig}
 
     # First submit succeeds
-    assert client_v1.post("/v1/activation-gates/G-ID", headers=COM, json=body).status_code == 200
+    assert client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json=body).status_code == 200
 
     # Replay fails
-    r_replay = client_v1.post("/v1/activation-gates/G-ID", headers=COM, json=body)
+    r_replay = client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json=body)
     assert r_replay.status_code == 409
 
 
-def test_gate_nonce_expired_rejected(client_v1, pg_admin_db_uri):
+def test_gate_nonce_expired_rejected(client_v1_hmac, pg_admin_db_uri):
     """Expired nonce -> 409; 0 gate log rows created."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
     assert r_ch.status_code == 200
     ch = r_ch.json()
 
-    # Artificially expire the nonce
+    # Artificially expire the nonce (must also move issued_at to satisfy check constraint)
     with psycopg.connect(pg_admin_db_uri, autocommit=True) as conn:
         conn.execute(
-            "UPDATE public.approval_nonces SET expires_at = now() - interval '10 seconds' WHERE nonce = %s",
+            "UPDATE public.approval_nonces SET issued_at = now() - interval '20 seconds', expires_at = now() - interval '10 seconds' WHERE nonce = %s",
             (ch["nonce"],),
         )
 
     sig = sign_gate(ch, SIGNING_SECRET)
-    r_sub = client_v1.post("/v1/activation-gates/G-ID", headers=COM, json={**ch, "signature": sig})
+    r_sub = client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json={**ch, "signature": sig})
     assert r_sub.status_code == 409
 
 
-def test_gate_tampered_field_rejected(client_v1):
+def test_gate_tampered_field_rejected(client_v1_hmac):
     """Modifying evidence_ref, code_revision, or nonce after signing -> 403."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
     assert r_ch.status_code == 200
     ch = r_ch.json()
     sig = sign_gate(ch, SIGNING_SECRET)
 
     # Tamper evidence_ref
     tampered = {**ch, "evidence_ref": "tampered-ref", "signature": sig}
-    assert client_v1.post("/v1/activation-gates/G-ID", headers=COM, json=tampered).status_code == 403
+    assert client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json=tampered).status_code == 403
 
 
-def test_gate_nonce_bound_to_gate(client_v1):
+def test_gate_nonce_bound_to_gate(client_v1_hmac):
     """Challenge for G-ID, submit to G-ATOMIC -> 409; 0 log rows."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
     assert r_ch.status_code == 200
     ch = r_ch.json()
 
     # Re-target body to G-ATOMIC
     ch["gate_id"] = "G-ATOMIC"
     sig = sign_gate(ch, SIGNING_SECRET)
-    r_sub = client_v1.post("/v1/activation-gates/G-ATOMIC", headers=COM, json={**ch, "signature": sig})
+    r_sub = client_v1_hmac.post("/v1/activation-gates/G-ATOMIC", headers=COM, json={**ch, "signature": sig})
     assert r_sub.status_code == 409
 
 
-def test_gate_requires_deployment_identity(client_v1):
+def test_gate_requires_deployment_identity(client_v1_hmac):
     """Empty code_revision or deployment_id -> 409 deployment_identity_missing."""
-    client_v1.app.state.settings.code_revision = None
-    client_v1.app.state.settings.deployment_id = None
+    client_v1_hmac.app.state.settings.code_revision = None
+    client_v1_hmac.app.state.settings.deployment_id = None
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={})
     assert r_ch.status_code == 409
     assert "deployment_identity_missing" in r_ch.text
 
@@ -226,18 +227,18 @@ def test_gate_record_from_other_deployment_ignored(pg_uri, pg_admin_db_uri):
     assert g_id.passed is False
 
 
-def test_gate_signature_excludes_correlation_id(client_v1):
+def test_gate_signature_excludes_correlation_id(client_v1_hmac):
     """Varying X-Correlation-Id produces valid verification because it's not signed."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers={**COM, "X-Correlation-Id": str(uuid.uuid4())}, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers={**COM, "X-Correlation-Id": str(uuid.uuid4())}, json={})
     assert r_ch.status_code == 200
     ch = r_ch.json()
     sig = sign_gate(ch, SIGNING_SECRET)
 
     # Submit with completely different correlation id
-    r_sub = client_v1.post(
+    r_sub = client_v1_hmac.post(
         "/v1/activation-gates/G-ID",
         headers={**COM, "X-Correlation-Id": str(uuid.uuid4())},
         json={**ch, "signature": sig},
@@ -245,37 +246,37 @@ def test_gate_signature_excludes_correlation_id(client_v1):
     assert r_sub.status_code == 200
 
 
-def test_g_outbox_not_recordable_in_phase1(client_v1):
+def test_g_outbox_not_recordable_in_phase1(client_v1_hmac):
     """C-3: G-OUTBOX challenge and record returns 409 not_recordable_before_phase_3."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1.post("/v1/activation-gates/G-OUTBOX/challenge", headers=COM, json={})
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-OUTBOX/challenge", headers=COM, json={})
     assert r_ch.status_code == 409
     assert "not_recordable_before_phase_3" in r_ch.text
 
 
-def test_gate_change_applies_on_next_evaluation(client_v1):
+def test_gate_change_applies_on_next_evaluation(client_v1_hmac):
     """C-1: Recording gate does not take effect until reevaluate_gates runs; no server restart needed."""
-    client_v1.app.state.settings.code_revision = "rev1"
-    client_v1.app.state.settings.deployment_id = "dep1"
-    reevaluate_gates(client_v1.app)
+    client_v1_hmac.app.state.settings.code_revision = "rev1"
+    client_v1_hmac.app.state.settings.deployment_id = "dep1"
+    reevaluate_gates(client_v1_hmac.app)
 
-    r_cfg1 = client_v1.get("/v1/config/dispatch", headers=COM).json()
+    r_cfg1 = client_v1_hmac.get("/v1/config/dispatch", headers=COM).json()
     assert any(g["gate_id"] == "G-ID" and not g["passed"] for g in r_cfg1["gates"])
 
     # Challenge and record G-ID
-    r_ch = client_v1.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={}).json()
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-ID/challenge", headers=COM, json={}).json()
     sig = sign_gate(r_ch, SIGNING_SECRET)
-    assert client_v1.post("/v1/activation-gates/G-ID", headers=COM, json={**r_ch, "signature": sig}).status_code == 200
+    assert client_v1_hmac.post("/v1/activation-gates/G-ID", headers=COM, json={**r_ch, "signature": sig}).status_code == 200
 
     # Config endpoint still reflects cached report
-    r_cfg2 = client_v1.get("/v1/config/dispatch", headers=COM).json()
+    r_cfg2 = client_v1_hmac.get("/v1/config/dispatch", headers=COM).json()
     assert any(g["gate_id"] == "G-ID" and not g["passed"] for g in r_cfg2["gates"])
 
     # Directly reevaluate gates without restarting graph-api (C-1)
-    reevaluate_gates(client_v1.app)
-    r_cfg3 = client_v1.get("/v1/config/dispatch", headers=COM).json()
+    reevaluate_gates(client_v1_hmac.app)
+    r_cfg3 = client_v1_hmac.get("/v1/config/dispatch", headers=COM).json()
     assert any(g["gate_id"] == "G-ID" and g["passed"] for g in r_cfg3["gates"])
 
 
@@ -294,6 +295,7 @@ def test_correlation_id_shared_by_dispatch_and_events(enabled_client, pg_uri):
         tid,
         intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"},
         headers=headers,
+        proof_type="cli_hmac",
     )
     assert r_dec.status_code == 200, r_dec.text
     dispatch_id = r_dec.json()["dispatch"]["dispatch_id"]
@@ -321,6 +323,7 @@ def test_approve_creates_dispatch_atomically(enabled_client, pg_uri):
         enabled_client,
         tid,
         intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"},
+        proof_type="cli_hmac",
     )
     assert r_dec.status_code == 200, r_dec.text
     dec_data = r_dec.json()
@@ -332,8 +335,8 @@ def test_approve_creates_dispatch_atomically(enabled_client, pg_uri):
     with psycopg.connect(pg_uri) as conn:
         d_row = conn.execute(
             """SELECT dispatch_id, dispatch_status, player_id, candidate_id, owner,
-                      approval_id, approval_request_id, package_version
-                 FROM public.dispatches WHERE dispatch_id = %s""",
+                  approval_id, approval_request_id, package_version
+               FROM public.dispatches WHERE dispatch_id = %s""",
             (dispatch_id,),
         ).fetchone()
         assert d_row is not None
@@ -371,6 +374,7 @@ def test_dispatch_failure_rolls_back_decision(enabled_client, pg_admin_db_uri):
             enabled_client,
             tid,
             intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"},
+            proof_type="cli_hmac",
         )
         assert r_dec.status_code in (409, 500)
 
@@ -404,7 +408,7 @@ def test_not_dispatchable_without_objective(enabled_client):
     enabled_client.pipeline.packages = pkgs
 
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"})
+    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}, proof_type="cli_hmac")
     assert r.status_code == 409
     assert "not_dispatchable" in r.text
 
@@ -413,7 +417,7 @@ def test_not_dispatchable_gamertag_player(enabled_client):
     """AC-46: Candidate player_id 'GamerTag99' -> 409 not_dispatchable."""
     enabled_client.pipeline.packages = fake_packages_dispatchable(player_ids=("GamerTag99",))
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "GamerTag99", "candidate_id": "coach-best-GamerTag99"})
+    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "GamerTag99", "candidate_id": "coach-best-GamerTag99"}, proof_type="cli_hmac")
     assert r.status_code == 409
     assert "not_dispatchable" in r.text
 
@@ -424,7 +428,7 @@ def test_not_dispatchable_unverified_player(enabled_client, pg_admin_db_uri):
         conn.execute("UPDATE public.players SET identity_verified_at = NULL WHERE player_id = '1001'")
 
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"})
+    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}, proof_type="cli_hmac")
     assert r.status_code == 409
     assert "not_dispatchable" in r.text
 
@@ -440,7 +444,7 @@ def test_player_id_is_compared_exactly(enabled_client, pg_admin_db_uri):
 
     enabled_client.pipeline.packages = fake_packages_dispatchable(player_ids=("007",))
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "007", "candidate_id": "coach-best-007"})
+    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "007", "candidate_id": "coach-best-007"}, proof_type="cli_hmac")
     assert r.status_code == 409
     assert "not_dispatchable" in r.text
 
@@ -449,7 +453,7 @@ def test_not_dispatchable_unknown_player(enabled_client):
     """Numeric player_id absent from players table -> 409 not_dispatchable."""
     enabled_client.pipeline.packages = fake_packages_dispatchable(player_ids=("999999",))
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "999999", "candidate_id": "coach-best-999999"})
+    r = decide(enabled_client, tid, intent={**APPROVE_COACH_BEST, "player_id": "999999", "candidate_id": "coach-best-999999"}, proof_type="cli_hmac")
     assert r.status_code == 409
     assert "not_dispatchable" in r.text
 
@@ -461,7 +465,7 @@ def test_not_dispatchable_unknown_player(enabled_client):
 def test_reject_creates_no_dispatch(enabled_client, pg_uri):
     """REJECT decision updates thread to rejected, creates 0 dispatch rows."""
     tid = start(enabled_client)
-    r = decide(enabled_client, tid, intent={"decision": "REJECT", "notes": "declined"})
+    r = decide(enabled_client, tid, intent={"decision": "REJECT", "notes": "declined"}, proof_type="cli_hmac")
     assert r.status_code == 200
     assert r.json()["dispatch"]["created"] is False
     assert r.json()["dispatch"]["dispatch_id"] is None
@@ -475,7 +479,7 @@ def test_supersede_is_atomic(enabled_client, pg_uri):
     """AC-9: Second approval transitions prior dispatch to superseded (superseded_by=new_id)."""
     # First approval -> dispatch 1
     tid1 = start(enabled_client)
-    r1 = decide(enabled_client, tid1, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"})
+    r1 = decide(enabled_client, tid1, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}, proof_type="cli_hmac")
     assert r1.status_code == 200
     d1_id = r1.json()["dispatch"]["dispatch_id"]
 
@@ -486,7 +490,7 @@ def test_supersede_is_atomic(enabled_client, pg_uri):
 
     # Second approval for same player/owner/metric -> dispatch 2 supersedes dispatch 1
     tid2 = start(enabled_client)
-    r2 = decide(enabled_client, tid2, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"})
+    r2 = decide(enabled_client, tid2, intent={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}, proof_type="cli_hmac")
     assert r2.status_code == 200
     d2_id = r2.json()["dispatch"]["dispatch_id"]
     assert d2_id != d1_id
@@ -510,8 +514,8 @@ def test_concurrent_supersede_is_serialized(enabled_client, pg_uri):
     ch1 = enabled_client.post(f"/threads/{tid1}/decision-challenge", headers=COM, json={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}).json()
     ch2 = enabled_client.post(f"/threads/{tid2}/decision-challenge", headers=COM, json={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"}).json()
 
-    sub1 = signed(ch1)
-    sub2 = signed(ch2)
+    sub1 = signed_cli_hmac(ch1)
+    sub2 = signed_cli_hmac(ch2)
 
     def submit(tid, body):
         return enabled_client.post(f"/threads/{tid}/decision", headers=COM, json=body)
@@ -547,7 +551,7 @@ def test_parallel_duplicate_approvals_single_dispatch(enabled_client, pg_uri):
         headers=COM,
         json={**APPROVE_COACH_BEST, "player_id": "1001", "candidate_id": "coach-best-1001"},
     ).json()
-    sub = signed(ch)
+    sub = signed_cli_hmac(ch)
 
     def submit():
         return enabled_client.post(f"/threads/{tid}/decision", headers=COM, json=sub)

@@ -12,6 +12,16 @@ SERVICE_TOKEN = "svc-test-token-0123456789abcdef0123456789abcdef"
 COMMISSIONER_TOKEN = "commissioner-test-token-0123456789abcdef01234567"
 SIGNING_SECRET = "signing-test-secret-0123456789abcdef0123456789ab"
 COMMISSIONER_ID = "batmanL8"
+# Test-only bootstrap secret (never used outside the test suite). Satisfies the
+# bootstrap secret quality policy in src/identity/recovery.py.
+TEST_BOOTSTRAP_TOKEN = "bootstrap-testsuite-7Qm2Xv9Lk4Rt8Np3Wz6Hc1Jd5Fs0Gb"
+# Test-only Phase 2 identity configuration. Never used outside the test suite.
+TEST_IDENTITY_ENV = {
+    "BFF_SERVICE_TOKEN": "test-bff-service-token-0123456789abcdef0123456789abcdef",
+    "GRAPH_SERVICE_TOKEN": "test-graph-service-token-0123456789abcdef0123456789abcdef",
+    # 44-char urlsafe base64 Fernet key (32 bytes of 0x01..0x20); test-only.
+    "IDENTITY_ENCRYPTION_KEY": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+}
 SVC = {"X-API-Key": SERVICE_TOKEN}
 COM = {"X-API-Key": COMMISSIONER_TOKEN}
 
@@ -121,10 +131,12 @@ def start(client, **extra) -> str:
     return r.json()["thread_id"]
 
 
-def decide(client, tid, intent=APPROVE_COACH_BEST, headers=COM):
+def decide(client, tid, intent=APPROVE_COACH_BEST, headers=COM, proof_type=None):
     ch = client.post(f"/threads/{tid}/decision-challenge", headers=headers, json=intent)
     if ch.status_code != 200:
         return ch
+    if proof_type == "cli_hmac":
+        return client.post(f"/threads/{tid}/decision", headers=headers, json=signed_cli_hmac(ch.json()))
     return client.post(f"/threads/{tid}/decision", headers=headers, json=signed(ch.json()))
 
 

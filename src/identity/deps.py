@@ -38,7 +38,8 @@ from src.identity.services import (
     get_service_credentials,
     match_service_token,
 )
-from src.identity.store import IdentityStore
+from src.identity.store import IdentityStore, IdentityStoreError
+from src.settings import ConfigError
 
 log = logging.getLogger("fc27.identity.deps")
 
@@ -73,7 +74,17 @@ async def get_current_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    creds = get_service_credentials()
+    try:
+        creds = get_service_credentials()
+    except ConfigError as exc:
+        # Fail closed: never fall through to session/legacy auth when the
+        # service-credential boundary is misconfigured. Variable names only;
+        # ConfigError messages never contain secret values.
+        log.error("identity subsystem unavailable: service credentials invalid (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="identity_unavailable: service credentials are not configured",
+        ) from None
 
     # Step 1: Check M2M Service Identities
     svc_principal = match_service_token(raw_token, creds)
@@ -124,6 +135,14 @@ async def get_current_principal(
                     is_service=False,
                     display_name=display_name,
                 )
+        except IdentityStoreError as exc:
+            if exc.status_code == 401 and exc.detail and (exc.detail.startswith("account ") or exc.detail in ("session revoked", "session expired")):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=exc.detail,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            log.warning("error validating session token: %s", type(exc).__name__)
         except Exception as exc:
             log.warning("error validating session token: %s", type(exc).__name__)
 
@@ -142,7 +161,7 @@ async def get_current_principal(
                     roles=[UserRole.COMMISSIONER],
                     auth_level=AuthLevel.AUTHENTICATED,
                     auth_method=AuthMethod.CLI_HMAC,
-                    is_service=True,
+                    is_service=False,
                     display_name="Commissioner CLI",
                     legacy_actor_id=legacy_p.name,
                 )

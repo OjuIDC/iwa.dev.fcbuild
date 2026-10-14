@@ -1,12 +1,24 @@
 .env
-.env.models
+.env.*
+.env.local
+.env.*.local
 *.log
 __pycache__/
 .pytest_cache/
+.coverage
+htmlcov/
 reports/model_benchmark_results.json
 agent_workspace/
 *.egg-info/
 secrets/
+*.code-workspace
+debug_tests.py
+tests/test_*.pyc
+tests/test_*_secret*
 
 # Transient multi-agent runtime state (never commit)
 .agents/teamwork/
+
+# Local compose overrides
+docker-compose.override.yml
+docker-compose.local.yml

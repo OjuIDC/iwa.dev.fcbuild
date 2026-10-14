@@ -255,7 +255,7 @@ class TestInvitationsValidation:
         # Force expiration in PostgreSQL
         with psycopg.connect(pg_uri) as conn:
             conn.execute(
-                "UPDATE public.fc27_invitations SET expires_at = now() - interval '1 hour' WHERE invitation_id = %s",
+                "UPDATE public.fc27_invitations SET issued_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' WHERE invitation_id = %s",
                 (inv["invitation_id"],),
             )
 
@@ -339,6 +339,14 @@ class TestInvitationsConsumption:
 
     def test_consume_player_invitation_with_player_id(self, client, pg_uri: str):
         """Player invitation consumption records numeric player_id."""
+        # Create a player first
+        player_id = "887766"
+        with psycopg.connect(pg_uri) as conn:
+            conn.execute(
+                "INSERT INTO public.players (player_id, club_id, display_name, platform) VALUES (%s, %s, %s, %s)",
+                (player_id, TEST_CLUB_ID, "Test Player", "common-gen5"),
+            )
+
         inv = client.post(
             "/v1/auth/invitations",
             headers=COM_HEADERS,
@@ -348,7 +356,7 @@ class TestInvitationsConsumption:
 
         res = client.post(
             f"/v1/auth/invitations/{token}/consume",
-            json={"display_name": "Striker Legend", "player_id": "887766"},
+            json={"display_name": "Striker Legend", "player_id": player_id},
         )
         assert res.status_code == 200
         data = res.json()

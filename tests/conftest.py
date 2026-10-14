@@ -60,7 +60,23 @@ def pg_admin_uri() -> str:
 
 
 from fastapi.testclient import TestClient
-from tests.helpers import make_app
+from tests.helpers import TEST_BOOTSTRAP_TOKEN, TEST_IDENTITY_ENV, make_app
+
+
+@pytest.fixture(autouse=True)
+def _bootstrap_secret_env(monkeypatch):
+    """Provision an explicit test-only bootstrap secret.
+
+    The application has no fallback bootstrap value; tests that exercise the
+    unconfigured (fail-closed) path delete these variables themselves.
+    """
+    monkeypatch.delenv("BOOTSTRAP_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("BOOTSTRAP_TOKEN", TEST_BOOTSTRAP_TOKEN)
+    # Phase 2 identity configuration (test-only values). setdefault semantics so
+    # suites that pin their own values (e.g. tests/e2e) keep them.
+    for name, value in TEST_IDENTITY_ENV.items():
+        if not os.environ.get(name) and not os.environ.get(f"{name}_FILE"):
+            monkeypatch.setenv(name, value)
 
 @pytest.fixture()
 def client(pg_uri):
@@ -555,6 +571,7 @@ def enabled_client(pg_db_migrated, pg_admin_db_uri):
     app_settings = settings(
         pg_uri,
         dispatch_enabled=True,
+        cli_hmac_enabled=True,
         code_revision=TEST_CODE_REVISION,
         deployment_id=TEST_DEPLOYMENT_ID,
     )

@@ -54,8 +54,8 @@ from src.identity.policy import (
     UserRole,
     authorize,
 )
+from tests.helpers import TEST_BOOTSTRAP_TOKEN as DEFAULT_BOOTSTRAP_TOKEN
 from src.identity.recovery import (
-    DEFAULT_BOOTSTRAP_TOKEN,
     BootstrapResult,
     BootstrapService,
     RecoveryResult,

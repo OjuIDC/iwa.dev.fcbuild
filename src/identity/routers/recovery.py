@@ -165,6 +165,11 @@ async def init_bootstrap_ceremony(
     store: IdentityStore = Depends(get_identity_store),
 ) -> Any:
     service = BootstrapService(store)
+    if not service.is_bootstrap_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="bootstrap_disabled: bootstrap secret is not configured",
+        )
     if service.is_bootstrapped(payload.club_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="bootstrap already locked")
     if not service.validate_bootstrap_token(payload.bootstrap_token):

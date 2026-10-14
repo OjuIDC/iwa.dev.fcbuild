@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.e2e.conftest import COM_HEADERS, SVC_HEADERS
+from tests.helpers import TEST_BOOTSTRAP_TOKEN
 from tests.e2e.phase2_helpers import (
     BFF_HEADERS,
     BFF_SERVICE_TOKEN,
@@ -94,7 +95,7 @@ class TestUsersRolesAndBootstrapFeatures:
             "login_identifier": "commissioner.primary@fc27.club",
             "display_name": "Commissioner Primary",
             "club_id": TEST_CLUB_ID,
-            "bootstrap_token": "bootstrap_secret_token_123",
+            "bootstrap_token": TEST_BOOTSTRAP_TOKEN,
         }
         res = client.post("/v1/auth/bootstrap", json=boot_req)
         # If bootstrap is already complete or succeeds, status is 201 or 409
@@ -109,7 +110,7 @@ class TestUsersRolesAndBootstrapFeatures:
             "login_identifier": "commissioner.attacker@fc27.club",
             "display_name": "Attacker",
             "club_id": TEST_CLUB_ID,
-            "bootstrap_token": "bootstrap_secret_token_123",
+            "bootstrap_token": TEST_BOOTSTRAP_TOKEN,
         }
         res = client.post("/v1/auth/bootstrap", json=boot_req)
         assert res.status_code in (403, 409)

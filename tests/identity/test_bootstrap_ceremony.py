@@ -31,7 +31,7 @@ from src.identity.policy import (
     UserRole,
     authorize,
 )
-from src.identity.recovery import DEFAULT_BOOTSTRAP_TOKEN
+from tests.helpers import TEST_BOOTSTRAP_TOKEN as DEFAULT_BOOTSTRAP_TOKEN
 from src.identity.store import IdentityStore
 from tests.e2e.phase2_helpers import session_header
 
@@ -75,10 +75,13 @@ def test_bootstrap_enrollment_session_quarantine_policy():
 
 def test_bootstrap_ceremony_full_lifecycle(client, store: IdentityStore, pg_uri: str):
     """Test full multi-step ceremony from bootstrap -> quarantine -> completion -> permanent lock."""
-    # Ensure database is clean of prior bootstrap locks
+    # Each test runs in a fresh database; fc27_app cannot DELETE from the immutable
+    # lock table, so assert the clean starting state instead of mutating it.
     with psycopg.connect(pg_uri, autocommit=True) as conn:
-        conn.execute("DELETE FROM public.fc27_bootstrap_locks WHERE lock_id = 'commissioner_bootstrap'")
-        conn.execute("DELETE FROM public.fc27_users WHERE login_id = 'commissioner.r7@fc27.club'")
+        assert conn.execute("SELECT count(*) FROM public.fc27_bootstrap_locks").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT count(*) FROM public.fc27_users WHERE login_id = 'commissioner.r7@fc27.club'"
+        ).fetchone()[0] == 0
 
     # 1. Initiate bootstrap
     bootstrap_payload = {

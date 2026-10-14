@@ -36,8 +36,8 @@ import pytest
 
 from src.db_migrate import GRANTS_POLICY
 from src.identity.crypto import hash_recovery_code, verify_recovery_code
+from tests.helpers import TEST_BOOTSTRAP_TOKEN as DEFAULT_BOOTSTRAP_TOKEN
 from src.identity.recovery import (
-    DEFAULT_BOOTSTRAP_TOKEN,
     DEFAULT_RECOVERY_CODE_COUNT,
     BootstrapResult,
     BootstrapService,

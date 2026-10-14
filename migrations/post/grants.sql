@@ -1,4 +1,4 @@
--- grants-policy-version: 9
+-- grants-policy-version: 10
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -91,8 +91,8 @@ BEGIN
     END IF;
 
     IF to_regclass('public.dispatches') IS NOT NULL THEN
-        -- CRITICAL: NO UPDATE, NO DELETE on dispatches for any runtime role!
-        GRANT SELECT, INSERT ON public.dispatches TO fc27_app;
+        -- UPDATE required for SELECT FOR UPDATE in supersession logic (dispatch/creation.py)
+        GRANT SELECT, INSERT, UPDATE ON public.dispatches TO fc27_app;
         GRANT SELECT ON public.dispatches TO fc27_dispatch;
     END IF;
 

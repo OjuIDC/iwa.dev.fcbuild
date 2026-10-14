@@ -152,7 +152,8 @@ def transition(
                     patch_payload,
                 ),
             )
-            new_version = cur.fetchone()[0]
+            row = cur.fetchone()
+            new_version = row["fc27_dispatch_transition"]
             return int(new_version)
 
     except psycopg.Error as exc:

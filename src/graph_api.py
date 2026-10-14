@@ -93,6 +93,8 @@ from src.identity.routers import (
     users_router,
 )
 from src.identity.store import IdentityStore, IdentityStoreError
+from src.identity.crypto import CryptoKeyError
+from src.identity.readiness import identity_readiness
 
 
 log = logging.getLogger("fc27.graph_api")
@@ -389,6 +391,16 @@ def create_app(
     async def identity_store_error_handler(_request: Request, exc: IdentityStoreError):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
+    @app.exception_handler(CryptoKeyError)
+    async def identity_crypto_unavailable_handler(_request: Request, exc: CryptoKeyError):
+        # Fail closed for TOTP and other identity-cryptography operations when
+        # IDENTITY_ENCRYPTION_KEY is absent or malformed. Never echo key material.
+        log.error("identity cryptography unavailable (%s)", type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "identity_crypto_unavailable: identity encryption key is not configured"},
+        )
+
     @app.exception_handler(AuthorizationError)
     async def authorization_error_handler(_request: Request, exc: AuthorizationError):
         return JSONResponse(
@@ -475,6 +487,20 @@ def create_app(
                 },
             )
 
+        identity = identity_readiness()
+        if not identity["ready"]:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "ready": False,
+                    "reason": "identity subsystem not ready",
+                    "identity": identity,
+                    "dispatch": "disabled",
+                    "dispatch_enabled": False,
+                },
+            )
+
         return {
             "status": "ok",
             "ready": True,
@@ -482,6 +508,7 @@ def create_app(
             "db_role_posture": "ok",
             "approval_consistency": 0,
             "checkpointer": "ok",
+            "identity": identity,
             "dispatch": "disabled",
             "dispatch_enabled": False,
             "fc_version": FC_VERSION,
@@ -616,10 +643,10 @@ def create_app(
                     SELECT nonce, gate_id, payload_sha256, consumed_at, revoked_at,
                            extract(epoch FROM expires_at)::bigint AS expires_at,
                            now() > expires_at AS expired,
-                           to_char(now() + interval '60 seconds' AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_eval
-                      FROM public.approval_nonces
-                     WHERE nonce = %s
-                       FOR UPDATE
+                           to_char((now() + interval '60 seconds') AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_eval
+                     FROM public.approval_nonces
+                    WHERE nonce = %s
+                      FOR UPDATE
                     """,
                     (body.nonce,),
                 )
@@ -678,6 +705,7 @@ def create_app(
                     actor=f"commissioner:{p.name}",
                     correlation_id=cid,
                     visibility="audit_only",
+                    scope_club_id=None,
                     source_table="activation_gate_log",
                     source_id=str(log_id),
                 )
@@ -994,9 +1022,6 @@ def create_app(
                         is_expired = r_row["is_expired"]
             else:
                 raise HTTPException(400, "missing target identifier")
-
-        if req_status != "awaiting_approval" or is_expired:
-            raise HTTPException(409, "approval_expired")
 
         action_map = {
             "approved": ActionType.PACKAGE_APPROVE,

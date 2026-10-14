@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests.helpers import TEST_BOOTSTRAP_TOKEN as DEFAULT_BOOTSTRAP_TOKEN
 from src.identity.recovery import (
-    DEFAULT_BOOTSTRAP_TOKEN,
     DEFAULT_RECOVERY_CODE_COUNT,
     BootstrapResult,
     BootstrapService,

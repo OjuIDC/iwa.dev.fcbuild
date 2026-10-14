@@ -120,10 +120,10 @@ class TestSessionInspection:
     def test_expired_session_returns_401(self, client, pg_uri: str, active_coach):
         """Session past idle expiration returns HTTP 401."""
         _, raw_token, sess = active_coach
-        # Set idle_expires_at in past
+        # Set idle_expires_at in past (and created_at before it to satisfy check constraint)
         with psycopg.connect(pg_uri) as conn:
             conn.execute(
-                "UPDATE public.fc27_sessions SET idle_expires_at = now() - interval '5 minutes' WHERE session_id = %s",
+                "UPDATE public.fc27_sessions SET created_at = now() - interval '10 minutes', idle_expires_at = now() - interval '5 minutes' WHERE session_id = %s",
                 (sess["session_id"],),
             )
 

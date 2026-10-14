@@ -198,7 +198,8 @@ def test_session_dual_expiry_and_rotation(store):
     assert new_sess["auth_level"] == "step_up_passkey"
 
     # Old token is now invalid / revoked
-    assert store.get_session_by_token(raw_token) is None
+    with pytest.raises(IdentityStoreError, match="session revoked"):
+        store.get_session_by_token(raw_token)
 
     # New token is active
     assert store.get_session_by_token(new_raw_token) is not None
@@ -206,7 +207,8 @@ def test_session_dual_expiry_and_rotation(store):
     # 4. Revoke all user sessions
     count = store.revoke_all_user_sessions(user_id, actor="admin")
     assert count >= 1
-    assert store.get_session_by_token(new_raw_token) is None
+    with pytest.raises(IdentityStoreError, match="session revoked"):
+        store.get_session_by_token(new_raw_token)
 
 
 # =====================================================================
@@ -253,7 +255,7 @@ def test_totp_credential_storage_and_rotation(store, crypto_key, older_crypto_ke
 # 5. Recovery Codes Tests
 # =====================================================================
 
-def test_recovery_codes_batch_and_consumption(store):
+def test_recovery_codes_batch_and_consumption(store, pg_admin_db_uri):
     user = store.create_user(
         club_id="500",
         login_id=f"rec_{secrets.token_hex(4)}@fc27.com",
@@ -280,9 +282,9 @@ def test_recovery_codes_batch_and_consumption(store):
     # Invalid code fails
     assert store.verify_and_consume_recovery_code(user_id, "INVALID-CODE", actor="commissioner") is False
 
-    # Deleting recovery code is rejected by trigger
+    # Deleting recovery code is rejected by trigger (use admin connection which has DELETE privilege)
     with pytest.raises(psycopg.errors.CheckViolation, match="is append-only"):
-        with store.connect() as conn, conn.transaction():
+        with psycopg.connect(pg_admin_db_uri, autocommit=True) as conn:
             conn.execute("DELETE FROM public.fc27_recovery_codes WHERE code_id = %s", (code_ids[0],))
 
 

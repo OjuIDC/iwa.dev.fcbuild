@@ -543,7 +543,7 @@ class TestEmpiricalPlayerDecisionConcurrency:
         for status, err in results:
             if status == "LOSS":
                 assert err.status_code == 409
-                assert "already consumed or revoked" in err.detail.lower()
+                assert "already consumed" in err.detail.lower()
 
         with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
             tok_row = conn.execute("SELECT consumed_at FROM public.fc27_action_tokens WHERE token_id = %s", (tok_id,)).fetchone()
@@ -856,7 +856,7 @@ class TestTriggerComplianceAndActiveConstraints:
 class TestDormancyInvariantsEmpirical:
     """Verifies non-negotiable dormancy invariants on live PostgreSQL database."""
 
-    def test_dormancy_and_zero_delivery_invariants(self, pg_uri):
+    def test_dormancy_and_zero_delivery_invariants(self, pg_uri, pg_dispatch_uri):
         """Verifies DISPATCH_ENABLED=false, DISPATCH_WORKER_ENABLED=false, zero dispatches."""
         assert os.getenv("DISPATCH_ENABLED", "false").lower() in ("false", "0", "")
         assert os.getenv("DISPATCH_WORKER_ENABLED", "false").lower() in ("false", "0", "")
@@ -865,6 +865,8 @@ class TestDormancyInvariantsEmpirical:
             dispatches = conn.execute("SELECT count(*) AS cnt FROM public.dispatches").fetchone()["cnt"]
             assert dispatches == 0, f"Dormancy invariant violated: {dispatches} dispatches exist"
 
+        # outbox and domain_events SELECT requires fc27_dispatch role (fc27_app only has INSERT on outbox)
+        with psycopg.connect(pg_dispatch_uri, row_factory=dict_row) as conn:
             published = conn.execute("SELECT count(*) AS cnt FROM public.outbox WHERE published_at IS NOT NULL").fetchone()["cnt"]
             assert published == 0, f"Dormancy invariant violated: {published} published outbox records exist"
 

@@ -437,7 +437,7 @@ class ApprovalStore:
 
             # Lock order 3: graph_threads (§7.6)
             thread = conn.execute(
-                """SELECT state, status, package_version, club_id, decision_payload
+                """SELECT thread_id, state, status, package_version, club_id, decision_payload
                      FROM public.graph_threads
                     WHERE thread_id = %s
                       FOR UPDATE""",
@@ -446,14 +446,14 @@ class ApprovalStore:
             if thread is None:
                 raise StoreError(404, "thread not found")
 
-            # SAFE IDEMPOTENT REPLAY PROTOCOL
+# SAFE IDEMPOTENT REPLAY PROTOCOL
             if nonce["consumed_at"] is not None:
                 audit = conn.execute(
                     """SELECT id, thread_id, package_version, signature_sha256,
-                              decision, candidate_id, player_id, owner, selection,
-                              approval_request_id
-                         FROM public.approval_audit
-                        WHERE nonce = %s""",
+                          decision, candidate_id, player_id, owner, selection,
+                          approval_request_id
+                     FROM public.approval_audit
+                    WHERE nonce = %s""",
                     (signed.nonce,),
                 ).fetchone()
 
@@ -623,7 +623,7 @@ class ApprovalStore:
                 except Exception as exc:
                     if exc.__class__.__name__ == "NotDispatchable":
                         raise StoreError(409, f"not_dispatchable: {exc}") from exc
-                    raise
+                    raise StoreError(500, f"dispatch_creation_failed: {exc}") from exc
 
             new_state = {
                 **new_state,

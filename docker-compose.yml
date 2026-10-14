@@ -39,7 +39,11 @@ services:
       context: .
       dockerfile: Dockerfile.graph
     <<: *app-security
-    command: ["python", "-m", "src.db_roles", "bootstrap", "--database", "fc27", "--legacy-owner", "fc27"]
+    # Fixed program + arguments live in the entrypoint so that the documented
+    # `docker compose --profile bootstrap run --rm db-bootstrap --confirm`
+    # APPENDS --confirm instead of replacing the command. With no extra
+    # arguments the tool runs a non-mutating dry run (plan only).
+    entrypoint: ["python", "-m", "src.db_roles", "bootstrap", "--database", "fc27", "--legacy-owner", "fc27"]
     environment:
       POSTGRES_ADMIN_URI_FILE: /run/secrets/postgres_admin_uri
       FC27_MIGRATOR_PASSWORD_FILE: /run/secrets/fc27_migrator_password
@@ -173,12 +177,18 @@ services:
       FC27_CLUB_ID: ${FC27_CLUB_ID:-330323}
       FC_PLATFORM: ${FC_PLATFORM:-common-gen5}
       MCP_PORT: "8000"
+      # Listen on all interfaces INSIDE the container so Compose peers
+      # (graph-api, live-watcher, post-match-rundown) can reach it. The port is
+      # NOT published to the host; bearer auth stays mandatory.
+      MCP_HOST: "0.0.0.0"
       MCP_ALLOWED_ORIGIN: ${MCP_ALLOWED_ORIGIN:-http://localhost}
       MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN in .env}
     networks: [fc27_net]
     expose: ["8000"]
     healthcheck:
-      test: ['CMD-SHELL', 'python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")"']
+      # Probes the container's own Compose-network address (never loopback), i.e.
+      # the same listener peers use. Fails if MCP is bound to 127.0.0.1.
+      test: ["CMD", "python", "-m", "src.mcp_healthcheck"]
       interval: 20s
       timeout: 5s
       retries: 5
@@ -220,8 +230,19 @@ services:
       LANGSMITH_TRACING: "false"
       LANGCHAIN_TRACING_V2: "false"
       LANGFUSE_ENABLED: "false"
+      # Phase 2 identity secrets: file-based, mounted into graph-api ONLY.
+      # BFF_SERVICE_TOKEN authenticates the BFF; it must differ from GRAPH_SERVICE_TOKEN.
+      BFF_SERVICE_TOKEN_FILE: /run/secrets/bff_service_token
+      # Fernet key (44-char urlsafe base64) for TOTP seed encryption at rest.
+      IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/identity_encryption_key
+      # One-time commissioner bootstrap secret. There is NO fallback: if this file
+      # is empty/placeholder/weak, bootstrap is disabled (fail closed).
+      BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
     secrets:
       - fc27_app_uri
+      - bff_service_token
+      - identity_encryption_key
+      - bootstrap_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -382,3 +403,9 @@ secrets:
     file: ./secrets/fc27_migrator_uri
   fc27_app_uri:
     file: ./secrets/fc27_app_uri
+  bff_service_token:
+    file: ./secrets/bff_service_token
+  identity_encryption_key:
+    file: ./secrets/identity_encryption_key
+  bootstrap_token:
+    file: ./secrets/bootstrap_token
