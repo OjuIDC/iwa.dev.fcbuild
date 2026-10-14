@@ -169,43 +169,44 @@ def _baseline_key(match_type: str) -> str:
     return f"fc27:watcher:{CLUB_ID}:{match_type}:baseline"
 
 
-async def match_state(redis: aioredis.Redis, match_id: str) -> Optional[str]:
+async def match_state(redis: Any, match_id: str) -> Optional[str]:
     return _s(await redis.hget(_record_key(match_id), "state"))
 
 
-async def acquire_lease(redis: aioredis.Redis, match_id: str) -> Optional[str]:
+async def acquire_lease(redis: Any, match_id: str) -> Optional[str]:
     token = uuid.uuid4().hex
     ok = await redis.set(_lease_key(match_id), token, nx=True, ex=LEASE_TTL)
     return token if ok else None
 
 
-async def release_lease(redis: aioredis.Redis, match_id: str, token: str) -> None:
+async def release_lease(redis: Any, match_id: str, token: str) -> None:
     # Only the owner releases; an expired-and-retaken lease is left alone.
     if _s(await redis.get(_lease_key(match_id))) == token:
         await redis.delete(_lease_key(match_id))
 
 
-async def mark_done(redis: aioredis.Redis, match_id: str, **fields: Any) -> None:
+async def mark_done(redis: Any, match_id: str, **fields: Any) -> None:
     mapping = {"state": STATE_DONE, "done_at": str(int(time.time()))}
     mapping.update({k: str(v) for k, v in fields.items() if v is not None})
     await redis.hset(_record_key(match_id), mapping=mapping)
     await redis.expire(_record_key(match_id), RECORD_TTL)
 
 
-async def get_recent_results(redis: aioredis.Redis, n: int = 5) -> list[str]:
+async def get_recent_results(redis: Any, n: int = 5) -> list[str]:
     """Return last n match results for tilt detection."""
     key = f"fc27:watcher:{CLUB_ID}:results"
     vals = await redis.lrange(key, 0, n - 1)
-    return [_s(v) for v in vals]
+    return [s for v in vals if (s := _s(v)) is not None]
 
-async def push_result(redis: aioredis.Redis, result: str) -> None:
+
+async def push_result(redis: Any, result: str) -> None:
     key = f"fc27:watcher:{CLUB_ID}:results"
     await redis.lpush(key, result)
     await redis.ltrim(key, 0, 9)   # keep last 10
 
 # ── Tilt Detection ─────────────────────────────────────────────────────────────
 
-async def check_tilt(redis: aioredis.Redis) -> Optional[dict]:
+async def check_tilt(redis: Any) -> Optional[dict]:
     """
     Returns tilt alert dict if 3+ consecutive losses detected, else None.
     Publishes to fc27:tilt:alert channel automatically.
@@ -319,24 +320,24 @@ async def trigger_swarm_analysis(match: dict) -> str:
 
 def _summarise(match: dict) -> tuple[str, Any, Any, str]:
     clubs     = match.get("clubs", {}) or {}
-    our_club  = clubs.get(CLUB_ID, clubs.get(str(CLUB_ID), {})) or {}
+    our_club  = clubs.get(CLUB_ID, {}) or {}
     result    = str(our_club.get("result", "unknown"))   # "win" | "loss" | "tie"
     goals_for = our_club.get("goals", "?")
     goals_ag  = our_club.get("goalsAgainst", "?")
     opp_name  = "Unknown"
     for cid, cdata in clubs.items():
-        if str(cid) != str(CLUB_ID):
+        if str(cid) != CLUB_ID:
             opp_name = str((cdata or {}).get("name", "Unknown"))[:64]
             break
     return result, goals_for, goals_ag, opp_name
 
 
-async def _once(redis: aioredis.Redis, match_id: str, step: str) -> bool:
+async def _once(redis: Any, match_id: str, step: str) -> bool:
     """Per-step idempotency marker: True only the first time `step` runs for this match."""
     return bool(await redis.hsetnx(_record_key(match_id), step, "1"))
 
 
-async def process_new_match(redis: aioredis.Redis, match: dict, match_type: str) -> str:
+async def process_new_match(redis: Any, match: dict, match_type: str) -> str:
     """
     Run all side effects for one match. Each side effect is guarded by a
     per-match step marker so a retry after a partial failure does not repeat
@@ -400,7 +401,7 @@ async def process_new_match(redis: aioredis.Redis, match: dict, match_type: str)
     return thread_id
 
 
-async def handle_match(redis: aioredis.Redis, match: dict, match_type: str) -> str:
+async def handle_match(redis: Any, match: dict, match_type: str) -> str:
     """
     Idempotent wrapper: lease → attempt counting → processing → done marker.
     Returns the outcome: 'done', 'skipped', 'busy', 'failed', 'dead'.
@@ -461,7 +462,7 @@ def _oldest_first(matches: list[dict]) -> list[dict]:
 
 # ── Poll Loop ──────────────────────────────────────────────────────────────────
 
-async def poll_match_type(redis: aioredis.Redis, match_type: str) -> list[tuple[str, str]]:
+async def poll_match_type(redis: Any, match_type: str) -> list[tuple[str, str]]:
     """Poll one match type and process every unseen match, oldest-first. Never raises."""
     try:
         matches = await mcp_get_matches(match_type)

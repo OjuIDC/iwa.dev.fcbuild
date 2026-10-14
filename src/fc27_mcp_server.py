@@ -38,7 +38,7 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
@@ -598,9 +598,9 @@ class ConfigError(RuntimeError):
     """Raised when the server refuses to start because of unsafe configuration."""
 
 
-def load_api_token(env: Optional[dict] = None) -> str:
-    env = os.environ if env is None else env
-    token = env.get("MCP_API_TOKEN", "")
+def load_api_token(env: Optional[Mapping[str, str]] = None) -> str:
+    target_env = os.environ if env is None else env
+    token = target_env.get("MCP_API_TOKEN", "")
     if not token or len(token) < MIN_TOKEN_LEN:
         raise ConfigError(
             f"MCP_API_TOKEN must be set to at least {MIN_TOKEN_LEN} characters; refusing to start.")
@@ -652,13 +652,13 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     ):
         self.api_token = load_api_token({"MCP_API_TOKEN": api_token})
         self.allowed_origin = _validate_origin(allowed_origin)
-        self.max_workers = max(1, int(max_workers))
+        self.max_workers = max(1, max_workers)
         self.request_timeout = float(request_timeout)
-        self.max_body_bytes = int(max_body_bytes)
+        self.max_body_bytes = max_body_bytes
         self.sse_keepalive_sec = float(sse_keepalive_sec)
         self.sse_max_sec = float(sse_max_sec)
         self.slots = threading.BoundedSemaphore(self.max_workers)
-        self.sse_slots = threading.BoundedSemaphore(max(1, int(max_sse_streams)))
+        self.sse_slots = threading.BoundedSemaphore(max(1, max_sse_streams))
         self.stopping = threading.Event()
         self._workers: set[threading.Thread] = set()
         self._workers_lock = threading.Lock()
@@ -712,12 +712,12 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
 
 class _MCPHandler(BaseHTTPRequestHandler):
-    server: BoundedThreadingHTTPServer
+    server: BoundedThreadingHTTPServer  # type: ignore
     server_version = "fc27-mcp"
     sys_version = ""
 
     def setup(self):
-        self.timeout = self.server.request_timeout  # per-request socket timeout
+        self.timeout = self.server.request_timeout  # type: ignore # per-request socket timeout
         super().setup()
 
     # ── helpers ──
@@ -853,9 +853,9 @@ class _MCPHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def log_message(self, fmt, *args):
+    def log_message(self, format, *args):
         # Request line only (method + path); headers (and the token) are never logged.
-        log.debug(fmt, *args)
+        log.debug(format, *args)
 
 
 def make_server(

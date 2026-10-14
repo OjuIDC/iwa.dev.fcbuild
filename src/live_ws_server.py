@@ -46,12 +46,13 @@ import signal
 import time
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.http11 import Request, Response
+from websockets.typing import Subprotocol
 
 log = logging.getLogger("fc27.ws")
 logging.basicConfig(
@@ -66,7 +67,7 @@ FC_VERSION= "27"
 PLATFORM  = os.getenv("FC_PLATFORM", "common-gen5")
 
 MIN_TOKEN_LEN   = 32
-SUBPROTOCOL     = "fc27.v1"
+SUBPROTOCOL     = Subprotocol("fc27.v1")
 BEARER_PROTO_PREFIX = "fc27.bearer."
 
 # Close codes (RFC 6455 §7.4.1)
@@ -137,18 +138,18 @@ class WSConfig:
             raise ConfigError("WS_ALLOWED_ORIGINS is empty; no client could connect.")
 
     @classmethod
-    def from_env(cls, env: Optional[dict] = None) -> "WSConfig":
-        env = os.environ if env is None else env
+    def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "WSConfig":
+        target_env = os.environ if env is None else env
         return cls(
-            token=env.get("WS_AUTH_TOKEN", ""),
-            allowed_origins=_parse_origins(env.get("WS_ALLOWED_ORIGINS", "")),
-            allow_no_origin=_truthy(env.get("WS_ALLOW_NO_ORIGIN")),
-            host=env.get("WS_HOST", "127.0.0.1"),
-            port=int(env.get("WS_PORT", "8765")),
-            max_message_bytes=int(env.get("WS_MAX_MESSAGE_BYTES", "4096")),
-            send_timeout=float(env.get("WS_SEND_TIMEOUT_SEC", "5")),
-            client_queue=int(env.get("WS_CLIENT_QUEUE", "64")),
-            max_clients=int(env.get("WS_MAX_CLIENTS", "200")),
+            token=target_env.get("WS_AUTH_TOKEN", ""),
+            allowed_origins=_parse_origins(target_env.get("WS_ALLOWED_ORIGINS", "")),
+            allow_no_origin=_truthy(target_env.get("WS_ALLOW_NO_ORIGIN")),
+            host=target_env.get("WS_HOST", "127.0.0.1"),
+            port=int(target_env.get("WS_PORT", "8765")),
+            max_message_bytes=int(target_env.get("WS_MAX_MESSAGE_BYTES", "4096")),
+            send_timeout=float(target_env.get("WS_SEND_TIMEOUT_SEC", "5")),
+            client_queue=int(target_env.get("WS_CLIENT_QUEUE", "64")),
+            max_clients=int(target_env.get("WS_MAX_CLIENTS", "200")),
         )
 
 # ── Connected clients ──────────────────────────────────────────────────────────
@@ -270,7 +271,9 @@ def make_process_request(cfg: WSConfig):
     return process_request
 
 
-def select_subprotocol(connection: ServerConnection, subprotocols) -> Optional[str]:
+def select_subprotocol(
+    connection: ServerConnection, subprotocols: Sequence[Subprotocol]
+) -> Optional[Subprotocol]:
     # Never select (echo) the bearer subprotocol; it carries the secret.
     return SUBPROTOCOL if SUBPROTOCOL in subprotocols else None
 
@@ -353,6 +356,8 @@ async def _consume(pubsub) -> None:
             continue
         channel = message.get("channel")
         data    = message.get("data")
+        if data is None:
+            continue
         try:
             payload = json.loads(data)
             if not isinstance(payload, dict):

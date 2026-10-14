@@ -1055,7 +1055,10 @@ def create_app(
             )
 
             # Validate against authoritative persisted state
-            resolved = resolve_candidate(thread_state, intent)
+            try:
+                resolved = resolve_candidate(thread_state, intent)
+            except DecisionConflict as e:
+                raise HTTPException(409, str(e))
 
             # Determine authoritative values for SignedDecision
             if signed_decision is DecisionKind.APPROVE:
@@ -1088,7 +1091,7 @@ def create_app(
                 player_id=auth_player_id,
             )
             legacy_p = Principal(
-                name=principal.display_name or "commissioner",
+                name=principal.legacy_actor_id or principal.display_name or "commissioner",
                 role=Role.commissioner,
             )
             return apply_decision_internal(request, target_thread_id, signed_obj, legacy_p)

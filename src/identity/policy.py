@@ -307,6 +307,7 @@ class PrincipalContext:
     player_id: str | None = None
     is_service: bool = False
     display_name: str | None = None
+    legacy_actor_id: str | None = None
 
     @classmethod
     def create(
@@ -321,6 +322,7 @@ class PrincipalContext:
         player_id: str | None = None,
         is_service: bool = False,
         display_name: str | None = None,
+        legacy_actor_id: str | None = None,
     ) -> "PrincipalContext":
         parsed_roles = frozenset(
             r if isinstance(r, UserRole) else UserRole(r) for r in roles
@@ -337,6 +339,7 @@ class PrincipalContext:
             player_id=player_id,
             is_service=is_service,
             display_name=display_name,
+            legacy_actor_id=legacy_actor_id,
         )
 
     @property

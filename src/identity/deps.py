@@ -144,6 +144,7 @@ async def get_current_principal(
                     auth_method=AuthMethod.CLI_HMAC,
                     is_service=True,
                     display_name="Commissioner CLI",
+                    legacy_actor_id=legacy_p.name,
                 )
 
         except HTTPException:

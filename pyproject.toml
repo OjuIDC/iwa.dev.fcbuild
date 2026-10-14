@@ -45,3 +45,10 @@ src = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.pyrefly]
+disable-search-path-heuristics = true
+search-path = ["."]
+
+[tool.pyright]
+extraPaths = ["."]

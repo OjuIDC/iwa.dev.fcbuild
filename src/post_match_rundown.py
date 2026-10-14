@@ -142,7 +142,7 @@ def _parse_match(match: dict, our_club_id: str) -> dict:
     ts      = match.get("timestamp", int(time.time()))
 
     # Opponent
-    opp_id   = next((cid for cid in clubs if str(cid) != str(our_club_id)), None)
+    opp_id   = next((cid for cid in clubs if str(cid) != our_club_id), None)
     opp      = clubs.get(opp_id, {}) if opp_id else {}
     opp_name = opp.get("name", "Opponent")
 
@@ -230,8 +230,8 @@ def _parse_match(match: dict, our_club_id: str) -> dict:
             club_stats["tackles_won"], club_stats["tackles"] = made or 0, att or 0
             break
     else:
-        club_stats["tackles_won"] = sum(p["tackles_won"] for p in our_players)
-        club_stats["tackles"]     = sum(p["tackles"] for p in our_players)
+        club_stats["tackles_won"] = sum(int(p["tackles_won"]) for p in our_players)
+        club_stats["tackles"]     = sum(int(p["tackles"]) for p in our_players)
 
     # Sort by rating desc
     our_players.sort(key=lambda p: p["rating"], reverse=True)
@@ -253,7 +253,7 @@ def _parse_match(match: dict, our_club_id: str) -> dict:
     if shot_pct < GAP_MAP["shots_on_target_low"]["threshold"]:
         gaps.append({**GAP_MAP["shots_on_target_low"], "actual": shot_pct})
     for p in our_players:
-        if p["rating"] < GAP_MAP["rating_below_avg"]["threshold"]:
+        if float(p["rating"]) < GAP_MAP["rating_below_avg"]["threshold"]:
             gaps.append({**GAP_MAP["rating_below_avg"],
                          "actual": p["rating"], "player": p["gamertag"]})
 
@@ -383,7 +383,7 @@ async def build_rundown(match: dict) -> dict:
     # Build formatted facts card (for non-AI display)
     facts_card = {
         "match_id": facts["match_id"],
-        "header": f"{CLUB_NAME or 'Club ' + str(CLUB_ID)} {facts['score']} {facts['opponent']}",
+        "header": f"{CLUB_NAME or 'Club ' + CLUB_ID} {facts['score']} {facts['opponent']}",
         "result_badge": facts["result"],
         "date": facts["date_str"],
         "match_type": facts["match_type"],

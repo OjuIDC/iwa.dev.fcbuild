@@ -23,12 +23,12 @@ import operator
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Callable, TypedDict
+from typing import Annotated, Any, Callable, TypedDict, cast
 from uuid import uuid4
 
 import httpx
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command, RunnableConfig, interrupt
 
 from .decision import package_version
 from .lead_packages import POLICY_VERSION, build_lead_packages, players_from_dashboard
@@ -83,7 +83,7 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _audit(node: str, state: dict, summary: str) -> list[dict]:
+def _audit(node: str, state: FC27State, summary: str) -> list[dict]:
     return [{"node": node, "ts": _now(), "summary": summary, "fc_version": FC_VERSION,
              "platform": state.get("platform", DEFAULT_PLATFORM)}]
 
@@ -179,7 +179,7 @@ def build_graph(deps: GraphDeps) -> StateGraph:
 
         state_req_id = state.get("approval_request_id")
         row_req_id = row.get("approval_request_id")
-        if state_req_id and row_req_id and str(row_req_id) != str(state_req_id):
+        if state_req_id and row_req_id and str(row_req_id) != state_req_id:
             raise ApprovalNotCommitted("committed decision refers to a different approval request")
 
         actor_type = row.get("actor_type") or payload.get("actor_type")
@@ -235,7 +235,7 @@ def build_graph(deps: GraphDeps) -> StateGraph:
         wrapper.__name__ = name
         return wrapper
 
-    g = StateGraph(FC27State)
+    g = StateGraph(cast(Any, FC27State))
     g.add_node("search", traced("search", search, "tool"))
     for role in ROLE_NODES:
         g.add_node(role, traced(role, role_node(role), "agent"))
@@ -253,7 +253,7 @@ def build_graph(deps: GraphDeps) -> StateGraph:
     return g
 
 
-def run_config(thread_id: str, club_id: str, platform: str = DEFAULT_PLATFORM) -> dict:
+def run_config(thread_id: str, club_id: str, platform: str = DEFAULT_PLATFORM) -> RunnableConfig:
     return {"configurable": {"thread_id": thread_id},
             "metadata": {"fc_version": FC_VERSION, "platform": platform, "club_id": club_id}}
 
@@ -261,39 +261,46 @@ def run_config(thread_id: str, club_id: str, platform: str = DEFAULT_PLATFORM) -
 class GraphRunner:
     """Owns the compiled graph and its PostgresSaver checkpointer."""
 
-    def __init__(self, checkpointer, deps: GraphDeps):
+    pool: Any = None
+
+    def __init__(self, checkpointer, deps: GraphDeps, pool: Any = None):
         self.checkpointer = checkpointer
         self.tracer = deps.tracer
         self.decision_reader = deps.decision_reader
         self.app = build_graph(deps).compile(checkpointer=checkpointer)
+        self.pool = pool
 
     @classmethod
     def from_conninfo(cls, conninfo: str, deps: GraphDeps, max_pool: int = 10, *, setup: bool = False) -> "GraphRunner":
         from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg import Connection
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
 
-        pool = ConnectionPool(conninfo, max_size=max_pool, open=True,
-                              kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
+        pool: ConnectionPool[Connection[dict[str, Any]]] = ConnectionPool(
+            conninfo, max_size=max_pool, open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
         saver = PostgresSaver(pool)
         if setup:
             saver.setup()
-        runner = cls(saver, deps)
-        runner.pool = pool
+        runner = cls(saver, deps, pool=pool)
         return runner
 
     def start(self, initial: dict) -> dict:
-        parts = parse_thread_id(initial["thread_id"]) or {}
+        thread_id: str = initial["thread_id"]
+        club_id: str = initial["club_id"]
+        platform: str = initial.get("platform", DEFAULT_PLATFORM)
+        parts = parse_thread_id(thread_id) or {}
         state = {**initial, "fc_version": FC_VERSION, "run_seq": int(parts.get("seq", 0) or 0),
                  "prompt_version": PROMPT_VERSION, "policy_version": POLICY_VERSION,
                  "code_revision": os.getenv("FC27_CODE_REVISION", "unknown"), "status": "running",
                  "errors": [], "audit_log": []}
-        cfg = run_config(state["thread_id"], state["club_id"], state.get("platform", DEFAULT_PLATFORM))
+        cfg = run_config(thread_id, club_id, platform)
         try:
             self.app.invoke(state, cfg, durability="sync")
         finally:
             self.tracer.flush()
-        return self.values(state["thread_id"])
+        return self.values(thread_id)
 
     def resume(self, thread_id: str) -> dict:
         snap = self.app.get_state({"configurable": {"thread_id": thread_id}})

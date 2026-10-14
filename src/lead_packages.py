@@ -59,7 +59,7 @@ class RankedLeadPackage(BaseModel):
 def players_from_dashboard(dashboard: dict[str, Any], club_id: str) -> dict[str, dict]:
     matches = dashboard.get("matches") or []
     latest = matches[0] if matches and isinstance(matches[0], dict) else {}
-    block = next((v for k, v in (latest.get("players") or {}).items() if str(k) == str(club_id)), {}) or {}
+    block = next((v for k, v in (latest.get("players") or {}).items() if str(k) == club_id), {}) or {}
     if not block:
         members = dashboard.get("members") or {}
         if isinstance(members, list):
@@ -125,7 +125,17 @@ def build_role_package(role: SwarmRole, players: dict[str, dict], result: RoleRe
             evidence_refs=[f"rating={stats.get('rating', 0)}", f"goals={stats.get('goals', 0)}", f"assists={stats.get('assists', 0)}"],
         )
     availability["selections"] = len(fields)
-    return RankedLeadPackage(owner=role, approvable=True, availability=availability, **fields)
+    return RankedLeadPackage(
+        owner=role,
+        approvable=True,
+        availability=availability,
+        best=fields.get("best"),
+        best_runner_up=fields.get("best_runner_up"),
+        middle=fields.get("middle"),
+        middle_runner_up=fields.get("middle_runner_up"),
+        lowest=fields.get("lowest"),
+        ignore=fields.get("ignore"),
+    )
 
 
 def build_lead_packages(dashboard: dict, club_id: str, role_results: dict[str, RoleResult], thread_id: str) -> dict[str, dict]:

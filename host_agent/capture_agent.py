@@ -45,20 +45,20 @@ import os
 import sys
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Any, Optional, cast
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).with_name(".env"))
 
 # Windows-only imports — guarded for CI/lint
 try:
-    import dxcam
+    import dxcam  # type: ignore
     DXCAM_AVAILABLE = True
 except ImportError:
     DXCAM_AVAILABLE = False
 
 try:
-    import mss
+    import mss  # type: ignore
     MSS_AVAILABLE = True
 except ImportError:
     MSS_AVAILABLE = False
@@ -148,9 +148,9 @@ class ScreenCapture:
     """
 
     def __init__(self):
-        self._camera = None
-        self._mss    = None
-        self._method = None
+        self._camera: Any = None
+        self._mss: Any = None
+        self._method: Optional[str] = None
 
         if DXCAM_AVAILABLE:
             try:
@@ -174,11 +174,11 @@ class ScreenCapture:
 
     def grab(self) -> Optional[np.ndarray]:
         """Grab current frame as BGR numpy array."""
-        if self._method == "dxcam":
+        if self._method == "dxcam" and self._camera is not None:
             frame = self._camera.get_latest_frame()
             return frame   # already BGR numpy
 
-        if self._method == "mss":
+        if self._method == "mss" and self._mss is not None:
             monitor = {"top": 0, "left": 0, "width": DISPLAY_W, "height": DISPLAY_H}
             img     = self._mss.grab(monitor)
             return cv2.cvtColor(np.array(img), cv2.COLOR_BGRA2BGR)
@@ -211,7 +211,7 @@ def _preprocess(region: np.ndarray) -> np.ndarray:
 
 def _ocr(region: np.ndarray, config: str = "--psm 7") -> str:
     processed = _preprocess(region)
-    return pytesseract.image_to_string(processed, config=config).strip()
+    return cast(str, pytesseract.image_to_string(processed, config=config)).strip()
 
 def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
     """OCR with per-word confidences (min over words). Confidence None if unavailable."""
@@ -220,7 +220,7 @@ def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
         data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
         return text_and_confidence(data)
     except Exception:
-        return pytesseract.image_to_string(processed, config=config).strip(), None
+        return cast(str, pytesseract.image_to_string(processed, config=config)).strip(), None
 
 def _refresh_orientation(frame: np.ndarray, state: LiveMatchTracker) -> None:
     if HOME_AWAY_MODE in ("home", "away"):

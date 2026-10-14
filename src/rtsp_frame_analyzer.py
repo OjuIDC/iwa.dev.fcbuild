@@ -41,7 +41,7 @@ import json
 import logging
 import os
 import time
-from typing import Optional
+from typing import Optional, cast
 
 import cv2
 import numpy as np
@@ -131,7 +131,7 @@ def _preprocess(region: np.ndarray) -> np.ndarray:
 
 def _ocr(region: np.ndarray, config: str = "--psm 7") -> str:
     """Run Tesseract OCR on a region. Returns stripped text."""
-    return pytesseract.image_to_string(_preprocess(region), config=config).strip()
+    return cast(str, pytesseract.image_to_string(_preprocess(region), config=config)).strip()
 
 def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
     """OCR with per-word confidences (min over words). Confidence None if unavailable."""
@@ -140,7 +140,7 @@ def _ocr_conf(region: np.ndarray, config: str) -> tuple[str, Optional[float]]:
         data = pytesseract.image_to_data(img, config=config, output_type=pytesseract.Output.DICT)
         return text_and_confidence(data)
     except Exception:   # older tesseract builds: fall back without confidence
-        return pytesseract.image_to_string(img, config=config).strip(), None
+        return cast(str, pytesseract.image_to_string(img, config=config)).strip(), None
 
 def _detect_match_active(frame: np.ndarray) -> bool:
     """
@@ -318,6 +318,9 @@ async def main() -> None:
     )
 
     try:
+        if proc.stdout is None:
+            raise RuntimeError("ffmpeg process stdout pipe is not available")
+
         while True:
             raw = await proc.stdout.readexactly(FRAME_BYTES)
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((FRAME_H, FRAME_W, 3))

@@ -42,9 +42,9 @@ def _swarms():
     root = logging.getLogger()
     saved_handlers, saved_level = list(root.handlers), root.level
     try:
-        import swarms
-        from swarms import Agent
-        from swarms.telemetry.otel import swarm_telemetry
+        import swarms  # type: ignore
+        from swarms import Agent  # type: ignore
+        from swarms.telemetry.otel import swarm_telemetry  # type: ignore
     except ImportError as exc:  # pragma: no cover - exercised when the extra is missing
         raise SwarmsUnavailable("ROLE_BACKEND=swarms requires the 'swarms' package (requirements-swarms.txt)") from exc
     finally:
@@ -95,11 +95,25 @@ def run_role_swarms(role: str, data: dict[str, Any], *, registry: ModelRegistry 
         # Swarms returns its input when every attempt fails; never parse that as model output.
         return RoleResult(role=role, valid=False, error="swarms agent produced no model response")
     route = llm.last.get("route")
-    meta = dict(provider=getattr(route, "provider", None), model=getattr(route, "model", None),
-                fallback_used=bool((llm.last or {}).get("fallback_used")), prompt_version=None)
-    meta = {k: v for k, v in meta.items() if v is not None}
+    provider: str | None = getattr(route, "provider", None)
+    model: str | None = getattr(route, "model", None)
+    fallback_used = bool((llm.last or {}).get("fallback_used"))
     try:
         output = parse_output(text if isinstance(text, str) else str(text))
     except ValueError as exc:
-        return RoleResult(role=role, valid=False, error=f"invalid structured output: {type(exc).__name__}", **meta)
-    return RoleResult(role=role, valid=True, output=output, **meta)
+        return RoleResult(
+            role=role,
+            valid=False,
+            error=f"invalid structured output: {type(exc).__name__}",
+            provider=provider,
+            model=model,
+            fallback_used=fallback_used,
+        )
+    return RoleResult(
+        role=role,
+        valid=True,
+        output=output,
+        provider=provider,
+        model=model,
+        fallback_used=fallback_used,
+    )

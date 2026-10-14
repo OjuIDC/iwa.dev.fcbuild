@@ -23,7 +23,7 @@ import hashlib
 import json
 import os
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -140,6 +140,9 @@ def normalize_fernet_key(raw_key: str | bytes) -> bytes:
 
     Never logs or leaks the raw key in exception text.
     """
+    if isinstance(raw_key, bytes) and len(raw_key) == 32:
+        return base64.urlsafe_b64encode(raw_key)
+
     if isinstance(raw_key, str):
         key_bytes = raw_key.strip().encode("utf-8")
     elif isinstance(raw_key, bytes):
@@ -156,7 +159,7 @@ def normalize_fernet_key(raw_key: str | bytes) -> bytes:
         except Exception:
             pass
 
-    # 32 raw bytes
+    # 32 raw bytes (e.g. after whitespace strip)
     if len(key_bytes) == 32:
         return base64.urlsafe_b64encode(key_bytes)
 
@@ -210,6 +213,9 @@ class IdentityCrypto:
             active_key = read_secret("IDENTITY_ENCRYPTION_KEY", required=True, min_length=32)
         except ConfigError as exc:
             raise CryptoKeyError(str(exc)) from exc
+
+        if not active_key:
+            raise CryptoKeyError("IDENTITY_ENCRYPTION_KEY must be set")
 
         prev_raw = read_secret("IDENTITY_ENCRYPTION_KEYS_PREVIOUS", required=False)
         previous_keys: list[str] = []
@@ -393,7 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         store = IdentityStore(conninfo, crypto=crypto)
         with store.connect() as conn:
-            rows = conn.execute(
+            rows: list[dict[str, Any]] = conn.execute(
                 "SELECT user_id, encrypted_seed, key_version FROM public.fc27_totp_credentials"
             ).fetchall()
 

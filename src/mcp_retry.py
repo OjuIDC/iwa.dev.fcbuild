@@ -171,7 +171,7 @@ def call_with_retry(fn: Callable[[], T], endpoint: str, policy: RetryPolicy) -> 
         try:
             return fn()
         except HTTPError as exc:
-            status = int(exc.code)
+            status = exc.code
             headers = exc.headers if exc.headers is not None else {}
             try:
                 exc.close()

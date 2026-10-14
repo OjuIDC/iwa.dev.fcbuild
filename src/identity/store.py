@@ -25,12 +25,13 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 from uuid import UUID, uuid4
 
 import pyotp
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row, tuple_row
 
 from src.events import record_event
@@ -58,7 +59,7 @@ class IdentityStoreError(Exception):
         return f"{self.status_code}: {self.detail}"
 
 
-def _safe_record_event(conn: psycopg.Connection, **kwargs: Any) -> int:
+def _safe_record_event(conn: psycopg.Connection[Any], **kwargs: Any) -> int:
     """Safely executes record_event with tuple_row factory to avoid dict indexing errors."""
     old_factory = conn.row_factory
     conn.row_factory = tuple_row
@@ -117,9 +118,9 @@ class IdentityStore:
             self._crypto = get_identity_crypto()
         return self._crypto
 
-    def connect(self) -> psycopg.Connection:
+    def connect(self) -> psycopg.Connection[dict[str, Any]]:
         """Returns a new psycopg connection with dict_row factory."""
-        return psycopg.connect(self.conninfo, row_factory=dict_row)
+        return cast(psycopg.Connection[dict[str, Any]], psycopg.connect(self.conninfo, row_factory=dict_row))
 
     # =================================================================
     # 1. Users and Roles
@@ -240,16 +241,31 @@ class IdentityStore:
             if curr_status == new_status:
                 return dict(user)
 
-            activated_clause = ", activated_at = now()" if new_status == "active" and not user["activated_at"] else ""
-            suspended_clause = ", suspended_at = now()" if new_status == "suspended" else ""
+            activated_clause = (
+                sql.SQL(", activated_at = now()")
+                if new_status == "active" and not user["activated_at"]
+                else sql.SQL("")
+            )
+            suspended_clause = (
+                sql.SQL(", suspended_at = now()")
+                if new_status == "suspended"
+                else sql.SQL("")
+            )
 
-            row = conn.execute(
-                f"""
+            query = sql.SQL(
+                """
                 UPDATE public.fc27_users
                 SET status = %s, updated_at = now() {activated_clause} {suspended_clause}
                 WHERE user_id = %s
                 RETURNING *
-                """,
+                """
+            ).format(
+                activated_clause=activated_clause,
+                suspended_clause=suspended_clause,
+            )
+
+            row = conn.execute(
+                query,
                 (new_status, user_id),
             ).fetchone()
 
@@ -485,6 +501,8 @@ class IdentityStore:
                 """,
                 (invitation_id, tok_hash, club_id, intended_role, email_to_use, creator_id, expires_at),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to create invitation")
 
             _safe_record_event(
                 conn,
@@ -568,6 +586,8 @@ class IdentityStore:
                 "UPDATE public.fc27_invitations SET consumed_at = now() WHERE invitation_id = %s RETURNING *",
                 (inv["invitation_id"],),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to consume invitation")
 
             _safe_record_event(
                 conn,
@@ -658,6 +678,9 @@ class IdentityStore:
                     """,
                     (resolved_display_name, player_id, user_id),
                 ).fetchone()
+
+            if not user_row:
+                raise IdentityStoreError(500, "failed to activate user account")
 
             role = inv["intended_role"]
             if role in self.PROHIBITED_INVITATION_ROLES:
@@ -752,6 +775,8 @@ class IdentityStore:
                 "UPDATE public.fc27_invitations SET revoked_at = now() WHERE invitation_id = %s RETURNING *",
                 (invitation_id,),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to revoke invitation")
 
             _safe_record_event(
                 conn,
@@ -812,6 +837,8 @@ class IdentityStore:
                 """,
                 (session_id, tok_hash, user_id, auth_level, auth_method, ip_address, user_agent, idle_exp, abs_exp),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to create session")
 
             _safe_record_event(
                 conn,
@@ -931,6 +958,8 @@ class IdentityStore:
                     abs_exp,
                 ),
             ).fetchone()
+            if not new_row:
+                raise IdentityStoreError(500, "failed to rotate session")
 
             _safe_record_event(
                 conn,
@@ -1120,6 +1149,8 @@ class IdentityStore:
                 """,
                 (user_id, encrypted_seed, key_ver),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to save totp credential")
 
             _safe_record_event(
                 conn,
@@ -1182,12 +1213,27 @@ class IdentityStore:
             raise IdentityStoreError(422, f"invalid TOTP status '{status}'")
 
         cid = correlation_id or uuid4()
-        revoked_clause = ", revoked_at = now()" if status == "revoked" else ""
-        verified_clause = ", last_verified_at = now()" if status == "active" else ""
+        revoked_clause = (
+            sql.SQL(", revoked_at = now()")
+            if status == "revoked"
+            else sql.SQL("")
+        )
+        verified_clause = (
+            sql.SQL(", last_verified_at = now()")
+            if status == "active"
+            else sql.SQL("")
+        )
+
+        query = sql.SQL(
+            "UPDATE public.fc27_totp_credentials SET status = %s{revoked_clause}{verified_clause} WHERE user_id = %s"
+        ).format(
+            revoked_clause=revoked_clause,
+            verified_clause=verified_clause,
+        )
 
         with self.connect() as conn, conn.transaction():
             conn.execute(
-                f"UPDATE public.fc27_totp_credentials SET status = %s {revoked_clause} {verified_clause} WHERE user_id = %s",
+                query,
                 (status, user_id),
             )
             _safe_record_event(
@@ -1634,6 +1680,8 @@ class IdentityStore:
                 """,
                 (user_id, club_id, norm_login, display_name.strip()),
             ).fetchone()
+            if not user_row:
+                raise IdentityStoreError(500, "failed to create commissioner user")
 
             # 4. Assign commissioner role
             conn.execute(
@@ -1853,6 +1901,8 @@ class IdentityStore:
                 """,
                 (cred_bytes, user_id, public_key, sign_counter, label or "Passkey", aaguid),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to save webauthn credential")
 
             _safe_record_event(
                 conn,
@@ -2208,6 +2258,8 @@ class IdentityStore:
                 "UPDATE public.fc27_action_tokens SET revoked_at = now() WHERE token_id = %s RETURNING *",
                 (token_id,),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to revoke action token")
 
             _safe_record_event(
                 conn,
@@ -2255,6 +2307,8 @@ class IdentityStore:
                 """,
                 (cid, challenge_type, challenge_str, user_id, bound_payload_hash, expires_at),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to create challenge")
             return dict(row)
 
     def consume_challenge(
@@ -2418,19 +2472,19 @@ class IdentityStore:
     ) -> list[dict[str, Any]]:
         """Lists delegations for a club with optional active filtering."""
         with self.connect() as conn:
-            clauses = ["club_id = %s"]
+            clauses = [sql.SQL("club_id = %s")]
             params: list[Any] = [club_id]
             if delegate_user_id:
-                clauses.append("delegate_id = %s")
+                clauses.append(sql.SQL("delegate_id = %s"))
                 params.append(str(delegate_user_id))
             if active_only:
-                clauses.append("revoked_at IS NULL AND expires_at > now()")
+                clauses.append(sql.SQL("revoked_at IS NULL AND expires_at > now()"))
 
-            where_sql = " AND ".join(clauses)
-            rows = conn.execute(
-                f"SELECT * FROM public.authority_delegations WHERE {where_sql} ORDER BY created_at DESC",
-                params,
-            ).fetchall()
+            where_clause = sql.SQL(" AND ").join(clauses)
+            query = sql.SQL(
+                "SELECT * FROM public.authority_delegations WHERE {} ORDER BY created_at DESC"
+            ).format(where_clause)
+            rows = conn.execute(query, params).fetchall()
             result = []
             for r in rows:
                 d = dict(r)
@@ -2469,6 +2523,8 @@ class IdentityStore:
                 """,
                 (revoked_by, reason, delegation_id),
             ).fetchone()
+            if not updated:
+                raise IdentityStoreError(500, "failed to revoke delegation")
 
             _safe_record_event(
                 conn,
@@ -2574,7 +2630,7 @@ class IdentityStore:
         bound_hash = canonical_bound_payload_hash or bound_payload_hash or ""
         cred_str = webauthn_credential_id or (credential_id.hex() if credential_id else None)
         sess_id = str(session_id) if session_id else None
-        th_id = str(thread_id) if thread_id else None
+        th_id = thread_id if thread_id else None
         appr_id = str(approval_request_id) if approval_request_id else None
         chal_id = str(challenge_id) if challenge_id else None
 
@@ -2606,6 +2662,8 @@ class IdentityStore:
                     expires_at,
                 ),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to record decision evidence")
 
             _safe_record_event(
                 conn,
@@ -2647,7 +2705,7 @@ class IdentityStore:
         expected_canonical_bound_payload_hash: str | None = None,
         actor: str = "system",
         correlation_id: UUID | None = None,
-        conn: psycopg.Connection | None = None,
+        conn: psycopg.Connection[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Atomically validates scope and consumes decision evidence (Feature 20 & Finding R2).
 
@@ -2660,7 +2718,7 @@ class IdentityStore:
         now = datetime.now(timezone.utc)
         cid = correlation_id or uuid4()
 
-        def _do_consume(tx_conn: psycopg.Connection) -> dict[str, Any]:
+        def _do_consume(tx_conn: psycopg.Connection[dict[str, Any]]) -> dict[str, Any]:
             row = tx_conn.execute(
                 "SELECT * FROM public.fc27_decision_evidence WHERE evidence_id = %s FOR UPDATE",
                 (str(evidence_id),),
@@ -2683,13 +2741,13 @@ class IdentityStore:
                 raise IdentityStoreError(403, "evidence bound to different session ID")
             if expected_approval_request_id and str(row["approval_request_id"]) != str(expected_approval_request_id):
                 raise IdentityStoreError(400, "evidence bound to different approval request ID")
-            if expected_thread_id and str(row["thread_id"]) != str(expected_thread_id):
+            if expected_thread_id and str(row["thread_id"]) != expected_thread_id:
                 raise IdentityStoreError(400, "evidence bound to different thread ID")
             if expected_package_id and row["package_id"] != expected_package_id:
                 raise IdentityStoreError(400, "evidence bound to different package ID")
-            if expected_package_hash and str(row["package_hash"]).lower() != str(expected_package_hash).lower():
+            if expected_package_hash and str(row["package_hash"]).lower() != expected_package_hash.lower():
                 raise IdentityStoreError(400, "evidence bound to different package hash")
-            if expected_package_version and str(row["package_version"]) != str(expected_package_version):
+            if expected_package_version and str(row["package_version"]) != expected_package_version:
                 raise IdentityStoreError(400, "evidence bound to different package version")
 
             exp_decision = expected_normalized_decision or expected_decision
@@ -2704,7 +2762,7 @@ class IdentityStore:
                 if row["normalized_decision"].lower() != norm_exp:
                     raise IdentityStoreError(403, "evidence bound to different decision")
 
-            if expected_canonical_bound_payload_hash and row["canonical_bound_payload_hash"].lower() != str(expected_canonical_bound_payload_hash).lower():
+            if expected_canonical_bound_payload_hash and row["canonical_bound_payload_hash"].lower() != expected_canonical_bound_payload_hash.lower():
                 raise IdentityStoreError(400, "canonical bound payload hash mismatch")
 
             # Mark consumed
@@ -2817,6 +2875,8 @@ class IdentityStore:
                     action_type, status, requires_player_consent, fallback_eligible
                 ),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to create player assignment")
 
             _safe_record_event(
                 conn,
@@ -2855,6 +2915,8 @@ class IdentityStore:
                 """,
                 (request_id, str(assignment_id), subject_player_id, challenge_nonce, action_token_reference, expires_at),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to create player decision request")
             return dict(row)
 
     def get_player_decision_request(self, request_id: UUID | str) -> dict[str, Any] | None:
@@ -2940,7 +3002,7 @@ class IdentityStore:
                 raise IdentityStoreError(409, "assignment version or hash mismatch")
             if assign["package_id"] != package_id or assign["package_hash"] != package_hash:
                 raise IdentityStoreError(409, "package binding mismatch")
-            if str(assign["subject_player_id"]) != str(subject_player_id) or str(subject_player_id) != str(actor_id):
+            if str(assign["subject_player_id"]) != subject_player_id or subject_player_id != actor_id:
                 raise IdentityStoreError(403, "player actor does not match assignment subject")
 
             req_update = conn.execute(
@@ -2971,14 +3033,16 @@ class IdentityStore:
                 RETURNING *
                 """,
                 (
-                    decision_id, str(request_id), str(assignment_id), str(subject_player_id),
-                    str(actor_id), decision, authority_basis,
+                    decision_id, str(request_id), str(assignment_id), subject_player_id,
+                    actor_id, decision, authority_basis,
                     assignment_version, assignment_hash, package_id,
                     package_version, package_hash, notes,
                     str(authentication_evidence_id) if authentication_evidence_id else None,
                     action_token_reference, idempotency_key
                 ),
             ).fetchone()
+            if not row:
+                raise IdentityStoreError(500, "failed to record player decision")
 
             if decision == "pause":
                 conn.execute(

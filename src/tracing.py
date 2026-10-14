@@ -18,7 +18,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
-from typing import Any, Iterator
+from typing import Any, Generator
 
 from .settings import DEFAULT_PLATFORM, FC_VERSION, ConfigError, env_bool, read_secret
 
@@ -47,7 +47,7 @@ class NullTracer:
     enabled = False
 
     @contextlib.contextmanager
-    def span(self, name: str, thread_id: str, metadata: dict | None = None, as_type: str = "span") -> Iterator[None]:
+    def span(self, name: str, thread_id: str, metadata: dict | None = None, as_type: str = "span") -> Generator[None]:
         yield None
 
     def event(self, name: str, thread_id: str, metadata: dict | None = None, level: str = "DEFAULT") -> None:
@@ -104,7 +104,7 @@ def tracer_from_env():
     host = read_secret("LANGFUSE_HOST")
     capture = env_bool("LANGFUSE_CAPTURE_CONTENT", False)
     try:
-        from langfuse import Langfuse
+        from langfuse import Langfuse  # type: ignore
     except ImportError as exc:
         raise ConfigError("LANGFUSE_ENABLED=true requires the 'langfuse' package (requirements-langfuse.txt)") from exc
     client = Langfuse(public_key=public, secret_key=secret, base_url=host, environment="fc27",

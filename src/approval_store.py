@@ -22,7 +22,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from uuid import UUID, uuid4
 
 import psycopg
@@ -40,7 +40,7 @@ from .identity.routers.step_up import compute_bound_payload_hash, normalize_deci
 MAX_APPROVAL_TTL_SECONDS = 300
 
 
-def _safe_record_event(conn: psycopg.Connection, **kwargs) -> int:
+def _safe_record_event(conn: psycopg.Connection[Any], **kwargs) -> int:
     old_factory = conn.row_factory
     conn.row_factory = tuple_row
     try:
@@ -69,8 +69,8 @@ class ApprovalStore:
         self.conninfo = conninfo
         self.request_ttl = request_ttl
 
-    def connect(self) -> psycopg.Connection:
-        return psycopg.connect(self.conninfo, row_factory=dict_row)
+    def connect(self) -> psycopg.Connection[dict[str, Any]]:
+        return cast(psycopg.Connection[dict[str, Any]], psycopg.connect(self.conninfo, row_factory=dict_row))
 
     # ------------------------------------------------------------------ runs
     def create_run(
@@ -326,7 +326,10 @@ class ApprovalStore:
             except DecisionConflict as exc:
                 raise StoreError(409, str(exc)) from exc
 
-            now_epoch = conn.execute("SELECT extract(epoch FROM now())::bigint AS t").fetchone()["t"]
+            now_row = conn.execute("SELECT extract(epoch FROM now())::bigint AS t").fetchone()
+            if now_row is None:
+                raise StoreError(500, "failed to query database time")
+            now_epoch = now_row["t"]
             issued_at = int(now_epoch)
             expires_at = min(issued_at + ttl, int(req["req_exp_epoch"]))
             if expires_at <= issued_at:
@@ -510,9 +513,12 @@ class ApprovalStore:
             if thread["package_version"] != signed.package_version:
                 raise StoreError(409, "lead package changed since the challenge was issued (stale package)")
 
-            decided_at = conn.execute(
+            now_row = conn.execute(
                 "SELECT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS t"
-            ).fetchone()["t"]
+            ).fetchone()
+            if now_row is None:
+                raise StoreError(500, "failed to query database time")
+            decided_at = str(now_row["t"])
 
             try:
                 new_state = apply_decision_to_state(thread["state"], intent, principal.name, decided_at)
@@ -579,6 +585,8 @@ class ApprovalStore:
                     req["approval_request_id"],
                 ),
             ).fetchone()
+            if audit_row is None:
+                raise StoreError(500, "failed to insert approval audit record")
             audit_id = audit_row["id"]
 
             _safe_record_event(
@@ -675,14 +683,14 @@ class ApprovalStore:
             # Cross-validate caller inputs against evidence row
             if approval_request_id is not None and str(approval_request_id) != str(ev_row["approval_request_id"]):
                 raise StoreError(400, "caller approval_request_id does not match evidence approval_request_id")
-            if thread_id is not None and str(thread_id) != str(ev_row["thread_id"]):
+            if thread_id is not None and thread_id != str(ev_row["thread_id"]):
                 raise StoreError(400, "caller thread_id does not match evidence thread_id")
-            if package_id is not None and str(package_id) != str(ev_row["package_id"]):
+            if package_id is not None and package_id != str(ev_row["package_id"]):
                 raise StoreError(400, "caller package_id does not match evidence package_id")
             if package_version is not None:
                 if (
-                    str(package_version) != str(ev_row["package_version"])
-                    and str(package_version).lower() != str(ev_row["package_hash"]).lower()
+                    package_version != str(ev_row["package_version"])
+                    and package_version.lower() != str(ev_row["package_hash"]).lower()
                 ):
                     raise StoreError(400, "caller package_version does not match evidence package parameters")
 
@@ -774,7 +782,7 @@ class ApprovalStore:
                 raise StoreError(400, "evidence bound to different thread ID")
             if str(req["thread_id"]) != str(thread["thread_id"]):
                 raise StoreError(400, "approval request bound to different thread ID")
-            if thread_id is not None and str(thread["thread_id"]) != str(thread_id):
+            if thread_id is not None and str(thread["thread_id"]) != thread_id:
                 raise StoreError(400, "caller thread_id does not match locked graph thread")
 
             # Package version match: supports both version string matching and hex package_hash matching
@@ -784,9 +792,9 @@ class ApprovalStore:
             ):
                 raise StoreError(400, "evidence bound to different package version")
             if package_version is not None and (
-                str(package_version) != str(req["package_version"])
-                and str(package_version).lower() != str(req["package_version"]).lower()
-                and str(package_version) != str(ev_row["package_version"])
+                package_version != str(req["package_version"])
+                and package_version.lower() != str(req["package_version"]).lower()
+                and package_version != str(ev_row["package_version"])
             ):
                 raise StoreError(400, "caller package_version does not match locked approval request")
 
@@ -909,6 +917,8 @@ class ApprovalStore:
                     ev_row["package_hash"],
                 ),
             ).fetchone()
+            if audit_row is None:
+                raise StoreError(500, "failed to insert approval audit record")
 
             # Insert domain events
             _safe_record_event(
@@ -1001,10 +1011,10 @@ class ApprovalStore:
                     continue
 
                 # Re-check expiry condition under row lock
-                now_check = conn.execute(
+                expiry_row = conn.execute(
                     "SELECT now() >= %s AS is_expired", (req["expires_at"],)
-                ).fetchone()["is_expired"]
-                if not now_check:
+                ).fetchone()
+                if expiry_row is None or not expiry_row["is_expired"]:
                     continue
 
                 # Lock order 3: graph_threads FOR UPDATE (§7.6)

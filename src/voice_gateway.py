@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib,hmac,json,os,re,time
+from typing import Any
 import httpx
 import redis
 from fastapi import FastAPI,File,Header,HTTPException,UploadFile
@@ -13,7 +14,7 @@ def auth(value):
  if not value or not hmac.compare_digest(value.encode(),TOKEN.encode()):raise HTTPException(401,"invalid voice token")
 class Transcript(BaseModel): transcript:str=Field(min_length=1,max_length=2000)
 class Speak(BaseModel): text:str=Field(min_length=1,max_length=4000);voice:str="default"
-def parse_command(text):
+def parse_command(text: str) -> dict[str, Any]:
  t=" ".join(text.lower().split())
  if re.search(r"\b(approve|reject|authorize|execute|deploy|activate)\b",t):
   return {"intent":"approval_attempt","safe":False,"confirmation_required":True,"message":"Voice cannot approve or reject. Open the authenticated visual approval screen and confirm the exact typed lead-package selection."}

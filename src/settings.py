@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal, overload
 
 FC_VERSION = "27"
 DEFAULT_PLATFORM = "common-gen5"
@@ -17,6 +18,18 @@ _FALSE = {"0", "false", "no", "off", ""}
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
+
+
+@overload
+def read_secret(name: str, *, required: Literal[True] = ..., min_length: int = ...) -> str: ...
+
+
+@overload
+def read_secret(name: str, *, required: Literal[False], min_length: int = ...) -> str | None: ...
+
+
+@overload
+def read_secret(name: str, *, required: bool = ..., min_length: int = ...) -> str | None: ...
 
 
 def read_secret(name: str, *, required: bool = True, min_length: int = 0) -> str | None:

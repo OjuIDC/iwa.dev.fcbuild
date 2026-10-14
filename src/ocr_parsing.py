@@ -177,7 +177,7 @@ class Debouncer:
     """
 
     def __init__(self, frames: int):
-        self.frames = max(1, int(frames))
+        self.frames = max(1, frames)
         self._candidate: Any = None
         self._count = 0
         self._last_emitted: Any = None
