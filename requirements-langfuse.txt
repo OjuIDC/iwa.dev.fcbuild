@@ -1,2 +1,2 @@
 # Optional Langfuse tracing client (LANGFUSE_ENABLED=true).
-langfuse==4.16.0
+langfuse==4.17.0
