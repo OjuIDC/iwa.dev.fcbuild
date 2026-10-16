@@ -31,6 +31,15 @@ from psycopg.types.json import Jsonb
 
 from . import approval
 from .decision import DecisionConflict, apply_decision_to_state, package_version, resolve_candidate
+from .dispatch.creation import NotDispatchable
+from .dispatch.transition import (
+    DispatchNotFoundError,
+    TransitionConflictError,
+    InvalidTransitionError,
+    InvalidPatchError,
+    UnauthorizedRoleError,
+    Phase1DeliveryBlockedError,
+)
 from .events import record_event
 from .schemas import DecisionIntent, DecisionKind, SignedDecision
 from .security import Principal, Role
@@ -620,10 +629,15 @@ class ApprovalStore:
                         principal_name=principal.name,
                         correlation_id=corr_id,
                     )
-                except Exception as exc:
-                    if exc.__class__.__name__ == "NotDispatchable":
-                        raise StoreError(409, f"not_dispatchable: {exc}") from exc
-                    raise StoreError(500, f"dispatch_creation_failed: {exc}") from exc
+                except NotDispatchable as exc:
+                    raise StoreError(409, f"not_dispatchable: {exc}") from exc
+                except (DispatchNotFoundError, TransitionConflictError, InvalidTransitionError, InvalidPatchError,
+                        UnauthorizedRoleError, Phase1DeliveryBlockedError) as exc:
+                    raise StoreError(409, f"dispatch_transition_failed: {exc}") from exc
+                except psycopg.Error as exc:
+                    raise StoreError(500, f"dispatch_database_error: {exc}") from exc
+                except BaseException as exc:
+                    raise
 
             new_state = {
                 **new_state,

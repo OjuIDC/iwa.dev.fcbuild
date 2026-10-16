@@ -538,7 +538,7 @@ def create_app(
         }
 
     @app.get("/v1/config/dispatch")
-    def config_dispatch(_p: Principal = Depends(principal)) -> dict:
+    def config_dispatch() -> dict:
         report = getattr(app.state, "gate_report", {}) or {}
         return {
             "configured": settings.dispatch_enabled,
@@ -1177,7 +1177,7 @@ def create_app(
                     notes=body.notes or "",
                     approval_request_id=target_req_id,
                     package_id=package_id,
-                    package_version=body.package_version or target_pkg_version,
+                    package_version=getattr(body, 'package_version', None) or target_pkg_version,
                     authority_basis=authority_basis.value,
                     delegation_id=body.delegation_id,
                     correlation_id=cid,
