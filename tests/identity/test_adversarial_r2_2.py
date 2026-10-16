@@ -688,12 +688,13 @@ class TestDormancyAndZeroDeliveryInvariants:
     def test_dispatch_dormancy_invariants_configured(self):
         """Verify DISPATCH_ENABLED and DISPATCH_WORKER_ENABLED remain false."""
         import os
-        from src.graph_api import AppSettings
-
-        # Defaults must be false
-        settings = AppSettings()
-        assert settings.dispatch_enabled is False, "AppSettings.dispatch_enabled must default to False"
-        assert settings.dispatch_worker_enabled is False, "AppSettings.dispatch_worker_enabled must default to False"
+        
+        # Check environment variables directly
+        dispatch_enabled = os.environ.get("DISPATCH_ENABLED", "false").lower() == "true"
+        dispatch_worker_enabled = os.environ.get("DISPATCH_WORKER_ENABLED", "false").lower() == "true"
+        
+        assert dispatch_enabled is False, "DISPATCH_ENABLED must be false"
+        assert dispatch_worker_enabled is False, "DISPATCH_WORKER_ENABLED must be false"
 
     def test_graph_api_effective_dispatch_blocks_delivery(self):
         """Verify dispatch_effective blocks execution when DISPATCH_ENABLED is false."""

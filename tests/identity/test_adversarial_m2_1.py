@@ -277,7 +277,7 @@ def test_adversarial_player_consent_for_other_player_rejected(player_a1: Princip
             p2_assignment,
             authority_basis=AuthorityBasis.AFFECTED_PLAYER_CONSENT,
         )
-    assert "player cannot provide consent for another player's assignment" in exc_info.value.detail
+    assert f"player '{player_a1.player_id}' is forbidden from accessing resource of player '{player_a2.player_id}'" in exc_info.value.detail
 
 
 def test_adversarial_player_fallback_for_other_player_rejected(player_a1: PrincipalContext, player_a2: PrincipalContext):
@@ -290,7 +290,7 @@ def test_adversarial_player_fallback_for_other_player_rejected(player_a1: Princi
             p2_assignment,
             authority_basis=AuthorityBasis.AFFECTED_PLAYER_FALLBACK,
         )
-    assert "player cannot provide fallback authorization for another player" in exc_info.value.detail
+    assert f"player '{player_a1.player_id}' is forbidden from accessing resource of player '{player_a2.player_id}'" in exc_info.value.detail
 
 
 def test_adversarial_player_fallback_on_club_wide_or_mixed_scope_rejected(player_a1: PrincipalContext):
@@ -639,13 +639,13 @@ def test_adversarial_grants_zero_dispatch_access_on_delegations():
 
 
 def test_adversarial_grants_policy_version_and_digest_sync():
-    """Verify grants.sql version 7 matches db_migrate.py GRANTS_POLICY exactly."""
+    """Verify grants.sql version 10 matches db_migrate.py GRANTS_POLICY exactly."""
     grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
-    assert grants_sql.startswith("-- grants-policy-version: 7"), "grants.sql must specify version 7"
+    assert grants_sql.startswith("-- grants-policy-version: 10"), "grants.sql must specify version 10"
 
     db_migrate_content = (ROOT / "src" / "db_migrate.py").read_text(encoding="utf-8")
-    assert "GRANTS_POLICY = GrantsPolicy(version=7" in db_migrate_content, (
-        "db_migrate.py must be synchronized to GrantsPolicy version 7"
+    assert "GRANTS_POLICY = GrantsPolicy(version=10" in db_migrate_content, (
+        "db_migrate.py must be synchronized to GrantsPolicy version 10"
     )
 
 

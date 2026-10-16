@@ -323,10 +323,10 @@ class TestScopeGuardsAndDormancy:
         assert pyproject["dependencies"] == reqs
 
     def test_grants_policy_version_8(self):
-        """Verify grants policy is synchronized at version 8."""
-        assert GRANTS_POLICY.version == 8
+        """Verify grants policy is synchronized at version 10."""
+        assert GRANTS_POLICY.version == 10
         grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
-        assert "-- grants-policy-version: 8" in grants_sql
+        assert "-- grants-policy-version: 10" in grants_sql
 
     def test_dispatch_dormancy_invariants(self):
         """Verify universal DISPATCH_ENABLED=false and DISPATCH_WORKER_ENABLED=false."""

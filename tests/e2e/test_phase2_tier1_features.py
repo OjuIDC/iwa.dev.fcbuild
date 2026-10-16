@@ -107,12 +107,23 @@ class TestUsersRolesAndBootstrapFeatures:
     def test_f40_bootstrap_locks_permanently(self, client):
         """Feature 40: Second bootstrap attempt fails permanently with 409 Conflict."""
         boot_req = {
+            "login_identifier": "commissioner.primary@fc27.club",
+            "display_name": "Commissioner Primary",
+            "club_id": TEST_CLUB_ID,
+            "bootstrap_token": TEST_BOOTSTRAP_TOKEN,
+        }
+        # First bootstrap should succeed
+        res = client.post("/v1/auth/bootstrap", json=boot_req)
+        assert res.status_code in (200, 201, 409)
+        
+        # Second bootstrap with different user should fail
+        boot_req2 = {
             "login_identifier": "commissioner.attacker@fc27.club",
             "display_name": "Attacker",
             "club_id": TEST_CLUB_ID,
             "bootstrap_token": TEST_BOOTSTRAP_TOKEN,
         }
-        res = client.post("/v1/auth/bootstrap", json=boot_req)
+        res = client.post("/v1/auth/bootstrap", json=boot_req2)
         assert res.status_code in (403, 409)
 
     def test_f01_f02_user_account_retrieval(self, client):

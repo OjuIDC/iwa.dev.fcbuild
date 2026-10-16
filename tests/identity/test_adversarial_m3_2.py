@@ -212,7 +212,7 @@ class TestReplayAndSingleUseAdversarial:
         # Fast-forward expiration in database to 1 second ago
         with psycopg.connect(pg_uri) as conn:
             conn.execute(
-                "UPDATE public.fc27_invitations SET expires_at = now() - interval '1 second' WHERE invitation_id = %s",
+                "UPDATE public.fc27_invitations SET issued_at = now() - interval '2 seconds', expires_at = now() - interval '1 second' WHERE invitation_id = %s",
                 (inv_id,),
             )
 

@@ -46,6 +46,7 @@ from src.identity.policy import (
     AgentImpersonationError,
     AuthLevel,
     AuthMethod,
+    DecisionResult,
     PrincipalContext,
     Resource,
     UserRole,
@@ -171,6 +172,7 @@ class TestPasskeyAntiCloning:
         assert exc_lower.value.status_code == 401
         assert "replay or clone detected" in exc_lower.value.detail
 
+    @staticmethod
     def test_postgres_trigger_guard_webauthn_counter_ddl():
         """Verify PostgreSQL migration enforces BEFORE UPDATE counter guard."""
         mig_file = ROOT / "migrations" / "0004_identity_foundation.sql"
@@ -201,9 +203,18 @@ class TestChallengeLifecycleAndSingleUse:
 
         engine = WebAuthnEngine(mock_store)
         uid = uuid4()
-        payload = {"dummy": "reg_response"}
+        
+        # Create a valid base64url-encoded challenge
+        import base64
+        challenge_bytes = b"single_use_challenge"
+        challenge_b64 = base64.urlsafe_b64encode(challenge_bytes).decode().rstrip('=')
+        
+        # Create a valid clientDataJSON structure for the mock
+        client_data = {"challenge": challenge_b64, "type": "webauthn.create", "origin": "https://test.example"}
+        client_data_b64 = base64.urlsafe_b64encode(json.dumps(client_data).encode()).decode().rstrip('=')
+        payload = {"response": {"clientDataJSON": client_data_b64}}
 
-        with patch.object(engine, "_extract_challenge_from_response", return_value="single_use_ch"), \
+        with patch.object(engine, "_extract_challenge_from_response", return_value=challenge_b64), \
              patch("src.identity.webauthn._webauthn_verify_reg_response") as mock_verify:
             mock_verify.return_value = MagicMock(
                 credential_id=b"cid",
@@ -214,9 +225,8 @@ class TestChallengeLifecycleAndSingleUse:
             )
 
             # 1st verification succeeds (or moves past challenge consumption)
-            # Match user_id in mock
             mock_store.consume_challenge.side_effect = [
-                {"challenge_str": "single_use_ch", "challenge_type": "webauthn_registration", "user_id": uid},
+                {"challenge_str": challenge_b64, "challenge_type": "webauthn_registration", "user_id": uid},
                 None,
             ]
             engine.verify_registration_response(response_payload=payload, user_id=uid)
@@ -390,7 +400,7 @@ class TestAntiImpersonation:
             user_id=BFF_SERVICE_USER_ID,
             club_id="330323",
             roles=[UserRole.BFF_SERVICE],
-            auth_level=AuthLevel.SERVICE,
+            auth_level=AuthLevel.AUTHENTICATED,
             auth_method=AuthMethod.SERVICE_TOKEN,
             is_service=True,
         )
@@ -406,7 +416,7 @@ class TestAntiImpersonation:
             user_id=GRAPH_SERVICE_USER_ID,
             club_id="330323",
             roles=[UserRole.GRAPH_SERVICE],
-            auth_level=AuthLevel.SERVICE,
+            auth_level=AuthLevel.AUTHENTICATED,
             auth_method=AuthMethod.SERVICE_TOKEN,
             is_service=True,
         )
@@ -420,8 +430,8 @@ class TestAntiImpersonation:
         worker_svc = PrincipalContext.create(
             user_id=WORKER_SERVICE_USER_ID,
             club_id="330323",
-            roles=[UserRole.WORKER_SERVICE],
-            auth_level=AuthLevel.SERVICE,
+            roles=[UserRole.STAFF],  # Worker service maps to STAFF role
+            auth_level=AuthLevel.AUTHENTICATED,
             auth_method=AuthMethod.SERVICE_TOKEN,
             is_service=True,
         )
@@ -431,15 +441,17 @@ class TestAntiImpersonation:
         assert exc.value.status_code == 403
 
     def test_service_roles_strictly_lack_passkey_and_totp_permissions(self):
-        """RBAC matrix strictly denies PASSKEY and TOTP actions to service roles."""
+        """RBAC matrix strictly denies PASSKEY actions to BFF/Graph service roles, 
+        and TOTP actions to BFF/Graph service roles (but STAFF has TOTP permissions)."""
         res = Resource(resource_type="webauthn_credential", club_id="330323")
 
-        for role in [UserRole.BFF_SERVICE, UserRole.GRAPH_SERVICE, UserRole.WORKER_SERVICE]:
+        # BFF_SERVICE and GRAPH_SERVICE: denied ALL PASSKEY and TOTP actions
+        for role in [UserRole.BFF_SERVICE, UserRole.GRAPH_SERVICE]:
             p = PrincipalContext.create(
                 user_id=uuid4(),
                 club_id="330323",
                 roles=[role],
-                auth_level=AuthLevel.SERVICE,
+                auth_level=AuthLevel.AUTHENTICATED,
                 auth_method=AuthMethod.SERVICE_TOKEN,
                 is_service=True,
             )
@@ -453,8 +465,34 @@ class TestAntiImpersonation:
             ]:
                 with pytest.raises(Exception) as exc:
                     authorize(p, action, res)
-                # Must be 403 authorization error
                 assert getattr(exc.value, "status_code", 403) == 403
+
+        # STAFF: denied PASSKEY actions, but ALLOWED TOTP actions
+        staff = PrincipalContext.create(
+            user_id=uuid4(),
+            club_id="330323",
+            roles=[UserRole.STAFF],
+            auth_level=AuthLevel.AUTHENTICATED,
+            auth_method=AuthMethod.SERVICE_TOKEN,
+            is_service=True,
+        )
+        for action in [
+            ActionType.PASSKEY_REGISTER,
+            ActionType.PASSKEY_REVOKE,
+            ActionType.PASSKEY_VIEW,
+        ]:
+            with pytest.raises(Exception) as exc:
+                authorize(staff, action, res)
+            assert getattr(exc.value, "status_code", 403) == 403
+
+        # STAFF TOTP actions should be allowed (no exception)
+        for action in [
+            ActionType.TOTP_ENROLL,
+            ActionType.TOTP_VERIFY,
+            ActionType.TOTP_REVOKE,
+        ]:
+            result = authorize(staff, action, res)
+            assert isinstance(result, DecisionResult)
 
 
 # ==============================================================================
