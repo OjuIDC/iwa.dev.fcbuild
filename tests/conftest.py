@@ -592,3 +592,32 @@ def enabled_client(pg_db_migrated, pg_admin_db_uri):
         client.pipeline = pipeline
         yield client
 
+
+from src.identity.store import IdentityStore
+from tests.e2e.phase2_helpers import TEST_CLUB_ID
+
+
+@pytest.fixture
+def store(pg_uri: str) -> IdentityStore:
+    return IdentityStore(pg_uri)
+
+
+@pytest.fixture
+def active_human_commissioner(
+    store: IdentityStore,
+) -> tuple[dict, str, dict]:
+    """Create a human Commissioner with a valid server-side session."""
+    user = store.create_user(
+        club_id=TEST_CLUB_ID,
+        login_id=f"human_commissioner_{uuid.uuid4().hex[:8]}@fc27.club",
+        display_name="Human Commissioner",
+        status="active",
+    )
+    store.assign_user_role(user["user_id"], "commissioner")
+    raw_token, sess = store.create_session(
+        user_id=user["user_id"],
+        auth_level="authenticated",
+        auth_method="passkey",
+    )
+    return user, raw_token, sess
+

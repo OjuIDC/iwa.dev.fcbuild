@@ -28,25 +28,26 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 import pytest
 
-from tests.e2e.conftest import COM_HEADERS
 from tests.e2e.phase2_helpers import TEST_CLUB_ID, session_header
 from src.identity.crypto import hash_token
 from src.identity.store import IdentityStore, IdentityStoreError
 
 
-@pytest.fixture
-def store(pg_uri: str) -> IdentityStore:
-    return IdentityStore(pg_uri)
-
 
 class TestInvitationsIssuance:
     """POST /v1/auth/invitations test coverage."""
 
-    def test_commissioner_issue_invitation_success(self, client, pg_uri: str):
+    def test_commissioner_issue_invitation_success(
+        self,
+        client,
+        pg_uri: str,
+        active_human_commissioner,
+    ):
         """Commissioner can issue invitation; token is 64 hex chars; stored as SHA-256."""
+        _, raw_token, _ = active_human_commissioner
         unique_email = f"coach_{uuid.uuid4().hex[:8]}@fc27.club"
         payload = {
             "club_id": TEST_CLUB_ID,
@@ -55,7 +56,11 @@ class TestInvitationsIssuance:
             "display_name": "Coach Pep",
             "expires_in_hours": 48,
         }
-        res = client.post("/v1/auth/invitations", headers=COM_HEADERS, json=payload)
+        res = client.post(
+            "/v1/auth/invitations",
+            headers=session_header(raw_token),
+            json=payload,
+        )
         assert res.status_code == 201
         data = res.json()
 
@@ -73,7 +78,7 @@ class TestInvitationsIssuance:
         assert "user_id" in data
 
         # Cryptographic verification in PostgreSQL
-        with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
+        with psycopg.Connection[DictRow].connect(pg_uri, row_factory=dict_row) as conn:
             inv_row = conn.execute(
                 "SELECT * FROM public.fc27_invitations WHERE invitation_id = %s",
                 (data["invitation_id"],),
@@ -187,11 +192,12 @@ class TestInvitationsIssuance:
         )
         assert res.status_code == 401
 
-    def test_invalid_email_format_rejected(self, client):
+    def test_invalid_email_format_rejected(self, client, active_human_commissioner):
         """Invalid email rejected with HTTP 422."""
+        _, raw_token, _ = active_human_commissioner
         res = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token),
             json={
                 "club_id": TEST_CLUB_ID,
                 "role": "coach",
@@ -200,11 +206,12 @@ class TestInvitationsIssuance:
         )
         assert res.status_code == 422
 
-    def test_invalid_role_rejected(self, client):
+    def test_invalid_role_rejected(self, client, active_human_commissioner):
         """Non-existent application role rejected with HTTP 422."""
+        _, raw_token, _ = active_human_commissioner
         res = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token),
             json={
                 "club_id": TEST_CLUB_ID,
                 "role": "root_admin",
@@ -217,12 +224,13 @@ class TestInvitationsIssuance:
 class TestInvitationsValidation:
     """GET /v1/auth/invitations/{token}/validate test coverage."""
 
-    def test_validate_active_invitation_success(self, client):
+    def test_validate_active_invitation_success(self, client, active_human_commissioner):
         """Public endpoint returns 200 with non-sensitive invitation projection."""
+        _, raw_token, _ = active_human_commissioner
         email = f"analyst_{uuid.uuid4().hex[:8]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token),
             json={"club_id": TEST_CLUB_ID, "role": "analyst", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
@@ -243,11 +251,12 @@ class TestInvitationsValidation:
         res = client.get(f"/v1/auth/invitations/{dummy_token}/validate")
         assert res.status_code == 404
 
-    def test_validate_expired_token_returns_410(self, client, pg_uri: str):
+    def test_validate_expired_token_returns_410(self, client, pg_uri: str, active_human_commissioner):
         """Expired token returns HTTP 410."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token),
             json={"club_id": TEST_CLUB_ID, "role": "analyst", "login_identifier": f"t_{uuid.uuid4().hex[:6]}@fc27.club"},
         ).json()
         token = inv["invitation_token"]
@@ -262,18 +271,19 @@ class TestInvitationsValidation:
         res = client.get(f"/v1/auth/invitations/{token}/validate")
         assert res.status_code == 410
 
-    def test_validate_revoked_token_returns_410(self, client):
+    def test_validate_revoked_token_returns_410(self, client, active_human_commissioner):
         """Revoked token returns HTTP 410."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token),
             json={"club_id": TEST_CLUB_ID, "role": "coach", "login_identifier": f"t_{uuid.uuid4().hex[:6]}@fc27.club"},
         ).json()
         token = inv["invitation_token"]
         inv_id = inv["invitation_id"]
 
         # Revoke invitation
-        rev_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        rev_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token))
         assert rev_res.status_code == 200
 
         # Validate returns 410
@@ -284,13 +294,21 @@ class TestInvitationsValidation:
 class TestInvitationsConsumption:
     """POST /v1/auth/invitations/{token}/consume and /accept test coverage."""
 
-    def test_consume_invitation_activates_user_and_grants_role(self, client, pg_uri: str):
+    def test_consume_invitation_activates_user_and_grants_role(
+        self, client, pg_uri: str, active_human_commissioner
+    ):
         """Consuming invitation transitions user to 'active' and grants role."""
+        _, raw_token, _ = active_human_commissioner
         email = f"coach_{uuid.uuid4().hex[:8]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "coach", "login_identifier": email, "display_name": "Pending Coach"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "coach",
+                "login_identifier": email,
+                "display_name": "Pending Coach",
+            },
         ).json()
         token = inv["invitation_token"]
 
@@ -306,8 +324,9 @@ class TestInvitationsConsumption:
         user_id = user_info["user_id"]
 
         # PostgreSQL verification
-        with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
+        with psycopg.Connection[DictRow].connect(pg_uri, row_factory=dict_row) as conn:
             user_row = conn.execute("SELECT * FROM public.fc27_users WHERE user_id = %s", (user_id,)).fetchone()
+            assert user_row is not None
             assert user_row["status"] == "active"
             assert user_row["activated_at"] is not None
 
@@ -317,14 +336,20 @@ class TestInvitationsConsumption:
 
             # Verify invitation marked consumed
             inv_row = conn.execute("SELECT * FROM public.fc27_invitations WHERE invitation_id = %s", (inv["invitation_id"],)).fetchone()
+            assert inv_row is not None
             assert inv_row["consumed_at"] is not None
 
-    def test_single_use_replay_rejection(self, client):
+    def test_single_use_replay_rejection(self, client, active_human_commissioner):
         """Second attempt to consume token returns HTTP 409 Conflict."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "analyst", "login_identifier": f"a_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "analyst",
+                "login_identifier": f"a_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         token = inv["invitation_token"]
 
@@ -337,8 +362,11 @@ class TestInvitationsConsumption:
         r2 = client.post(f"/v1/auth/invitations/{token}/accept", json={"display_name": "Replay Attempt"})
         assert r2.status_code == 409
 
-    def test_consume_player_invitation_with_player_id(self, client, pg_uri: str):
+    def test_consume_player_invitation_with_player_id(
+        self, client, pg_uri: str, active_human_commissioner
+    ):
         """Player invitation consumption records numeric player_id."""
+        _, raw_token, _ = active_human_commissioner
         # Create a player first
         player_id = "887766"
         with psycopg.connect(pg_uri) as conn:
@@ -349,8 +377,12 @@ class TestInvitationsConsumption:
 
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "player", "login_identifier": f"p_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "player",
+                "login_identifier": f"p_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         token = inv["invitation_token"]
 
@@ -363,25 +395,31 @@ class TestInvitationsConsumption:
         assert data["role"] == "player"
         assert data["player_id"] == "887766"
 
-        with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
+        with psycopg.Connection[DictRow].connect(pg_uri, row_factory=dict_row) as conn:
             user_row = conn.execute("SELECT * FROM public.fc27_users WHERE user_id = %s", (data["user_id"],)).fetchone()
+            assert user_row is not None
             assert user_row["player_id"] == "887766"
 
 
 class TestInvitationsRevocation:
     """DELETE /v1/auth/invitations/{invitation_id} test coverage."""
 
-    def test_commissioner_can_revoke_invitation(self, client):
+    def test_commissioner_can_revoke_invitation(self, client, active_human_commissioner):
         """Commissioner can revoke unconsumed invitation."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "coach", "login_identifier": f"rev_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "coach",
+                "login_identifier": f"rev_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         inv_id = inv["invitation_id"]
         token = inv["invitation_token"]
 
-        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token))
         assert del_res.status_code == 200
         data = del_res.json()
         assert data["status"] == "revoked"
@@ -390,12 +428,17 @@ class TestInvitationsRevocation:
         consume_res = client.post(f"/v1/auth/invitations/{token}/accept", json={"display_name": "Too Late"})
         assert consume_res.status_code == 410
 
-    def test_revoking_consumed_invitation_fails(self, client):
+    def test_revoking_consumed_invitation_fails(self, client, active_human_commissioner):
         """Revoking an already consumed invitation returns HTTP 409 Conflict."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "staff", "login_identifier": f"cons_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "staff",
+                "login_identifier": f"cons_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         token = inv["invitation_token"]
         inv_id = inv["invitation_id"]
@@ -404,22 +447,27 @@ class TestInvitationsRevocation:
         client.post(f"/v1/auth/invitations/{token}/accept", json={"display_name": "Active Staff"})
 
         # Revocation must fail with 409
-        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token))
         assert del_res.status_code == 409
 
-    def test_revoking_already_revoked_invitation_fails(self, client):
+    def test_revoking_already_revoked_invitation_fails(self, client, active_human_commissioner):
         """Revoking twice returns HTTP 409 Conflict."""
+        _, raw_token, _ = active_human_commissioner
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": TEST_CLUB_ID, "role": "analyst", "login_identifier": f"dbl_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token),
+            json={
+                "club_id": TEST_CLUB_ID,
+                "role": "analyst",
+                "login_identifier": f"dbl_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         inv_id = inv["invitation_id"]
 
-        del1 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del1 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token))
         assert del1.status_code == 200
 
-        del2 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del2 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token))
         assert del2.status_code == 409
 
 
@@ -433,15 +481,20 @@ class TestInvitationsServiceRoleRejection:
         "worker_service",
         "service",
     ])
-    def test_router_rejects_machine_roles_with_422(self, client, prohibited_role: str):
+    def test_router_rejects_machine_roles_with_422(
+        self, client, active_human_commissioner, prohibited_role: str
+    ):
         """API rejects machine identity roles with HTTP 422 Unprocessable Entity."""
+        _, raw_token, _ = active_human_commissioner
         payload = {
             "club_id": TEST_CLUB_ID,
             "role": prohibited_role,
             "login_identifier": f"bot_{uuid.uuid4().hex[:6]}@fc27.club",
             "display_name": "Machine Identity",
         }
-        res = client.post("/v1/auth/invitations", headers=COM_HEADERS, json=payload)
+        res = client.post(
+            "/v1/auth/invitations", headers=session_header(raw_token), json=payload
+        )
         assert res.status_code == 422, f"Role {prohibited_role} should be rejected with 422, got {res.status_code}: {res.text}"
 
     @pytest.mark.parametrize("prohibited_role", [

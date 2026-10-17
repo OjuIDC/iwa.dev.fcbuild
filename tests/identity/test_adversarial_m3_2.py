@@ -45,7 +45,6 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 
-from tests.e2e.conftest import COM_HEADERS
 from tests.e2e.phase2_helpers import TEST_CLUB_ID, session_header
 from src.identity.crypto import hash_token
 from src.identity.store import IdentityStore, IdentityStoreError
@@ -55,11 +54,6 @@ CLUB_PRIMARY = TEST_CLUB_ID
 CLUB_FOREIGN = "998877"
 
 
-@pytest.fixture
-def store(pg_uri: str) -> IdentityStore:
-    return IdentityStore(pg_uri)
-
-
 # ==============================================================================
 # Track 1: Token Security & Storage Invariants
 # ==============================================================================
@@ -67,13 +61,14 @@ def store(pg_uri: str) -> IdentityStore:
 class TestTokenSecurityAndStorageAdversarial:
     """Adversarial stress testing for invitation token generation, entropy, and database storage."""
 
-    def test_token_format_and_entropy_guarantee(self, client):
+    def test_token_format_and_entropy_guarantee(self, client, active_human_commissioner):
         """Tokens must be exactly 64 lowercase hexadecimal characters (32 bytes entropy) and distinct."""
+        _, raw_token, _ = active_human_commissioner
         tokens = set()
         for i in range(10):
             res = client.post(
                 "/v1/auth/invitations",
-                headers=COM_HEADERS,
+                headers=session_header(raw_token),
                 json={
                     "club_id": CLUB_PRIMARY,
                     "role": "analyst",
@@ -93,12 +88,15 @@ class TestTokenSecurityAndStorageAdversarial:
             assert token not in tokens
             tokens.add(token)
 
-    def test_zero_plaintext_tokens_in_database(self, client, pg_uri: str):
+    def test_zero_plaintext_tokens_in_database(
+        self, client, pg_uri: str, active_human_commissioner
+    ):
         """PostgreSQL database must strictly store SHA-256 digests. Plaintext tokens must never appear."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"zero_plaintext_{uuid.uuid4().hex[:8]}@fc27.club"
         res = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={
                 "club_id": CLUB_PRIMARY,
                 "role": "coach",
@@ -147,12 +145,15 @@ class TestTokenSecurityAndStorageAdversarial:
                     (uuid.uuid4(), "short_token_hash_value_123456", CLUB_PRIMARY, "coach", "bad@fc27.club", "comm"),
                 )
 
-    def test_public_validation_endpoint_never_leaks_token_hash(self, client):
+    def test_public_validation_endpoint_never_leaks_token_hash(
+        self, client, active_human_commissioner
+    ):
         """Public validation response must not contain token_hash or internal secrets."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"leak_check_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "player", "login_identifier": email},
         ).json()
         raw_token = inv["invitation_token"]
@@ -174,12 +175,15 @@ class TestTokenSecurityAndStorageAdversarial:
 class TestReplayAndSingleUseAdversarial:
     """Adversarial stress testing for replay rejection, expiration, and revocation."""
 
-    def test_repeated_consumption_fails_409_repeatedly(self, client):
+    def test_repeated_consumption_fails_409_repeatedly(
+        self, client, active_human_commissioner
+    ):
         """First consumption succeeds; all subsequent consumption attempts return HTTP 409 Conflict."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"replay_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "coach", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
@@ -198,12 +202,15 @@ class TestReplayAndSingleUseAdversarial:
             assert r_replay.status_code == 409, f"Attempt {attempt} returned {r_replay.status_code}"
             assert "already" in r_replay.json().get("detail", "").lower()
 
-    def test_expired_token_fails_closed_on_validate_and_consume(self, client, pg_uri: str):
+    def test_expired_token_fails_closed_on_validate_and_consume(
+        self, client, pg_uri: str, active_human_commissioner
+    ):
         """Expired invitations must fail closed with HTTP 410 Gone on both validate and consume."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"expired_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "analyst", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
@@ -226,19 +233,24 @@ class TestReplayAndSingleUseAdversarial:
         assert con_res.status_code == 410
         assert "expired" in con_res.json().get("detail", "").lower()
 
-    def test_revoked_token_fails_closed_on_validate_and_consume(self, client):
+    def test_revoked_token_fails_closed_on_validate_and_consume(
+        self, client, active_human_commissioner
+    ):
         """Revoked invitations must fail closed with HTTP 410 Gone on both validate and consume."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"revoked_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "staff", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
         inv_id = inv["invitation_id"]
 
         # Administrative revocation
-        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del_res = client.delete(
+            f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token_auth)
+        )
         assert del_res.status_code == 200
 
         # 1. Validation returns 410 Gone
@@ -251,29 +263,39 @@ class TestReplayAndSingleUseAdversarial:
         assert con_res.status_code == 410
         assert "revoked" in con_res.json().get("detail", "").lower()
 
-    def test_revoking_already_revoked_invitation_fails_409(self, client):
+    def test_revoking_already_revoked_invitation_fails_409(
+        self, client, active_human_commissioner
+    ):
         """Attempting to revoke an already-revoked invitation must fail with HTTP 409 Conflict."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"double_rev_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "player", "login_identifier": email},
         ).json()
         inv_id = inv["invitation_id"]
 
-        del1 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del1 = client.delete(
+            f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token_auth)
+        )
         assert del1.status_code == 200
 
-        del2 = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del2 = client.delete(
+            f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token_auth)
+        )
         assert del2.status_code == 409
         assert "already revoked" in del2.json().get("detail", "").lower()
 
-    def test_revoking_already_consumed_invitation_fails_409(self, client):
+    def test_revoking_already_consumed_invitation_fails_409(
+        self, client, active_human_commissioner
+    ):
         """Attempting to revoke an already-consumed invitation must fail with HTTP 409 Conflict."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"consumed_rev_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "coach", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
@@ -284,7 +306,9 @@ class TestReplayAndSingleUseAdversarial:
         assert con_res.status_code == 200
 
         # Revoke attempt must fail with 409
-        del_res = client.delete(f"/v1/auth/invitations/{inv_id}", headers=COM_HEADERS)
+        del_res = client.delete(
+            f"/v1/auth/invitations/{inv_id}", headers=session_header(raw_token_auth)
+        )
         assert del_res.status_code == 409
         assert "consumed" in del_res.json().get("detail", "").lower()
 
@@ -296,13 +320,21 @@ class TestReplayAndSingleUseAdversarial:
 class TestStateMachineAndRoleBoundariesAdversarial:
     """Adversarial stress testing for account status transitions and caller authorization."""
 
-    def test_invitation_consumption_state_transition_and_events(self, client, pg_uri: str):
+    def test_invitation_consumption_state_transition_and_events(
+        self, client, pg_uri: str, active_human_commissioner
+    ):
         """Consuming invitation updates user status to active, sets activated_at, and records audit events."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"state_trans_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": CLUB_PRIMARY, "role": "coach", "login_identifier": email, "display_name": "Pending"},
+            headers=session_header(raw_token_auth),
+            json={
+                "club_id": CLUB_PRIMARY,
+                "role": "coach",
+                "login_identifier": email,
+                "display_name": "Pending",
+            },
         ).json()
         token = inv["invitation_token"]
         user_id = inv["user_id"]
@@ -346,8 +378,11 @@ class TestStateMachineAndRoleBoundariesAdversarial:
             assert "identity.status_changed" in event_types
             assert "identity.role_granted" in event_types
 
-    def test_disabled_account_cannot_be_invited(self, client, store: IdentityStore):
+    def test_disabled_account_cannot_be_invited(
+        self, client, store: IdentityStore, active_human_commissioner
+    ):
         """Attempting to invite an existing user whose status is 'disabled' fails closed with HTTP 403."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"disabled_user_{uuid.uuid4().hex[:6]}@fc27.club"
         user = store.create_user(
             club_id=CLUB_PRIMARY,
@@ -358,18 +393,21 @@ class TestStateMachineAndRoleBoundariesAdversarial:
 
         res = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "player", "login_identifier": email},
         )
         assert res.status_code == 403
         assert "disabled" in res.json().get("detail", "").lower()
 
-    def test_disabled_account_cannot_be_activated_via_invitation(self, client, store: IdentityStore, pg_uri: str):
+    def test_disabled_account_cannot_be_activated_via_invitation(
+        self, client, store: IdentityStore, pg_uri: str, active_human_commissioner
+    ):
         """If user is disabled after invitation issuance, consumption fails closed with HTTP 403."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"disabled_act_{uuid.uuid4().hex[:6]}@fc27.club"
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "player", "login_identifier": email},
         ).json()
         token = inv["invitation_token"]
@@ -384,8 +422,11 @@ class TestStateMachineAndRoleBoundariesAdversarial:
         assert res.status_code == 403
         assert "disabled" in res.json().get("detail", "").lower()
 
-    def test_active_account_cannot_be_invited_or_reactivated(self, client, store: IdentityStore):
+    def test_active_account_cannot_be_invited_or_reactivated(
+        self, client, store: IdentityStore, active_human_commissioner
+    ):
         """User account that is already active cannot receive new invitation (409 Conflict)."""
+        _, raw_token_auth, _ = active_human_commissioner
         email = f"active_user_{uuid.uuid4().hex[:6]}@fc27.club"
         store.create_user(
             club_id=CLUB_PRIMARY,
@@ -396,7 +437,7 @@ class TestStateMachineAndRoleBoundariesAdversarial:
 
         res = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
+            headers=session_header(raw_token_auth),
             json={"club_id": CLUB_PRIMARY, "role": "coach", "login_identifier": email},
         )
         assert res.status_code == 409
@@ -490,13 +531,20 @@ class TestStateMachineAndRoleBoundariesAdversarial:
         )
         assert res.status_code == 403
 
-    def test_cross_club_invitation_revocation_rejected(self, client, store: IdentityStore):
+    def test_cross_club_invitation_revocation_rejected(
+        self, client, store: IdentityStore, active_human_commissioner
+    ):
         """Staff/Commissioner caller from Club B attempting to revoke Club A invitation is rejected (HTTP 403)."""
+        _, raw_token_auth, _ = active_human_commissioner
         # 1. Create invitation in Club A
         inv = client.post(
             "/v1/auth/invitations",
-            headers=COM_HEADERS,
-            json={"club_id": CLUB_PRIMARY, "role": "coach", "login_identifier": f"club_a_{uuid.uuid4().hex[:6]}@fc27.club"},
+            headers=session_header(raw_token_auth),
+            json={
+                "club_id": CLUB_PRIMARY,
+                "role": "coach",
+                "login_identifier": f"club_a_{uuid.uuid4().hex[:6]}@fc27.club",
+            },
         ).json()
         inv_id = inv["invitation_id"]
 

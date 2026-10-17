@@ -33,15 +33,9 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 
-from tests.e2e.conftest import COM_HEADERS
 from tests.e2e.phase2_helpers import TEST_CLUB_ID, session_header
 from src.identity.crypto import hash_token
 from src.identity.store import IdentityStore
-
-
-@pytest.fixture
-def store(pg_uri: str) -> IdentityStore:
-    return IdentityStore(pg_uri)
 
 
 @pytest.fixture
@@ -264,12 +258,17 @@ class TestSessionManagement:
         for s in sessions_list:
             assert s["user_id"] == str(user["user_id"])
 
-    def test_commissioner_can_revoke_user_session_by_id(self, client, active_coach):
+    def test_commissioner_can_revoke_user_session_by_id(
+        self, client, active_coach, active_human_commissioner
+    ):
         """Commissioner can administratively revoke another user's session by ID."""
         _, raw_token, sess = active_coach
         sess_id = sess["session_id"]
 
-        del_res = client.delete(f"/v1/auth/sessions/{sess_id}", headers=COM_HEADERS)
+        _, commissioner_token, _ = active_human_commissioner
+        del_res = client.delete(
+            f"/v1/auth/sessions/{sess_id}", headers=session_header(commissioner_token)
+        )
         assert del_res.status_code in (200, 204)
 
         # That coach's session is now invalidated
