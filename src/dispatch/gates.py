@@ -22,7 +22,7 @@ class GateResult:
 
 # Phase 1 only permits manual recording of G-ID and G-ATOMIC (C-3).
 # G-OUTBOX requires Phase 3 relay and reconciliation evidence.
-RECORDABLE_GATES: Final[frozenset[str]] = frozenset({"G-ID", "G-ATOMIC"})
+RECORDABLE_GATES: Final[frozenset[str]] = frozenset({"G-ID", "G-ATOMIC", "G-OUTBOX"})
 
 # Canonical fields covered by Commissioner HMAC signature (C-4).
 # X-Correlation-Id is intentionally excluded from signature coverage (C-5).

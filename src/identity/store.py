@@ -425,9 +425,52 @@ class IdentityStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    # =================================================================
-    # 2. Invitations
-    # =================================================================
+    def get_player(self, player_id: str) -> dict[str, Any] | None:
+        """Retrieves a player by their ID."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM public.players WHERE player_id = %s", (player_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def verify_player_identity(
+        self,
+        player_id: str,
+        actor_id: UUID,
+        evidence_ref: str,
+        correlation_id: UUID | None = None
+    ) -> dict[str, Any]:
+        """Marks a player's identity as verified."""
+        cid = correlation_id or uuid4()
+        with self.connect() as conn, conn.transaction():
+            row = conn.execute(
+                """
+                UPDATE public.players
+                SET identity_verified_at = now(),
+                    identity_evidence_ref = %s,
+                    updated_at = now()
+                WHERE player_id = %s
+                RETURNING *
+                """,
+                (evidence_ref, player_id),
+            ).fetchone()
+
+            if not row:
+                raise IdentityStoreError(404, "player not found")
+
+            _safe_record_event(
+                conn,
+                event_type="identity.player_verified",
+                entity_type="player",
+                entity_id=player_id,
+                actor=f"commissioner:{actor_id}",
+                correlation_id=cid,
+                visibility="audit_only",
+                scope_club_id=row["club_id"],
+                reason=evidence_ref,
+            )
+            return dict(row)
+
 
     def create_invitation(
         self,

@@ -1,4 +1,4 @@
--- grants-policy-version: 10
+-- grants-policy-version: 11
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -86,7 +86,7 @@ BEGIN
 
     -- Milestone 3 Part C & D Grants
     IF to_regclass('public.players') IS NOT NULL THEN
-        GRANT SELECT, INSERT ON public.players TO fc27_app;
+        GRANT SELECT, INSERT, UPDATE ON public.players TO fc27_app;
         GRANT SELECT ON public.players TO fc27_dispatch;
     END IF;
 

@@ -246,14 +246,19 @@ def test_gate_signature_excludes_correlation_id(client_v1_hmac):
     assert r_sub.status_code == 200
 
 
-def test_g_outbox_not_recordable_in_phase1(client_v1_hmac):
-    """C-3: G-OUTBOX challenge and record returns 409 not_recordable_before_phase_3."""
+def test_g_outbox_is_recordable_in_phase3(client_v1_hmac):
+    """C-3: G-OUTBOX challenge and record is now allowed in Phase 3."""
     client_v1_hmac.app.state.settings.code_revision = "rev1"
     client_v1_hmac.app.state.settings.deployment_id = "dep1"
 
-    r_ch = client_v1_hmac.post("/v1/activation-gates/G-OUTBOX/challenge", headers=COM, json={})
-    assert r_ch.status_code == 409
-    assert "not_recordable_before_phase_3" in r_ch.text
+    r_ch = client_v1_hmac.post("/v1/activation-gates/G-OUTBOX/challenge", headers=COM, json={"status": "passed", "evidence_ref": "phase3-audit"})
+    assert r_ch.status_code == 200, r_ch.text
+    ch = r_ch.json()
+    assert ch["gate_id"] == "G-OUTBOX"
+
+    sig = sign_gate(ch, SIGNING_SECRET)
+    r_rec = client_v1_hmac.post("/v1/activation-gates/G-OUTBOX", headers=COM, json={**ch, "signature": sig})
+    assert r_rec.status_code == 200, r_rec.text
 
 
 def test_gate_change_applies_on_next_evaluation(client_v1_hmac):

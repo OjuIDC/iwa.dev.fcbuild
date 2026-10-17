@@ -731,3 +731,45 @@ async def get_player_assignment_detail(
 
     check_player_isolation(principal, assignment)
     return PlayerAssignmentProjection(**assignment)
+
+class PlayerIdentityVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    verified: bool
+    evidence_ref: str = Field(min_length=1, max_length=500)
+
+
+@router.post(
+    "/{player_id}/identity-verification",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Manually verify a player's identity",
+)
+async def verify_player_identity(
+    request: Request,
+    body: PlayerIdentityVerificationRequest,
+    player_id: str = Path(..., pattern=r"^[0-9]{1,20}$"),
+    principal: PrincipalContext = Depends(require_human_principal),
+    store: IdentityStore = Depends(get_identity_store),
+) -> dict:
+    if not principal.has_role(UserRole.COMMISSIONER):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient privileges")
+
+    if not body.verified:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="verified must be true")
+
+    player = store.get_player(player_id)
+    if not player:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="player not found")
+
+    if str(player["club_id"]) != str(principal.club_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="player belongs to a different club")
+
+    cid = getattr(request.state, "correlation_id", None) or uuid4()
+    updated_player = store.verify_player_identity(
+        player_id=player_id,
+        actor_id=principal.user_id,
+        evidence_ref=body.evidence_ref,
+        correlation_id=cid,
+    )
+
+    return updated_player
