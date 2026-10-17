@@ -304,6 +304,29 @@ services:
     networks: [fc27_net]
     restart: unless-stopped
 
+  outbox-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.graph
+    <<: *app-security
+    command: ["python", "-m", "src.dispatch.outbox_relay"]
+    environment:
+      <<: *common
+      POSTGRES_URI_FILE: /run/secrets/fc27_migrator_uri
+      OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-50}
+      OUTBOX_RELAY_POLL_INTERVAL: ${OUTBOX_RELAY_POLL_INTERVAL:-1.0}
+    secrets:
+      - fc27_migrator_uri
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [fc27_net, fc27_data]
+    restart: unless-stopped
+
   ws-server:
     build:
       context: .
