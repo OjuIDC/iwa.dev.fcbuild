@@ -142,10 +142,11 @@ class DbUris:
     migrator: str
     app: str
     dispatch: str
+    relay: str = ""
 
 @pytest.fixture(scope="session")
 def pg_roles(pg_admin_uri):
-    bootstrap_cluster(pg_admin_uri, {"fc27_migrator": None, "fc27_app": None, "fc27_dispatch": None})
+    bootstrap_cluster(pg_admin_uri, {"fc27_migrator": None, "fc27_app": None, "fc27_dispatch": None, "fc27_relay": None})
 
 @pytest.fixture()
 def pg_db(pg_admin_uri, pg_roles):
@@ -156,13 +157,6 @@ def pg_db(pg_admin_uri, pg_roles):
     uri = _with_db(pg_admin_uri, name)
     bootstrap_database(uri, legacy_owner=None, confirm=True)
     
-    migrator = _with_db(uri.replace(uri.split('//')[1].split(':')[0], 'fc27_migrator'), name) if '@' in uri else uri + ' user=fc27_migrator'
-    app = _with_db(uri.replace(uri.split('//')[1].split(':')[0], 'fc27_app'), name) if '@' in uri else uri + ' user=fc27_app'
-    dispatch = _with_db(uri.replace(uri.split('//')[1].split(':')[0], 'fc27_dispatch'), name) if '@' in uri else uri + ' user=fc27_dispatch'
-    
-    # Actually wait, parsing URI like that is fragile. psycopg.conninfo.make_conninfo is better.
-    
-    
     info = psycopg.conninfo.conninfo_to_dict(uri)
     info['user'] = 'fc27_migrator'
     migrator = psycopg.conninfo.make_conninfo(**info)
@@ -170,7 +164,9 @@ def pg_db(pg_admin_uri, pg_roles):
     app = psycopg.conninfo.make_conninfo(**info)
     info['user'] = 'fc27_dispatch'
     dispatch = psycopg.conninfo.make_conninfo(**info)
-    yield DbUris(uri, migrator, app, dispatch)
+    info['user'] = 'fc27_relay'
+    relay = psycopg.conninfo.make_conninfo(**info)
+    yield DbUris(uri, migrator, app, dispatch, relay)
 
 
     with psycopg.connect(pg_admin_uri, autocommit=True) as conn:

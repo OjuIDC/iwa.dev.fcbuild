@@ -22,7 +22,7 @@ def _compute_grants_sha256() -> str:
     p = MIGRATIONS_DIR / "post" / "grants.sql"
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
-GRANTS_POLICY = GrantsPolicy(version=11, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=12, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -59,6 +59,20 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
         row = cur.fetchone()
         if row and row[0]:
             violations.append("dispatch_owner_member")
+
+        # check fc27_relay
+        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay'")
+        if cur.fetchone():
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = 'fc27_relay'")
+            row = cur.fetchone()
+            if row and row[0]:
+                violations.append("relay_superuser")
+            cur.execute("SELECT pg_has_role('fc27_relay', 'fc27_owner', 'MEMBER')")
+            if cur.fetchone()[0]:
+                violations.append("relay_owner_member")
+            cur.execute("SELECT has_schema_privilege('fc27_relay', 'public', 'CREATE')")
+            if cur.fetchone()[0]:
+                violations.append("relay_create_on_public")
 
         # check fc27_dispatch_transition
         cur.execute("""

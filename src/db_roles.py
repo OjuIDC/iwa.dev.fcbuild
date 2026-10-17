@@ -14,6 +14,7 @@ ROLE_OWNER = "fc27_owner"
 ROLE_MIGRATOR = "fc27_migrator"
 ROLE_APP = "fc27_app"
 ROLE_DISPATCH = "fc27_dispatch"
+ROLE_RELAY = "fc27_relay"
 
 @dataclass
 class BootstrapReport:
@@ -24,7 +25,7 @@ class BootstrapReport:
     planned: list[str] = field(default_factory=list)
 
 
-LOGIN_ROLES = (ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH)
+LOGIN_ROLES = (ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH, ROLE_RELAY)
 ALL_ROLES = (ROLE_OWNER, *LOGIN_ROLES)
 
 
@@ -86,7 +87,7 @@ def bootstrap_cluster(admin_conninfo: str, passwords: Mapping[str, str | None]) 
     """Idempotent. Creates the required roles and sets passwords."""
     with psycopg.connect(admin_conninfo, autocommit=True) as conn:
         with conn.cursor() as cur:
-            for role in [ROLE_OWNER, ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH]:
+            for role in ALL_ROLES:
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
                 if not cur.fetchone():
                     if role == ROLE_OWNER:
@@ -153,7 +154,7 @@ def _plan_database_grants(cur, dbname: str) -> list[str]:
     for priv in ("USAGE", "CREATE"):
         if not _acl_has(cur, catalog="schema", name="public", grantee=ROLE_OWNER, privilege=priv):
             planned.append(f"GRANT {priv} ON SCHEMA public TO {ROLE_OWNER}")
-    for role in (ROLE_APP, ROLE_DISPATCH):
+    for role in (ROLE_APP, ROLE_DISPATCH, ROLE_RELAY):
         if not _acl_has(cur, catalog="schema", name="public", grantee=role, privilege="USAGE"):
             planned.append(f"GRANT USAGE ON SCHEMA public TO {role}")
     return planned
@@ -180,8 +181,8 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
             if not confirm:
                 planned.extend(_plan_database_grants(cur, dbname))
             else:
-                # Grant CONNECT ON DATABASE to the three login roles
-                for role in [ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH]:
+                # Grant CONNECT ON DATABASE to the login roles
+                for role in LOGIN_ROLES:
                     cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(dbname), sql.Identifier(role)))
 
                 # REVOKE CREATE ON SCHEMA public FROM PUBLIC
@@ -190,8 +191,8 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                 # GRANT USAGE, CREATE ON SCHEMA public TO fc27_owner
                 cur.execute(f"GRANT USAGE, CREATE ON SCHEMA public TO {ROLE_OWNER}")
 
-                # GRANT USAGE ON SCHEMA public TO fc27_app, fc27_dispatch
-                cur.execute(f"GRANT USAGE ON SCHEMA public TO {ROLE_APP}, {ROLE_DISPATCH}")
+                # GRANT USAGE ON SCHEMA public TO app, dispatch, relay
+                cur.execute(f"GRANT USAGE ON SCHEMA public TO {ROLE_APP}, {ROLE_DISPATCH}, {ROLE_RELAY}")
             
             # Ownership transfer
             query = """
@@ -318,11 +319,18 @@ def main():
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(2)
 
+    try:
+        relay_pw = settings.read_secret("FC27_RELAY_PASSWORD")
+    except settings.ConfigError:
+        relay_pw = None
+
     if not admin_uri:
         print("Configuration error: POSTGRES_ADMIN_URI is not set", file=sys.stderr)
         sys.exit(2)
 
     passwords = {ROLE_MIGRATOR: migrator_pw, ROLE_APP: app_pw, ROLE_DISPATCH: dispatch_pw}
+    if relay_pw is not None:
+        passwords[ROLE_RELAY] = relay_pw
     info = psycopg.conninfo.conninfo_to_dict(admin_uri)
     info["dbname"] = args.database
     db_conninfo = psycopg.conninfo.make_conninfo(**info)

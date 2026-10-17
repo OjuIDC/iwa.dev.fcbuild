@@ -1,4 +1,4 @@
--- grants-policy-version: 11
+-- grants-policy-version: 12
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -36,6 +36,9 @@ BEGIN
     IF to_regclass('public.domain_events') IS NOT NULL THEN
         GRANT SELECT, INSERT ON public.domain_events TO fc27_app;
         GRANT SELECT ON public.domain_events TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'GRANT SELECT ON public.domain_events TO fc27_relay';
+        END IF;
     END IF;
     IF to_regclass('public.domain_events_event_id_seq') IS NOT NULL THEN
         GRANT USAGE ON SEQUENCE public.domain_events_event_id_seq TO fc27_app;
@@ -44,7 +47,11 @@ BEGIN
     IF to_regclass('public.outbox') IS NOT NULL THEN
         GRANT INSERT ON public.outbox TO fc27_app;
         GRANT SELECT ON public.outbox TO fc27_dispatch;
-        GRANT UPDATE (published_at, attempts, last_error, locked_until) ON public.outbox TO fc27_dispatch;
+        GRANT UPDATE (published_at, attempts, last_error, locked_until, locked_by) ON public.outbox TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'GRANT SELECT ON public.outbox TO fc27_relay';
+            EXECUTE 'GRANT UPDATE (published_at, attempts, last_error, locked_until, locked_by) ON public.outbox TO fc27_relay';
+        END IF;
     END IF;
     IF to_regclass('public.outbox_outbox_id_seq') IS NOT NULL THEN
         GRANT USAGE ON SEQUENCE public.outbox_outbox_id_seq TO fc27_app;
