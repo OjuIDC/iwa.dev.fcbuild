@@ -329,6 +329,30 @@ services:
     networks: [fc27_net, fc27_data]
     restart: unless-stopped
 
+  dispatch-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.graph
+    <<: *app-security
+    command: ["python", "-m", "src.dispatch.worker"]
+    environment:
+      <<: *common
+      POSTGRES_URI_FILE: /run/secrets/fc27_dispatch_uri
+      DISPATCH_ENABLED: ${DISPATCH_ENABLED:-false}
+      WORKER_HEARTBEAT_INTERVAL: ${WORKER_HEARTBEAT_INTERVAL:-15.0}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-1.0}
+    secrets:
+      - fc27_dispatch_uri
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [fc27_net, fc27_data]
+    restart: unless-stopped
+
   ws-server:
     build:
       context: .
@@ -438,3 +462,5 @@ secrets:
     file: ./secrets/fc27_relay_password
   fc27_relay_uri:
     file: ./secrets/fc27_relay_uri
+  fc27_dispatch_uri:
+    file: ./secrets/fc27_dispatch_uri

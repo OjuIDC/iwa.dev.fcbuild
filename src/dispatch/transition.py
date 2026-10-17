@@ -153,7 +153,7 @@ def transition(
                 ),
             )
             row = cur.fetchone()
-            new_version = row["fc27_dispatch_transition"]
+            new_version = row["fc27_dispatch_transition"] if isinstance(row, Mapping) else row[0]
             return int(new_version)
 
     except psycopg.Error as exc:
