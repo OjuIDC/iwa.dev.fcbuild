@@ -27,8 +27,10 @@ ALL_DB_SECRETS = {
     "fc27_migrator_password",
     "fc27_app_password",
     "fc27_dispatch_password",
+    "fc27_relay_password",
     "fc27_migrator_uri",
     "fc27_app_uri",
+    "fc27_relay_uri",
 }
 
 
@@ -130,9 +132,12 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_migrator_password",
                 "fc27_app_password",
                 "fc27_dispatch_password",
+                "fc27_relay_password",
             }
         elif name == "db-migrate":
             assert mounted == {"fc27_migrator_uri"}
+        elif name == "outbox-relay":
+            assert mounted == {"fc27_relay_uri"}
         elif name == "graph-api":
             assert "fc27_app_uri" in mounted
             assert not (mounted & {
@@ -140,7 +145,9 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_migrator_password",
                 "fc27_app_password",
                 "fc27_dispatch_password",
+                "fc27_relay_password",
                 "fc27_migrator_uri",
+                "fc27_relay_uri",
             })
         else:
             assert not (mounted & ALL_DB_SECRETS), f"{name} must not mount any DB secrets, got {mounted & ALL_DB_SECRETS}"
@@ -201,7 +208,7 @@ def test_db_migrate_has_no_other_secrets(model):
 
 def test_only_graph_api_can_reach_postgres(model):
     on_data = sorted(n for n, s in model["services"].items() if "fc27_data" in (s.get("networks") or {}))
-    assert on_data == ["db-bootstrap", "db-migrate", "graph-api", "postgres"]
+    assert on_data == ["db-bootstrap", "db-migrate", "graph-api", "outbox-relay", "postgres"]
     assert model["networks"]["fc27_data"].get("internal") is True
 
 

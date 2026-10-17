@@ -49,11 +49,13 @@ services:
       FC27_MIGRATOR_PASSWORD_FILE: /run/secrets/fc27_migrator_password
       FC27_APP_PASSWORD_FILE: /run/secrets/fc27_app_password
       FC27_DISPATCH_PASSWORD_FILE: /run/secrets/fc27_dispatch_password
+      FC27_RELAY_PASSWORD_FILE: /run/secrets/fc27_relay_password
     secrets:
       - postgres_admin_uri
       - fc27_migrator_password
       - fc27_app_password
       - fc27_dispatch_password
+      - fc27_relay_password
     networks: [fc27_data]
     profiles: [bootstrap]
     restart: "no"
@@ -312,11 +314,11 @@ services:
     command: ["python", "-m", "src.dispatch.outbox_relay"]
     environment:
       <<: *common
-      POSTGRES_URI_FILE: /run/secrets/fc27_migrator_uri
+      POSTGRES_URI_FILE: /run/secrets/fc27_relay_uri
       OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-50}
       OUTBOX_RELAY_POLL_INTERVAL: ${OUTBOX_RELAY_POLL_INTERVAL:-1.0}
     secrets:
-      - fc27_migrator_uri
+      - fc27_relay_uri
     depends_on:
       postgres:
         condition: service_healthy
@@ -432,3 +434,7 @@ secrets:
     file: ./secrets/identity_encryption_key
   bootstrap_token:
     file: ./secrets/bootstrap_token
+  fc27_relay_password:
+    file: ./secrets/fc27_relay_password
+  fc27_relay_uri:
+    file: ./secrets/fc27_relay_uri
