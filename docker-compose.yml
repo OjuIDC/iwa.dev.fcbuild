@@ -148,7 +148,7 @@ services:
     restart: "no"
 
   model-health:
-    image: ${PYTHON_IMAGE:-python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e}
+    image: ${PYTHON_IMAGE:-python:3.14.8-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170}
     <<: *app-security
     depends_on:
       ollama-init:
