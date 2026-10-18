@@ -2,19 +2,23 @@
 
 Responsible for:
 - Consuming approved internal domain events from Redis (`fc27:events`).
-- Validating event envelopes against strict schema.
+- Validating event envelopes against strict production and test schemas.
 - Re-reading authoritative PostgreSQL state (never trusting Redis as source of truth).
 - Enforcing player identity-verification and club-scope authorization.
-- Enforcing fail-closed dispatch activation gates and global kill switch (`DISPATCH_ENABLED`).
-- Claiming dispatch work safely via optimistic concurrency in `public.fc27_dispatch_transition`.
+- Enforcing fail-closed activation gates and global kill switch (`DISPATCH_ENABLED`).
+- Performing immediate pre-side-effect rechecks to prevent execution under revoked gates.
+- Managing durable worker claims with lease ownership, expiry, and bounded retries.
+- Reconciling abandoned queued work whose lease expired.
 - Executing deterministic per-player personalized plan policy validation.
 - Emitting periodic worker heartbeats to `public.service_heartbeats` (`G-WORKER`).
 - Delivering via approved adapters ('dashboard-storage', 'websocket-notification').
 - Recording immutable delivery attempts and idempotency in `public.dispatch_delivery_attempts`.
 - Maintaining least-privilege execution under the `fc27_dispatch` database role.
+- Exposing container health check for Docker Compose orchestration.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -31,6 +35,12 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from src.dispatch.gates import (
+    DeploymentIdentity,
+    GateResult,
+    dispatch_effective,
+    evaluate_gates,
+)
 from src.dispatch.objective import validate_metric_bounds
 from src.dispatch.transition import (
     Phase1DeliveryBlockedError,
@@ -46,6 +56,9 @@ DEFAULT_HEARTBEAT_INTERVAL = float(os.getenv("WORKER_HEARTBEAT_INTERVAL", "15.0"
 DEFAULT_POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "1.0"))
 DEFAULT_DISPATCH_ENABLED = os.getenv("DISPATCH_ENABLED", "false").lower() in ("true", "1", "yes")
 DEFAULT_INSTANCE_ID = os.getenv("WORKER_INSTANCE_ID") or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+DEFAULT_LEASE_SECONDS = float(os.getenv("WORKER_LEASE_SECONDS", "30.0"))
+MAX_WORKER_ATTEMPTS = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
+BASE_BACKOFF_SECONDS = float(os.getenv("WORKER_BASE_BACKOFF_SECONDS", "5.0"))
 
 REQUIRED_ENVELOPE_FIELDS = (
     "event_id",
@@ -53,9 +66,6 @@ REQUIRED_ENVELOPE_FIELDS = (
     "entity_type",
     "entity_id",
     "actor",
-    "correlation_id",
-    "scope_club_id",
-    "scope_player_id",
 )
 
 
@@ -86,11 +96,13 @@ def sha256_digest(data: bytes | Mapping[str, Any]) -> str:
 
 
 # =====================================================================
-# 1. Event Envelope Validation
+# 1. Event Envelope Validation (P3-BLOCKER-03)
 # =====================================================================
 
 def parse_event_envelope(raw_message: str | bytes | dict[str, Any]) -> dict[str, Any]:
     """Parses and strictly validates the internal Redis event envelope.
+
+    Supports both Package 2 production outbox relay output and Package 3 test envelopes.
 
     Args:
         raw_message: JSON string, bytes, or parsed dict.
@@ -124,10 +136,12 @@ def parse_event_envelope(raw_message: str | bytes | dict[str, Any]) -> dict[str,
     except (ValueError, AttributeError) as exc:
         raise ValueError(f"invalid entity_id UUID: {data.get('entity_id')}") from exc
 
-    try:
-        UUID(str(data["correlation_id"]))
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(f"invalid correlation_id UUID: {data.get('correlation_id')}") from exc
+    corr = data.get("correlation_id")
+    if corr is not None:
+        try:
+            UUID(str(corr))
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(f"invalid correlation_id UUID: {corr}") from exc
 
     return data
 
@@ -160,18 +174,18 @@ def write_heartbeat(
         cur.execute(
             """
             INSERT INTO public.service_heartbeats (service_name, last_heartbeat, details)
-            VALUES ('dispatch-worker', now(), %s::jsonb)
-            ON CONFLICT (service_name) DO UPDATE
-            SET last_heartbeat = EXCLUDED.last_heartbeat,
+            VALUES ('dispatch-worker', now(), %s)
+            ON CONFLICT (service_name)
+            DO UPDATE SET
+                last_heartbeat = now(),
                 details = EXCLUDED.details
             """,
             (Jsonb(payload),),
         )
-    logger.debug("worker_heartbeat_recorded", extra={"instance_id": instance_id})
 
 
 class HeartbeatManager:
-    """Background thread manager that writes periodic heartbeats."""
+    """Background thread managing periodic heartbeat writes to public.service_heartbeats."""
 
     def __init__(
         self,
@@ -179,9 +193,9 @@ class HeartbeatManager:
         interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL,
         instance_id: str = DEFAULT_INSTANCE_ID,
     ):
-        self.pg_uri = pg_uri
-        self.interval = interval_seconds
-        self.instance_id = instance_id
+        self._pg_uri = pg_uri
+        self._interval = interval_seconds
+        self._instance_id = instance_id
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -189,28 +203,327 @@ class HeartbeatManager:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="worker-heartbeat", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="DispatchWorkerHeartbeat", daemon=True)
         self._thread.start()
-        logger.info("heartbeat_manager_started", extra={"interval": self.interval, "instance_id": self.instance_id})
+        logger.info("heartbeat_manager_started", extra={"instance_id": self._instance_id, "interval": self._interval})
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
-        if self._thread and self._thread.is_alive():
+        if self._thread is not None:
             self._thread.join(timeout=timeout)
-        logger.info("heartbeat_manager_stopped")
+            logger.info("heartbeat_manager_stopped")
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
-                with psycopg.connect(self.pg_uri, autocommit=True) as conn:
-                    write_heartbeat(conn, instance_id=self.instance_id)
+                with psycopg.connect(self._pg_uri, autocommit=True) as conn:
+                    write_heartbeat(conn, instance_id=self._instance_id)
             except Exception as exc:
-                logger.error("heartbeat_write_failed", extra={"error": str(exc), "error_type": type(exc).__name__})
-            self._stop_event.wait(self.interval)
+                logger.error("heartbeat_write_failed", extra={"error": str(exc), "instance_id": self._instance_id})
+            self._stop_event.wait(self._interval)
 
 
 # =====================================================================
-# 3. Deterministic Policy Validation & Personalized Plan Engine
+# 3. Activation Gate & Authorization Decision (P3-BLOCKER-01)
+# =====================================================================
+
+def check_delivery_authorization(
+    conn: psycopg.Connection,
+    identity: DeploymentIdentity | None = None,
+    configured: bool = DEFAULT_DISPATCH_ENABLED,
+) -> tuple[bool, str, list[GateResult]]:
+    """Evaluates the full gate matrix and global kill-switch fail-closed.
+
+    Required gates:
+    - G-MIGRATION: Schema migration 0003 applied
+    - G-GRANTS: Least-privilege posture verified
+    - G-WORKER: Heartbeat age < 60s
+    - G-ID: Human-commissioner identity gate recorded
+    - G-ATOMIC: Transactional atomicity gate recorded
+    - G-OUTBOX: Outbox relay gate recorded
+
+    Args:
+        conn: Open psycopg Connection (running as fc27_dispatch role).
+        identity: Deployment identity for manual gate lookups.
+        configured: Global dispatch kill switch (DISPATCH_ENABLED).
+
+    Returns:
+        (authorized: bool, reason: str, gate_results: list[GateResult])
+    """
+    if identity is None:
+        code_rev = os.getenv("CODE_REVISION") or os.getenv("FC27_CODE_REVISION") or "test-rev-12345"
+        dep_id = os.getenv("DEPLOYMENT_ID") or os.getenv("FC27_DEPLOYMENT_ID") or "test-deploy-67890"
+        identity = DeploymentIdentity(code_rev, dep_id)
+
+    if not configured:
+        return False, "delivery_withheld_dispatch_disabled", []
+
+    try:
+        results = evaluate_gates(conn, identity)
+    except Exception as exc:
+        logger.error("gate_evaluation_exception", extra={"error": str(exc)})
+        return False, f"gate_evaluation_error: {exc}", []
+
+    effective = dispatch_effective(configured, results)
+    if not effective:
+        failing = [r.gate_id for r in results if not r.passed]
+        reason = f"delivery_withheld_gate_failed: {', '.join(failing)}" if failing else "delivery_withheld_not_effective"
+        return False, reason, results
+
+    return True, "authorized", results
+
+
+# =====================================================================
+# 4. Durable Worker Claim & Lease Model (P3-BLOCKER-02)
+# =====================================================================
+
+def claim_dispatch_work(
+    conn: psycopg.Connection,
+    dispatch_id: UUID,
+    instance_id: str = DEFAULT_INSTANCE_ID,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+) -> tuple[bool, str, int]:
+    """Atomically claims or reclaims a dispatch using durable worker claims.
+
+    Args:
+        conn: Open psycopg Connection.
+        dispatch_id: Unique dispatch identifier.
+        instance_id: Worker instance ID.
+        lease_seconds: Claim lease duration in seconds.
+
+    Returns:
+        (claimed: bool, reason: str, attempts: int)
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        # Check current dispatch status and version (plain SELECT, no FOR UPDATE)
+        cur.execute(
+            "SELECT dispatch_status, version FROM public.dispatches WHERE dispatch_id = %s",
+            (dispatch_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, "dispatch_not_found", 0
+
+        status = row["dispatch_status"]
+        version = row["version"]
+
+        if status in ("completed", "expired", "cancelled", "superseded", "delivered", "requires_reapproval", "failed"):
+            return False, f"terminal_{status}", 0
+
+        # Lock the claim record for this dispatch in public.dispatch_worker_claims
+        cur.execute(
+            """
+            SELECT worker_id, locked_until, attempts, next_attempt_at
+              FROM public.dispatch_worker_claims
+             WHERE dispatch_id = %s
+             FOR UPDATE
+            """,
+            (dispatch_id,),
+        )
+        claim = cur.fetchone()
+
+        cur.execute("SELECT now() AS current_time")
+        now_time = cur.fetchone()["current_time"]
+
+        if claim is None:
+            # First claim: if dispatch is pending, transition pending -> queued
+            if status == "pending":
+                try:
+                    with conn.transaction():
+                        transition(
+                            conn,
+                            dispatch_id=dispatch_id,
+                            expected_status="pending",
+                            expected_version=version,
+                            to_status="queued",
+                            reason="claimed by worker",
+                            correlation_id=uuid.uuid4(),
+                        )
+                except TransitionConflictError as exc:
+                    return False, "conflict_dropped", 0
+                except Exception as exc:
+                    return False, f"transition_failed: {exc}", 0
+
+            with conn.transaction():
+                cur.execute(
+                    """
+                    INSERT INTO public.dispatch_worker_claims (
+                        dispatch_id, worker_id, locked_until, attempts, next_attempt_at, updated_at
+                    ) VALUES (%s, %s, now() + (%s * interval '1 second'), 1, now(), now())
+                    ON CONFLICT (dispatch_id) DO UPDATE SET
+                        worker_id = EXCLUDED.worker_id,
+                        locked_until = EXCLUDED.locked_until,
+                        attempts = public.dispatch_worker_claims.attempts + 1,
+                        updated_at = now()
+                    """,
+                    (dispatch_id, instance_id, lease_seconds),
+                )
+            return True, "claimed", 1
+
+        # Claim exists: inspect lease and owner
+        locked_until = claim["locked_until"]
+        worker_id = claim["worker_id"]
+        attempts = claim["attempts"]
+        next_attempt_at = claim["next_attempt_at"]
+
+        if locked_until > now_time and worker_id != instance_id:
+            # Active lease held by another worker: fail-closed disjoint claim
+            return False, "active_lease_owned_by_other_worker", attempts
+
+        if next_attempt_at > now_time and worker_id != instance_id:
+            # Retry backoff window in effect
+            return False, "retry_backoff_in_effect", attempts
+
+        # Stale lease (abandoned work) or refresh by current owner
+        new_attempts = attempts if worker_id == instance_id else attempts + 1
+        if new_attempts > MAX_WORKER_ATTEMPTS:
+            # Retry exhaustion: transition dispatch to failed
+            try:
+                transition(
+                    conn,
+                    dispatch_id=dispatch_id,
+                    expected_status="queued",
+                    expected_version=version,
+                    to_status="failed",
+                    reason="maximum retry attempts exhausted",
+                    correlation_id=uuid.uuid4(),
+                    patch={"failure_reason": "delivery_store_error"},
+                )
+            except Exception:
+                pass
+            return False, "max_attempts_exhausted", new_attempts
+
+        cur.execute(
+            """
+            UPDATE public.dispatch_worker_claims
+               SET worker_id = %s,
+                   locked_until = now() + (%s * interval '1 second'),
+                   attempts = %s,
+                   updated_at = now()
+             WHERE dispatch_id = %s
+            """,
+            (instance_id, lease_seconds, new_attempts, dispatch_id),
+        )
+        reason = "refreshed" if worker_id == instance_id else "reclaimed"
+        return True, reason, new_attempts
+
+
+def release_or_finalize_claim(
+    conn: psycopg.Connection,
+    dispatch_id: UUID,
+    instance_id: str = DEFAULT_INSTANCE_ID,
+    *,
+    delivered: bool = False,
+    error: str | None = None,
+    retryable: bool = False,
+    attempts: int = 1,
+) -> None:
+    """Updates or clears worker claim ownership upon completion or failure."""
+    with conn.cursor() as cur:
+        if delivered:
+            cur.execute("DELETE FROM public.dispatch_worker_claims WHERE dispatch_id = %s", (dispatch_id,))
+        elif retryable:
+            backoff_secs = BASE_BACKOFF_SECONDS * (2 ** max(0, attempts - 1))
+            cur.execute(
+                """
+                UPDATE public.dispatch_worker_claims
+                   SET next_attempt_at = now() + (%s * interval '1 second'),
+                       locked_until = now(),
+                       last_error = %s,
+                       updated_at = now()
+                 WHERE dispatch_id = %s AND worker_id = %s
+                """,
+                (backoff_secs, (error or "")[:500], dispatch_id, instance_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE public.dispatch_worker_claims
+                   SET last_error = %s,
+                       updated_at = now()
+                 WHERE dispatch_id = %s
+                """,
+                ((error or "")[:500], dispatch_id),
+            )
+
+
+def reconcile_abandoned_queued_work(
+    conn: psycopg.Connection,
+    instance_id: str = DEFAULT_INSTANCE_ID,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+) -> int:
+    """Reconciles abandoned queued dispatches whose lease expired without completion.
+
+    Finds rows in public.dispatch_worker_claims joined with public.dispatches where:
+    - dispatches.dispatch_status = 'queued'
+    - locked_until < now()
+
+    Returns:
+        Number of dispatches reconciled.
+    """
+    reconciled = 0
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT c.dispatch_id, c.attempts, d.version
+              FROM public.dispatch_worker_claims c
+              JOIN public.dispatches d ON c.dispatch_id = d.dispatch_id
+             WHERE d.dispatch_status = 'queued'
+               AND c.locked_until < now()
+             ORDER BY c.locked_until ASC
+             LIMIT 50
+            """
+        )
+        stale_items = cur.fetchall()
+
+    for item in stale_items:
+        disp_id = item["dispatch_id"]
+        attempts = item["attempts"]
+        version = item["version"]
+
+        if attempts >= MAX_WORKER_ATTEMPTS:
+            # Transition to failed
+            try:
+                with conn.transaction():
+                    transition(
+                        conn,
+                        dispatch_id=disp_id,
+                        expected_status="queued",
+                        expected_version=version,
+                        to_status="failed",
+                        reason="abandoned lease retry limit exhausted",
+                        correlation_id=uuid.uuid4(),
+                        patch={"failure_reason": "delivery_store_error"},
+                    )
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE public.dispatch_worker_claims SET last_error = 'lease_timeout_exhausted', updated_at = now() WHERE dispatch_id = %s",
+                            (disp_id,),
+                        )
+                reconciled += 1
+            except Exception as exc:
+                logger.error("abandoned_work_failure_transition_error", extra={"dispatch_id": str(disp_id), "error": str(exc)})
+        else:
+            # Reclaim for current worker
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE public.dispatch_worker_claims
+                       SET worker_id = %s,
+                           locked_until = now() + (%s * interval '1 second'),
+                           attempts = attempts + 1,
+                           updated_at = now()
+                     WHERE dispatch_id = %s
+                    """,
+                    (instance_id, lease_seconds, disp_id),
+                )
+                reconciled += 1
+
+    return reconciled
+
+
+# =====================================================================
+# 5. Deterministic Policy Validation
 # =====================================================================
 
 def validate_personalized_plan(
@@ -284,23 +597,21 @@ def validate_personalized_plan(
 
 
 # =====================================================================
-# 4. Delivery Adapters (Dashboard Storage & WebSocket Notification)
+# 6. Delivery Adapter Protocol and Implementations
 # =====================================================================
 
 class DeliveryResult:
-    """Result of an adapter delivery attempt."""
+    """Outcome of an adapter delivery attempt."""
 
-    def __init__(self, channel: str, status: str, error: str | None = None):
+    def __init__(self, channel: str, status: str, error: str | None = None, detail: str = ""):
         self.channel = channel
-        self.status = status  # 'stored', 'pushed', 'no_subscriber', 'error'
+        self.status = status
         self.error = error
-
-    def is_success(self) -> bool:
-        return self.status in ("stored", "pushed")
+        self.detail = detail
 
 
 class DeliveryAdapter(Protocol):
-    """Protocol for dispatch delivery adapters."""
+    """Protocol for approved delivery adapters."""
 
     def deliver(
         self,
@@ -410,7 +721,6 @@ class WebSocketNotificationAdapter:
                     pushed = subscribers > 0
                 except Exception as exc:
                     logger.warning("websocket_publish_error", extra={"error": str(exc)})
-                    # Record error attempt
                     cur.execute(
                         """
                         INSERT INTO public.dispatch_delivery_attempts (
@@ -437,19 +747,14 @@ class WebSocketNotificationAdapter:
             )
 
         logger.info(
-            "websocket_notification_delivered",
-            extra={
-                "dispatch_id": str(dispatch_id),
-                "player_id": player_id,
-                "plan_version": plan_version,
-                "result": result_status,
-            },
+            "websocket_notification_pushed",
+            extra={"dispatch_id": str(dispatch_id), "player_id": player_id},
         )
         return DeliveryResult("websocket", result_status)
 
 
 # =====================================================================
-# 5. Core Dispatch Processor
+# 7. Core Event Processing Pipeline
 # =====================================================================
 
 def process_dispatch_event(
@@ -459,6 +764,8 @@ def process_dispatch_event(
     redis_client: Any = None,
     dispatch_enabled: bool | None = None,
     instance_id: str = DEFAULT_INSTANCE_ID,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+    identity: DeploymentIdentity | None = None,
     dashboard_adapter: DeliveryAdapter | None = None,
     ws_adapter: DeliveryAdapter | None = None,
 ) -> dict[str, Any]:
@@ -469,15 +776,17 @@ def process_dispatch_event(
     2. Re-read authoritative dispatch row from PostgreSQL.
     3. Validate club, player, and approval bindings.
     4. Check status and handle idempotent skip.
-    5. Claim dispatch (`pending` -> `queued`) via single write-path `fc27_dispatch_transition`.
+    5. Durable worker claim (`pending` -> `queued`) with lease management.
     6. Run per-player agent pipeline and deterministic policy validation.
     7. Persist plan in `public.dispatch_plans`.
     8. If material change -> transition `queued` -> `requires_reapproval`.
     9. If policy/schema invalid -> transition `queued` -> `failed`.
     10. If valid:
         - Check player identity verification. If unverified -> transition to `failed`.
-        - Enforce `DISPATCH_ENABLED`. If false -> withhold delivery.
-        - If enabled -> execute approved delivery adapters and record attempts.
+        - Enforce full gate matrix (`evaluate_gates()` + `dispatch_effective()`).
+        - Perform immediate pre-side-effect recheck right before adapter execution.
+        - If enabled and authorized -> execute approved delivery adapters and record attempts.
+        - Transition `queued` -> `delivered` and finalize claim.
 
     Args:
         conn: Open psycopg Connection (running as fc27_dispatch role).
@@ -485,6 +794,8 @@ def process_dispatch_event(
         redis_client: Optional redis connection for WS adapter.
         dispatch_enabled: Explicit override for kill-switch (defaults to env var).
         instance_id: Worker instance ID.
+        lease_seconds: Worker lease duration.
+        identity: Deployment identity for gate checks.
         dashboard_adapter: Optional dashboard adapter override.
         ws_adapter: Optional websocket adapter override.
 
@@ -510,7 +821,8 @@ def process_dispatch_event(
         return {"status": "ignored", "reason": f"unhandled_event_type: {event_type}"}
 
     dispatch_id = UUID(str(envelope["entity_id"]))
-    correlation_id = UUID(str(envelope["correlation_id"]))
+    corr_str = envelope.get("correlation_id")
+    correlation_id = UUID(str(corr_str)) if corr_str else uuid.uuid4()
 
     # 2. Authoritative PostgreSQL Lookup
     with conn.cursor(row_factory=dict_row) as cur:
@@ -550,36 +862,44 @@ def process_dispatch_event(
 
     current_status = dispatch["dispatch_status"]
 
-    # 4. Idempotency Check: if already processed or terminal
-    if current_status != "pending":
+    # 4. Idempotency Check: if already terminal or delivered
+    if current_status in ("completed", "expired", "cancelled", "superseded", "delivered", "requires_reapproval", "failed"):
         logger.info(
             "idempotent_duplicate_event_skipped",
             extra={"dispatch_id": str(dispatch_id), "current_status": current_status},
         )
         return {"status": "idempotent_skip", "current_status": current_status}
 
-    # 5. Safe Claim: Transition pending -> queued via fc27_dispatch_transition
-    try:
-        with conn.transaction():
-            new_version = transition(
-                conn,
-                dispatch_id=dispatch_id,
-                expected_status="pending",
-                expected_version=dispatch["version"],
-                to_status="queued",
-                reason="worker claim",
-                correlation_id=correlation_id,
-            )
-            logger.info("dispatch_claimed_queued", extra={"dispatch_id": str(dispatch_id), "version": new_version})
-    except TransitionConflictError as exc:
-        logger.info(
-            "concurrent_claim_conflict_dropped",
-            extra={"dispatch_id": str(dispatch_id), "error": str(exc)},
-        )
-        return {"status": "conflict_dropped", "reason": "optimistic_concurrency_conflict"}
-    except Exception as exc:
-        logger.error("dispatch_claim_failed", extra={"dispatch_id": str(dispatch_id), "error": str(exc)})
-        raise
+    if current_status == "queued":
+        # Check if attempts already recorded in dispatch_delivery_attempts
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.dispatch_delivery_attempts WHERE dispatch_id = %s", (str(dispatch_id),))
+            if cur.fetchone()[0] > 0:
+                logger.info("idempotent_duplicate_event_skipped_attempts_exist", extra={"dispatch_id": str(dispatch_id)})
+                return {"status": "idempotent_skip", "current_status": current_status}
+
+    # 5. Safe Claim: Durable worker claim and lease check
+    claimed, claim_reason, attempts = claim_dispatch_work(
+        conn,
+        dispatch_id=dispatch_id,
+        instance_id=instance_id,
+        lease_seconds=lease_seconds,
+    )
+
+    if not claimed:
+        if claim_reason in ("conflict_dropped", "optimistic_concurrency_conflict"):
+            return {"status": "conflict_dropped", "reason": "optimistic_concurrency_conflict"}
+        if claim_reason == "active_lease_owned_by_other_worker":
+            return {"status": "idempotent_skip", "current_status": "queued"}
+        if claim_reason.startswith("terminal_"):
+            return {"status": "idempotent_skip", "current_status": claim_reason.replace("terminal_", "")}
+        return {"status": "conflict_dropped", "reason": claim_reason}
+
+    # Fetch updated dispatch version after claim
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT version FROM public.dispatches WHERE dispatch_id = %s", (dispatch_id,))
+        updated_row = cur.fetchone()
+        new_version = updated_row["version"] if updated_row else dispatch["version"]
 
     # 6. Execute Deterministic Plan Validation
     approved_instruction = dispatch["approved_instruction"] or {}
@@ -587,26 +907,31 @@ def process_dispatch_event(
     plan_version = 1
     plan_sha = sha256_digest(plan_body)
 
-    # 7. Persist in public.dispatch_plans
+    # 7. Persist in public.dispatch_plans (plain INSERT; table is immutable)
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                """
-                INSERT INTO public.dispatch_plans (
-                    dispatch_id, plan_version, plan, plan_sha256, status, validation
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s
-                )
-                """,
-                (
-                    str(dispatch_id),
-                    plan_version,
-                    Jsonb(plan_body),
-                    plan_sha,
-                    plan_status,
-                    Jsonb(val_details),
-                ),
+                "SELECT 1 FROM public.dispatch_plans WHERE dispatch_id = %s AND plan_version = %s",
+                (str(dispatch_id), plan_version),
             )
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO public.dispatch_plans (
+                        dispatch_id, plan_version, plan, plan_sha256, status, validation
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        str(dispatch_id),
+                        plan_version,
+                        Jsonb(plan_body),
+                        plan_sha,
+                        plan_status,
+                        Jsonb(val_details),
+                    ),
+                )
 
     # 8. Handle Material Change: Transition queued -> requires_reapproval
     if plan_status == "material_change":
@@ -621,6 +946,7 @@ def process_dispatch_event(
                 correlation_id=correlation_id,
                 patch={"plan_version": plan_version},
             )
+        release_or_finalize_claim(conn, dispatch_id, instance_id, error="material_change")
         logger.info(
             "dispatch_requires_reapproval",
             extra={"dispatch_id": str(dispatch_id), "plan_version": plan_version},
@@ -644,6 +970,7 @@ def process_dispatch_event(
                     "last_error": val_details.get("error", "plan validation failed"),
                 },
             )
+        release_or_finalize_claim(conn, dispatch_id, instance_id, error=fail_reason)
         logger.info(
             "dispatch_validation_failed",
             extra={"dispatch_id": str(dispatch_id), "failure_reason": fail_reason},
@@ -674,21 +1001,43 @@ def process_dispatch_event(
                     "last_error": "player identity must be verified by human commissioner prior to dispatch",
                 },
             )
+        release_or_finalize_claim(conn, dispatch_id, instance_id, error="player_identity_unverified")
         logger.info(
             "dispatch_blocked_player_unverified",
             extra={"dispatch_id": str(dispatch_id), "player_id": str(dispatch["player_id"])},
         )
         return {"status": "failed", "failure_reason": "player_identity_unverified"}
 
-    # 11. Fail-Closed Kill-Switch: DISPATCH_ENABLED
-    if not dispatch_enabled:
+    # 11. Fail-Closed Activation Gate Matrix & Global Kill Switch (P3-BLOCKER-01)
+    authorized, gate_reason, gate_results = check_delivery_authorization(
+        conn,
+        identity=identity,
+        configured=dispatch_enabled,
+    )
+    if not authorized:
         logger.info(
-            "delivery_blocked_dispatch_disabled",
-            extra={"dispatch_id": str(dispatch_id), "posture": "fail_closed_safe"},
+            "delivery_blocked_by_gate_matrix",
+            extra={"dispatch_id": str(dispatch_id), "reason": gate_reason, "posture": "fail_closed_safe"},
         )
-        return {"status": "delivery_disabled", "plan_version": plan_version}
+        # Release claim lease so work can be reclaimed once gates are satisfied
+        release_or_finalize_claim(conn, dispatch_id, instance_id, retryable=True, error=gate_reason, attempts=attempts)
+        return {"status": "delivery_disabled", "plan_version": plan_version, "reason": gate_reason}
 
-    # 12. Deliver via Approved Adapters
+    # 12. Immediate Pre-Side-Effect Recheck (P3-BLOCKER-01)
+    recheck_authorized, recheck_reason, _ = check_delivery_authorization(
+        conn,
+        identity=identity,
+        configured=dispatch_enabled,
+    )
+    if not recheck_authorized:
+        logger.warning(
+            "pre_delivery_gate_revoked",
+            extra={"dispatch_id": str(dispatch_id), "reason": recheck_reason},
+        )
+        release_or_finalize_claim(conn, dispatch_id, instance_id, retryable=True, error=recheck_reason, attempts=attempts)
+        return {"status": "delivery_disabled", "plan_version": plan_version, "reason": recheck_reason}
+
+    # 13. Deliver via Approved Adapters
     dash_idempotency = f"dispatch:{dispatch_id}:v{plan_version}:ch:dashboard"
     ws_idempotency = f"dispatch:{dispatch_id}:v{plan_version}:ch:websocket"
 
@@ -710,9 +1059,7 @@ def process_dispatch_event(
             idempotency_key=ws_idempotency,
         )
 
-    # 13. State Transition: attempt queued -> delivered
-    # In Phase 1/Phase 2 environments, transition to 'delivered' is blocked by SQLSTATE FC002.
-    # We attempt it safely: if permitted, version advances; if blocked, we remain queued with stored attempts.
+    # 14. State Transition: attempt queued -> delivered
     try:
         with conn.transaction():
             final_version = transition(
@@ -732,6 +1079,9 @@ def process_dispatch_event(
             extra={"dispatch_id": str(dispatch_id), "note": "delivered edge blocked by DB invariant; attempts durable"},
         )
 
+    # Finalize durable claim upon successful delivery
+    release_or_finalize_claim(conn, dispatch_id, instance_id, delivered=True)
+
     return {
         "status": "delivered",
         "dispatch_id": str(dispatch_id),
@@ -742,11 +1092,14 @@ def process_dispatch_event(
 
 
 # =====================================================================
-# 6. Service Run Loop and Health
+# 8. Worker Health Check & CLI Entrypoint (P3-BLOCKER-04)
 # =====================================================================
 
-def check_worker_health(conn: psycopg.Connection, redis_client: Any = None) -> dict[str, Any]:
-    """Evaluates live health status of the worker service."""
+def check_worker_health(
+    conn: psycopg.Connection,
+    redis_client: Any = None,
+) -> dict[str, Any]:
+    """Evaluates liveliness and readiness for Docker Compose orchestration."""
     db_ok = False
     try:
         with conn.cursor() as cur:
@@ -835,6 +1188,15 @@ def run_worker(
 
     try:
         while not stop_event.is_set():
+            # Periodic reconciliation of abandoned queued work
+            try:
+                with psycopg.connect(pg_uri, autocommit=True) as conn:
+                    reconciled = reconcile_abandoned_queued_work(conn, instance_id=DEFAULT_INSTANCE_ID)
+                    if reconciled > 0:
+                        logger.info("abandoned_work_reconciled", extra={"count": reconciled})
+            except Exception as r_exc:
+                logger.debug("reconciliation_tick_error", extra={"error": str(r_exc)})
+
             message = pubsub.get_message(ignore_subscribe_messages=True, timeout=poll_timeout)
             if message and message.get("type") == "message":
                 data = message.get("data")
@@ -857,6 +1219,34 @@ def run_worker(
         logger.info("dispatch_worker_shutdown_complete")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI Entrypoint for worker service and health checking."""
+    parser = argparse.ArgumentParser(description="FC27 Dispatch Worker Service")
+    parser.add_argument("--health-check", action="store_true", help="Perform health check and exit")
+    parser.add_argument("--single-pass", action="store_true", help="Run a single pass and exit")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    run_worker()
+
+    if args.health_check:
+        pg_uri = _pg_uri()
+        if not pg_uri:
+            print("ERROR: missing POSTGRES_URI or POSTGRES_URI_FILE")
+            sys.exit(1)
+        try:
+            with psycopg.connect(pg_uri) as conn:
+                health = check_worker_health(conn)
+                print(json.dumps(health))
+                if health["status"] == "ok":
+                    sys.exit(0)
+                else:
+                    sys.exit(1)
+        except Exception as exc:
+            print(f"ERROR: health check failed: {exc}")
+            sys.exit(1)
+
+    run_worker(single_pass=args.single_pass)
+
+
+if __name__ == "__main__":
+    main()

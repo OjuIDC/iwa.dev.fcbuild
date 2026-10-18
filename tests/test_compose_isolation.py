@@ -138,6 +138,8 @@ def test_db_secret_mounts_per_service(model):
             assert mounted == {"fc27_migrator_uri"}
         elif name == "outbox-relay":
             assert mounted == {"fc27_relay_uri"}
+        elif name == "dispatch-worker":
+            assert mounted == {"fc27_dispatch_uri"}
         elif name == "graph-api":
             assert "fc27_app_uri" in mounted
             assert not (mounted & {
@@ -197,6 +199,8 @@ def test_graph_api_uses_app_role(model):
 def test_dispatch_disabled_by_default(model, lf_model):
     assert model["services"]["graph-api"]["environment"].get("DISPATCH_ENABLED") == "false"
     assert lf_model["services"]["graph-api"]["environment"].get("DISPATCH_ENABLED") == "false"
+    if "dispatch-worker" in model["services"]:
+        assert model["services"]["dispatch-worker"]["environment"].get("DISPATCH_ENABLED") == "false"
 
 
 def test_db_migrate_has_no_other_secrets(model):
@@ -208,7 +212,7 @@ def test_db_migrate_has_no_other_secrets(model):
 
 def test_only_graph_api_can_reach_postgres(model):
     on_data = sorted(n for n, s in model["services"].items() if "fc27_data" in (s.get("networks") or {}))
-    assert on_data == ["db-bootstrap", "db-migrate", "graph-api", "outbox-relay", "postgres"]
+    assert on_data == ["db-bootstrap", "db-migrate", "dispatch-worker", "graph-api", "outbox-relay", "postgres"]
     assert model["networks"]["fc27_data"].get("internal") is True
 
 

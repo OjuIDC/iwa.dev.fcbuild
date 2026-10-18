@@ -1,4 +1,4 @@
--- grants-policy-version: 12
+-- grants-policy-version: 13
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -14,7 +14,7 @@ BEGIN
         GRANT SELECT, INSERT ON public.approval_audit TO fc27_app;
     END IF;
     IF to_regclass('public.schema_migrations') IS NOT NULL THEN
-        GRANT SELECT ON public.schema_migrations TO fc27_app;
+        GRANT SELECT ON public.schema_migrations TO fc27_app, fc27_dispatch;
     END IF;
     IF to_regclass('public.checkpoints') IS NOT NULL THEN
         GRANT SELECT, INSERT, UPDATE, DELETE ON public.checkpoints TO fc27_app;
@@ -161,6 +161,7 @@ BEGIN
     -- Milestone 4 additions
     IF to_regclass('public.activation_gate_log') IS NOT NULL THEN
         GRANT SELECT, INSERT ON public.activation_gate_log TO fc27_app;
+        GRANT SELECT ON public.activation_gate_log TO fc27_dispatch;
     END IF;
 
     IF to_regclass('public.activation_gate_log_id_seq') IS NOT NULL THEN
@@ -168,12 +169,16 @@ BEGIN
     END IF;
 
     IF to_regclass('public.activation_gates') IS NOT NULL THEN
-        GRANT SELECT ON public.activation_gates TO fc27_app;
+        GRANT SELECT ON public.activation_gates TO fc27_app, fc27_dispatch;
     END IF;
 
     IF to_regclass('public.service_heartbeats') IS NOT NULL THEN
         GRANT SELECT ON public.service_heartbeats TO fc27_app;
         GRANT SELECT, INSERT, UPDATE ON public.service_heartbeats TO fc27_dispatch;
+    END IF;
+
+    IF to_regclass('public.dispatch_worker_claims') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.dispatch_worker_claims TO fc27_dispatch, fc27_app;
     END IF;
 
     -- Phase 2 Milestone 1: Identity Data Foundation Grants
