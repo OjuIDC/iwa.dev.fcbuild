@@ -1,0 +1,19 @@
+services:
+  matchpulse:
+    build:
+      context: .
+    environment:
+      CHALLENGE_SYNTHETIC_ONLY: "true"
+      FOUNDRY_ENDPOINT: ${FOUNDRY_ENDPOINT:-}
+      FOUNDRY_DEPLOYMENT: ${FOUNDRY_DEPLOYMENT:-}
+      FOUNDRY_API_KEY: ${FOUNDRY_API_KEY:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+PASS: required submission files present
+PASS: source compiles
+PASS: no obvious secrets or forbidden files detected
+PASS: synthetic-only gate documented
+PASS: solution configurations present
+ACTION REQUIRED: register, deploy Azure/Foundry, publish repository, record video, and submit URLs
+
+(2026-10-19, run from the challenge project root with the local .venv interpreter.)

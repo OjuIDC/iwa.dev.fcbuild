@@ -1,0 +1,114 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{1B4E0C8A-6D2F-4A57-9E31-2C7F5A8D4B10}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MatchPulse.Live.Api", "MatchPulse.Live.Api", "{2C5F1D9B-7E30-4B68-AF42-3D806B9E5C21}"
+	ProjectSection(SolutionItems) = preProject
+		src\matchpulse\__init__.py = src\matchpulse\__init__.py
+		src\matchpulse\__main__.py = src\matchpulse\__main__.py
+		src\matchpulse\agents.py = src\matchpulse\agents.py
+		src\matchpulse\foundry.py = src\matchpulse\foundry.py
+		src\matchpulse\localization.py = src\matchpulse\localization.py
+		src\matchpulse\models.py = src\matchpulse\models.py
+		src\matchpulse\service.py = src\matchpulse\service.py
+		src\matchpulse\state.py = src\matchpulse\state.py
+		src\matchpulse\synthetic.py = src\matchpulse\synthetic.py
+		pyproject.toml = pyproject.toml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{3D602EAC-8F41-4C79-B053-4E917CAF6D32}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MatchPulse.Live.Tests", "MatchPulse.Live.Tests", "{4E713FBD-9052-4D8A-C164-5FA28DB07E43}"
+	ProjectSection(SolutionItems) = preProject
+		tests\test_api.py = tests\test_api.py
+		tests\test_foundry_guard.py = tests\test_foundry_guard.py
+		tests\test_foundry_provider.py = tests\test_foundry_provider.py
+		tests\test_localization.py = tests\test_localization.py
+		tests\test_personalization.py = tests\test_personalization.py
+		tests\test_pipeline.py = tests\test_pipeline.py
+		tests\test_solution_layout.py = tests\test_solution_layout.py
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "infrastructure", "infrastructure", "{5F8240CE-A163-4E9B-D275-60B39EC18F54}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MatchPulse.Live.Azure", "MatchPulse.Live.Azure", "{609351DF-B274-4FAC-E386-71C4AFD29A65}"
+	ProjectSection(SolutionItems) = preProject
+		infra\main.bicep = infra\main.bicep
+		infra\main.parameters.example.json = infra\main.parameters.example.json
+		infra\validate.ps1 = infra\validate.ps1
+		infra\validate.sh = infra\validate.sh
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{71A462E0-C385-4BBD-F497-82D5B0E3AB76}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MatchPulse.Live.Build", "MatchPulse.Live.Build", "{82B573F1-D496-4ACE-A5A8-93E6C1F4BC87}"
+	ProjectSection(SolutionItems) = preProject
+		.github\workflows\azure-deploy.yml = .github\workflows\azure-deploy.yml
+		.github\workflows\challenge-ci.yml = .github\workflows\challenge-ci.yml
+		Dockerfile = Dockerfile
+		compose.challenge.yml = compose.challenge.yml
+		scripts\bootstrap.ps1 = scripts\bootstrap.ps1
+		scripts\bootstrap.sh = scripts\bootstrap.sh
+		scripts\preflight.py = scripts\preflight.py
+		scripts\smoke_test.py = scripts\smoke_test.py
+		scripts\validate_solution.py = scripts\validate_solution.py
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "documentation", "documentation", "{93C68402-E5A7-4BDF-B6B9-A4F7D205CD98}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MatchPulse.Live.Docs", "MatchPulse.Live.Docs", "{A4D79513-F6B8-4CE0-C7CA-B508E316DEA9}"
+	ProjectSection(SolutionItems) = preProject
+		docs\ARCHITECTURE.md = docs\ARCHITECTURE.md
+		docs\AZURE_DEPLOYMENT.md = docs\AZURE_DEPLOYMENT.md
+		docs\CHALLENGE_ALIGNMENT.md = docs\CHALLENGE_ALIGNMENT.md
+		docs\GITHUB_PUBLICATION.md = docs\GITHUB_PUBLICATION.md
+		docs\PREFLIGHT_RESULTS.txt = docs\PREFLIGHT_RESULTS.txt
+		docs\TEST_RESULTS.txt = docs\TEST_RESULTS.txt
+		docs\VALIDATION_REPORT.md = docs\VALIDATION_REPORT.md
+		submission\DEMO_SCRIPT_120S.md = submission\DEMO_SCRIPT_120S.md
+		submission\IP_DATA_AND_SAFETY_REVIEW.md = submission\IP_DATA_AND_SAFETY_REVIEW.md
+		submission\PITCH.md = submission\PITCH.md
+		submission\PROJECT_DESCRIPTION.md = submission\PROJECT_DESCRIPTION.md
+		submission\REGISTRATION_AND_SUBMISSION_CHECKLIST.md = submission\REGISTRATION_AND_SUBMISSION_CHECKLIST.md
+		submission\TESTING_INSTRUCTIONS.md = submission\TESTING_INSTRUCTIONS.md
+		README.md = README.md
+		README-VISUAL-STUDIO.md = README-VISUAL-STUDIO.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{B5E8A624-07C9-4DF1-D8DB-C619F427EFBA}"
+	ProjectSection(SolutionItems) = preProject
+		.dockerignore = .dockerignore
+		.env.example = .env.example
+		.gitignore = .gitignore
+		CODE_OF_CONDUCT.md = CODE_OF_CONDUCT.md
+		CONTRIBUTING.md = CONTRIBUTING.md
+		LICENSE = LICENSE
+		MANIFEST.sha256 = MANIFEST.sha256
+		NOTICE = NOTICE
+		SECURITY.md = SECURITY.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+		ChallengeDemo|Any CPU = ChallengeDemo|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{2C5F1D9B-7E30-4B68-AF42-3D806B9E5C21} = {1B4E0C8A-6D2F-4A57-9E31-2C7F5A8D4B10}
+		{4E713FBD-9052-4D8A-C164-5FA28DB07E43} = {3D602EAC-8F41-4C79-B053-4E917CAF6D32}
+		{609351DF-B274-4FAC-E386-71C4AFD29A65} = {5F8240CE-A163-4E9B-D275-60B39EC18F54}
+		{82B573F1-D496-4ACE-A5A8-93E6C1F4BC87} = {71A462E0-C385-4BBD-F497-82D5B0E3AB76}
+		{A4D79513-F6B8-4CE0-C7CA-B508E316DEA9} = {93C68402-E5A7-4BDF-B6B9-A4F7D205CD98}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C6F9B735-18DA-4E02-E9EC-D72A0538000C}
+	EndGlobalSection
+EndGlobal

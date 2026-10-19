@@ -1,0 +1,112 @@
+name: azure-deploy
+
+# This workflow is intentionally inert until a GitHub environment, an Azure
+# subscription, a resource group, and least-privilege role assignments exist.
+#
+# Required repository configuration before this workflow can succeed:
+#   * a protected GitHub environment named "azure-production";
+#   * environment variables AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+#     AZURE_RESOURCE_GROUP, ACR_NAME (or an approved GHCR image reference),
+#     CONTAINER_APP_NAME, FOUNDRY_ENDPOINT, FOUNDRY_DEPLOYMENT;
+#   * an OIDC subject claim mapping the "azure-production" environment to an
+#     Azure app registration with Contributor (or a narrower custom role) on the
+#     target resource group.
+#
+# No long-lived AZURE_CLIENT_SECRET is used or requested.
+#
+# To enable: create the environment and its variables, then change the
+# `if:` condition below from `false` to `true`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Full container image reference to deploy"
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/azure-deploy.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bicep:
+    name: Validate infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-bicep@v1
+
+      - name: Build template
+        run: az bicep build --file infra/main.bicep --outfile main.json
+
+      - name: Lint template
+        run: az bicep lint --file infra/main.bicep
+
+      - name: Check for hardcoded identifiers and secrets
+        run: |
+          set -euo pipefail
+          if grep -nE '"subscriptionId"[[:space:]]*:[[:space:]]*"[0-9a-fA-F-]{36}"' main.json; then
+            echo "hardcoded subscription id"; exit 1
+          fi
+          if grep -nE '"tenantId"[[:space:]]*:[[:space:]]*"[0-9a-fA-F-]{36}"' main.json; then
+            echo "hardcoded tenant id"; exit 1
+          fi
+          if grep -nEi '"(AccountKey=|password|clientSecret|apiKey)[[:space:]]*:[[:space:]]*"[^"]+"' main.json; then
+            echo "secret literal in template"; exit 1
+          fi
+
+  deploy:
+    name: Deploy to Azure
+    if: false
+    needs: bicep
+    runs-on: ubuntu-latest
+    environment: azure-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: azure/setup-bicep@v1
+
+      - name: Build template
+        run: az bicep build --file infra/main.bicep --outfile main.json
+
+      - name: Validate deployment without creating resources
+        run: |
+          az deployment group validate \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file main.json \
+            --parameters prefix=matchpulse \
+            --parameters image="${{ inputs.image || vars.IMAGE_REFERENCE }}"
+
+      - name: Deploy infrastructure
+        run: |
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file main.json \
+            --parameters prefix=matchpulse \
+            --parameters image="${{ inputs.image || vars.IMAGE_REFERENCE }}" \
+            --parameters foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}" \
+            --parameters foundryDeployment="${{ vars.FOUNDRY_DEPLOYMENT }}" \
+            --parameters foundryAuthMode=managed_identity
+
+      - name: Publish summary
+        run: |
+          echo "### Azure deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "Resource group: \${{ vars.AZURE_RESOURCE_GROUP }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Container app: \${{ vars.CONTAINER_APP_NAME }}" >> "$GITHUB_STEP_SUMMARY"

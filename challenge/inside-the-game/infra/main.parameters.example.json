@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "prefix": {
+      "value": "matchpulse"
+    },
+    "image": {
+      "value": "ghcr.io/OWNER/matchpulse-live:TAG"
+    },
+    "foundryEndpoint": {
+      "value": "https://YOUR-RESOURCE.openai.azure.com"
+    },
+    "foundryDeployment": {
+      "value": "YOUR-DEPLOYMENT"
+    },
+    "foundryAuthMode": {
+      "value": "managed_identity"
+    },
+    "logRetentionInDays": {
+      "value": 30
+    },
+    "minReplicas": {
+      "value": 1
+    },
+    "maxReplicas": {
+      "value": 5
+    },
+    "concurrentRequestsPerReplica": {
+      "value": 50
+    }
+  }
+}

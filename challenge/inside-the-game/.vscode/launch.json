@@ -1,0 +1,79 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: matchpulse.service:app",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "matchpulse.service:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8080"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CHALLENGE_SYNTHETIC_ONLY": "true"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Synthetic producer",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "matchpulse.synthetic",
+      "args": [
+        "--url",
+        "http://127.0.0.1:8080",
+        "--delay",
+        "0.15",
+        "--events",
+        "50"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CHALLENGE_SYNTHETIC_ONLY": "true"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-q"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CHALLENGE_SYNTHETIC_ONLY": "true"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Preflight",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/preflight.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CHALLENGE_SYNTHETIC_ONLY": "true"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Bicep validation",
+      "type": "shell",
+      "request": "launch",
+      "command": "az bicep build --file infra/main.bicep",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

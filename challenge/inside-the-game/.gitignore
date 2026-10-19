@@ -1,0 +1,54 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test and coverage output
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+reports/
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Visual Studio per-user artifacts (never commit)
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.pyproj.user
+.vscode/*
+!.vscode/launch.json
+
+# Editors and operating system artifacts
+.idea/
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# Logs and local evidence
+*.log
+logs/
+
+# Compiled Bicep output (regenerate with: az bicep build --file infra/main.bicep)
+infra/main.json
+main.json
+
+# Local tooling overrides
+docker-compose.override.yml
+docker-compose.local.yml

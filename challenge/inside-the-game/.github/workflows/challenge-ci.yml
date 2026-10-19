@@ -1,0 +1,72 @@
+name: challenge-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: challenge-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Validate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Byte-compile sources
+        run: python -m compileall src
+
+      - name: Ruff
+        run: python -m ruff check src tests scripts
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Coverage (minimum 80%)
+        run: python -m pytest --cov=matchpulse --cov-report=term-missing --cov-fail-under=80
+
+      - name: Preflight
+        run: python scripts/preflight.py
+
+      - name: Visual Studio solution validation
+        run: python scripts/validate_solution.py
+
+  container:
+    name: Container build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t matchpulse-live:ci .
+
+      - name: Inspect image
+        run: |
+          docker image inspect matchpulse-live:ci --format '{{.Config.User}} {{json .Config.Healthcheck}}'
+          test "$(docker image inspect matchpulse-live:ci --format '{{.Config.User}}')" != "0"
+          test "$(docker image inspect matchpulse-live:ci --format '{{.Config.User}}')" != "root"
+
+      - name: Compose configuration
+        run: docker compose -f compose.challenge.yml config

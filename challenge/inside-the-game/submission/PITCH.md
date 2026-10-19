@@ -1,0 +1,3 @@
+# Elevator pitch
+
+**MatchPulse Live makes every football match feel made for every fan.** It ingests synthetic events in real time, turns them into evidence-backed match intelligence, and renders the same moment as a deep analyst insight, a concise broadcast overlay, or an accessible fan story in English, Spanish, or French. A purposeful multi-agent pipeline interprets, explains, personalizes, and localizes each moment; Microsoft Foundry can improve the copy, but deterministic evidence guards keep facts authoritative when the model is unavailable or unsupported. The result is live narrative plus automated recap without sacrificing trust, latency, or global reach.

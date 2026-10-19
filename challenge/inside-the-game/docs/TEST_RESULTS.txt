@@ -1,0 +1,3 @@
+44 passed, 0 failed (2026-10-19, Python 3.14.8, after the Visual Studio solution conversion)
+
+Original bundle baseline: 9 passed, 0 failed.
