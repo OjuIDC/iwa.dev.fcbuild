@@ -68,9 +68,9 @@ class StubPipeline:
         return {**state, "status": "awaiting_approval", "lead_packages": self.packages, "reports": {}}
 
 
-def make_app(pg_uri: str, pipeline=None, ttl: int = 120):
+def make_app(pg_uri: str, pipeline=None, ttl: int = 120, cli_hmac_enabled: bool = False):
     events = []
-    app = create_app(settings(pg_uri, ttl), pipeline=pipeline or StubPipeline(),
+    app = create_app(settings(pg_uri, ttl, cli_hmac_enabled=cli_hmac_enabled), pipeline=pipeline or StubPipeline(),
                      publisher=lambda ch, payload: events.append((ch, payload)))
     return app, events
 

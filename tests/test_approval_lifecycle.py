@@ -22,6 +22,7 @@ from tests.helpers import (
     APPROVE_COACH_BEST,
     REJECT,
     signed,
+    signed_cli_hmac,
     fake_packages,
 )
 
@@ -74,11 +75,11 @@ def test_complete_run_creates_linked_request(client, pg_uri, pg_admin_db_uri):
             assert out[0] == "fc27:events"
 
 
-def test_decision_updates_request_and_thread_together(client, pg_uri):
+def test_decision_updates_request_and_thread_together(client_v1_hmac, pg_uri):
     """Decision atomically updates thread & request, writes audit with proof_type=hmac, emits event."""
-    tid = start(client)
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
-    resp = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(ch))
+    tid = start(client_v1_hmac)
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
+    resp = client_v1_hmac.post(f"/threads/{tid}/decision", headers=COM, json=signed_cli_hmac(ch))
     assert resp.status_code == 200
 
     with psycopg.connect(pg_uri) as conn:
@@ -109,12 +110,15 @@ def test_decision_updates_request_and_thread_together(client, pg_uri):
             assert ev[2] == str(audit_id)
 
 
-def test_approve_writes_no_dispatch_key(client, pg_uri):
+def test_approve_writes_no_dispatch_key(client_v1_hmac, pg_uri):
     """AC-44: Decision state never contains a dispatch key."""
-    tid = start(client)
-    resp = decide(client, tid, APPROVE_COACH_BEST)
+    tid = start(client_v1_hmac)
+    resp = decide(client_v1_hmac, tid, APPROVE_COACH_BEST, proof_type="cli_hmac")
     assert resp.status_code == 200
-    assert "dispatch" not in resp.json()
+    dispatch_block = resp.json().get("dispatch", {})
+    assert dispatch_block.get("dispatch_id") is None
+    assert dispatch_block.get("enabled") is False
+    assert dispatch_block.get("created") is False
 
     with psycopg.connect(pg_uri) as conn:
         with conn.cursor() as cur:
@@ -123,12 +127,12 @@ def test_approve_writes_no_dispatch_key(client, pg_uri):
             assert "dispatch" not in state
 
 
-def test_request_revision_lifecycle(client, pg_uri):
+def test_request_revision_lifecycle(client_v1_hmac, pg_uri):
     """Spec §7.3: REQUEST_REVISION decision is terminal and immutable."""
-    tid = start(client)
+    tid = start(client_v1_hmac)
     revision_intent = {"decision": "REQUEST_REVISION", "notes": "Please revise the tactical formation."}
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=revision_intent).json()
-    resp = client.post(f"/threads/{tid}/decision", headers=COM, json=signed(ch))
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=revision_intent).json()
+    resp = client_v1_hmac.post(f"/threads/{tid}/decision", headers=COM, json=signed_cli_hmac(ch))
     assert resp.status_code == 200
 
     with psycopg.connect(pg_uri) as conn:
@@ -277,20 +281,20 @@ def test_expiry_and_decision_race_has_single_outcome(pg_uri):
                 assert audits == 0
 
 
-def test_inbox_query_never_shows_terminal_threads(pg_uri, client):
+def test_inbox_query_never_shows_terminal_threads(pg_uri, client_v1_hmac):
     """AC-55: pending_approvals inbox query never shows terminal or expired threads."""
     store = ApprovalStore(pg_uri)
 
     # 1. Thread that gets approved
-    tid_approved = start(client)
-    decide(client, tid_approved, APPROVE_COACH_BEST)
+    tid_approved = start(client_v1_hmac)
+    decide(client_v1_hmac, tid_approved, APPROVE_COACH_BEST, proof_type="cli_hmac")
 
     # 2. Thread that gets rejected
-    tid_rejected = start(client)
-    decide(client, tid_rejected, REJECT)
+    tid_rejected = start(client_v1_hmac)
+    decide(client_v1_hmac, tid_rejected, REJECT, proof_type="cli_hmac")
 
     # 3. Thread that is active awaiting_approval
-    tid_active = start(client)
+    tid_active = start(client_v1_hmac)
 
     inbox = store.pending_approvals()
     inbox_tids = [r["thread_id"] for r in inbox]
@@ -344,16 +348,16 @@ def test_failed_decision_rolls_back_everything(pg_uri, pg_admin_db_uri, table):
             conn.execute(f"DROP FUNCTION IF EXISTS fail_txn_{table}();")
 
 
-def test_safe_idempotent_decision_replay(client, pg_uri):
+def test_safe_idempotent_decision_replay(client_v1_hmac, pg_uri):
     """Repeating identical signed decision safely returns committed state; conflicting replay returns 409."""
-    tid = start(client)
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
-    good_signed = signed(ch)
-    r1 = client.post(f"/threads/{tid}/decision", headers=COM, json=good_signed)
+    tid = start(client_v1_hmac)
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
+    good_signed = signed_cli_hmac(ch)
+    r1 = client_v1_hmac.post(f"/threads/{tid}/decision", headers=COM, json=good_signed)
     assert r1.status_code == 200
 
     # Idempotent replay: must succeed and return same terminal status
-    r2 = client.post(f"/threads/{tid}/decision", headers=COM, json=good_signed)
+    r2 = client_v1_hmac.post(f"/threads/{tid}/decision", headers=COM, json=good_signed)
     assert r2.status_code == 200
     assert r2.json()["status"] == "approved"
 
@@ -363,7 +367,7 @@ def test_safe_idempotent_decision_replay(client, pg_uri):
     conflict_payload["signature"] = approval.sign(
         {k: v for k, v in conflict_payload.items() if k != "signature"}, SIGNING_SECRET
     )
-    r3 = client.post(f"/threads/{tid}/decision", headers=COM, json=conflict_payload)
+    r3 = client_v1_hmac.post(f"/threads/{tid}/decision", headers=COM, json=conflict_payload)
     assert r3.status_code == 409
 
 
@@ -391,11 +395,11 @@ def test_timeout_inactivity_cannot_approve(pg_uri, pg_admin_db_uri):
             assert admin_cur.fetchone()[0] == 0
 
 
-def test_unsupported_actor_types_fail_closed_in_phase1(client, pg_uri):
+def test_unsupported_actor_types_fail_closed_in_phase1(client_v1_hmac, pg_uri):
     """Section 1A.8 & Agent C: Unsupported actor types (player, delegate, agent) fail closed in Phase 1."""
-    tid = start(client)
+    tid = start(client_v1_hmac)
     store = ApprovalStore(pg_uri)
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
     signed_payload = SignedDecision.model_validate(signed(ch))
 
     for bad_actor in ("player", "delegate", "agent", "coach", "system"):
@@ -411,11 +415,11 @@ def test_unsupported_actor_types_fail_closed_in_phase1(client, pg_uri):
         assert exc_info.value.status_code in (403, 422)
 
 
-def test_unsupported_authority_bases_fail_closed_in_phase1(client, pg_uri):
+def test_unsupported_authority_bases_fail_closed_in_phase1(client_v1_hmac, pg_uri):
     """Section 1A.8 & Agent B: Unsupported authority bases fail closed in Phase 1."""
-    tid = start(client)
+    tid = start(client_v1_hmac)
     store = ApprovalStore(pg_uri)
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
     signed_payload = SignedDecision.model_validate(signed(ch))
 
     for bad_basis in ("affected_player_fallback", "explicit_delegate", "affected_player_consent"):
@@ -453,11 +457,11 @@ def test_schema_distinguishes_club_authorization_and_player_consent(pg_uri):
             assert {"actor_type", "actor_id", "authority_basis", "decision_scope"}.issubset(found_cols)
 
 
-def test_player_agent_cannot_be_decision_actor(client, pg_uri):
+def test_player_agent_cannot_be_decision_actor(client_v1_hmac, pg_uri):
     """Section 1A.2: A player agent cannot be recorded as decision actor."""
-    tid = start(client)
+    tid = start(client_v1_hmac)
     store = ApprovalStore(pg_uri)
-    ch = client.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
+    ch = client_v1_hmac.post(f"/threads/{tid}/decision-challenge", headers=COM, json=APPROVE_COACH_BEST).json()
     signed_payload = SignedDecision.model_validate(signed(ch))
 
     with pytest.raises(StoreError) as exc_info:
