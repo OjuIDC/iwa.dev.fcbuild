@@ -71,9 +71,7 @@ def _env_file(tmp_path, drop=()):
 
 
 def _config(env, *args):
-    # Use docker-compose (standalone) which works in clean environments on Windows.
-    # docker compose (plugin) requires additional env vars for plugin discovery.
-    cmd = ["docker-compose", "--env-file", str(env), *args, "config", "--format", "json"]
+    cmd = ["docker", "compose", "--env-file", str(env), *args, "config", "--format", "json"]
     # Isolate from the caller's environment: shell variables override --env-file.
     clean = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
     return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=clean)
