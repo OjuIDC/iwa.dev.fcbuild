@@ -4,7 +4,7 @@
 # install.ps1 retries without the dxcam line if the full list fails.
 dxcam>=0.0.5,<1
 mss>=9,<11
-opencv-python>=4.10,<5
+opencv-python>=5.0.0.93,<6
 numpy>=1.26,<3
 pytesseract>=0.3.13,<0.4
 Pillow>=13,<14
