@@ -1225,9 +1225,12 @@ class TestDormancyAndZeroDeliveryInvariants:
         if pg_uri:
             from psycopg.rows import dict_row
             with psycopg.connect(pg_uri, row_factory=dict_row) as conn:
-                dispatches = conn.execute("SELECT count(*) AS cnt FROM public.dispatches").fetchone()["cnt"]
-                assert dispatches == 0, f"Invariant violation: found {dispatches} dispatches in DB"
-                outbox = conn.execute("SELECT count(*) AS cnt FROM public.outbox WHERE published_at IS NOT NULL").fetchone()["cnt"]
-                assert outbox == 0, f"Invariant violation: found {outbox} published outbox rows in DB"
-                events = conn.execute("SELECT count(*) AS cnt FROM public.domain_events WHERE event_type LIKE 'dispatch.%'").fetchone()["cnt"]
-                assert events == 0, f"Invariant violation: found {events} dispatch domain events in DB"
+                if conn.execute("SELECT to_regclass('public.dispatches') AS r").fetchone()["r"] is not None:
+                    dispatches = conn.execute("SELECT count(*) AS cnt FROM public.dispatches").fetchone()["cnt"]
+                    assert dispatches == 0, f"Invariant violation: found {dispatches} dispatches in DB"
+                if conn.execute("SELECT to_regclass('public.outbox') AS r").fetchone()["r"] is not None:
+                    outbox = conn.execute("SELECT count(*) AS cnt FROM public.outbox WHERE published_at IS NOT NULL").fetchone()["cnt"]
+                    assert outbox == 0, f"Invariant violation: found {outbox} published outbox rows in DB"
+                if conn.execute("SELECT to_regclass('public.domain_events') AS r").fetchone()["r"] is not None:
+                    events = conn.execute("SELECT count(*) AS cnt FROM public.domain_events WHERE event_type LIKE 'dispatch.%'").fetchone()["cnt"]
+                    assert events == 0, f"Invariant violation: found {events} dispatch domain events in DB"

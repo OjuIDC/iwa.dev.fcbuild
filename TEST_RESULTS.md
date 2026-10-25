@@ -20,7 +20,7 @@
 - **PostgreSQL**: PostgreSQL 16 server (local cluster, UTF-8, trust authentication harness, `TEST_POSTGRES_URI=postgresql://fc27test@127.0.0.1:55432/postgres`).
 - **Core Dependencies**:
   - `langgraph` 1.2.12
-  - `langgraph-checkpoint-postgres` 3.1.2
+  - `langgraph-checkpoint-postgres` 3.1.3
   - `fastapi` 0.142.2
   - `pydantic` 2.13.5
   - `psycopg` 3.3.6

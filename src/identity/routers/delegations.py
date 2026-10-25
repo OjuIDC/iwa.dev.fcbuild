@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
@@ -83,6 +84,20 @@ class CreateDelegationRequest(BaseModel):
         return v
 
 
+def _format_delegation(del_dict: dict[str, Any]) -> dict[str, Any]:
+    res = dict(del_dict)
+    if "delegate_id" in res and "delegate_user_id" not in res:
+        res["delegate_user_id"] = str(res["delegate_id"])
+    now = datetime.now(timezone.utc)
+    revoked = res.get("revoked_at") is not None
+    res["revoked"] = revoked
+    starts_at = res.get("starts_at")
+    expires_at = res.get("expires_at")
+    is_active = (not revoked) and (starts_at is None or starts_at <= now) and (expires_at is None or now <= expires_at)
+    res["is_active"] = is_active
+    return res
+
+
 # ==============================================================================
 # Delegations Endpoints
 # ==============================================================================
@@ -140,7 +155,7 @@ def create_delegation(
             actor=actor,
             correlation_id=getattr(principal, "correlation_id", None),
         )
-        return result
+        return _format_delegation(result)
     except IdentityStoreError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -154,11 +169,12 @@ def list_delegations(
 ) -> list[dict]:
     """Lists delegations for the caller's club scope."""
     try:
-        return store.list_delegations(
+        items = store.list_delegations(
             club_id=principal.club_id,
             delegate_user_id=delegate_user_id,
             active_only=active_only,
         )
+        return [_format_delegation(d) for d in items]
     except IdentityStoreError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -175,7 +191,7 @@ def get_delegation(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delegation not found")
     if del_obj["club_id"] != principal.club_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="access to cross-club delegation denied")
-    return del_obj
+    return _format_delegation(del_obj)
 
 
 @router.delete("/{delegation_id}", status_code=status.HTTP_200_OK, summary="Revoke delegation")
@@ -209,6 +225,6 @@ def revoke_delegation(
             actor=actor,
             correlation_id=getattr(principal, "correlation_id", None),
         )
-        return result
+        return _format_delegation(result)
     except IdentityStoreError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)

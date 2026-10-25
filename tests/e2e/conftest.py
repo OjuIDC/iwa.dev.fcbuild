@@ -63,6 +63,38 @@ SVC_HEADERS = {"X-API-Key": E2E_SERVICE_TOKEN}
 COM_HEADERS = {"X-API-Key": E2E_COMMISSIONER_TOKEN}
 
 
+@pytest.fixture(autouse=True)
+def setup_human_commissioner_if_phase2(request, pg_uri):
+    """Ensure COM_HEADERS carries an active human commissioner session token during phase 2 tests."""
+    if "phase2" in request.node.fspath.basename:
+        from src.identity.store import IdentityStore
+        from tests.e2e.phase2_helpers import session_header, TEST_CLUB_ID
+        store = IdentityStore(pg_uri)
+        user = store.create_user(
+            club_id=TEST_CLUB_ID,
+            login_id=f"e2e_commissioner_{uuid.uuid4().hex[:8]}@fc27.club",
+            display_name="Human Commissioner",
+            status="active",
+        )
+        store.assign_user_role(user["user_id"], "commissioner")
+        raw_token, sess = store.create_session(
+            user_id=user["user_id"],
+            auth_level="step_up_passkey",
+            auth_method="passkey",
+        )
+        headers = session_header(raw_token)
+        old = dict(COM_HEADERS)
+        COM_HEADERS.clear()
+        COM_HEADERS.update(headers)
+        try:
+            yield
+        finally:
+            COM_HEADERS.clear()
+            COM_HEADERS.update(old)
+    else:
+        yield
+
+
 def table_exists(conn: psycopg.Connection, table_name: str, schema: str = "public") -> bool:
     with conn.cursor() as cur:
         cur.execute(

@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 os.environ.setdefault("BFF_SERVICE_TOKEN", "bff_service_test_token_min_length_32_chars_ok")
-os.environ.setdefault("GRAPH_SERVICE_TOKEN", "graph_service_test_token_min_length_32_chars_ok")
+os.environ.setdefault("GRAPH_SERVICE_TOKEN", "graph_service_test_token_min_length_32_chars")
 
 import pytest
 from fastapi import FastAPI, HTTPException

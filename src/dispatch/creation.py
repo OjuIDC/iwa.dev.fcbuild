@@ -113,7 +113,6 @@ def create_dispatch_for_approval(
                AND owner = %s
                AND (approved_instruction->'objective'->>'metric') = %s
                AND dispatch_status NOT IN ('completed', 'expired', 'cancelled', 'superseded')
-             FOR UPDATE
             """,
             (cand_player_id, intent.owner.value, objective.metric),
         )

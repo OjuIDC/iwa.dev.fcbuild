@@ -67,7 +67,7 @@ from .schemas import (
 )
 from .security import Authenticator, Principal, Role, require_role
 from .settings import DEFAULT_PLATFORM, FC_VERSION, ConfigError, env_bool, read_secret
-from src.identity.deps import get_current_principal
+from src.identity.deps import get_current_principal, require_human_principal
 from src.identity.policy import (
     ActionType,
     AgentImpersonationError,
@@ -95,6 +95,7 @@ from src.identity.routers import (
 from src.identity.store import IdentityStore, IdentityStoreError
 from src.identity.crypto import CryptoKeyError
 from src.identity.readiness import identity_readiness
+from src.identity.services import WORKER_SERVICE_USER_ID
 
 
 log = logging.getLogger("fc27.graph_api")
@@ -184,7 +185,7 @@ def reevaluate_gates(app: FastAPI) -> None:
         fc_version=FC_VERSION,
         platform=DEFAULT_PLATFORM,
     )
-    with psycopg.connect(settings.postgres_uri) as conn:
+    with psycopg.connect(settings.postgres_uri, connect_timeout=3) as conn:
         results = evaluate_gates(conn, identity)
 
     effective = dispatch_effective(settings.dispatch_enabled, results)
@@ -314,7 +315,7 @@ def create_app(
             migrate(settings.postgres_uri)
 
         if settings.enforce_db_posture:
-            with psycopg.connect(settings.postgres_uri) as conn:
+            with psycopg.connect(settings.postgres_uri, connect_timeout=3) as conn:
                 violations = check_runtime_posture(conn)
                 if violations:
                     raise ConfigError(f"database role posture violation: {violations}")
@@ -939,6 +940,7 @@ def create_app(
             **state,
             "thread_id": thread_id,
             "status": state["status"],
+            "approved_by": state.get("approved_by") or p.name,
             "package_version": state.get("package_version"),
             "approval_audit_id": state.get("approval_audit_id"),
             "approval_request_id": str(state["approval_request_id"]) if state.get("approval_request_id") else None,
@@ -956,6 +958,15 @@ def create_app(
         principal: PrincipalContext,
     ) -> dict[str, Any]:
         """Unified authoritative decision processing for Phase 2 Milestone 5."""
+        if principal.has_role(UserRole.BFF_SERVICE) or principal.has_role(UserRole.GRAPH_SERVICE) or principal.user_id == WORKER_SERVICE_USER_ID:
+            raise AgentImpersonationError(
+                f"service principal '{principal.user_id}' cannot commit decisions"
+            )
+        if body.proof_type == "webauthn" and (principal.is_service or principal.auth_method == AuthMethod.CLI_HMAC):
+            raise AgentImpersonationError(
+                f"service principal '{principal.user_id}' cannot commit human WebAuthn decisions without passkey step-up proof"
+            )
+
         target_thread_id: str
         target_req_id: Any = None
         target_pkg_version: Any = None

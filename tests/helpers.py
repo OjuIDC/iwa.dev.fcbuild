@@ -34,6 +34,7 @@ def settings(pg_uri: str, ttl: int = 120, **kwargs) -> ApiSettings:
         approval_ttl_seconds=ttl,
         redis_url=None,
         run_migrations=False,
+        cli_hmac_enabled=True,
     )
     args.update(kwargs)
     return ApiSettings(**args)
@@ -68,7 +69,7 @@ class StubPipeline:
         return {**state, "status": "awaiting_approval", "lead_packages": self.packages, "reports": {}}
 
 
-def make_app(pg_uri: str, pipeline=None, ttl: int = 120, cli_hmac_enabled: bool = False):
+def make_app(pg_uri: str, pipeline=None, ttl: int = 120, cli_hmac_enabled: bool = True):
     events = []
     app = create_app(settings(pg_uri, ttl, cli_hmac_enabled=cli_hmac_enabled), pipeline=pipeline or StubPipeline(),
                      publisher=lambda ch, payload: events.append((ch, payload)))
@@ -76,7 +77,11 @@ def make_app(pg_uri: str, pipeline=None, ttl: int = 120, cli_hmac_enabled: bool 
 
 
 def signed(challenge: dict, secret: str = SIGNING_SECRET) -> dict:
-    return {**challenge, "signature": approval.sign(challenge, secret)}
+    return {
+        **challenge,
+        "proof_type": challenge.get("proof_type", "cli_hmac"),
+        "signature": approval.sign(challenge, secret),
+    }
 
 
 def signed_cli_hmac(challenge: dict, secret: str = SIGNING_SECRET) -> dict:

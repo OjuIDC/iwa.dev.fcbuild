@@ -84,7 +84,7 @@ class TestDatabaseInfrastructureFeatures:
             if not table_exists(conn, "schema_migrations"):
                 pytest.skip("schema_migrations table not found")
             with conn.cursor() as cur:
-                cur.execute("SELECT version, applied_at, checksum FROM public.schema_migrations ORDER BY version")
+                cur.execute("SELECT version, applied_at, sha256 FROM public.schema_migrations ORDER BY version")
                 rows = cur.fetchall()
                 assert len(rows) >= 2, "At least initial migrations must be applied"
                 versions = [r[0] for r in rows]
@@ -157,9 +157,9 @@ class TestDatabaseInfrastructureFeatures:
                         (uuid.uuid4(),),
                     )
 
-    def test_feature_07_append_only_table_guards_reject_mutations(self, pg_uri):
+    def test_feature_07_append_only_table_guards_reject_mutations(self, pg_admin_db_uri):
         """Feature 7: Triggers prevent UPDATE and DELETE on immutable audit/event tables."""
-        with psycopg.connect(pg_uri, autocommit=True) as conn:
+        with psycopg.connect(pg_admin_db_uri, autocommit=True) as conn:
             eid = record_event(
                 conn,
                 event_type="system.heartbeat",
@@ -168,6 +168,7 @@ class TestDatabaseInfrastructureFeatures:
                 actor="system:test",
                 correlation_id=uuid.uuid4(),
                 visibility="ops",
+                scope_club_id=None,
             )
             with pytest.raises(psycopg.errors.CheckViolation, match="is append-only"):
                 conn.execute("UPDATE public.domain_events SET actor = 'malicious' WHERE event_id = %s", (eid,))
@@ -201,10 +202,10 @@ class TestApprovalLifecycleFeatures:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT tgname FROM pg_trigger 
-                       WHERE tgname = 'fc27_check_approval_pair'"""
+                       WHERE tgname IN ('fc27_graph_threads_pair_check', 'fc27_approval_requests_pair_check')"""
                 )
                 rows = cur.fetchall()
-                assert len(rows) >= 1, "fc27_check_approval_pair trigger must be installed"
+                assert len(rows) >= 1, "approval pair check constraint trigger must be installed"
 
     def test_feature_10_approval_inconsistencies_view_exists(self, pg_uri):
         """Feature 10: View fc27_approval_inconsistencies exists and is queryable."""
@@ -243,8 +244,8 @@ class TestApprovalLifecycleFeatures:
                 pytest.skip("Milestone M1 required: column subject_type not yet migrated")
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT check_clause FROM information_schema.check_constraints 
-                       WHERE constraint_name LIKE '%subject_type%'"""
+                    """SELECT conname FROM pg_constraint
+                       WHERE conrelid = 'public.approval_nonces'::regclass AND conname LIKE '%subject_type%'"""
                 )
                 assert cur.fetchone() is not None, "subject_type check constraint must exist"
 
@@ -323,14 +324,24 @@ class TestGraphCoreAndApiFeatures:
             r = c.post("/run", headers=SVC_HEADERS, json={"club_id": "330323"})
             tid = r.json()["thread_id"]
 
-            # Attempting resume before PostgreSQL commit fails
-            from src.graph import ApprovalNotCommitted
-            with pytest.raises(ApprovalNotCommitted):
-                runner.resume(tid)
+            # Attempting resume before PostgreSQL commit fails with 409 approval_not_committed
+            resume_attempt = c.post(f"/v1/runs/{tid}/resume", headers=SVC_HEADERS, json={})
+            assert resume_attempt.status_code == 409
+            assert resume_attempt.json()["detail"] == "approval_not_committed"
 
             # Once committed in DB, resume succeeds
-            ch = c.post(f"/threads/{tid}/decision-challenge", headers=COM_HEADERS, json=APPROVE_COACH_BEST)
-            assert ch.status_code == 200
+            state = c.get(f"/threads/{tid}", headers=SVC_HEADERS).json()
+            cand = state["lead_packages"]["coach"]["best"]
+            intent = {
+                "decision": "APPROVE",
+                "owner": "coach",
+                "selection": "best",
+                "candidate_id": cand["candidate_id"],
+                "player_id": cand["player_id"],
+                "notes": "ok",
+            }
+            ch = c.post(f"/threads/{tid}/decision-challenge", headers=COM_HEADERS, json=intent)
+            assert ch.status_code == 200, ch.json()
             dec = c.post(f"/threads/{tid}/decision", headers=COM_HEADERS, json=signed(ch.json()))
             assert dec.status_code == 200
 

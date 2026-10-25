@@ -484,14 +484,20 @@ class TestChallenge3SingleTransactionCommit:
         user_id = uuid4()
         session_id = uuid4()
 
-        with store.connect() as conn, conn.transaction():
-            thread_id, req_id, pkg_ver = _setup_approval_env(conn, user_id, session_id)
-            ev_id, canonical_hash = _mint_evidence(conn, user_id, session_id, thread_id, req_id, "approved", pkg_ver)
+        with store.connect() as conn:
+            with conn.transaction():
+                thread_id, req_id, pkg_ver = _setup_approval_env(conn, user_id, session_id)
+                ev_id, canonical_hash = _mint_evidence(conn, user_id, session_id, thread_id, req_id, "approved", pkg_ver)
             # Conflicting transition: approval request transitioned to approved
-            conn.execute(
-                "UPDATE public.approval_requests SET status = 'approved', decided_at = now() WHERE approval_request_id = %s",
-                (req_id,),
-            )
+            with conn.transaction():
+                conn.execute(
+                    "UPDATE public.approval_requests SET status = 'approved', decided_at = now() WHERE approval_request_id = %s",
+                    (req_id,),
+                )
+                conn.execute(
+                    "UPDATE public.graph_threads SET status = 'approved', approved_by = 'commissioner', approved_at = now(), decision_payload = '{}'::jsonb WHERE thread_id = %s",
+                    (thread_id,),
+                )
 
         principal = PrincipalContext.create(
             user_id=user_id,

@@ -49,6 +49,7 @@ __all__ = [
     "require_role",
     "require_human_principal",
     "require_service_principal",
+    "get_identity_store",
 ]
 
 
@@ -165,6 +166,16 @@ async def get_current_principal(
                     display_name="Commissioner CLI",
                     legacy_actor_id=legacy_p.name,
                 )
+            elif legacy_p.role.value == "service":
+                return PrincipalContext.create(
+                    user_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    club_id="0",
+                    roles=[UserRole.GRAPH_SERVICE],
+                    auth_level=AuthLevel.AUTHENTICATED,
+                    auth_method=AuthMethod.SERVICE_TOKEN,
+                    is_service=True,
+                    display_name="Legacy Service Token",
+                )
 
         except HTTPException:
             pass
@@ -249,4 +260,22 @@ def require_service_principal(
         return principal
 
     return _guard
+
+
+def get_identity_store(request: Request) -> IdentityStore:
+    store: IdentityStore | None = getattr(request.app.state, "identity_store", None)
+    if store is not None:
+        return store
+    settings = getattr(request.app.state, "settings", None)
+    uri = getattr(settings, "postgres_uri", None) if settings else None
+    if not uri:
+        uri = os.environ.get("POSTGRES_URI")
+    if not uri:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="database configuration unavailable",
+        )
+    store = IdentityStore(uri)
+    request.app.state.identity_store = store
+    return store
 

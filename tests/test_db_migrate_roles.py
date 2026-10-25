@@ -210,7 +210,7 @@ def test_fc27_decision_evidence_immutability(pg_uri):
     """Verifies single-use consumption and immutability trigger on fc27_decision_evidence (R10)."""
     import secrets
     from uuid import uuid4
-    with psycopg.connect(pg_uri, autocommit=True) as conn:
+    with psycopg.connect(pg_uri) as conn:
         user_id = str(uuid4())
         session_id = str(uuid4())
         thread_id = f"thread_{secrets.token_hex(4)}"
@@ -220,8 +220,9 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
         conn.execute("INSERT INTO public.fc27_users (user_id, club_id, login_id, display_name) VALUES (%s, '330323', %s, 'Tester')", (user_id, f"test_{secrets.token_hex(4)}@fc27.club"))
         conn.execute("INSERT INTO public.fc27_sessions (session_id, token_hash, user_id, auth_level, auth_method, idle_expires_at, absolute_expires_at) VALUES (%s, %s, %s, 'authenticated', 'passkey', now() + interval '1 hour', now() + interval '8 hours')", (session_id, secrets.token_hex(32), user_id))
-        conn.execute("INSERT INTO public.graph_threads (thread_id, state, status) VALUES (%s, '{}'::jsonb, 'awaiting_approval')", (thread_id,))
+        conn.execute("INSERT INTO public.graph_threads (thread_id, state, status, package_version) VALUES (%s, '{}'::jsonb, 'running', %s)", (thread_id, pkg_hash))
         conn.execute("INSERT INTO public.approval_requests (approval_request_id, thread_id, package_version, status, expires_at) VALUES (%s, %s, %s, 'awaiting_approval', now() + interval '1 hour')", (req_id, thread_id, pkg_hash))
+        conn.execute("UPDATE public.graph_threads SET status = 'awaiting_approval', approval_request_id = %s WHERE thread_id = %s", (req_id, thread_id))
 
         ev_id = str(uuid4())
         conn.execute("""
@@ -231,10 +232,12 @@ def test_fc27_decision_evidence_immutability(pg_uri):
                 canonical_bound_payload_hash, issued_at, expires_at
             ) VALUES (%s, %s, %s, %s, %s, 'pkg_1', '1', %s, 'approved', %s, now(), now() + interval '5 minutes')
         """, (ev_id, user_id, session_id, thread_id, req_id, pkg_hash, bound_hash))
+        conn.commit()
+        conn.autocommit = True
 
         # Modifying immutable attribute fails
         with pytest.raises(psycopg.errors.CheckViolation, match="decision evidence attributes are immutable"):
-            conn.execute("UPDATE public.fc27_decision_evidence SET package_id = 'tampered' WHERE evidence_id = %s", (ev_id,))
+            conn.execute("UPDATE public.fc27_decision_evidence SET package_id = 'tampered', consumed_at = now() WHERE evidence_id = %s", (ev_id,))
 
         # First consumption succeeds
         conn.execute("UPDATE public.fc27_decision_evidence SET consumed_at = now() WHERE evidence_id = %s", (ev_id,))

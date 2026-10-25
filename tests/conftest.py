@@ -31,8 +31,11 @@ if not ADMIN_URI:
     try:
         with psycopg.connect("postgresql://fc27test@127.0.0.1:55432/postgres", connect_timeout=1):
             ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
+            os.environ.setdefault("TEST_POSTGRES_URI", ADMIN_URI)
     except Exception:
         pass
+else:
+    os.environ.setdefault("TEST_POSTGRES_URI", ADMIN_URI)
 
 
 def pytest_configure(config):

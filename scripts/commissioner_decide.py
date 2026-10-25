@@ -58,6 +58,7 @@ def submit(thread_id: str, intent: dict, assume_yes: bool) -> int:
         print("not confirmed; nothing submitted")
         return 1
     payload["signature"] = sign(payload, read_secret("APPROVAL_SIGNING_SECRET", min_length=32))
+    payload["proof_type"] = "cli_hmac"
     r = httpx.post(f"{base_url()}/threads/{thread_id}/decision", headers=commissioner, json=payload, timeout=30)
     if r.status_code != 200:
         print(f"decision refused: {r.status_code} {r.json().get('detail')}", file=sys.stderr)

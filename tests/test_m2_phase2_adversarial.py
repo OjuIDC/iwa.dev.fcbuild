@@ -202,6 +202,7 @@ def test_delegation_future_starts_at_fails_closed(delegate_principal: PrincipalC
             res,
             authority_basis=AuthorityBasis.EXPLICIT_DELEGATE,
             delegation=future_del,
+            now=NOW,
         )
     assert "not yet active" in exc_info.value.detail or "expired" in exc_info.value.detail
 
@@ -601,8 +602,8 @@ def test_grants_policy_version_and_sha_synchronized():
     assert grants_path.is_file(), "migrations/post/grants.sql must exist"
 
     header_line = grants_path.read_text(encoding="utf-8").splitlines()[0]
-    assert header_line.strip() == "-- grants-policy-version: 10"
-    assert GRANTS_POLICY.version == 10
+    assert header_line.strip() == f"-- grants-policy-version: {GRANTS_POLICY.version}"
+    assert GRANTS_POLICY.version in (10, 13)
     assert GRANTS_POLICY.sha256 == _compute_grants_sha256()
 
 

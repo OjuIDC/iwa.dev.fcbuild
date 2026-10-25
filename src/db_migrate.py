@@ -119,7 +119,7 @@ from src.db_roles import redact_conninfo
 def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | None = None, checkpoint_setup: bool = True) -> list[str]:
     applied_now: list[str] = []
     
-    with psycopg.connect(conninfo, autocommit=True) as conn:
+    with psycopg.connect(conninfo, autocommit=True, connect_timeout=3) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_owner'")
             if not cur.fetchone():

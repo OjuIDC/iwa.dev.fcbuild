@@ -136,11 +136,11 @@ def query_domain_events(conn: psycopg.Connection, event_type: str | None = None)
     with conn.cursor(row_factory=dict_row) as cur:
         if event_type:
             cur.execute(
-                "SELECT * FROM public.domain_events WHERE event_type = %s ORDER BY recorded_at DESC",
+                "SELECT * FROM public.domain_events WHERE event_type = %s ORDER BY occurred_at DESC",
                 (event_type,),
             )
         else:
-            cur.execute("SELECT * FROM public.domain_events ORDER BY recorded_at DESC")
+            cur.execute("SELECT * FROM public.domain_events ORDER BY occurred_at DESC")
         return cur.fetchall()
 
 

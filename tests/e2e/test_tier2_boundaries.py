@@ -135,7 +135,7 @@ class TestCryptoAndNonceBoundaries:
 
         # Manually expire nonce in database
         with psycopg.connect(pg_uri, autocommit=True) as conn:
-            conn.execute("UPDATE public.approval_nonces SET expires_at = now() - interval '1 second' WHERE nonce = %s", (nonce,))
+            conn.execute("UPDATE public.approval_nonces SET issued_at = now() - interval '100 seconds', expires_at = now() - interval '1 second' WHERE nonce = %s", (nonce,))
 
         res = client.post(f"/threads/{tid}/decision", headers=COM_HEADERS, json=signed(ch))
         assert res.status_code in (409, 400)
@@ -223,7 +223,7 @@ class TestStateAndLifecycleBoundaries:
             with pytest.raises(psycopg.errors.CheckViolation):
                 with conn.transaction():
                     conn.execute(
-                        "INSERT INTO public.graph_threads (thread_id, club_id, status) VALUES ('bad-thread', '330323', 'dispatched')"
+                        "INSERT INTO public.graph_threads (thread_id, club_id, status, state) VALUES ('bad-thread', '330323', 'dispatched', '{}')"
                     )
 
 

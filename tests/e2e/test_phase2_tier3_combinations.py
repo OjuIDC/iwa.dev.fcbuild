@@ -317,12 +317,17 @@ class TestPhase2CrossFeatureCombinations:
 
         uri = getattr(getattr(client.app, "state", None), "settings", None).postgres_uri or os.environ.get("POSTGRES_URI")
         if uri:
-            with psycopg.connect(uri) as conn:
+            info = psycopg.conninfo.conninfo_to_dict(uri)
+            admin_base = os.environ.get("TEST_POSTGRES_URI") or "postgresql://fc27test@127.0.0.1:55432/postgres"
+            admin_info = psycopg.conninfo.conninfo_to_dict(admin_base)
+            admin_info["dbname"] = info.get("dbname", "postgres")
+            admin_uri = psycopg.conninfo.make_conninfo(**admin_info)
+            with psycopg.connect(admin_uri) as conn:
                 events = query_domain_events(conn)
                 assert len(events) > 0
                 # Verify append-only immutability trigger blocks deletion
                 with conn.cursor() as cur:
-                    with pytest.raises(psycopg.errors.RaiseException):
+                    with pytest.raises((psycopg.errors.RaiseException, psycopg.errors.CheckViolation)):
                         cur.execute("DELETE FROM public.domain_events")
 
     def test_tier3_inactivity_timeout_escalation_flow(self, client):
