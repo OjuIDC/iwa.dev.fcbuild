@@ -72,7 +72,7 @@ Errors: 401 missing or invalid credential, 403 wrong role or bad signature. The 
   - MCP, WS and voice each have their own token.
 
 ## LangGraph implementation
-- **Versions:** langgraph 1.2.12 with langgraph-checkpoint-postgres 3.1.2. PostgresSaver runs over a psycopg pool.
+- **Versions:** langgraph 1.2.12 with langgraph-checkpoint-postgres 3.1.3. PostgresSaver runs over a psycopg pool.
 - **Graph:**
   - search → scout → analyst → coach → tactics → director → prepare_approval → approval (`interrupt()`) → finalize_decision.
   - search failure → END.
