@@ -51,7 +51,7 @@ pytestmark = pytest.mark.usefixtures("pg_uri")
 class TestRealWorldLifecycleScenarios:
     """Full lifecycle journeys from run creation to terminal outcome."""
 
-    def test_tier4_scenario_full_approval_lifecycle_no_dispatch(self, client, pg_uri):
+    def test_tier4_scenario_full_approval_lifecycle_no_dispatch(self, client, pg_uri, pg_admin_db_uri):
         """Full end-to-end approval lifecycle.
 
         1. POST /v1/runs creates durable thread
@@ -94,7 +94,7 @@ class TestRealWorldLifecycleScenarios:
         assert dec_data["status"] in ("approved", "APPROVED, NOT DISPATCHED")
 
         # Step 8: Verify authoritative database records
-        with psycopg.connect(pg_uri) as conn:
+        with psycopg.connect(pg_admin_db_uri) as conn:
             with conn.cursor() as cur:
                 # graph_threads status
                 cur.execute("SELECT status, package_version, approved_by FROM public.graph_threads WHERE thread_id = %s", (tid,))
@@ -111,11 +111,11 @@ class TestRealWorldLifecycleScenarios:
                 assert aud_row[2] == ch_data["nonce"]
 
                 # domain_events record
-                cur.execute("SELECT event_type, entity_id FROM public.domain_events WHERE entity_id = %s AND event_type = 'approval.decided'", (tid,))
+                cur.execute("SELECT event_type, entity_id FROM public.domain_events WHERE event_type = 'approval.decided' AND scope_club_id = '330323'")
                 assert cur.fetchone() is not None
 
                 # outbox row
-                cur.execute("SELECT channel, published_at FROM public.outbox WHERE domain_event_id IN (SELECT event_id FROM public.domain_events WHERE entity_id = %s)", (tid,))
+                cur.execute("SELECT channel, published_at FROM public.outbox WHERE domain_event_id IN (SELECT event_id FROM public.domain_events WHERE event_type = 'approval.decided' AND scope_club_id = '330323')")
                 outbox_row = cur.fetchone()
                 assert outbox_row is not None
                 assert outbox_row[1] is None, "Outbox row must remain unpublished in Phase 1"
@@ -241,11 +241,12 @@ class TestSection1AHumanAuthorityAndConsent:
         tid = r.json()["thread_id"]
 
         # Simulate timeout in database: request becomes expired
-        with psycopg.connect(pg_uri, autocommit=True) as conn:
-            # Manually expire thread or approval request
-            conn.execute("UPDATE public.graph_threads SET status = 'expired' WHERE thread_id = %s", (tid,))
-            if table_exists(conn, "approval_requests"):
-                conn.execute("UPDATE public.approval_requests SET status = 'expired', expired_at = now() WHERE thread_id = %s", (tid,))
+        with psycopg.connect(pg_uri) as conn:
+            # Manually expire thread and approval request within same transaction
+            with conn.transaction():
+                if table_exists(conn, "approval_requests"):
+                    conn.execute("UPDATE public.approval_requests SET status = 'expired', expired_at = now() WHERE thread_id = %s", (tid,))
+                conn.execute("UPDATE public.graph_threads SET status = 'expired' WHERE thread_id = %s", (tid,))
 
         # Verify thread state is expired, NEVER approved
         state = client.get(f"/threads/{tid}", headers=SVC_HEADERS).json()

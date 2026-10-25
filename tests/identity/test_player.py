@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
+import psycopg
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -399,6 +400,12 @@ def test_db_player_assignment_and_decision_lifecycle(pg_uri: str):
     """Database backed test for PostgreSQL player assignments and decisions."""
     store = IdentityStore(pg_uri)
 
+    with psycopg.connect(pg_uri, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO public.players (player_id, club_id, display_name) VALUES ('10101', '330323', 'Marcus Rashford') ON CONFLICT (player_id) DO NOTHING"
+            )
+
     player_user = store.create_user(
         club_id="330323",
         login_id=f"player_{secrets.token_hex(4)}@fc27.club",
@@ -409,13 +416,14 @@ def test_db_player_assignment_and_decision_lifecycle(pg_uri: str):
     store.assign_user_role(player_user["user_id"], "player")
 
     pkg_id = f"pkg_{secrets.token_hex(4)}"
+    pkg_ver = hashlib.sha256(b"1").hexdigest()
     pkg_hash = hashlib.sha256(b"training_routine").hexdigest()
     assign_hash = hashlib.sha256(b"assignment_spec").hexdigest()
 
     # 1. Create player assignment
     assign = store.create_player_assignment(
         package_id=pkg_id,
-        package_version="1",
+        package_version=pkg_ver,
         package_hash=pkg_hash,
         subject_player_id="10101",
         club_id="330323",
@@ -455,8 +463,9 @@ def test_db_player_assignment_and_decision_lifecycle(pg_uri: str):
         assignment_version=1,
         assignment_hash=assign_hash,
         package_id=pkg_id,
-        package_version="1",
+        package_version=pkg_ver,
         package_hash=pkg_hash,
+        action_token_reference="sat_action_token_test_ref",
         notes="acknowledged workout plan",
     )
     assert dec["decision"] == "acknowledge"

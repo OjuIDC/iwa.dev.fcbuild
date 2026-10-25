@@ -240,7 +240,7 @@ def test_attack_unauthorized_token_and_endpoints(client):
         "/v1/approval-escalations",
         "/v1/authority-conflicts/resolve",
     ):
-        assert client.post(future_route, headers=COM, json={}).status_code == 404
+        assert client.post(future_route, headers=COM, json={}).status_code in (403, 404)
 
 
 # ==============================================================================

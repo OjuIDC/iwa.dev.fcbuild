@@ -61,7 +61,7 @@ python scripts/commissioner_decide.py hash-token    # generate GRAPH_COMMISSIONE
 docker compose up -d postgres
 docker compose --profile bootstrap run --rm db-bootstrap --confirm
 
-# 3. Launch the stack
+# 3. Launch the stack (use -f docker-compose.yml -f docker-compose.gpu.yml or -f docker-compose.cpu.yml as needed)
 docker compose up -d --build
 curl -fsS http://127.0.0.1:8001/health/ready
 ```

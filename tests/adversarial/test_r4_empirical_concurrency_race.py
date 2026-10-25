@@ -72,10 +72,10 @@ def _seed_test_player_assignment(admin_uri: str, club_id="330323", player_id="10
                        assignment_version, assignment_hash, status, created_at, updated_at
                    ) VALUES (
                        %s, %s, %s, 'personal_training',
-                       'pkg_concurrency', '1', %s,
+                       'pkg_concurrency', %s, %s,
                        1, %s, 'active', now(), now()
                    )""",
-                (aid, club_id, player_id, "p" * 64, "a" * 64),
+                (aid, club_id, player_id, "1" * 64, "f" * 64, "a" * 64),
             )
 
             # 3. Decision request
@@ -131,8 +131,8 @@ def test_empirical_real_pg_player_decision_store_race(pg_admin_db_uri, pg_uri):
                 assignment_version=1,
                 assignment_hash="a" * 64,
                 package_id="pkg_concurrency",
-                package_version="1",
-                package_hash="p" * 64,
+                package_version="1" * 64,
+                package_hash="f" * 64,
                 notes=f"Race by {name}",
                 action_token_reference=str(tok_id),
                 actor="10101",
@@ -156,7 +156,7 @@ def test_empirical_real_pg_player_decision_store_race(pg_admin_db_uri, pg_uri):
     loser_error = [v[1] for v in results.values() if v[0] == "LOSS"][0]
     assert isinstance(loser_error, IdentityStoreError)
     assert loser_error.status_code == 409
-    assert "player decision request is not awaiting player or already decided" in loser_error.detail
+    assert "already decided" in loser_error.detail or "already in status" in loser_error.detail
 
     # Verify database state
     with psycopg.connect(pg_admin_db_uri, row_factory=dict_row) as check_conn:

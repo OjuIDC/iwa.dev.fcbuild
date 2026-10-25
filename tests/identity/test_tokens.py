@@ -301,6 +301,13 @@ def test_db_action_token_lifecycle(pg_uri: str):
     store = IdentityStore(pg_uri)
     engine = ScopedActionTokenEngine(store)
 
+    import psycopg
+    with psycopg.connect(pg_uri, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO public.players (player_id, club_id, display_name) VALUES ('10102', '330323', 'Token Player') ON CONFLICT (player_id) DO NOTHING"
+            )
+
     user = store.create_user(
         club_id="330323",
         login_id=f"token_user_{secrets.token_hex(4)}@fc27.club",
@@ -308,7 +315,18 @@ def test_db_action_token_lifecycle(pg_uri: str):
         status="active",
     )
     uid = user["user_id"]
-    aid = uuid4()
+
+    assign = store.create_player_assignment(
+        package_id=f"pkg_{secrets.token_hex(4)}",
+        package_version=hashlib.sha256(b"1").hexdigest(),
+        package_hash=hashlib.sha256(b"training_routine").hexdigest(),
+        subject_player_id="10102",
+        club_id="330323",
+        assignment_version=1,
+        assignment_hash=hashlib.sha256(b"assignment_spec").hexdigest(),
+        action_type="personal_training",
+    )
+    aid = assign["assignment_id"]
 
     # 1. Issue token
     sat = engine.issue_token(

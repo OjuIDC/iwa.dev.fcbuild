@@ -124,7 +124,7 @@ class TestCrossFeatureCombinations:
         assert status_resp.status_code == 200
         assert status_resp.json()["status"] == "awaiting_approval"
 
-    def test_tier3_domain_events_and_outbox_transactional_atomicity(self, pg_uri):
+    def test_tier3_domain_events_and_outbox_transactional_atomicity(self, pg_uri, pg_admin_db_uri):
         """An aborted transaction writing domain_events rolls back the corresponding outbox row."""
         corr_id = uuid.uuid4()
         with psycopg.connect(pg_uri) as conn:
@@ -139,6 +139,7 @@ class TestCrossFeatureCombinations:
                         actor="system",
                         correlation_id=corr_id,
                         visibility="ops",
+                        scope_club_id="330323",
                     )
                     # Trigger an intentional error before commit
                     raise RuntimeError("Simulated transaction failure")
@@ -146,7 +147,7 @@ class TestCrossFeatureCombinations:
                 pass
 
         # Verify neither the event nor the outbox row exists in the database
-        with psycopg.connect(pg_uri) as conn:
+        with psycopg.connect(pg_admin_db_uri) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT count(*) FROM public.domain_events WHERE correlation_id = %s", (corr_id,))
                 assert cur.fetchone()[0] == 0

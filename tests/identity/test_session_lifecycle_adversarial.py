@@ -24,7 +24,7 @@ from tests.e2e.phase2_helpers import (
     session_header,
 )
 from src.identity.crypto import hash_token
-from src.identity.store import IdentityStore
+from src.identity.store import IdentityStore, IdentityStoreError
 
 
 @pytest.fixture
@@ -58,7 +58,6 @@ def two_players(store: IdentityStore) -> tuple[tuple[dict, str, dict], tuple[dic
         club_id=TEST_CLUB_ID,
         login_id=f"player_a_{uuid.uuid4().hex[:8]}@fc27.club",
         display_name="Player Alpha",
-        player_id=f"ea_player_a_{uuid.uuid4().hex[:6]}",
         status="active",
     )
     store.assign_user_role(p1["user_id"], "player")
@@ -73,7 +72,6 @@ def two_players(store: IdentityStore) -> tuple[tuple[dict, str, dict], tuple[dic
         club_id=TEST_CLUB_ID,
         login_id=f"player_b_{uuid.uuid4().hex[:8]}@fc27.club",
         display_name="Player Beta",
-        player_id=f"ea_player_b_{uuid.uuid4().hex[:6]}",
         status="active",
     )
     store.assign_user_role(p2["user_id"], "player")
@@ -108,7 +106,8 @@ class TestDualExpiryAdversarial:
             conn.execute(
                 """
                 UPDATE public.fc27_sessions
-                SET idle_expires_at = now() - interval '1 second',
+                SET created_at = now() - interval '2 hours',
+                    idle_expires_at = now() - interval '1 second',
                     absolute_expires_at = now() + interval '23 hours'
                 WHERE session_id = %s
                 """,
@@ -145,7 +144,8 @@ class TestDualExpiryAdversarial:
             conn.execute(
                 """
                 UPDATE public.fc27_sessions
-                SET absolute_expires_at = now() - interval '1 second',
+                SET created_at = now() - interval '25 hours',
+                    absolute_expires_at = now() - interval '1 second',
                     idle_expires_at = now() + interval '25 minutes'
                 WHERE session_id = %s
                 """,

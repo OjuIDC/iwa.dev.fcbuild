@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from src.identity.deps import (
     get_current_principal,
     require_human_principal,
+    get_identity_store,
 )
 from src.identity.policy import (
     ActionType,
@@ -68,22 +69,6 @@ router = APIRouter(tags=["player-decisions"])
 player_router = router
 
 
-def get_identity_store(request: Request) -> IdentityStore:
-    store: IdentityStore | None = getattr(request.app.state, "identity_store", None)
-    if store is not None:
-        return store
-    settings = getattr(request.app.state, "settings", None)
-    uri = getattr(settings, "postgres_uri", None) if settings else None
-    if not uri:
-        uri = os.environ.get("POSTGRES_URI")
-    if not uri:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="database configuration unavailable",
-        )
-    store = IdentityStore(uri)
-    request.app.state.identity_store = store
-    return store
 
 
 # ==============================================================================
@@ -764,7 +749,7 @@ async def verify_player_identity(
     if str(player["club_id"]) != str(principal.club_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="player belongs to a different club")
 
-    cid = getattr(request.state, "correlation_id", None) or uuid4()
+    cid = getattr(request.state, "correlation_id", None)
     updated_player = store.verify_player_identity(
         player_id=player_id,
         actor_id=principal.user_id,

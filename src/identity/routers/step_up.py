@@ -462,6 +462,18 @@ def issue_action_token_general(
         except Exception:
             pass
 
+    if assign_id is not None:
+        with store.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM public.player_assignments WHERE assignment_id = %s",
+                (str(assign_id),),
+            ).fetchone()
+            if not row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"player assignment '{assign_id}' not found",
+                )
+
     engine = ScopedActionTokenEngine(store)
     raw_token, record = engine.issue_token(
         user_id=principal.user_id,

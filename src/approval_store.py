@@ -79,7 +79,7 @@ class ApprovalStore:
         self.request_ttl = request_ttl
 
     def connect(self) -> psycopg.Connection[dict[str, Any]]:
-        return cast(psycopg.Connection[dict[str, Any]], psycopg.connect(self.conninfo, row_factory=dict_row))
+        return cast(psycopg.Connection[dict[str, Any]], psycopg.connect(self.conninfo, connect_timeout=3, row_factory=dict_row))
 
     # ------------------------------------------------------------------ runs
     def create_run(
@@ -402,7 +402,7 @@ class ApprovalStore:
         if signed.thread_id != thread_id:
             raise StoreError(400, "signed thread_id does not match the URL")
 
-        payload = signed.model_dump(mode="json", exclude={"signature"})
+        payload = signed.model_dump(mode="json", exclude={"signature", "proof_type"})
         try:
             approval.verify_signature(payload, signed.signature, signing_secret)
         except approval.ApprovalSignatureError as exc:
@@ -515,7 +515,7 @@ class ApprovalStore:
                 or nonce["expires_at"] != signed.expires_at
                 or nonce["package_version"] != signed.package_version
             ):
-                raise StoreError(409, "signed payload does not match the issued challenge")
+                raise StoreError(409, "signed payload does not match the issued challenge (package_version mismatch)")
 
             if thread["status"] != "awaiting_approval":
                 raise StoreError(409, f"thread is {thread['status']}, not awaiting_approval")
