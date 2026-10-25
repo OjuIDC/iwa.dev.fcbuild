@@ -34,7 +34,7 @@ COACHING_CONFIG_VERSION = "east-coasters-v1.0"
 
 def is_recommendations_enabled() -> bool:
     """Safety gate: checks if recommendations generation is enabled."""
-    return os.getenv("FC27_RECOMMENDATIONS_ENABLED", "true").lower() in ("true", "1", "yes")
+    return os.getenv("FC27_RECOMMENDATIONS_ENABLED", "false").lower() in ("true", "1", "yes")
 
 
 def generate_coaching_recommendations(

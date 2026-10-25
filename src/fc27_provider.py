@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -185,7 +184,9 @@ class FC27SyntheticProvider:
 
         player_perfs: list[dict[str, Any]] = []
         for p in roster:
-            base_rating = 7.0 + rating_boost + ((hash(p["player_id"] + str(match_index)) % 15) / 10.0)
+            seed = f"{p['player_id']}:{match_index}".encode("utf-8")
+            stable_bucket = int.from_bytes(hashlib.sha256(seed).digest()[:8], "big") % 15
+            base_rating = 7.0 + rating_boost + stable_bucket / 10.0
             base_rating = max(4.0, min(10.0, round(base_rating, 1)))
 
             p_perf = {

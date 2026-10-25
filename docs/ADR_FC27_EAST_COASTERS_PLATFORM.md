@@ -62,6 +62,6 @@ Every recommendation must separate:
 - All dispatch and autonomous mutation flags default to fail-closed:
   - `FC27_PROVIDER_ENABLED=false` (unless test fixtures or approved providers are active)
   - `FC27_LIVE_INGESTION_ENABLED=false`
-  - `FC27_RECOMMENDATIONS_ENABLED=false`
+  - `FC27_RECOMMENDATIONS_ENABLED=false by default`
   - `DISPATCH_ENABLED=false`
 - All security postures established in Phase 1 (least-privilege database roles, HMAC/WebAuthn human approval requirements, immutability triggers) remain inviolable.

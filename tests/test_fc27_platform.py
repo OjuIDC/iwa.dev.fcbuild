@@ -194,6 +194,54 @@ def test_synthetic_provider_normalization():
         assert m.provider_provenance is not None
 
 
+def test_synthetic_provider_player_rating_determinism():
+    import copy
+
+    p1 = FC27SyntheticProvider()
+    p2 = FC27SyntheticProvider()
+
+    # 1. Identical inputs return identical ratings across calls
+    env1_a = p1.generate_match_fixture(match_index=1, outcome="WIN")
+    env1_b = p1.generate_match_fixture(match_index=1, outcome="WIN")
+    norm1_a = normalize_match_envelope(env1_a)
+    norm1_b = normalize_match_envelope(env1_b)
+    ratings1_a = [p.match_rating for p in norm1_a.player_performances]
+    ratings1_b = [p.match_rating for p in norm1_b.player_performances]
+    assert ratings1_a == ratings1_b
+
+    # 2. Results remain identical across independently constructed provider instances
+    env1_inst2 = p2.generate_match_fixture(match_index=1, outcome="WIN")
+    norm1_inst2 = normalize_match_envelope(env1_inst2)
+    ratings_inst2 = [p.match_rating for p in norm1_inst2.player_performances]
+    assert ratings1_a == ratings_inst2
+
+    # 3. Ratings remain within expected bounds (between 4.0 and 10.0, step 0.1)
+    for r in ratings1_a:
+        assert 4.0 <= r <= 10.0
+        assert round(r, 1) == r
+
+    for idx in range(1, 10):
+        for out in ("WIN", "LOSS", "DRAW"):
+            env = p1.generate_match_fixture(match_index=idx, outcome=out)
+            norm = normalize_match_envelope(env)
+            for p in norm.player_performances:
+                assert 4.0 <= p.match_rating <= 10.0
+                assert round(p.match_rating, 1) == p.match_rating
+
+    # 4. Changing player ID or match index can produce a different deterministic bucket
+    env2 = p1.generate_match_fixture(match_index=2, outcome="WIN")
+    norm2 = normalize_match_envelope(env2)
+    ratings2 = [p.match_rating for p in norm2.player_performances]
+    assert len(set(ratings1_a)) > 1
+    assert ratings1_a != ratings2
+
+    # 5. Input data (canonical roster) is not mutated
+    roster_before = copy.deepcopy(p1.get_canonical_roster())
+    _ = p1.generate_match_fixture(match_index=99)
+    roster_after = p1.get_canonical_roster()
+    assert roster_before == roster_after
+
+
 # ==============================================================================
 # Phase 5: Functional Analytics Core Tests
 # ==============================================================================
@@ -266,7 +314,8 @@ def test_team_snapshot_generation():
 # Phase 6: East Coasters Coaching Engine Tests
 # ==============================================================================
 
-def test_coaching_recommendations_generation():
+def test_coaching_recommendations_generation(monkeypatch):
+    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
     provider = FC27SyntheticProvider()
     matches = provider.get_season_fixtures(count=8)
     builds = {
@@ -287,7 +336,8 @@ def test_coaching_recommendations_generation():
         assert r.formula_version == "fc27-v1.0"
 
 
-def test_coaching_recommendations_empty_matches_fails_safe():
+def test_coaching_recommendations_empty_matches_fails_safe(monkeypatch):
+    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
     recs = generate_coaching_recommendations([])
     assert len(recs) == 1
     assert recs[0].confidence == "PROVISIONAL"
@@ -295,10 +345,56 @@ def test_coaching_recommendations_empty_matches_fails_safe():
     assert "at least 3 to 5 matches" in recs[0].recommendation
 
 
-def test_coaching_kill_switch_behavior(monkeypatch):
-    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "false")
+@pytest.mark.parametrize(
+    "env_val,expected",
+    [
+        (None, False),          # 1. Missing FC27_RECOMMENDATIONS_ENABLED means disabled
+        ("false", False),       # 2. "false" means disabled
+        ("0", False),           # 3. "0" means disabled
+        ("no", False),          # 4. "no" means disabled
+        ("true", True),         # 5. "true" means enabled
+        ("1", True),            # 6. "1" means enabled
+        ("yes", True),          # 7. "yes" means enabled
+        ("True", True),         # 8. Mixed-case "True"
+        ("YES", True),          # 8. Mixed-case "YES"
+        ("TrUe", True),         # 8. Mixed-case "TrUe"
+        ("False", False),       # 8. Mixed-case "False"
+        ("No", False),          # 8. Mixed-case "No"
+        ("random_val", False),  # 9. Unrecognized value fails closed
+        ("", False),            # 9. Empty string fails closed
+        ("2", False),           # 9. "2" fails closed
+    ],
+)
+def test_coaching_recommendations_kill_switch_matrix(monkeypatch, env_val, expected):
+    if env_val is None:
+        monkeypatch.delenv("FC27_RECOMMENDATIONS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", env_val)
+    assert is_recommendations_enabled() is expected
+
+
+def test_coaching_kill_switch_prevents_generation_by_default(monkeypatch):
+    # 10. Disabling recommendations (by default without env var) prevents recommendation generation
+    monkeypatch.delenv("FC27_RECOMMENDATIONS_ENABLED", raising=False)
     assert is_recommendations_enabled() is False
     provider = FC27SyntheticProvider()
     matches = provider.get_season_fixtures(count=5)
-    recs = generate_coaching_recommendations(matches)
-    assert recs == []
+    recs_default = generate_coaching_recommendations(matches)
+    assert recs_default == []
+
+    # Disabling recommendations explicitly also prevents generation
+    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "false")
+    recs_explicit = generate_coaching_recommendations(matches)
+    assert recs_explicit == []
+
+
+def test_coaching_enabled_does_not_enable_prohibited_actions(monkeypatch):
+    import os
+
+    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
+    assert is_recommendations_enabled() is True
+
+    # Enabling recommendations must not enable live ingestion, dispatch, or worker
+    assert os.getenv("FC27_LIVE_INGESTION_ENABLED", "false").lower() in ("false", "0", "no", "")
+    assert os.getenv("DISPATCH_ENABLED", "false").lower() in ("false", "0", "no", "")
+    assert os.getenv("DISPATCH_WORKER_ENABLED", "false").lower() in ("false", "0", "no", "")
