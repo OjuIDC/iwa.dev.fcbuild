@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1218,6 +1219,30 @@ def test_auth_reuse_after_consumption_rejected(valid_capture_auth):
         budget.consume(valid_capture_auth.authorization_id)
 
 
+def test_budget_concurrent_consumption_is_atomic(valid_capture_auth):
+    """19b. Concurrent consumers cannot both consume the one-use budget."""
+    budget = FC27CaptureBudget(valid_capture_auth.authorization_id)
+    success_count = 0
+    exhausted_count = 0
+
+    def _attempt_consume():
+        nonlocal success_count, exhausted_count
+        try:
+            budget.consume(valid_capture_auth.authorization_id)
+            return "SUCCESS"
+        except FC27BudgetExhaustedError:
+            return "EXHAUSTED"
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(_attempt_consume) for _ in range(10)]
+        results = [f.result() for f in futures]
+
+    assert results.count("SUCCESS") == 1
+    assert results.count("EXHAUSTED") == 9
+    assert budget.is_consumed is True
+    assert budget.remaining_attempts == 0
+
+
 # ------------------------------------------------------------------------------
 # Runner and Transport Tests (20-35)
 # ------------------------------------------------------------------------------
@@ -1251,6 +1276,35 @@ def test_runner_exactly_one_attempt(valid_capture_auth):
             budget=budget,
             transport=transport,
         )
+
+
+def test_runner_concurrent_execution_calls_transport_exactly_once(valid_capture_auth):
+    """21b. Concurrent capture attempts execute transport exactly once; other threads fail closed."""
+    budget = FC27CaptureBudget(valid_capture_auth.authorization_id)
+    transport = FC27MockHTTPTransport()
+
+    def _attempt_run():
+        try:
+            return run_authorized_club_identity_capture(
+                authorization=valid_capture_auth,
+                budget=budget,
+                transport=transport,
+            )
+        except FC27BudgetExhaustedError:
+            return "EXHAUSTED"
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(_attempt_run) for _ in range(10)]
+        results = [f.result() for f in futures]
+
+    successes = [r for r in results if r != "EXHAUSTED"]
+    exhausted = [r for r in results if r == "EXHAUSTED"]
+
+    assert len(successes) == 1
+    assert len(exhausted) == 9
+    assert transport.attempt_count == 1
+    assert budget.is_consumed is True
+    assert budget.remaining_attempts == 0
 
 
 def test_runner_attempt_consumed_before_transport(valid_capture_auth):
@@ -1565,6 +1619,54 @@ def test_sanitizer_diagnostics_contain_paths_only():
     res = sanitizer.sanitize(raw)
     for p in res.sensitive_field_paths:
         assert secret_val not in p
+
+
+def test_sanitizer_normalizes_and_detects_all_sensitive_variants():
+    """44b. Sanitizer normalizes delimiters and detects all sensitive key variants."""
+    sanitizer = FC27IdentitySanitizer()
+    payload = {
+        "330323": {
+            "clubId": 330323,
+            "name": "East Coasters",
+            "accessToken": "secret-access",
+            "refreshToken": "secret-refresh",
+            "authHeader": "secret-auth",
+            "sessionId": "secret-session",
+            "accountId": "secret-account",
+            "personaId": "secret-persona",
+            "nucleusId": "secret-nucleus",
+            "userId": "secret-user",
+            "playerId": "secret-player",
+            "gamerTag": "secret-gamer",
+            "ipAddress": "192.168.1.1",
+            "deviceId": "device-uuid",
+            "user-credentials": {"secretKey": "val"},
+            "meta": {"x_origin_session": "sess-xyz"},
+        }
+    }
+    res = sanitizer.sanitize(payload)
+    assert res.sanitization_status == "SENSITIVE_DETECTED"
+    assert res.safe_to_retain is False
+
+    expected_terms = [
+        "accessToken",
+        "refreshToken",
+        "authHeader",
+        "sessionId",
+        "accountId",
+        "personaId",
+        "nucleusId",
+        "userId",
+        "playerId",
+        "gamerTag",
+        "ipAddress",
+        "deviceId",
+        "user-credentials",
+        "secretKey",
+        "x_origin_session",
+    ]
+    for term in expected_terms:
+        assert any(term in path for path in res.sensitive_field_paths), f"Term '{term}' not caught in sensitive paths"
 
 
 # ------------------------------------------------------------------------------

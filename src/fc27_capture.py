@@ -63,6 +63,9 @@ PROHIBITED_SECRET_PATTERNS = (
     "private_key",
     "ghp_",
     "sk-",
+    "credential",
+    "authheader",
+    "auth_header",
 )
 
 
@@ -301,7 +304,9 @@ SENSITIVE_FIELD_KEYWORDS = (
     "passcode",
     "secret",
     "token",
+    "auth",
     "authorization",
+    "credential",
     "cookie",
     "session",
     "account",
@@ -350,7 +355,8 @@ class FC27IdentitySanitizer:
                 for k, v in obj.items():
                     current_path = f"{prefix}.{k}" if prefix else str(k)
                     lowered_key = str(k).lower()
-                    if any(term in lowered_key for term in SENSITIVE_FIELD_KEYWORDS):
+                    normalized_key = lowered_key.replace("-", "").replace("_", "").replace(".", "")
+                    if any(term in lowered_key or term in normalized_key for term in SENSITIVE_FIELD_KEYWORDS):
                         sensitive_paths.append(current_path)
                     _scan_paths(v, current_path)
             elif isinstance(obj, list):
