@@ -1,0 +1,4 @@
+club_id,club_name,platform,game_version,external_match_id,played_at,result,goals_for,goals_against,opponent_name,formation
+330323,East Coasters,common-gen5,FC27,SYNTHETIC-MATCH-CSV-01,2026-10-25T10:00:00Z,WIN,3,1,Synthetic Opponent FC,4-3-3
+330323,East Coasters,common-gen5,FC27,SYNTHETIC-MATCH-CSV-02,2026-10-25T11:30:00Z,DRAW,2,2,Synthetic Athletic,4-2-3-1
+330323,East Coasters,common-gen5,FC27,SYNTHETIC-MATCH-CSV-03,2026-10-25T13:00:00Z,LOSS,0,1,Synthetic United,4-3-3
