@@ -5,10 +5,12 @@ functional analytics core, and evidence-grounded coaching layer.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -1874,28 +1876,125 @@ def test_isolation_no_dns_resolution(valid_capture_auth):
     assert transport.attempt_count == 1
 
 
-def test_isolation_default_preflight_is_blocked_safe():
-    """64. Default preflight outputs BLOCKED_SAFE."""
-    res = subprocess.run([sys.executable, "scripts/fc27_capture_preflight.py"], capture_output=True, text=True)
+def test_isolation_default_preflight_is_blocked_safe(tmp_path):
+    """64. Default preflight outputs BLOCKED_SAFE from any working directory without PYTHONPATH."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "fc27_capture_preflight.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    res = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
     assert res.returncode == 0
+    assert "ModuleNotFoundError" not in res.stderr
+    assert "Traceback" not in res.stderr
     assert "PREFLIGHT_STATUS=BLOCKED_SAFE" in res.stdout
     assert "NETWORK_REQUESTS_EXECUTED=0" in res.stdout
+    assert "DNS_RESOLUTIONS_EXECUTED=0" in res.stdout
     assert "LIVE_CAPTURE_AUTHORIZED=NO" in res.stdout
 
 
-def test_isolation_mock_preflight_is_mock_validated():
-    """65. Mock preflight outputs MOCK_VALIDATED."""
-    res = subprocess.run([sys.executable, "scripts/fc27_capture_preflight.py", "--mock"], capture_output=True, text=True)
+def test_isolation_mock_preflight_is_mock_validated(tmp_path):
+    """65. Mock preflight outputs MOCK_VALIDATED from any working directory without PYTHONPATH."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "fc27_capture_preflight.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    res = subprocess.run(
+        [sys.executable, str(script_path), "--mock"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
     assert res.returncode == 0
+    assert "ModuleNotFoundError" not in res.stderr
+    assert "Traceback" not in res.stderr
     assert "PREFLIGHT_STATUS=MOCK_VALIDATED" in res.stdout
+    assert "NETWORK_REQUESTS_EXECUTED=0" in res.stdout
+    assert "DNS_RESOLUTIONS_EXECUTED=0" in res.stdout
     assert "MOCK_ATTEMPTS=1" in res.stdout
     assert "AUTHORIZATION_CONSUMED=YES" in res.stdout
+    assert "RAW_RESPONSE_RETAINED=NO" in res.stdout
     assert "IDENTITY_STATUS=PROVISIONAL" in res.stdout
 
 
-def test_isolation_mock_preflight_zero_network_calls():
+def test_isolation_mock_preflight_zero_network_calls(tmp_path):
     """66. Mock preflight executes zero network calls."""
-    res = subprocess.run([sys.executable, "scripts/fc27_capture_preflight.py", "--mock"], capture_output=True, text=True)
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "fc27_capture_preflight.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    res = subprocess.run(
+        [sys.executable, str(script_path), "--mock"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
     assert res.returncode == 0
+    assert "ModuleNotFoundError" not in res.stderr
+    assert "Traceback" not in res.stderr
     assert "NETWORK_REQUESTS_EXECUTED=0" in res.stdout
     assert "DNS_RESOLUTIONS_EXECUTED=0" in res.stdout
+
+
+@pytest.mark.parametrize("dir_kind", ["repo_root", "external_tmp", "path_with_spaces"])
+def test_preflight_portability_across_working_directories(tmp_path, dir_kind):
+    """67. Regression: preflight executes identically across repo root, external cwd, and paths with spaces."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "fc27_capture_preflight.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    if dir_kind == "repo_root":
+        cwd = repo_root
+    elif dir_kind == "external_tmp":
+        cwd = tmp_path
+    else:
+        cwd = tmp_path / "fc27 path with spaces"
+        cwd.mkdir(parents=True, exist_ok=True)
+
+    # Test default mode
+    res_default = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert res_default.returncode == 0
+    assert "ModuleNotFoundError" not in res_default.stderr
+    assert "Traceback" not in res_default.stderr
+    assert "PREFLIGHT_STATUS=BLOCKED_SAFE" in res_default.stdout
+
+    # Test mock mode
+    res_mock = subprocess.run(
+        [sys.executable, str(script_path), "--mock"],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert res_mock.returncode == 0
+    assert "ModuleNotFoundError" not in res_mock.stderr
+    assert "Traceback" not in res_mock.stderr
+    assert "PREFLIGHT_STATUS=MOCK_VALIDATED" in res_mock.stdout
+    assert "IDENTITY_STATUS=PROVISIONAL" in res_mock.stdout
