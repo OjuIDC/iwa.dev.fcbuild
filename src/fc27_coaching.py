@@ -27,6 +27,7 @@ from src.schemas import (
     EastCoastersRecommendation,
     PlayerBuild,
 )
+from src.settings import is_fc27_recommendations_enabled
 
 COACHING_FORMULA_VERSION = "fc27-v1.0"
 COACHING_CONFIG_VERSION = "east-coasters-v1.0"
@@ -34,7 +35,7 @@ COACHING_CONFIG_VERSION = "east-coasters-v1.0"
 
 def is_recommendations_enabled() -> bool:
     """Safety gate: checks if recommendations generation is enabled."""
-    return os.getenv("FC27_RECOMMENDATIONS_ENABLED", "false").lower() in ("true", "1", "yes")
+    return is_fc27_recommendations_enabled()
 
 
 def generate_coaching_recommendations(

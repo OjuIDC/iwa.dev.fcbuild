@@ -352,6 +352,103 @@ SAMPLE_SIZE_TIERS = Literal[
 ]
 
 
+class MetricAvailability(str, Enum):
+    """Data availability tier for analytical metrics."""
+    DIRECT = "DIRECT"
+    DERIVED = "DERIVED"
+    PROXY = "PROXY"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNVERIFIED = "UNVERIFIED"
+
+
+class MetricCompatibilityEntry(BaseModel):
+    """Machine-readable compatibility descriptor for an analytical metric."""
+    model_config = ConfigDict(extra="forbid")
+
+    domain_field: str
+    provider_field: str
+    availability: MetricAvailability
+    transform: str
+    units: str
+    valid_range: str
+    missing_data_policy: str
+    confidence_impact: str
+    fixture_coverage: str
+    validation_status: str
+
+
+class ClubIdentityState(str, Enum):
+    """Lifecycle and verification states for club identity."""
+    UNVERIFIED = "UNVERIFIED"
+    SYNTHETIC_ONLY = "SYNTHETIC_ONLY"
+    PROVISIONAL = "PROVISIONAL"
+    VERIFIED = "VERIFIED"
+    CONFLICTED = "CONFLICTED"
+    RETIRED = "RETIRED"
+
+
+class ClubIdentityRecord(BaseModel):
+    """Strongly-typed, platform-scoped identity contract for Pro Clubs."""
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=64)
+    provider_game: str = Field(default="eafc", min_length=1, max_length=64)
+    game_version: Literal["FC27", "fc27"] = "FC27"
+    platform: str = Field(default="common-gen5", min_length=1, max_length=64)
+    club_id: str = Field(pattern=r"^[0-9]{1,20}$", description="Numeric club identifier")
+    club_name: str = Field(min_length=1, max_length=128)
+    aliases: list[str] = Field(default_factory=list)
+    region: str | None = Field(default=None, max_length=64)
+    identity_verification_state: ClubIdentityState = ClubIdentityState.PROVISIONAL
+    verification_source: str = Field(default="community_research_provisional", min_length=1, max_length=128)
+    verification_timestamp: str | None = Field(default=None)
+    payload_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    provenance: str = Field(default="Interactive-63/eafc-pro-clubs-api-research@4cb6292")
+    synthetic_data_indicator: bool = False
+    last_evidence_payload: dict[str, Any] | None = None
+
+
+class FixtureClassification(str, Enum):
+    """Classification of test and telemetry payloads."""
+    SYNTHETIC = "SYNTHETIC"
+    COMMUNITY_RESEARCH_DERIVED = "COMMUNITY_RESEARCH_DERIVED"
+    AUTHORIZED_CAPTURE = "AUTHORIZED_CAPTURE"
+
+
+class DiagnosticEnvelope(BaseModel):
+    """Safe diagnostic envelope preserving unknown provider fields without corrupting core models."""
+    model_config = ConfigDict(extra="forbid")
+
+    envelope_id: str = Field(min_length=1, max_length=128)
+    unrecognized_keys: dict[str, Any] = Field(default_factory=dict)
+    unsupported_values: list[str] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+    created_at: str = Field(description="ISO-8601 UTC timestamp")
+
+
+class ProviderContractMetadata(BaseModel):
+    """Metadata detailing the schema, mapping, and formula versioning of a provider interaction."""
+    model_config = ConfigDict(extra="forbid")
+
+    provider_name: str = Field(min_length=1, max_length=64)
+    provider_contract_version: str = Field(default="1.0.0", min_length=1, max_length=32)
+    game_version: Literal["FC27", "fc27"] = "FC27"
+    schema_version: str = Field(default="1.0.0", min_length=1, max_length=16)
+    mapping_version: str = Field(default="fc27-v1.0", min_length=1, max_length=32)
+    formula_version: str = Field(default="fc27-v1.0", min_length=1, max_length=32)
+    endpoint_or_operation: str = Field(min_length=1, max_length=128)
+    request_timestamp: str = Field(description="ISO-8601 UTC timestamp")
+    response_timestamp: str = Field(description="ISO-8601 UTC timestamp")
+    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_classification: FixtureClassification = FixtureClassification.SYNTHETIC
+    synthetic_data_indicator: bool = True
+    validation_outcome: Literal["VALID", "INVALID", "DIAGNOSTIC_WARNING"] = "VALID"
+    unknown_fields: list[str] = Field(default_factory=list)
+    unsupported_values: list[str] = Field(default_factory=list)
+    raw_payload_reference: str | None = Field(default=None, max_length=256)
+
+
 class ProviderEnvelope(BaseModel):
     """Normalized ingestion envelope for all match and telemetry providers."""
     model_config = ConfigDict(extra="forbid")
@@ -365,6 +462,9 @@ class ProviderEnvelope(BaseModel):
     payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$", description="SHA-256 hex digest of canonical payload")
     raw_payload_reference: str | None = Field(default=None, max_length=256)
     data_quality_status: Literal["VERIFIED", "PROVISIONAL", "DEGRADED", "REJECTED"] = "VERIFIED"
+    source_classification: FixtureClassification = FixtureClassification.SYNTHETIC
+    contract_metadata: ProviderContractMetadata | None = None
+    diagnostic_envelope: DiagnosticEnvelope | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -409,6 +509,22 @@ class PlayerMatch(BaseModel):
             raise ValueError(f"unknown FC 27 role '{v}'; must be one of {sorted(VALID_FC27_ROLES)}")
         return v
 
+    @model_validator(mode="after")
+    def validate_numerical_bounds(self) -> PlayerMatch:
+        if self.passes_completed > self.passes_attempted:
+            raise ValueError(
+                f"passes_completed ({self.passes_completed}) cannot exceed passes_attempted ({self.passes_attempted})"
+            )
+        if self.shots_on_target > self.shots:
+            raise ValueError(
+                f"shots_on_target ({self.shots_on_target}) cannot exceed shots ({self.shots})"
+            )
+        if self.tackles_won > self.tackles_attempted:
+            raise ValueError(
+                f"tackles_won ({self.tackles_won}) cannot exceed tackles_attempted ({self.tackles_attempted})"
+            )
+        return self
+
     @property
     def pass_completion_rate(self) -> float:
         return (self.passes_completed / self.passes_attempted * 100.0) if self.passes_attempted > 0 else 0.0
@@ -442,6 +558,16 @@ class ClubMatch(BaseModel):
         if v not in VALID_FC27_FORMATIONS:
             raise ValueError(f"unknown FC 27 formation '{v}'; must be one of {sorted(VALID_FC27_FORMATIONS)}")
         return v
+
+    @model_validator(mode="after")
+    def validate_team_consistency(self) -> ClubMatch:
+        if self.player_performances:
+            total_player_goals = sum(p.goals for p in self.player_performances)
+            if total_player_goals > self.goals_for:
+                raise ValueError(
+                    f"player goals total ({total_player_goals}) exceeds club goals_for ({self.goals_for})"
+                )
+        return self
 
 
 class PlayerBuild(BaseModel):

@@ -60,3 +60,47 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value in _FALSE:
         return False
     raise ConfigError(f"{name} must be one of true/false/1/0/yes/no, got an invalid value")
+
+
+def safe_env_bool(name: str, default: bool = False) -> bool:
+    """Fail-closed boolean parser: missing or malformed values return the safe default."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    # Malformed configuration fails closed to default
+    return default
+
+
+def is_fc27_provider_enabled() -> bool:
+    """Check if FC 27 provider layer is enabled (default: False)."""
+    return safe_env_bool("FC27_PROVIDER_ENABLED", default=False)
+
+
+def is_fc27_live_ingestion_enabled() -> bool:
+    """Check if FC 27 live ingestion is enabled (default: False)."""
+    return safe_env_bool("FC27_LIVE_INGESTION_ENABLED", default=False)
+
+
+def is_fc27_recommendations_enabled() -> bool:
+    """Check if FC 27 recommendations generation is enabled (default: False)."""
+    return safe_env_bool("FC27_RECOMMENDATIONS_ENABLED", default=False)
+
+
+def is_fc27_provider_dry_run() -> bool:
+    """Check if FC 27 provider operates in dry-run mode (default: True)."""
+    return safe_env_bool("FC27_PROVIDER_DRY_RUN", default=True)
+
+
+def is_dispatch_enabled() -> bool:
+    """Check if dispatch is enabled (default: False)."""
+    return safe_env_bool("DISPATCH_ENABLED", default=False)
+
+
+def is_dispatch_worker_enabled() -> bool:
+    """Check if dispatch worker is enabled (default: False)."""
+    return safe_env_bool("DISPATCH_WORKER_ENABLED", default=False)
