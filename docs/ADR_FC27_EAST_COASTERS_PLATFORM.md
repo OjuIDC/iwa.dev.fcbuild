@@ -177,3 +177,73 @@ Live access remains strictly blocked at code and configuration levels (`FC27Live
 - Match-history, member, roster, and player statistics capture remain strictly out of scope.
 - Browser-session extraction, cookie scraping, account impersonation, and automated login remain prohibited.
 - General live ingestion, dispatch, dispatch workers, and recommendations remain disabled.
+
+---
+
+## 11. Provider Access Decision
+
+### 11.1 Reviewed Sources and Authority Hierarchy
+1. **Official EA User Agreement (ea.com/legal/user-agreement)**: Evaluated Section 6 ("Rules of Conduct"), which explicitly prohibits using automated tools, bots, or scrapers to access EA services, as well as reverse engineering or extracting data without express written permission from EA.
+2. **Official EA Sports FC Web Properties & Portals**: Confirmed EA does not provide an open or self-service public developer API for Pro Clubs. The restricted "FC Community API" is limited to pre-approved commercial partners (e.g. FUTBIN, FUT.GG) for Ultimate Team, with applications closed.
+3. **Public HTTP Behavior**: The endpoint `https://proclubs.ea.com/api/fc/clubs/info` serves internal web companion widgets. While observed unauthenticated in web browser sessions, it lacks third-party developer licensing or service-level agreements.
+4. **Community Research**: Unofficial community wrappers (e.g. `fc-clubs-api`, `proclubs-sdk`) confirm observed endpoint mechanics but do not establish legal or contractual authorization.
+
+### 11.2 Access Classification and Findings
+- **Official API Availability**: NO official public Pro Clubs API exists.
+- **Authentication Method**: NO official API-key, OAuth2, or service-account authentication flow is provided by EA.
+- **Automation Permission**: NO official programmatic automation permission exists; automated access without written consent breaches the EA User Agreement.
+- **Rate Limits & Retention Policies**: Undocumented and unmanaged by EA for third parties.
+- **Privacy Impact**: Direct responses can expose persistent gamer tags, account IDs, and persona IDs.
+- **Provider Access Classification**: `RESEARCH_ONLY`.
+- **Operational Safety Posture**:
+  - `ACCESS_STATUS`: `UNAPPROVED`
+  - `PROVIDER_CONTRACT_STATUS`: `PROVISIONAL`
+  - `LIVE_EXECUTION_STATUS`: `BLOCKED`
+  - `CLUB_ID_VERIFICATION_STATUS`: `PROVISIONAL`
+
+### 11.3 Integration Strategy Decision Matrix
+
+| Strategy | Legal / Terms Risk | Security Risk | Privacy Risk | Stability | Automation | Completeness | Implementation Effort | Maintenance Effort | Usability | Recommendation |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Strategy A: Official API** | LOW | LOW | LOW | HIGH | HIGH | HIGH | LOW | LOW | HIGH | Not Available (No public API) |
+| **Strategy B: Undocumented Public Endpoint** | HIGH | MEDIUM | HIGH | LOW | HIGH | MEDIUM | MEDIUM | HIGH | HIGH | `DO_NOT_IMPLEMENT` |
+| **Strategy C: User-Supplied Export** | LOW | LOW | LOW | MEDIUM | MEDIUM | HIGH | LOW | LOW | HIGH | **PRIMARY_PATH** |
+| **Strategy D: Club-Managed Manual Entry** | LOW | LOW | LOW | HIGH | LOW | MEDIUM | LOW | LOW | MEDIUM | **FALLBACK_PATH** |
+
+### 11.4 Selected Paths and Live Transport Decision
+- **Primary Integration Path**: `USER_SUPPLIED_EXPORT`. Enables East Coasters administrators to lawfully export and import their own club data with explicit consent and without automated scraping.
+- **Fallback Integration Path**: `MANUAL_ENTRY`. Enables direct administrative entry of verified club attributes and match outcomes.
+- **Live Transport Decision**: `DO_NOT_IMPLEMENT`.
+- **Live Transport Design Status**: `DESIGN_ONLY`, `NOT_IMPLEMENTED`, `NOT_AUTHORIZED_FOR_EXECUTION`. A live concrete HTTP transport will not be implemented unless EA publishes an official, supported third-party API.
+
+### 11.5 User-Supplied Export Contract Specification
+The user-supplied intake path operates strictly on sanitized, consented observations.
+
+#### Required Fields
+- `provider`: Exact literal `"EA_FC_PRO_CLUBS"`
+- `game_version`: Exact literal `"FC27"`
+- `platform`: Target platform (e.g. `"common-gen5"`)
+- `club_id`: Expected club identifier (e.g. `"330323"`)
+- `club_name`: Expected club name (e.g. `"East Coasters"`)
+- `captured_at`: ISO 8601 UTC timestamp of export creation
+- `source_classification`: `"USER_SUPPLIED_EXPORT"`
+- `supplied_by_role`: `"club_administrator"` or `"player"`
+- `consent_attestation`: Explicit boolean attesting user ownership and consent
+- `payload_sha256`: SHA-256 digest of original export content
+- `contract_version`: Schema contract version (`"1.0.0"`)
+- `schema_version`: Identity schema version (`"1.0"`)
+
+#### Prohibited Fields
+The following fields are strictly rejected:
+- Authentication headers, bearer tokens, API keys
+- Session cookies, session IDs, tracking tokens
+- Nucleus IDs, account IDs, persona IDs
+- Personal email addresses, IP addresses, device identifiers
+- Raw roster arrays and unconsented member telemetry
+
+#### Validation Invariants
+1. Extra or unmapped fields are quarantined or rejected fail-closed.
+2. User-supplied exports remain `PROVISIONAL` and cannot automatically transition identity to `VERIFIED`.
+3. Discrepancies in `club_id`, `club_name`, or `platform` transition identity to `CONFLICTED`.
+4. Duplicate imports are strictly idempotent via `payload_sha256`.
+5. Raw upload files are not retained permanently in storage.
