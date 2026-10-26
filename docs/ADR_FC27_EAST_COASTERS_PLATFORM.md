@@ -145,3 +145,35 @@ Every recommendation must separate:
 4. **Idempotent Ingestion & Quarantine**: Match payloads are hashed via deterministic SHA-256. Replaying identical matches causes zero duplicate side effects. Conflicting payloads for the same match ID are quarantined.
 5. **Segregation of Synthetic & Observed Records**: Synthetic test records are explicitly tagged (`source_classification: SYNTHETIC`) and blocked from silent merging into observed records.
 6. **No Secret Storage**: No credentials, session cookies, or user tokens are stored in source control or fixtures.
+
+---
+
+## 10. Bounded Capture Harness & Mock Validation Specification
+
+### 10.1 Access Status and Operational Posture
+- `ACCESS_STATUS`: `UNAPPROVED`
+- `PROVIDER_CONTRACT_STATUS`: `PROVISIONAL`
+- `LIVE_EXECUTION_STATUS`: `BLOCKED`
+
+Live access remains strictly blocked at code and configuration levels (`FC27LiveAccessBlockedError`). The capture harness does NOT provide EA provider credentials or session access; it provides immutable, in-memory operator scoping and budget controls.
+
+### 10.2 Bounded Capability and One-Use Budgeting
+- **Exact One-Request Scope**: Authorization (`FC27CaptureAuthorization`) is bound strictly to `operation=club_identity_lookup`, `hostname=proclubs.ea.com`, `method=GET`, `path=/api/fc/clubs/info`, `club_id=330323`, and `platform=common-gen5`.
+- **Zero Retries & Redirects**: `maximum_attempts=1`, `maximum_redirects=0`. All transient (408, 429, 5xx) and terminal errors consume the attempt without retry. Redirects are rejected immediately.
+- **Immediate Consumption**: The attempt is consumed via `FC27CaptureBudget.consume()` immediately prior to transport execution. Re-use of an authorization or budget fails closed with `FC27BudgetExhaustedError`.
+
+### 10.3 Sanitization and Privacy Boundaries
+- **Allowlist Retention**: Only non-personal identity fields (`provider`, `game_version`, `platform`, `club_id`, `club_name`, `region`, `captured_at`, `payload_sha256`, `source_classification`, `verification_state`, `verification_confidence`, `contract_version`, `schema_version`) are retained.
+- **Sensitive Keyword Detection**: Deep recursive inspection scans all dictionary keys and list paths for terms including `email`, `password`, `token`, `cookie`, `session`, `account`, `persona`, `gamer`, `player`, `roster`, and `device`.
+- **Raw-Response Prohibition**: Raw response bytes are permanently discarded after hashing and sanitization. No raw payloads or sensitive field values are written to disk, logged, or retained.
+- **Incident Handling**: Detection of unresolved sensitive field paths sets `safe_to_retain=False` and blocks club identity verification.
+
+### 10.4 Identity Verification and Human Approval Rules
+- **Provisional by Default**: Mock data, synthetic fixtures, and unapproved captures remain `PROVISIONAL` or `SYNTHETIC_ONLY`.
+- **Human Approval Requirement**: Transition to `VERIFIED` strictly requires all matching identity criteria, zero sensitive data findings, valid envelope, `source_classification=AUTHORIZED_CAPTURE`, and explicit `human_verification_approved=True`.
+- **Discrepancy Conflict**: Mismatches in `club_id`, `club_name`, or `platform` transition identity to `CONFLICTED`.
+
+### 10.5 Boundaries and Exclusions
+- Match-history, member, roster, and player statistics capture remain strictly out of scope.
+- Browser-session extraction, cookie scraping, account impersonation, and automated login remain prohibited.
+- General live ingestion, dispatch, dispatch workers, and recommendations remain disabled.
