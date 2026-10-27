@@ -2086,3 +2086,34 @@ def test_136_manifest_records_matching_and_conflicting_ids_and_reason_codes() ->
     }
     assert "MULTI_GROUP_CORROBORATED_NOT_VERIFIED" in manifest.reason_codes
     assert "MANAGER_AUTHORITY_UNVERIFIED" in manifest.reason_codes
+
+
+def test_137_east_coasters_export_pilot_package_deliverables() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    assert pkg_path.is_file()
+    content = pkg_path.read_text(encoding="utf-8")
+    for required_token in (
+        "CLUB_MANAGER",
+        "CLUB_ADMIN",
+        "DATA_STEWARD",
+        "CLUB_IDENTITY",
+        "MATCH_RESULTS",
+        "LINEUPS",
+        "PLAYER_PERFORMANCE",
+        "BUILD_REFERENCES",
+        "RETENTION_ACKNOWLEDGED=YES",
+        "ANALYTICS_USE_ACKNOWLEDGED=YES",
+        "TEAM_REVIEW_ACKNOWLEDGED=YES",
+        "scripts/fc27_user_export_import.py",
+        "--validate",
+        "--dry-run",
+        "INSUFFICIENT_DATA",
+        "EXPLORATORY",
+        "PROVISIONAL_TRENDS",
+        "HIGH_SAMPLE_READINESS",
+        "SAFE_TO_RETAIN_RAW_UPLOAD: NO",
+        "Prohibition of `--apply`",
+        "Prohibition of Recommendations",
+        "Prohibition of Committing Pilot Data",
+    ):
+        assert required_token in content

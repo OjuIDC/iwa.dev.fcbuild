@@ -456,12 +456,12 @@ To corroborate club identity claims without executing automated requests against
 Each template includes `attestation_timestamp`, `expires_at`, `evidence_references`, `reviewer_reference`, `review_decision`, `review_reason`, and `manager_authority_status="UNVERIFIED"`. Personal email addresses (`@`), tokens, passwords, and session identifiers are rejected fail-closed.
 
 ### 14.4 Consented User-Export Pilot Sequence
-The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`):
+The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`), documented in full in `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`:
 1. Authorized supplier provides local export outside repository
 2. Consent scopes reviewed
 3. `--validate`
 4. Human metadata review
 5. `--dry-run`
-6. Readiness preview
+6. Readiness preview (`0-2`: `INSUFFICIENT_DATA`, `3-9`: `EXPLORATORY`, `10-19`: `PROVISIONAL_TRENDS`, `20+`: `HIGH_SAMPLE_READINESS`)
 7. No `--apply`
 8. No recommendations
