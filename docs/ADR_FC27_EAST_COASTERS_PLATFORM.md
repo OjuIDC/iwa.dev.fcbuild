@@ -427,21 +427,24 @@ SOFTWARE.
 ### 14.1 Offline Public-Source Observation Model
 To corroborate club identity claims without executing automated requests against EA services or scraping public websites, `src/fc27_clubs.py` implements an offline, metadata-only evidence evaluation workflow (`FC27OfflinePublicObservation`, `evaluate_offline_club_evidence`, `FC27OfflineEvidenceManifest`):
 - **No Network or Scraping**: Zero page fetching, zero HTML scraping, zero browser-call replay, zero raw HTML storage, and zero player-linked data retention.
-- **Untrusted Secondary Sources (`UNTRUSTED_SECONDARY_OBSERVATION`)**:
-  1. `https://proclubstracker.com/club/330323?platform=common-gen5`
-  2. `https://myproclubs.com/East%20Coasters/330323-5`
-  3. `https://www.proclubsanalytics.com/club/330323?edition=fc27&platform=common-gen5&clubName=East+Coasters&lang=en`
-- **Provenance & Deduplication**: Each observation records `url_sha256`, `source_operator`, `observed_at`, `page_title`, and allowlisted club-level `observed_fields` (`club_name`, `club_id`, `platform`, `game_version`). Duplicate URL hashes or repeated observations from the same operator are deduplicated so a single site cannot self-corroborate.
+- **Explicit Source Independence Groups (`FC27SourceIndependenceGroup`)**:
+  1. `PROCLUBS_TRACKER`: `https://proclubstracker.com/club/330323?platform=common-gen5` (`proclubstracker.com`, `www.proclubstracker.com`)
+  2. `MYPROCLUBS`: `https://myproclubs.com/East%20Coasters/330323-5` (`myproclubs.com`, `www.myproclubs.com`)
+  3. `PROCLUBS_ANALYTICS`: `https://www.proclubsanalytics.com/club/330323?edition=fc27&platform=common-gen5&clubName=East+Coasters&lang=en` (`proclubsanalytics.com`, `www.proclubsanalytics.com`)
+- **Strict URL Policy (`canonicalize_secondary_url`)**: Enforces `https` only, ASCII host only (no Unicode lookalikes or punycode), no credentials, no localhost or private IP literals, no explicit ports, and an explicit domain allowlist. `compute_url_sha256` strips `#fragment` while preserving query parameters.
+- **Provenance & Deduplication**: Each observation records `url_sha256`, `evidence_sha256` (deterministic UTF-8 JSON SHA-256 of normalized fields), `independence_group`, `source_operator`, `observed_at`, `page_title`, `normalized_fields`, `reviewer_reference`, and `review_status`. Duplicate URL hashes, identical `evidence_sha256` digests, or repeated observations from the same `independence_group` are deduplicated so a single site cannot self-corroborate. If the same `observation_id` appears with a different `evidence_sha256`, the evaluation flags `EVIDENCE_ID_CONFLICT`.
 
-### 14.2 East Coasters Evidence Outcome & Authority Separation
-When at least two independently operated public sources match the East Coasters seed profile (`East Coasters` / alias `EastCoasters FC`, abbreviation `ECF`, club ID `330323`, platform `common-gen5`, game version `FC27`) without conflict:
-- `CLUB_NAME_STATUS`: `CORROBORATED`
-- `CLUB_ID_STATUS`: `CORROBORATED`
-- `PLATFORM_STATUS`: `CORROBORATED`
-- `GAME_VERSION_STATUS`: `CORROBORATED`
-- `REGION_STATUS`: `USER_ASSERTED` (`East Coast US 1`)
-- `MEMBERSHIP_STATUS`: `USER_ASSERTED`
-- `MANAGER_AUTHORITY_STATUS`: `UNVERIFIED`
+### 14.2 East Coasters Evidence Outcome, Status Hierarchy, & Authority Separation
+- **Evidence Status Hierarchy (`FC27EvidenceStatusHierarchy`)**: `UNSET -> USER_ASSERTED -> PROVISIONAL -> CORROBORATED -> CONFLICTED -> VERIFIED`.
+- **Corroboration & Conflict Rules**: A claim (`club_name`, `club_id`, `platform`, `game_version`) becomes `CORROBORATED` only when `>= 2` distinct `FC27SourceIndependenceGroup` observations agree and zero observations conflict. Any disagreement across `club_name`, `club_id`, `platform`, `game_version`, `club_abbreviation`, or `matchmaking_region` sets that field's status to `CONFLICTED` (majority vote never clears a conflict).
+- When the three independent East Coasters secondary observations are evaluated:
+  - `CLUB_NAME_STATUS`: `CORROBORATED`
+  - `CLUB_ID_STATUS`: `CORROBORATED`
+  - `PLATFORM_STATUS`: `CORROBORATED`
+  - `GAME_VERSION_STATUS`: `CORROBORATED`
+  - `REGION_STATUS`: `USER_ASSERTED` (`East Coast US 1`)
+  - `MEMBERSHIP_STATUS`: `USER_ASSERTED`
+  - `MANAGER_AUTHORITY_STATUS`: `UNVERIFIED`
 - **Corroborated Does Not Mean Verified**: `corroborated_equals_verified` is strictly `False`. Corroboration across secondary public observations never grants `VERIFIED` status, team membership, or manager authority.
 
 ### 14.3 Non-Personal Role Attestation Templates
@@ -450,7 +453,7 @@ When at least two independently operated public sources match the East Coasters 
 - `CLUB_ADMIN`: `supplier_reference="ecf-role-ref-club-admin-01"`
 - `DATA_STEWARD`: `supplier_reference="ecf-role-ref-data-steward-01"`
 
-Personal email addresses (`@`), tokens, passwords, and session identifiers are rejected fail-closed in `supplier_reference`.
+Each template includes `attestation_timestamp`, `expires_at`, `evidence_references`, `reviewer_reference`, `review_decision`, `review_reason`, and `manager_authority_status="UNVERIFIED"`. Personal email addresses (`@`), tokens, passwords, and session identifiers are rejected fail-closed.
 
 ### 14.4 Consented User-Export Pilot Sequence
 The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`):

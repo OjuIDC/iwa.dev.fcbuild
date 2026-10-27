@@ -9,9 +9,10 @@ emulation (rejected in audit).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, List, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -20,16 +21,53 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from src.fc27_clubs import (
     EAST_COASTERS_SEED_PROFILE,
     FC27ClubQuery,
+    FC27OfflinePublicObservation,
     FC27Operation,
     FC27ProviderCapabilities,
     FC27PublicProviderPolicy,
     PROVIDER_NAME,
     build_default_east_coasters_offline_observations,
     build_fc27_club_request,
+    compute_url_sha256,
     evaluate_offline_club_evidence,
     get_attestation_templates,
     validate_request_against_policy,
 )
+
+MAX_EVIDENCE_FILE_SIZE_BYTES = 1_048_576
+
+
+def _load_offline_observations_from_file(input_path_str: str) -> List[FC27OfflinePublicObservation]:
+    path = Path(input_path_str)
+    if not path.exists() or not path.is_file() or path.is_symlink():
+        raise ValueError("Offline evidence input must be an existing regular local file.")
+    if path.suffix.lower() != ".json":
+        raise ValueError("Offline evidence input must be a .json file.")
+    size = path.stat().st_size
+    if size <= 0 or size > MAX_EVIDENCE_FILE_SIZE_BYTES:
+        raise ValueError(f"Offline evidence input exceeds maximum size ({MAX_EVIDENCE_FILE_SIZE_BYTES} bytes).")
+    raw_text = path.read_text(encoding="utf-8")
+    lowered = raw_text.lower()
+    if "<html" in lowered or "<!doctype" in lowered or "<script" in lowered:
+        raise ValueError("Raw HTML or JavaScript content is prohibited in offline evidence input.")
+    parsed: Any = json.loads(raw_text)
+    if isinstance(parsed, dict) and "observations" in parsed:
+        items = parsed["observations"]
+    elif isinstance(parsed, list):
+        items = parsed
+    else:
+        raise ValueError("Offline evidence JSON must be a list of observation objects or {'observations': [...]}.")
+    if not isinstance(items, list) or not items:
+        raise ValueError("Offline evidence JSON must contain at least one observation.")
+    observations: List[FC27OfflinePublicObservation] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            raise ValueError("Each offline observation entry must be a JSON object.")
+        item_dict = dict(raw_item)
+        if "source_url" in item_dict and "url_sha256" not in item_dict:
+            item_dict["url_sha256"] = compute_url_sha256(str(item_dict["source_url"]))
+        observations.append(FC27OfflinePublicObservation(**item_dict))
+    return observations
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -77,6 +115,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Evaluate offline secondary public observations without page fetching or scraping",
     )
     parser.add_argument(
+        "--input",
+        default=None,
+        help="Optional local JSON metadata file for --evaluate-offline-evidence",
+    )
+    parser.add_argument(
         "--mock",
         action="store_true",
         default=False,
@@ -117,9 +160,16 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
         print("REQUESTS_EXECUTED=0")
         return 0
 
-    if args.evaluate_offline_evidence:
-        observations = build_default_east_coasters_offline_observations()
-        manifest = evaluate_offline_club_evidence(observations)
+    if args.evaluate_offline_evidence or (args.mock and not args.club_id):
+        try:
+            if args.input:
+                observations = _load_offline_observations_from_file(args.input)
+            else:
+                observations = list(build_default_east_coasters_offline_observations())
+            manifest = evaluate_offline_club_evidence(observations)
+        except Exception as exc:
+            print(f"ERROR=OFFLINE_EVIDENCE_INVALID:{type(exc).__name__}", file=sys.stderr)
+            return 1
         print("EVIDENCE_MODE=OFFLINE_EVALUATION")
         print(f"MOCK_MODE={'YES' if args.mock else 'NO'}")
         print(f"MANIFEST_ID={manifest.manifest_id}")
@@ -138,6 +188,7 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
         print(f"CORROBORATED_EQUALS_VERIFIED={'YES' if manifest.corroborated_equals_verified else 'NO'}")
         print(f"UNIQUE_INDEPENDENT_SOURCES={manifest.unique_independent_sources}")
         print(f"DUPLICATE_OBSERVATIONS={manifest.duplicate_observations_detected}")
+        print(f"CONFLICT_COUNT={manifest.conflict_count}")
         print("PAGE_FETCHING_USED=NO")
         print("SCRAPING_USED=NO")
         print("BROWSER_CALL_REPLAY_USED=NO")

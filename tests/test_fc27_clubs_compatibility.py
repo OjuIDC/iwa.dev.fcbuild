@@ -62,6 +62,7 @@ from src.fc27_clubs import (
     FC27ClubOverviewRecord,
     FC27ClubQuery,
     FC27ClubsCompatibilityAdapter,
+    FC27EvidenceStatusHierarchy,
     FC27IdentityOutcome,
     FC27MemberCareerStatsRecord,
     FC27OfflineEvidenceManifest,
@@ -73,10 +74,13 @@ from src.fc27_clubs import (
     FC27ProviderResponseEnvelope,
     FC27PublicProviderPolicy,
     FC27RoleAttestationTemplate,
+    FC27SourceIndependenceGroup,
     UpstreamAuditRecord,
     build_default_east_coasters_offline_observations,
     build_fc27_club_request,
+    canonicalize_secondary_url,
     compare_club_identity,
+    compute_evidence_content_sha256,
     compute_url_sha256,
     evaluate_club_access,
     evaluate_fc27_feature_flags,
@@ -1854,3 +1858,231 @@ def test_126_cli_evaluate_offline_evidence_and_mock(capsys: pytest.CaptureFixtur
         "REQUESTS_EXECUTED=0",
     ):
         assert expected in out
+
+
+# ==============================================================================
+# 127-136: Part A Remediation & Hardening Tests (Phases A3-A11)
+# ==============================================================================
+
+def test_127_secondary_url_policy_and_fragment_stripping() -> None:
+    base_url = "https://proclubstracker.com/club/330323?platform=common-gen5"
+    with_fragment = "https://proclubstracker.com/club/330323?platform=common-gen5#section-stats"
+    assert compute_url_sha256(base_url) == compute_url_sha256(with_fragment)
+    canonical, grp = canonicalize_secondary_url(with_fragment)
+    assert canonical == base_url
+    assert grp == FC27SourceIndependenceGroup.PROCLUBS_TRACKER.value
+
+    for bad_url in (
+        "http://proclubstracker.com/club/330323",
+        "https://user:pass@proclubstracker.com/club/330323",
+        "https://localhost/club/330323",
+        "https://127.0.0.1/club/330323",
+        "https://192.168.1.10/club/330323",
+        "https://proclubstracker.com:8443/club/330323",
+        "https://xn--proclubstracker-99a.com/club/330323",
+        "https://pr\u043eclubstracker.com/club/330323",
+        "https://untrusted-site.example.com/club/330323",
+    ):
+        with pytest.raises(ValueError):
+            canonicalize_secondary_url(bad_url)
+
+
+def test_128_independence_group_deduplication_prevents_self_corroboration() -> None:
+    u1 = "https://proclubstracker.com/club/330323?platform=common-gen5"
+    u2 = "https://www.proclubstracker.com/club/330323?platform=common-gen5&view=overview"
+    obs1 = FC27OfflinePublicObservation(
+        observation_id="obs-pct-1",
+        source_url=u1,
+        url_sha256=compute_url_sha256(u1),
+        source_operator="proclubstracker.com",
+        observed_at="2026-10-27T12:00:00Z",
+        page_title="East Coasters | Pro Clubs Tracker",
+        observed_fields={
+            "club_name": "East Coasters",
+            "club_id": "330323",
+            "platform": "common-gen5",
+            "game_version": "FC27",
+        },
+    )
+    obs2 = FC27OfflinePublicObservation(
+        observation_id="obs-pct-2",
+        source_url=u2,
+        url_sha256=compute_url_sha256(u2),
+        source_operator="www.proclubstracker.com",
+        observed_at="2026-10-27T12:05:00Z",
+        page_title="East Coasters Overview | Pro Clubs Tracker",
+        observed_fields={
+            "club_name": "East Coasters",
+            "club_id": "330323",
+            "platform": "common-gen5",
+            "game_version": "FC27",
+        },
+    )
+    manifest = evaluate_offline_club_evidence([obs1, obs2])
+    assert manifest.unique_independent_sources == 1
+    assert manifest.duplicate_observations_detected == 1
+    assert manifest.club_name_status == FC27EvidenceStatusHierarchy.PROVISIONAL.value
+    assert manifest.club_id_status == FC27EvidenceStatusHierarchy.PROVISIONAL.value
+    assert manifest.platform_status == FC27EvidenceStatusHierarchy.PROVISIONAL.value
+    assert manifest.game_version_status == FC27EvidenceStatusHierarchy.PROVISIONAL.value
+
+
+def test_129_same_observation_id_with_different_content_flags_conflict() -> None:
+    u1 = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[0]
+    u2 = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[1]
+    obs1 = FC27OfflinePublicObservation(
+        observation_id="same-obs-id",
+        source_url=u1,
+        url_sha256=compute_url_sha256(u1),
+        source_operator="proclubstracker.com",
+        observed_at="2026-10-27T12:00:00Z",
+        page_title="East Coasters",
+        observed_fields={"club_name": "East Coasters", "club_id": "330323"},
+    )
+    obs2 = FC27OfflinePublicObservation(
+        observation_id="same-obs-id",
+        source_url=u2,
+        url_sha256=compute_url_sha256(u2),
+        source_operator="myproclubs.com",
+        observed_at="2026-10-27T12:05:00Z",
+        page_title="East Coasters Modified",
+        observed_fields={"club_name": "East Coasters", "club_id": "330323", "platform": "common-gen5"},
+    )
+    assert obs1.evidence_sha256 != obs2.evidence_sha256
+    manifest = evaluate_offline_club_evidence([obs1, obs2])
+    assert "EVIDENCE_ID_CONFLICT:same-obs-id" in manifest.conflicts_detected
+    assert "same-obs-id" in manifest.conflicting_evidence_ids
+    assert manifest.conflict_count >= 1
+
+
+def test_130_majority_vote_never_clears_conflict() -> None:
+    obs = list(build_default_east_coasters_offline_observations())
+    u3 = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[2]
+    # 2 matching sources (obs[0], obs[1]) + 1 conflicting source -> still CONFLICTED
+    conflict_obs = FC27OfflinePublicObservation(
+        observation_id="obs-minority-conflict",
+        source_url=u3,
+        url_sha256=compute_url_sha256(u3),
+        source_operator="proclubsanalytics.com",
+        observed_at="2026-10-27T12:15:00Z",
+        page_title="East Coasters Conflict",
+        observed_fields={
+            "club_name": "East Coasters",
+            "club_id": "330323",
+            "platform": "nx",
+            "game_version": "FC27",
+            "club_abbreviation": "WCF",
+            "matchmaking_region": "British Isles",
+        },
+    )
+    manifest = evaluate_offline_club_evidence([obs[0], obs[1], conflict_obs])
+    assert manifest.platform_status == FC27EvidenceStatusHierarchy.CONFLICTED.value
+    assert manifest.region_status == FC27EvidenceStatusHierarchy.CONFLICTED.value
+    assert "platform" in manifest.unresolved_fields
+    assert "club_abbreviation" in manifest.unresolved_fields
+    assert "matchmaking_region" in manifest.unresolved_fields
+    assert "obs-minority-conflict" in manifest.conflicting_evidence_ids
+
+
+def test_131_deterministic_evidence_content_sha256_key_order_independent() -> None:
+    u = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[0]
+    h1 = compute_evidence_content_sha256(
+        url_sha256=compute_url_sha256(u),
+        independence_group="PROCLUBS_TRACKER",
+        observed_fields={"club_id": "330323", "club_name": "East Coasters", "platform": "common-gen5"},
+    )
+    h2 = compute_evidence_content_sha256(
+        url_sha256=compute_url_sha256(u + "#ignored-fragment"),
+        independence_group="PROCLUBS_TRACKER",
+        observed_fields={"platform": "common-gen5", "club_name": "East Coasters", "club_id": "330323"},
+    )
+    assert h1 == h2
+
+
+def test_132_attestation_template_expiry_and_authority_isolation() -> None:
+    templates = get_attestation_templates()
+    for role, tmpl in templates.items():
+        assert tmpl.supplier_role == role
+        assert tmpl.manager_authority_status == "UNVERIFIED"
+        assert tmpl.review_decision == "PENDING_HUMAN_REVIEW"
+        assert len(tmpl.evidence_references) >= 1
+    with pytest.raises(ValidationError, match="expires_at must be strictly later"):
+        FC27RoleAttestationTemplate(
+            supplier_role="CLUB_MANAGER",
+            supplier_reference="ecf-role-ref-club-manager-01",
+            authorized_scopes=("CLUB_IDENTITY",),
+            attestation_timestamp="2026-10-27T12:00:00Z",
+            expires_at="2026-10-27T11:00:00Z",
+        )
+
+
+def test_133_cli_standalone_mock_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = run_cli(["--mock"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "EVIDENCE_MODE=OFFLINE_EVALUATION" in out
+    assert "MOCK_MODE=YES" in out
+    assert "CLUB_ID_STATUS=CORROBORATED" in out
+    assert "MANAGER_AUTHORITY_STATUS=UNVERIFIED" in out
+    assert "REQUESTS_EXECUTED=0" in out
+
+
+def test_134_cli_evaluate_offline_evidence_with_local_json_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    obs = build_default_east_coasters_offline_observations()
+    payload = {"observations": [o.model_dump() for o in obs]}
+    json_path = tmp_path / "offline_evidence.json"
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rc = run_cli(["--evaluate-offline-evidence", "--input", str(json_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "EVIDENCE_MODE=OFFLINE_EVALUATION" in out
+    assert "CLUB_ID_STATUS=CORROBORATED" in out
+    assert "CONFLICT_COUNT=0" in out
+    assert "REQUESTS_EXECUTED=0" in out
+
+
+def test_135_cli_offline_evidence_input_rejects_html_and_sensitive_fields(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    html_file = tmp_path / "bad_html.json"
+    html_file.write_text('[{"page_title": "<html>bad</html>"}]', encoding="utf-8")
+    assert run_cli(["--evaluate-offline-evidence", "--input", str(html_file)]) != 0
+
+    sensitive_file = tmp_path / "sensitive.json"
+    sensitive_file.write_text(
+        json.dumps([
+            {
+                "observation_id": "bad-sens",
+                "source_url": EAST_COASTERS_SECONDARY_OBSERVATION_URLS[0],
+                "source_operator": "proclubstracker.com",
+                "observed_at": "2026-10-27T12:00:00Z",
+                "page_title": "East Coasters",
+                "observed_fields": {"club_id": "330323", "persona_id": "99999"},
+            }
+        ]),
+        encoding="utf-8",
+    )
+    assert run_cli(["--evaluate-offline-evidence", "--input", str(sensitive_file)]) != 0
+    capsys.readouterr()
+
+
+def test_136_manifest_records_matching_and_conflicting_ids_and_reason_codes() -> None:
+    obs = build_default_east_coasters_offline_observations()
+    manifest = evaluate_offline_club_evidence(obs)
+    assert len(manifest.matching_evidence_ids) == 3
+    assert manifest.conflicting_evidence_ids == ()
+    assert set(manifest.unresolved_fields) == {
+        "club_abbreviation",
+        "manager_authority",
+        "matchmaking_region",
+        "user_membership",
+    }
+    assert "MULTI_GROUP_CORROBORATED_NOT_VERIFIED" in manifest.reason_codes
+    assert "MANAGER_AUTHORITY_UNVERIFIED" in manifest.reason_codes
