@@ -232,8 +232,8 @@ def test_expiry_and_decision_race_has_single_outcome(pg_uri):
     ch = store.issue_challenge(tid, intent, COMMISSIONER, 10)
     signed_payload = SignedDecision.model_validate({**ch, "signature": approval.sign(ch, SIGNING_SECRET)})
 
-    # Sleep close to expiry
-    time.sleep(0.95)
+    # Ensure the request is expired before racing expiry workers with decisions.
+    time.sleep(1.2)
 
     barrier = threading.Barrier(8)
     results = []
