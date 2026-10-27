@@ -37,6 +37,7 @@ from src.fc27_clubs import (
     AUDITED_UPSTREAM_LICENSE,
     AUDITED_UPSTREAM_REPOSITORY,
     AUDITED_UPSTREAM_VERSION,
+    EAST_COASTERS_SECONDARY_OBSERVATION_URLS,
     EAST_COASTERS_SEED_PROFILE,
     MIT_ATTRIBUTION_NOTICE,
     OFFICIAL_EA_DEVELOPER_API,
@@ -47,6 +48,7 @@ from src.fc27_clubs import (
     SEARCH_LIVE_ENABLED,
     UPSTREAM_AUDIT_RECORD,
     UPSTREAM_SINGLE_EVENT_DEFS,
+    USER_EXPORT_PILOT_SEQUENCE,
     ComponentAdoptionClassification,
     FC27AccessAction,
     FC27AccessRole,
@@ -62,18 +64,25 @@ from src.fc27_clubs import (
     FC27ClubsCompatibilityAdapter,
     FC27IdentityOutcome,
     FC27MemberCareerStatsRecord,
+    FC27OfflineEvidenceManifest,
+    FC27OfflinePublicObservation,
     FC27Operation,
     FC27Platform,
     FC27PlayerMatchStatsRecord,
     FC27ProviderCapabilities,
     FC27ProviderResponseEnvelope,
     FC27PublicProviderPolicy,
+    FC27RoleAttestationTemplate,
     UpstreamAuditRecord,
+    build_default_east_coasters_offline_observations,
     build_fc27_club_request,
     compare_club_identity,
+    compute_url_sha256,
     evaluate_club_access,
     evaluate_fc27_feature_flags,
+    evaluate_offline_club_evidence,
     flag_enabled,
+    get_attestation_templates,
     has_permission,
     lookup_fc27_club,
     match_identity,
@@ -1665,3 +1674,183 @@ def test_116_event_registry_exact_74_count_and_no_duplicates() -> None:
                 (215, "duplicate_event_entry", "FC27"),
             ]
         )
+
+
+# ==============================================================================
+# 117-126: Offline Club Evidence Workflow & Attestation Template Tests
+# ==============================================================================
+
+def test_117_offline_observation_urls_and_sha256_provenance() -> None:
+    assert len(EAST_COASTERS_SECONDARY_OBSERVATION_URLS) == 3
+    obs = build_default_east_coasters_offline_observations()
+    assert len(obs) == 3
+    for item, expected_url in zip(obs, EAST_COASTERS_SECONDARY_OBSERVATION_URLS):
+        assert item.source_url == expected_url
+        assert item.url_sha256 == compute_url_sha256(expected_url)
+        assert item.source_classification == "UNTRUSTED_SECONDARY_OBSERVATION"
+        assert item.page_fetched is False
+        assert item.scraped is False
+        assert item.browser_call_replayed is False
+        assert item.raw_html_stored is False
+        assert item.player_data_included is False
+        assert item.authority_inferred is False
+
+
+def test_118_offline_observation_rejects_html_and_player_data() -> None:
+    u = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[0]
+    h = compute_url_sha256(u)
+    with pytest.raises(ValidationError, match="url_sha256 mismatch"):
+        FC27OfflinePublicObservation(
+            observation_id="bad-hash",
+            source_url=u,
+            url_sha256="0" * 64,
+            source_operator="proclubstracker.com",
+            observed_at="2026-10-27T12:00:00Z",
+            page_title="East Coasters",
+            observed_fields={"club_id": "330323"},
+        )
+    with pytest.raises(ValidationError, match="Raw HTML"):
+        FC27OfflinePublicObservation(
+            observation_id="bad-html",
+            source_url=u,
+            url_sha256=h,
+            source_operator="proclubstracker.com",
+            observed_at="2026-10-27T12:00:00Z",
+            page_title="<html><body>East Coasters</body></html>",
+            observed_fields={"club_id": "330323"},
+        )
+    with pytest.raises(ValidationError, match="Prohibited or player-linked field"):
+        FC27OfflinePublicObservation(
+            observation_id="bad-player",
+            source_url=u,
+            url_sha256=h,
+            source_operator="proclubstracker.com",
+            observed_at="2026-10-27T12:00:00Z",
+            page_title="East Coasters",
+            observed_fields={"club_id": "330323", "gamer_tag": "Player99"},
+        )
+
+
+def test_119_offline_evidence_corroboration_for_east_coasters() -> None:
+    obs = build_default_east_coasters_offline_observations()
+    manifest = evaluate_offline_club_evidence(obs)
+    assert isinstance(manifest, FC27OfflineEvidenceManifest)
+    assert manifest.club_name_status == "CORROBORATED"
+    assert manifest.club_id_status == "CORROBORATED"
+    assert manifest.platform_status == "CORROBORATED"
+    assert manifest.game_version_status == "CORROBORATED"
+    assert manifest.region_status == "USER_ASSERTED"
+    assert manifest.membership_status == "USER_ASSERTED"
+    assert manifest.manager_authority_status == "UNVERIFIED"
+    assert manifest.corroborated_equals_verified is False
+    assert manifest.unique_independent_sources == 3
+    assert manifest.duplicate_observations_detected == 0
+    assert manifest.conflicts_detected == ()
+
+
+def test_120_offline_evidence_duplicate_detection() -> None:
+    obs = build_default_east_coasters_offline_observations()
+    # Supply the first observation twice; single unique source must NOT corroborate club_id
+    dup_list = [obs[0], obs[0]]
+    manifest = evaluate_offline_club_evidence(dup_list)
+    assert manifest.total_observations == 2
+    assert manifest.unique_independent_sources == 1
+    assert manifest.duplicate_observations_detected == 1
+    assert manifest.club_id_status == "PROVISIONAL"
+    assert manifest.platform_status == "PROVISIONAL"
+
+
+def test_121_offline_evidence_conflict_detection() -> None:
+    obs = list(build_default_east_coasters_offline_observations())
+    u3 = EAST_COASTERS_SECONDARY_OBSERVATION_URLS[2]
+    conflicting = FC27OfflinePublicObservation(
+        observation_id="obs-conflict",
+        source_url=u3,
+        url_sha256=compute_url_sha256(u3),
+        source_operator="proclubsanalytics.com",
+        observed_at="2026-10-27T12:10:00Z",
+        page_title="Different Club",
+        observed_fields={
+            "club_name": "Wrong Club Name",
+            "club_id": "999999",
+            "platform": "nx",
+            "game_version": "FC26",
+        },
+    )
+    manifest = evaluate_offline_club_evidence([obs[0], obs[1], conflicting])
+    assert manifest.club_name_status == "CONFLICTED"
+    assert manifest.club_id_status == "CONFLICTED"
+    assert manifest.platform_status == "CONFLICTED"
+    assert manifest.game_version_status == "CONFLICTED"
+    assert len(manifest.conflicts_detected) == 4
+
+
+def test_122_offline_evidence_deterministic_manifest_hash() -> None:
+    obs = build_default_east_coasters_offline_observations()
+    m1 = evaluate_offline_club_evidence(obs)
+    m2 = evaluate_offline_club_evidence(obs)
+    assert m1.manifest_sha256 == m2.manifest_sha256
+    assert len(m1.manifest_sha256) == 64
+
+
+def test_123_role_attestation_templates_non_personal() -> None:
+    templates = get_attestation_templates()
+    assert set(templates.keys()) == {"CLUB_MANAGER", "CLUB_ADMIN", "DATA_STEWARD"}
+    for role, tmpl in templates.items():
+        assert tmpl.supplier_role == role
+        assert "@" not in tmpl.supplier_reference
+        assert tmpl.non_personal_reference_only is True
+        assert tmpl.retention_acknowledged is True
+        assert tmpl.analytics_use_acknowledged is True
+        assert tmpl.team_review_acknowledged is True
+    with pytest.raises(ValidationError, match="non-personal"):
+        FC27RoleAttestationTemplate(
+            supplier_role="CLUB_MANAGER",
+            supplier_reference="manager@example.com",
+            authorized_scopes=("CLUB_IDENTITY", "MATCH_RESULTS"),
+        )
+
+
+def test_124_user_export_pilot_sequence_documented() -> None:
+    assert len(USER_EXPORT_PILOT_SEQUENCE) == 8
+    assert "3. --validate" in USER_EXPORT_PILOT_SEQUENCE
+    assert "5. --dry-run" in USER_EXPORT_PILOT_SEQUENCE
+    assert "7. No --apply" in USER_EXPORT_PILOT_SEQUENCE
+    assert "8. No recommendations" in USER_EXPORT_PILOT_SEQUENCE
+
+
+def test_125_cli_show_claims(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = run_cli(["--show-claims"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "EVIDENCE_MODE=SHOW_CLAIMS" in out
+    assert "CANONICAL_CLUB_NAME=East Coasters" in out
+    assert "CLUB_ID=330323" in out
+    assert "REGION_STATUS=USER_ASSERTED" in out
+    assert "MEMBERSHIP_STATUS=USER_ASSERTED" in out
+    assert "MANAGER_AUTHORITY_STATUS=UNVERIFIED" in out
+    assert "ATTESTATION_ROLES=CLUB_ADMIN,CLUB_MANAGER,DATA_STEWARD" in out
+    assert "REQUESTS_EXECUTED=0" in out
+
+
+def test_126_cli_evaluate_offline_evidence_and_mock(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = run_cli(["--evaluate-offline-evidence", "--mock"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    for expected in (
+        "EVIDENCE_MODE=OFFLINE_EVALUATION",
+        "MOCK_MODE=YES",
+        "CLUB_NAME_STATUS=CORROBORATED",
+        "CLUB_ID_STATUS=CORROBORATED",
+        "PLATFORM_STATUS=CORROBORATED",
+        "GAME_VERSION_STATUS=CORROBORATED",
+        "REGION_STATUS=USER_ASSERTED",
+        "MEMBERSHIP_STATUS=USER_ASSERTED",
+        "MANAGER_AUTHORITY_STATUS=UNVERIFIED",
+        "CORROBORATED_EQUALS_VERIFIED=NO",
+        "PAGE_FETCHING_USED=NO",
+        "SCRAPING_USED=NO",
+        "BROWSER_CALL_REPLAY_USED=NO",
+        "REQUESTS_EXECUTED=0",
+    ):
+        assert expected in out

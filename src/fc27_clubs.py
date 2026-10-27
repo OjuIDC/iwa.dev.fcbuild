@@ -2731,3 +2731,340 @@ FC27_LIVE_INGESTION_ENABLED = is_fc27_live_ingestion_enabled()
 FC27_RECOMMENDATIONS_ENABLED = is_fc27_recommendations_enabled()
 DISPATCH_ENABLED = is_dispatch_enabled()
 DISPATCH_WORKER_ENABLED = is_dispatch_worker_enabled()
+
+
+# ==============================================================================
+# Phase 19: Offline Club Evidence Workflow & Attestation Templates
+# ==============================================================================
+
+EAST_COASTERS_SECONDARY_OBSERVATION_URLS: Tuple[str, ...] = (
+    "https://proclubstracker.com/club/330323?platform=common-gen5",
+    "https://myproclubs.com/East%20Coasters/330323-5",
+    "https://www.proclubsanalytics.com/club/330323?edition=fc27&platform=common-gen5&clubName=East+Coasters&lang=en",
+)
+
+ALLOWED_OFFLINE_EVIDENCE_FIELDS = {
+    "club_name",
+    "club_id",
+    "platform",
+    "game_version",
+}
+
+USER_EXPORT_PILOT_SEQUENCE: Tuple[str, ...] = (
+    "1. Authorized supplier provides local export outside repository",
+    "2. Consent scopes reviewed",
+    "3. --validate",
+    "4. Human metadata review",
+    "5. --dry-run",
+    "6. Readiness preview",
+    "7. No --apply",
+    "8. No recommendations",
+)
+
+
+def compute_url_sha256(url: str) -> str:
+    """Computes the deterministic SHA-256 hex digest of a canonical URL string."""
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL must be a non-empty string")
+    return hashlib.sha256(url.strip().encode("utf-8")).hexdigest()
+
+
+class FC27OfflinePublicObservation(BaseModel):
+    """Manually supplied metadata-only observation from an untrusted secondary public source.
+
+    Enforces:
+    - No page fetching, scraping, or browser-call replay.
+    - No raw HTML storage.
+    - No player-linked data.
+    - Exact URL SHA-256 provenance verification.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observation_id: str = Field(min_length=1, max_length=128)
+    source_url: str = Field(min_length=8, max_length=1024)
+    url_sha256: str = Field(min_length=64, max_length=64)
+    source_operator: str = Field(min_length=1, max_length=128)
+    source_classification: Literal["UNTRUSTED_SECONDARY_OBSERVATION"] = "UNTRUSTED_SECONDARY_OBSERVATION"
+    observed_at: str = Field(min_length=10, max_length=64)
+    page_title: str = Field(min_length=1, max_length=256)
+    observed_fields: Dict[str, str]
+    page_fetched: Literal[False] = False
+    scraped: Literal[False] = False
+    browser_call_replayed: Literal[False] = False
+    raw_html_stored: Literal[False] = False
+    player_data_included: Literal[False] = False
+    authority_inferred: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _validate_observation(self) -> FC27OfflinePublicObservation:
+        expected_hash = compute_url_sha256(self.source_url)
+        if self.url_sha256 != expected_hash:
+            raise ValueError(f"url_sha256 mismatch for '{self.source_url}'")
+        _ = _normalize_timestamp(self.observed_at)
+        low_title = self.page_title.lower()
+        if "<html" in low_title or "<!doctype" in low_title or "<script" in low_title:
+            raise ValueError("Raw HTML is prohibited in offline observations")
+        if not self.observed_fields:
+            raise ValueError("observed_fields must not be empty")
+        for k, v in self.observed_fields.items():
+            k_str = str(k)
+            v_str = str(v)
+            if _is_sensitive_key(k_str) or k_str not in ALLOWED_OFFLINE_EVIDENCE_FIELDS:
+                raise ValueError(f"Prohibited or player-linked field '{k_str}' in offline observation")
+            if "<html" in v_str.lower() or "<!doctype" in v_str.lower() or "<script" in v_str.lower():
+                raise ValueError("Raw HTML is prohibited in observed_fields values")
+        return self
+
+
+class FC27OfflineEvidenceManifest(BaseModel):
+    """Deterministic manifest resulting from offline club evidence evaluation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    manifest_id: str
+    canonical_club_name: str
+    known_alias: str
+    club_abbreviation: str
+    club_id: str
+    platform: str
+    game_version: str
+    region_claim: str
+    club_name_status: Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"]
+    club_id_status: Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"]
+    platform_status: Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"]
+    game_version_status: Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"]
+    region_status: Literal["USER_ASSERTED"] = "USER_ASSERTED"
+    membership_status: Literal["USER_ASSERTED"] = "USER_ASSERTED"
+    manager_authority_status: Literal["UNVERIFIED"] = "UNVERIFIED"
+    corroborated_equals_verified: Literal[False] = False
+    total_observations: int
+    unique_independent_sources: int
+    duplicate_observations_detected: int
+    conflicts_detected: Tuple[str, ...] = ()
+    observation_url_sha256s: Tuple[str, ...] = ()
+    manifest_sha256: str
+    page_fetching_used: Literal[False] = False
+    scraping_used: Literal[False] = False
+    browser_call_replay_used: Literal[False] = False
+    raw_html_stored: Literal[False] = False
+    player_data_included: Literal[False] = False
+    review_required: Literal[True] = True
+
+
+def build_default_east_coasters_offline_observations() -> Tuple[FC27OfflinePublicObservation, ...]:
+    """Constructs the 3 manually supplied UNTRUSTED_SECONDARY_OBSERVATION metadata records for East Coasters."""
+    u1, u2, u3 = EAST_COASTERS_SECONDARY_OBSERVATION_URLS
+    common_fields = {
+        "club_name": "East Coasters",
+        "club_id": "330323",
+        "platform": "common-gen5",
+        "game_version": "FC27",
+    }
+    return (
+        FC27OfflinePublicObservation(
+            observation_id="obs-proclubstracker-330323",
+            source_url=u1,
+            url_sha256=compute_url_sha256(u1),
+            source_operator="proclubstracker.com",
+            observed_at="2026-10-27T12:00:00Z",
+            page_title="East Coasters (330323) - ProClubsTracker",
+            observed_fields=dict(common_fields),
+        ),
+        FC27OfflinePublicObservation(
+            observation_id="obs-myproclubs-330323",
+            source_url=u2,
+            url_sha256=compute_url_sha256(u2),
+            source_operator="myproclubs.com",
+            observed_at="2026-10-27T12:05:00Z",
+            page_title="East Coasters - MyProClubs",
+            observed_fields=dict(common_fields),
+        ),
+        FC27OfflinePublicObservation(
+            observation_id="obs-proclubsanalytics-330323",
+            source_url=u3,
+            url_sha256=compute_url_sha256(u3),
+            source_operator="proclubsanalytics.com",
+            observed_at="2026-10-27T12:10:00Z",
+            page_title="East Coasters | FC 27 Pro Clubs Analytics",
+            observed_fields=dict(common_fields),
+        ),
+    )
+
+
+def evaluate_offline_club_evidence(
+    observations: Sequence[FC27OfflinePublicObservation],
+    *,
+    seed_profile: FC27ClubSeedProfile = EAST_COASTERS_SEED_PROFILE,
+    manifest_id: str = "manifest-east-coasters-offline-evidence-v1",
+) -> FC27OfflineEvidenceManifest:
+    """Evaluates manually supplied offline public-source metadata against a club seed profile.
+
+    Rules:
+    - At least two independently operated public sources matching a field promote it to CORROBORATED.
+    - Any conflicting observation marks that field CONFLICTED.
+    - Duplicate URL hashes or duplicate operator observations are counted and deduplicated.
+    - Region claim and membership status remain USER_ASSERTED; manager authority remains UNVERIFIED.
+    - Corroborated never means VERIFIED.
+    """
+    seen_url_hashes: set[str] = set()
+    seen_operators: set[str] = set()
+    duplicates = 0
+    unique_obs: List[FC27OfflinePublicObservation] = []
+
+    for obs in observations:
+        op_key = obs.source_operator.strip().lower()
+        if obs.url_sha256 in seen_url_hashes or op_key in seen_operators:
+            duplicates += 1
+            continue
+        seen_url_hashes.add(obs.url_sha256)
+        seen_operators.add(op_key)
+        unique_obs.append(obs)
+
+    conflicts: List[str] = []
+    matching_operators: Dict[str, set[str]] = {
+        "club_name": set(),
+        "club_id": set(),
+        "platform": set(),
+        "game_version": set(),
+    }
+    valid_names = {normalize_name(seed_profile.canonical_club_name)} | {
+        normalize_name(a) for a in seed_profile.known_aliases if a
+    }
+
+    for obs in unique_obs:
+        op_key = obs.source_operator.strip().lower()
+        f = obs.observed_fields
+        if "club_name" in f:
+            if normalize_name(f["club_name"]) in valid_names:
+                matching_operators["club_name"].add(op_key)
+            else:
+                conflicts.append(f"CLUB_NAME_MISMATCH:{obs.observation_id}")
+        if "club_id" in f:
+            if f["club_id"].strip() == seed_profile.provisional_club_id:
+                matching_operators["club_id"].add(op_key)
+            else:
+                conflicts.append(f"CLUB_ID_MISMATCH:{obs.observation_id}")
+        if "platform" in f:
+            if f["platform"].strip() == seed_profile.provisional_platform:
+                matching_operators["platform"].add(op_key)
+            else:
+                conflicts.append(f"PLATFORM_MISMATCH:{obs.observation_id}")
+        if "game_version" in f:
+            if f["game_version"].strip().upper() == seed_profile.game_version.upper():
+                matching_operators["game_version"].add(op_key)
+            else:
+                conflicts.append(f"GAME_VERSION_MISMATCH:{obs.observation_id}")
+
+    def _resolve_status(
+        field_key: str,
+        conflict_prefix: str,
+        default_status: Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"],
+    ) -> Literal["USER_ASSERTED", "PROVISIONAL", "CORROBORATED", "CONFLICTED"]:
+        if any(c.startswith(conflict_prefix) for c in conflicts):
+            return "CONFLICTED"
+        if len(matching_operators[field_key]) >= 2:
+            return "CORROBORATED"
+        return default_status
+
+    name_status = _resolve_status("club_name", "CLUB_NAME_MISMATCH", "CORROBORATED")
+    id_status = _resolve_status("club_id", "CLUB_ID_MISMATCH", "PROVISIONAL")
+    plat_status = _resolve_status("platform", "PLATFORM_MISMATCH", "PROVISIONAL")
+    gv_status = _resolve_status("game_version", "GAME_VERSION_MISMATCH", "PROVISIONAL")
+
+    url_hashes = tuple(obs.url_sha256 for obs in observations)
+    canonical_manifest_payload = {
+        "manifest_id": manifest_id,
+        "club_id": seed_profile.provisional_club_id,
+        "canonical_club_name": seed_profile.canonical_club_name,
+        "platform": seed_profile.provisional_platform,
+        "game_version": seed_profile.game_version,
+        "club_name_status": name_status,
+        "club_id_status": id_status,
+        "platform_status": plat_status,
+        "game_version_status": gv_status,
+        "region_status": "USER_ASSERTED",
+        "membership_status": "USER_ASSERTED",
+        "manager_authority_status": "UNVERIFIED",
+        "total_observations": len(observations),
+        "unique_independent_sources": len(unique_obs),
+        "duplicate_observations_detected": duplicates,
+        "conflicts_detected": sorted(conflicts),
+        "observation_url_sha256s": list(url_hashes),
+    }
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(canonical_manifest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    return FC27OfflineEvidenceManifest(
+        manifest_id=manifest_id,
+        canonical_club_name=seed_profile.canonical_club_name,
+        known_alias=seed_profile.known_aliases[0] if seed_profile.known_aliases else "",
+        club_abbreviation=seed_profile.club_abbreviation,
+        club_id=seed_profile.provisional_club_id,
+        platform=seed_profile.provisional_platform,
+        game_version=seed_profile.game_version,
+        region_claim=seed_profile.matchmaking_region_claim,
+        club_name_status=name_status,
+        club_id_status=id_status,
+        platform_status=plat_status,
+        game_version_status=gv_status,
+        region_status="USER_ASSERTED",
+        membership_status="USER_ASSERTED",
+        manager_authority_status="UNVERIFIED",
+        corroborated_equals_verified=False,
+        total_observations=len(observations),
+        unique_independent_sources=len(unique_obs),
+        duplicate_observations_detected=duplicates,
+        conflicts_detected=tuple(sorted(conflicts)),
+        observation_url_sha256s=url_hashes,
+        manifest_sha256=manifest_sha256,
+    )
+
+
+class FC27RoleAttestationTemplate(BaseModel):
+    """Non-personal attestation template for CLUB_MANAGER, CLUB_ADMIN, or DATA_STEWARD."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    supplier_role: Literal["CLUB_MANAGER", "CLUB_ADMIN", "DATA_STEWARD"]
+    supplier_reference: str = Field(min_length=3, max_length=128)
+    club_id: str = "330323"
+    canonical_club_name: str = "East Coasters"
+    platform: str = "common-gen5"
+    game_version: str = "FC27"
+    authorized_scopes: Tuple[str, ...]
+    consent_version: str = "fc27-consent-v1.0"
+    consented_data_categories: Tuple[str, ...] = ("CLUB_IDENTITY", "MATCH_RESULTS")
+    retention_acknowledged: Literal[True] = True
+    analytics_use_acknowledged: Literal[True] = True
+    team_review_acknowledged: Literal[True] = True
+    non_personal_reference_only: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _validate_non_personal_reference(self) -> FC27RoleAttestationTemplate:
+        ref = self.supplier_reference.strip()
+        if "@" in ref or " " in ref or any(tok in ref.lower() for tok in ("bearer", "token", "secret", "password", "cookie")):
+            raise ValueError("supplier_reference must be a non-personal club-controlled identifier (no emails or secrets)")
+        return self
+
+
+def get_attestation_templates() -> Dict[str, FC27RoleAttestationTemplate]:
+    """Returns non-personal attestation templates for CLUB_MANAGER, CLUB_ADMIN, and DATA_STEWARD."""
+    return {
+        "CLUB_MANAGER": FC27RoleAttestationTemplate(
+            supplier_role="CLUB_MANAGER",
+            supplier_reference="ecf-role-ref-club-manager-01",
+            authorized_scopes=("CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"),
+        ),
+        "CLUB_ADMIN": FC27RoleAttestationTemplate(
+            supplier_role="CLUB_ADMIN",
+            supplier_reference="ecf-role-ref-club-admin-01",
+            authorized_scopes=("CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"),
+        ),
+        "DATA_STEWARD": FC27RoleAttestationTemplate(
+            supplier_role="DATA_STEWARD",
+            supplier_reference="ecf-role-ref-data-steward-01",
+            authorized_scopes=("CLUB_IDENTITY", "MATCH_RESULTS"),
+        ),
+    }

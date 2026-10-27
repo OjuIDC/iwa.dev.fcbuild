@@ -419,3 +419,46 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## 14. Offline Club Evidence Workflow & Attestation Templates
+
+### 14.1 Offline Public-Source Observation Model
+To corroborate club identity claims without executing automated requests against EA services or scraping public websites, `src/fc27_clubs.py` implements an offline, metadata-only evidence evaluation workflow (`FC27OfflinePublicObservation`, `evaluate_offline_club_evidence`, `FC27OfflineEvidenceManifest`):
+- **No Network or Scraping**: Zero page fetching, zero HTML scraping, zero browser-call replay, zero raw HTML storage, and zero player-linked data retention.
+- **Untrusted Secondary Sources (`UNTRUSTED_SECONDARY_OBSERVATION`)**:
+  1. `https://proclubstracker.com/club/330323?platform=common-gen5`
+  2. `https://myproclubs.com/East%20Coasters/330323-5`
+  3. `https://www.proclubsanalytics.com/club/330323?edition=fc27&platform=common-gen5&clubName=East+Coasters&lang=en`
+- **Provenance & Deduplication**: Each observation records `url_sha256`, `source_operator`, `observed_at`, `page_title`, and allowlisted club-level `observed_fields` (`club_name`, `club_id`, `platform`, `game_version`). Duplicate URL hashes or repeated observations from the same operator are deduplicated so a single site cannot self-corroborate.
+
+### 14.2 East Coasters Evidence Outcome & Authority Separation
+When at least two independently operated public sources match the East Coasters seed profile (`East Coasters` / alias `EastCoasters FC`, abbreviation `ECF`, club ID `330323`, platform `common-gen5`, game version `FC27`) without conflict:
+- `CLUB_NAME_STATUS`: `CORROBORATED`
+- `CLUB_ID_STATUS`: `CORROBORATED`
+- `PLATFORM_STATUS`: `CORROBORATED`
+- `GAME_VERSION_STATUS`: `CORROBORATED`
+- `REGION_STATUS`: `USER_ASSERTED` (`East Coast US 1`)
+- `MEMBERSHIP_STATUS`: `USER_ASSERTED`
+- `MANAGER_AUTHORITY_STATUS`: `UNVERIFIED`
+- **Corroborated Does Not Mean Verified**: `corroborated_equals_verified` is strictly `False`. Corroboration across secondary public observations never grants `VERIFIED` status, team membership, or manager authority.
+
+### 14.3 Non-Personal Role Attestation Templates
+`get_attestation_templates()` provides structured, non-personal attestation templates (`FC27RoleAttestationTemplate`) for:
+- `CLUB_MANAGER`: `supplier_reference="ecf-role-ref-club-manager-01"`
+- `CLUB_ADMIN`: `supplier_reference="ecf-role-ref-club-admin-01"`
+- `DATA_STEWARD`: `supplier_reference="ecf-role-ref-data-steward-01"`
+
+Personal email addresses (`@`), tokens, passwords, and session identifiers are rejected fail-closed in `supplier_reference`.
+
+### 14.4 Consented User-Export Pilot Sequence
+The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`):
+1. Authorized supplier provides local export outside repository
+2. Consent scopes reviewed
+3. `--validate`
+4. Human metadata review
+5. `--dry-run`
+6. Readiness preview
+7. No `--apply`
+8. No recommendations

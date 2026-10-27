@@ -18,24 +18,29 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from src.fc27_clubs import (
+    EAST_COASTERS_SEED_PROFILE,
     FC27ClubQuery,
     FC27Operation,
+    FC27ProviderCapabilities,
     FC27PublicProviderPolicy,
-     FC27ProviderCapabilities,
     PROVIDER_NAME,
+    build_default_east_coasters_offline_observations,
     build_fc27_club_request,
+    evaluate_offline_club_evidence,
+    get_attestation_templates,
     validate_request_against_policy,
 )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="FC 27 Multi-Club Lookup CLI (Dry-Run Metadata Only)",
+        description="FC 27 Multi-Club Lookup & Offline Evidence CLI (Metadata Only)",
         allow_abbrev=False,
     )
     parser.add_argument(
         "--club-id",
-        required=True,
+        required=False,
+        default=None,
         help="Numeric club identifier (e.g., 330323)",
     )
     parser.add_argument(
@@ -59,6 +64,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="Execute dry-run metadata validation only (default; live execution disabled)",
     )
+    parser.add_argument(
+        "--show-claims",
+        action="store_true",
+        default=False,
+        help="Show seeded club identity claims and non-personal attestation templates",
+    )
+    parser.add_argument(
+        "--evaluate-offline-evidence",
+        action="store_true",
+        default=False,
+        help="Evaluate offline secondary public observations without page fetching or scraping",
+    )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        default=False,
+        help="Run with in-memory synthetic/offline metadata fixtures only",
+    )
     return parser
 
 
@@ -72,6 +95,58 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
     if args.provider != PROVIDER_NAME:
         print(f"ERROR=UNSUPPORTED_PROVIDER:{args.provider}", file=sys.stderr)
         return 1
+
+    if args.show_claims:
+        seed = EAST_COASTERS_SEED_PROFILE
+        templates = get_attestation_templates()
+        print("EVIDENCE_MODE=SHOW_CLAIMS")
+        print(f"CANONICAL_CLUB_NAME={seed.canonical_club_name}")
+        print(f"KNOWN_ALIAS={seed.known_aliases[0] if seed.known_aliases else ''}")
+        print(f"CLUB_ABBREVIATION={seed.club_abbreviation}")
+        print(f"CLUB_ID={seed.provisional_club_id}")
+        print(f"PLATFORM={seed.provisional_platform}")
+        print(f"GAME_VERSION={seed.game_version}")
+        print(f"REGION_CLAIM={seed.matchmaking_region_claim}")
+        print(f"CLUB_NAME_STATUS={seed.club_name_status}")
+        print(f"CLUB_ID_STATUS={seed.club_id_status}")
+        print(f"PLATFORM_STATUS={seed.platform_status}")
+        print(f"REGION_STATUS={seed.matchmaking_region_status}")
+        print(f"MEMBERSHIP_STATUS={seed.user_membership_status}")
+        print(f"MANAGER_AUTHORITY_STATUS={seed.manager_authority_status}")
+        print(f"ATTESTATION_ROLES={','.join(sorted(templates.keys()))}")
+        print("REQUESTS_EXECUTED=0")
+        return 0
+
+    if args.evaluate_offline_evidence:
+        observations = build_default_east_coasters_offline_observations()
+        manifest = evaluate_offline_club_evidence(observations)
+        print("EVIDENCE_MODE=OFFLINE_EVALUATION")
+        print(f"MOCK_MODE={'YES' if args.mock else 'NO'}")
+        print(f"MANIFEST_ID={manifest.manifest_id}")
+        print(f"MANIFEST_SHA256={manifest.manifest_sha256}")
+        print(f"CANONICAL_CLUB_NAME={manifest.canonical_club_name}")
+        print(f"CLUB_ID={manifest.club_id}")
+        print(f"PLATFORM={manifest.platform}")
+        print(f"GAME_VERSION={manifest.game_version}")
+        print(f"CLUB_NAME_STATUS={manifest.club_name_status}")
+        print(f"CLUB_ID_STATUS={manifest.club_id_status}")
+        print(f"PLATFORM_STATUS={manifest.platform_status}")
+        print(f"GAME_VERSION_STATUS={manifest.game_version_status}")
+        print(f"REGION_STATUS={manifest.region_status}")
+        print(f"MEMBERSHIP_STATUS={manifest.membership_status}")
+        print(f"MANAGER_AUTHORITY_STATUS={manifest.manager_authority_status}")
+        print(f"CORROBORATED_EQUALS_VERIFIED={'YES' if manifest.corroborated_equals_verified else 'NO'}")
+        print(f"UNIQUE_INDEPENDENT_SOURCES={manifest.unique_independent_sources}")
+        print(f"DUPLICATE_OBSERVATIONS={manifest.duplicate_observations_detected}")
+        print("PAGE_FETCHING_USED=NO")
+        print("SCRAPING_USED=NO")
+        print("BROWSER_CALL_REPLAY_USED=NO")
+        print("REQUESTS_EXECUTED=0")
+        return 0
+
+    if not args.club_id:
+        print("ERROR=MISSING_CLUB_ID", file=sys.stderr)
+        return 2
 
     try:
         caps = FC27ProviderCapabilities()
