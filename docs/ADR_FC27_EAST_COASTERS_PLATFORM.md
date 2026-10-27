@@ -329,3 +329,93 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 - `PROVIDER_CONTRACT_STATUS`: `PROVISIONAL`
 - `LIVE_EXECUTION_STATUS`: `BLOCKED`
 - `CLUB_ID_VERIFICATION_STATUS`: `PROVISIONAL`
+
+---
+
+## 13. Audited `fc27-clubs-api` Multi-Club Compatibility Layer
+
+### 13.1 Upstream Audit Provenance & Licensing
+- **Upstream Repository**: `https://github.com/1erkandogan/fc27-clubs-api`
+- **Reviewed Commit SHA**: `26a5ff12ea793042bd776a858c74f3f44dd427f5` (2026-10-03T11:05:32Z)
+- **Reviewed Version**: `0.3.1`
+- **Upstream License**: `MIT` (`LICENSE.md` SHA-256: `2b5e42f174b039db7454e7d13d61c39d5e05a1e283121d66768e0ac6398455b5`)
+- **Audit Reference & Date**: `AUDIT-FC27-CLUBS-API-2026-10-27` (`2026-10-27`)
+- **License Compatibility**: `YES`
+- **Security & Dependency Review**: `PASS` (Zero mandatory third-party network dependencies; `pandas` optional extra rejected from runtime requirements).
+- **Transport Review**: `REJECTED` (`TRANSPORT_REVIEW_PASS: NO`, `BROWSER_IMPERSONATION_REQUIRED: YES`). Upstream `src/fc_clubs_api/_http.py` injects browser-profile emulation headers (`User-Agent: Mozilla/5.0 ... Chrome/141.0.0.0`, `sec-ch-ua`, and `sec-fetch-site: same-origin`) specifically to bypass Akamai 403 blocks on `proclubs.ea.com`.
+- **Adaptation Decision**: `APPROVED_SUBSET`
+- **Adoption Strategy**: `INTERNAL_REIMPLEMENTATION` in `src/fc27_clubs.py` (no runtime dependency on `fc-clubs-api` or `pandas`).
+
+### 13.2 Unofficial Provider Classification & No EA Endorsement
+- `PROVIDER_NAME`: `EA_FC_CLUBS_WEB`
+- `PROVIDER_STATUS`: `UNOFFICIAL_PUBLIC_WEB_INTERFACE`
+- `OFFICIAL_EA_DEVELOPER_API`: `NO`
+- `SUPPORT_STATUS`: `UNSUPPORTED`
+- `CONTRACT_STABILITY`: `UNCONFIRMED`
+- `PROVIDER_AUTHENTICATION_METHOD`: `NONE_DOCUMENTED`
+- `TERMS_REVIEW_REQUIRED`: `YES`
+- **No EA Approval or Endorsement**: The official EA Community API program does not authorize this integration. `iwa.dev.fcbuild` is not an approved EA client, does not display any EA badge, does not claim EA OAuth support, and never collects EA credentials or browser sessions.
+
+### 13.3 Component Adoption & Rejection Matrix
+
+| Upstream Component | Classification | Disposition & Modification Summary |
+|---|---|---|
+| `src/fc_clubs_api/enums.py` | `CLEAN_ROOM_REIMPLEMENTED` | Reimplemented platform (`common-gen5`, `nx`) and operation enums in `src/fc27_clubs.py`. |
+| `src/fc_clubs_api/exceptions.py` | `CLEAN_ROOM_REIMPLEMENTED` | Mapped error semantics into `FC27ClubsCompatibilityAdapter.translate_error()`. |
+| `src/fc_clubs_api/_columns.py` | `ADAPTED_WITH_LICENSE` | Adapted field mappings into strongly typed Pydantic internal records (`FC27ClubIdentityMappedRecord`, `FC27ClubOverviewRecord`, `FC27ClubMatchSummaryRecord`, `FC27ClubMemberSummaryRecord`, `FC27MemberCareerStatsRecord`, `FC27PlayerMatchStatsRecord`). |
+| `src/fc_clubs_api/_normalize.py` | `CLEAN_ROOM_REIMPLEMENTED` | Reimplemented strict numeric string coercion (`_coerce_int`, `_coerce_float`) and UTC ISO-8601 timestamp normalization (`_normalize_timestamp`). |
+| `src/fc_clubs_api/events.py` | `ADAPTED_WITH_LICENSE` | Reconciled 74 single-event definitions with `FC27_EVENT_REGISTRY` via `reconcile_event_registry()`, keeping all community-derived mappings strictly `PROVISIONAL`. |
+| `src/fc_clubs_api/assets.py` | `CONCEPT_ONLY` | Retained non-personal crest/kit identifier extraction (`team_id`, `crest_asset_id`, `selected_kit_type`) only. |
+| `src/fc_clubs_api/_http.py` | `REJECTED` | Rejected due to Chrome 141 User-Agent, `sec-ch-ua`, and `sec-fetch-site: same-origin` Akamai evasion headers. |
+| `src/fc_clubs_api/client.py:get_json` | `REJECTED` | Rejected unguarded arbitrary endpoint caller. |
+| `src/fc_clubs_api/client.py:find_club_id` | `REJECTED` | Rejected automatic single-result selection on club search; explicit human club ID confirmation is mandatory. |
+| `src/fc_clubs_api/_output.py` | `REJECTED` | Rejected `pandas` DataFrame output layer and raw JSON pass-through. |
+| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with dry-run-only `scripts/fc27_club_lookup.py`. |
+| `Interactive-63/eafc-pro-clubs-api-research` | `CONCEPT_ONLY` | Unlicensed upstream research repository cited as conceptual provenance only; zero code copied. |
+
+### 13.4 Separation of Concerns: Authentication, Authorization, Membership, and Manager Authority
+The compatibility layer enforces a strict 11-way architectural separation:
+1. **Application Authentication (`FC27ApplicationClubAccess`)**: Reuses `iwa.dev.fcbuild` actor identity. Authentication alone grants zero club permissions without an assigned `FC27AccessRole` (`VIEWER`, `TEAM_MEMBER`, `DATA_STEWARD`, `CLUB_MANAGER`, `CLUB_ADMIN`) or explicit action grant.
+2. **Public Club Identity Lookup (`VIEW_PUBLIC_CLUB_IDENTITY`)**: Permitees may inspect metadata-only public club identity, but a successful lookup **never** grants team membership, manager authority, persistence, recommendations, or dispatch.
+3. **Team Membership & Manager Authority**: Initial East Coasters state maintains `USER_MEMBERSHIP_STATUS=USER_ASSERTED` and `MANAGER_AUTHORITY_STATUS=UNVERIFIED`. Manager authority cannot be inferred from a successful lookup, roster presence, matching alias, possession of a club ID, public page access, login, or self-assertion (`"I think I am a manager"`). It requires separate reviewed authority evidence (`reviewed_authority_evidence_id`), and fails closed upon expiration or revocation.
+
+### 13.5 Multi-Club Query Model, Request Builder, and Provider Policy
+- **Capability Truthfulness (`FC27ProviderCapabilities`)**: Explicitly distinguishes between `declared_operations` (all 10 operations), `mock_enabled_operations` (all 10 operations), `design_eligible_operations` (`("CLUB_IDENTITY",)`), and `live_executable_operations` (`()` — empty because no approved transport exists).
+- **Multi-Club Design**: `FC27ClubQuery` and `lookup_fc27_club()` support any validated numeric `club_id` and supported platform (`common-gen5`, `nx`). East Coasters (`330323`, `East Coasters`, alias `EastCoasters FC`, abbreviation `ECF`, region claim `East Coast US 1`) is represented purely as a seeded configuration profile (`EAST_COASTERS_SEED_PROFILE`).
+- **Pure Request Builder (`build_fc27_club_request`)**: Constructs `GET https://proclubs.ea.com/api/fc/clubs/info?platform=<platform>&clubIds=<club_id>` while rejecting CRLF injection, query injection, multiple-club injection, negative/nonnumeric IDs, embedded credentials, HTTP, alternate hosts/ports, fragments, Unicode lookalikes, and custom/cookie/auth headers.
+- **Public Provider Policy (`FC27PublicProviderPolicy`)**: Enforces HTTPS only, exact host/path allowlists, GET only, zero retries, `maximum_requests=1`, connect timeout <= 5s, total timeout <= 10s, response size <= 1 MiB (`1,048,576` bytes), `application/json`, no redirects, no raw-body logging or retention, and prohibition of scheduler, dispatch, or worker execution contexts.
+
+### 13.6 Response Sanitizer, Identity Matching, Cache, and Circuit Breaker
+- **Allowlist Sanitizer (`sanitize_identity_payload`)**: Retains only `club_id`, `club_name`, `platform`, `provider_region_value`, non-personal `crest_kit_identifiers`, `provider`, `game_version`, `capture_timestamp`, `payload_hash`, and `provenance`. Drops all member lists, gamer tags, persona IDs, account IDs, user IDs, cookies, tokens, and sessions, recording only dropped/sensitive field paths.
+- **Identity Matching (`compare_club_identity`)**: Uses Unicode `NFKC` + casefolding while preserving the exact provider-returned name. Exact match against canonical name or known alias returns `EXACT_MATCH`. Abbreviation (`ECF`) alone returns `REVIEW_REQUIRED`. Provider region IDs are never automatically mapped to `East Coast US 1`.
+- **Sanitized Cache (`FC27Cache`)**: Bounded in-memory LRU cache (`TTL <= 600s`), keyed by `(provider, operation, game_version, platform, club_id)`. Rejects raw bodies and unsanitized payloads.
+- **Circuit Breaker (`FC27CircuitBreaker`)**: Opens immediately on HTTP 401, 403, redirects, CAPTCHAs, HTML/Akamai challenges, session requirements, or repeated malformed responses. When open, blocks calls, requires manual review reset (`reset(manual=True)`), and returns the `USER_SUPPLIED_EXPORT` fallback.
+
+### 13.7 Event & Formula Reconciliation and Controlled Probe Gate
+- **Event & Formula Reconciliation (`reconcile_event_registry`)**: Maps upstream event definitions as `PROVISIONAL` (`source_commit=26a5ff12ea793042bd776a858c74f3f44dd427f5`), flags semantic mismatches as `CONFLICTED`, rejects non-FC27 (e.g., FC 26) promotions, preserves unknown event IDs with raw counts, and degrades analysis confidence when required events are unknown.
+- **Controlled Probe Gate & Offline Fallback**: Because the upstream transport requires browser-header emulation to avoid Akamai 403 responses, no live HTTP transport is enabled (`READY_FOR_ONE_PUBLIC_IDENTITY_PROBE=NO`, `FC27_PUBLIC_IDENTITY_LOOKUP_ENABLED=false`, `FC27_UPSTREAM_COMPATIBILITY_ENABLED=false`). `USER_SUPPLIED_EXPORT` remains the active primary integration path.
+
+### 13.8 Upstream MIT License Notice
+```text
+MIT License
+
+Copyright (c) 2025 Erkan Dogan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

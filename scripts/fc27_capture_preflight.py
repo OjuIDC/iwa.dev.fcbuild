@@ -29,7 +29,9 @@ from src.settings import (
     is_dispatch_worker_enabled,
     is_fc27_live_ingestion_enabled,
     is_fc27_provider_enabled,
+    is_fc27_public_identity_lookup_enabled,
     is_fc27_recommendations_enabled,
+    is_fc27_upstream_compatibility_enabled,
 )
 
 
@@ -37,6 +39,10 @@ def run_safety_checks() -> bool:
     """Verifies that all safety boundaries and fail-closed configurations hold."""
     # 1. Feature flags must be strictly disabled
     if is_fc27_provider_enabled():
+        return False
+    if is_fc27_public_identity_lookup_enabled():
+        return False
+    if is_fc27_upstream_compatibility_enabled():
         return False
     if is_fc27_live_ingestion_enabled():
         return False

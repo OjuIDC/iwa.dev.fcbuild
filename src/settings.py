@@ -81,6 +81,16 @@ def is_fc27_provider_enabled() -> bool:
     return safe_env_bool("FC27_PROVIDER_ENABLED", default=False)
 
 
+def is_fc27_public_identity_lookup_enabled() -> bool:
+    """Check if FC 27 public identity lookup is enabled (default: False)."""
+    return safe_env_bool("FC27_PUBLIC_IDENTITY_LOOKUP_ENABLED", default=False)
+
+
+def is_fc27_upstream_compatibility_enabled() -> bool:
+    """Check if FC 27 upstream compatibility adapter is enabled (default: False)."""
+    return safe_env_bool("FC27_UPSTREAM_COMPATIBILITY_ENABLED", default=False)
+
+
 def is_fc27_live_ingestion_enabled() -> bool:
     """Check if FC 27 live ingestion is enabled (default: False)."""
     return safe_env_bool("FC27_LIVE_INGESTION_ENABLED", default=False)
