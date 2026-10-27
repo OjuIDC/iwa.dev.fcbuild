@@ -20,6 +20,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -45,6 +46,7 @@ from src.fc27_clubs import (
     RECONCILED_EVENT_REGISTRY,
     SEARCH_LIVE_ENABLED,
     UPSTREAM_AUDIT_RECORD,
+    UPSTREAM_SINGLE_EVENT_DEFS,
     ComponentAdoptionClassification,
     FC27AccessAction,
     FC27AccessRole,
@@ -209,9 +211,15 @@ def test_007_supported_operation_declarations() -> None:
 
 def test_008_live_identity_only() -> None:
     caps = FC27ProviderCapabilities()
-    assert caps.live_enabled_operations == ("CLUB_IDENTITY",)
+    assert caps.design_eligible_operations == ("CLUB_IDENTITY",)
+    assert caps.live_executable_operations == ()
+    assert caps.live_enabled_operations == ()
     with pytest.raises(ValidationError):
-        FC27ProviderCapabilities(live_enabled_operations=("CLUB_IDENTITY", "CLUB_MATCHES"))
+        FC27ProviderCapabilities(design_eligible_operations=("CLUB_IDENTITY", "CLUB_MATCHES"))
+    with pytest.raises(ValidationError):
+        FC27ProviderCapabilities(live_executable_operations=("CLUB_IDENTITY",))
+    with pytest.raises(ValidationError):
+        FC27ProviderCapabilities(live_enabled_operations=("CLUB_IDENTITY",))
 
 
 def test_009_other_live_operations_disabled() -> None:
@@ -1572,3 +1580,88 @@ def test_112_cli_zero_network_in_dry_run(capsys: pytest.CaptureFixture[str]) -> 
     out = capsys.readouterr().out
     assert rc == 0
     assert "REQUESTS_EXECUTED=0" in out
+
+
+# ==============================================================================
+# 113-118: Independent Review Hardening & Regression Tests
+# ==============================================================================
+
+def test_113_capability_truthfulness_four_tiers() -> None:
+    caps = FC27ProviderCapabilities()
+    assert caps.declared_operations == ALL_OPERATIONS
+    assert caps.supported_operations == ALL_OPERATIONS
+    assert caps.mock_enabled_operations == ALL_OPERATIONS
+    assert caps.design_eligible_operations == ("CLUB_IDENTITY",)
+    assert caps.live_executable_operations == ()
+    assert caps.live_enabled_operations == ()
+
+
+def test_114_sanitizer_normalized_key_variants() -> None:
+    payload = {
+        "clubId": "330323",
+        "name": "East Coasters",
+        "platform": "common-gen5",
+        "ea-account-id": "secret_acct_99",
+        "x_origin_id": "origin_77",
+        "client-secret": "cs_123",
+        "api_key": "ak_456",
+        "bearerToken": "bt_789",
+        "nested": {
+            "ip-address": "198.51.100.7",
+            "device.id": "dev_888",
+            "gamer-tag": "HiddenPro99",
+        },
+    }
+    sanitized, spaths, _ = sanitize_identity_payload(payload, requested_club_id="330323")
+    assert len(spaths) == 8
+    assert "ea-account-id" in spaths
+    assert "x_origin_id" in spaths
+    assert "client-secret" in spaths
+    assert "api_key" in spaths
+    assert "bearerToken" in spaths
+    assert "nested.ip-address" in spaths
+    assert "nested.device.id" in spaths
+    assert "nested.gamer-tag" in spaths
+    dumped = repr(sanitized)
+    for secret_val in ("secret_acct_99", "origin_77", "cs_123", "ak_456", "bt_789", "198.51.100.7", "dev_888", "HiddenPro99"):
+        assert secret_val not in dumped
+
+
+def test_115_cache_and_breaker_thread_safety() -> None:
+    cache = FC27Cache(max_size=32, ttl=300.0)
+    breaker = FC27CircuitBreaker(malformed_threshold=50)
+    errors: list[Exception] = []
+
+    def _worker(tid: int) -> None:
+        try:
+            for idx in range(25):
+                cid = str(330000 + (tid * 100) + idx)
+                k = cache.key("EA_FC_CLUBS_WEB", "CLUB_IDENTITY", "FC27", "common-gen5", cid)
+                cache.set(k, {"club_id": cid, "club_name": f"Club {cid}", "platform": "common-gen5"})
+                rec, hit = cache.get(k)
+                if hit:
+                    assert rec is not None and rec["club_id"] == cid
+                breaker.record(status_code=200, content_type="application/json")
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert breaker.is_open() is False
+
+
+def test_116_event_registry_exact_74_count_and_no_duplicates() -> None:
+    assert len(UPSTREAM_SINGLE_EVENT_DEFS) == 74
+    assert len(RECONCILED_EVENT_REGISTRY) == 74
+    with pytest.raises(ValueError, match="Duplicate upstream event ID"):
+        reconcile_event_registry(
+            upstream_events=[
+                (215, "passes_completed", "FC27"),
+                (215, "duplicate_event_entry", "FC27"),
+            ]
+        )

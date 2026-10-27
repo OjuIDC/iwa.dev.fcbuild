@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 import unicodedata
 import urllib.parse
@@ -271,9 +272,12 @@ class FC27ProviderCapabilities(BaseModel):
     upstream_commit: str = AUDITED_UPSTREAM_COMMIT
     supported_game_versions: Tuple[str, ...] = ("FC27",)
     supported_platforms: Tuple[str, ...] = SUPPORTED_PLATFORMS
+    declared_operations: Tuple[str, ...] = ALL_OPERATIONS
     supported_operations: Tuple[str, ...] = ALL_OPERATIONS
-    live_enabled_operations: Tuple[str, ...] = (FC27Operation.CLUB_IDENTITY.value,)
     mock_enabled_operations: Tuple[str, ...] = ALL_OPERATIONS
+    design_eligible_operations: Tuple[str, ...] = (FC27Operation.CLUB_IDENTITY.value,)
+    live_executable_operations: Tuple[str, ...] = ()
+    live_enabled_operations: Tuple[str, ...] = ()
     authentication_required: bool = False
     personal_data_possible: bool = True
     raw_response_supported: bool = False
@@ -289,8 +293,10 @@ class FC27ProviderCapabilities(BaseModel):
             raise ValueError(f"Unsupported upstream_commit: {self.upstream_commit}")
         if self.upstream_version != AUDITED_UPSTREAM_VERSION:
             raise ValueError(f"Unsupported upstream_version: {self.upstream_version}")
-        if self.live_enabled_operations != (FC27Operation.CLUB_IDENTITY.value,):
-            raise ValueError("Only CLUB_IDENTITY may be declared in live_enabled_operations")
+        if self.design_eligible_operations != (FC27Operation.CLUB_IDENTITY.value,):
+            raise ValueError("Only CLUB_IDENTITY may be declared in design_eligible_operations")
+        if self.live_executable_operations != () or self.live_enabled_operations != ():
+            raise ValueError("No live operations may be declared executable without an approved transport")
         if self.raw_response_supported or self.persistence_supported:
             raise ValueError("Raw response retention and persistence are prohibited in this phase")
         if not self.personal_data_possible:
@@ -917,11 +923,15 @@ PROHIBITED_SENSITIVE_KEY_TOKENS = (
     "session",
     "password",
     "secret",
+    "clientsecret",
+    "apikey",
+    "bearer",
     "auth",
     "authorization",
     "email",
     "ipaddress",
     "deviceid",
+    "originid",
     "hidden",
     "requestmeta",
 )
@@ -1120,9 +1130,6 @@ UPSTREAM_SINGLE_EVENT_DEFS: Tuple[Tuple[int, str], ...] = (
     (19, "shots_off_target_outside_box"),
     (202, "shots_saved"),
     (214, "goals"),
-    (128, "goals_first_time"),
-    (131, "goals_weak_foot"),
-    (136, "goals_off_post"),
     (11, "assists"),
     (115, "second_assists"),
     (118, "through_ball_assists"),
@@ -1189,7 +1196,11 @@ def reconcile_event_registry(
         source_items = list(upstream_events)
 
     reconciled: Dict[int, ReconciledEventMapping] = {}
+    seen_event_ids: set[int] = set()
     for eid, up_name, game_ver in source_items:
+        if eid in seen_event_ids:
+            raise ValueError(f"Duplicate upstream event ID {eid} detected in event reconciliation")
+        seen_event_ids.add(eid)
         if game_ver != "FC27":
             reconciled[eid] = ReconciledEventMapping(
                 upstream_event_id=eid,
@@ -2154,6 +2165,7 @@ class FC27Cache:
         self.max_size = max_size
         self.ttl = ttl
         self.clock = clock or time.time
+        self._lock = threading.RLock()
         self._store: OrderedDict[Tuple[str, str, str, str, str], Tuple[Dict[str, Any], float]] = OrderedDict()
 
     @staticmethod
@@ -2167,13 +2179,14 @@ class FC27Cache:
         return (str(provider), str(operation), str(game_version), str(platform), str(club_id))
 
     def get(self, key: Tuple[str, str, str, str, str]) -> Tuple[Optional[Dict[str, Any]], bool]:
-        if key in self._store:
-            val, ts = self._store[key]
-            if (self.clock() - ts) <= self.ttl:
-                self._store.move_to_end(key)
-                return json.loads(json.dumps(val)), True
-            del self._store[key]
-        return None, False
+        with self._lock:
+            if key in self._store:
+                val, ts = self._store[key]
+                if (self.clock() - ts) <= self.ttl:
+                    self._store.move_to_end(key)
+                    return json.loads(json.dumps(val)), True
+                del self._store[key]
+            return None, False
 
     def set(self, key: Tuple[str, str, str, str, str], sanitized_value: Mapping[str, Any]) -> None:
         if not isinstance(sanitized_value, Mapping):
@@ -2185,14 +2198,17 @@ class FC27Cache:
         if spaths:
             raise ValueError(f"Cannot cache unsanitized payload containing sensitive paths: {spaths}")
 
-        if key in self._store:
-            self._store.move_to_end(key)
-        elif len(self._store) >= self.max_size:
-            self._store.popitem(last=False)
-        self._store[key] = (json.loads(json.dumps(dict(sanitized_value))), self.clock())
+        cloned = json.loads(json.dumps(dict(sanitized_value)))
+        with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            elif len(self._store) >= self.max_size:
+                self._store.popitem(last=False)
+            self._store[key] = (cloned, self.clock())
 
     def clear(self) -> None:
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
 
 class FC27CircuitBreaker:
@@ -2205,6 +2221,7 @@ class FC27CircuitBreaker:
     ) -> None:
         self.malformed_threshold = max(1, malformed_threshold)
         self.clock = clock or time.time
+        self._lock = threading.RLock()
         self.state: Literal["CLOSED", "OPEN"] = "CLOSED"
         self.opened_at: Optional[float] = None
         self.open_reason: Optional[str] = None
@@ -2212,21 +2229,24 @@ class FC27CircuitBreaker:
         self.fallback_mode: str = "USER_SUPPLIED_EXPORT"
 
     def is_open(self) -> bool:
-        return self.state == "OPEN"
+        with self._lock:
+            return self.state == "OPEN"
 
     def open(self, reason: str = "PROVIDER_BLOCK_OR_CHALLENGE") -> None:
-        self.state = "OPEN"
-        self.opened_at = self.clock()
-        self.open_reason = reason
+        with self._lock:
+            self.state = "OPEN"
+            self.opened_at = self.clock()
+            self.open_reason = reason
 
     def reset(self, *, manual: bool = False, reviewer_reference: Optional[str] = None) -> None:
         """Circuit breaker requires explicit manual review before reset."""
         if not manual:
             raise FC27ProviderError("Manual review confirmation (manual=True) is required to reset circuit breaker")
-        self.state = "CLOSED"
-        self.opened_at = None
-        self.open_reason = None
-        self.malformed_count = 0
+        with self._lock:
+            self.state = "CLOSED"
+            self.opened_at = None
+            self.open_reason = None
+            self.malformed_count = 0
 
     def record(
         self,
@@ -2240,38 +2260,39 @@ class FC27CircuitBreaker:
         malformed: bool = False,
     ) -> bool:
         """Inspects transport outcome and opens the circuit immediately on challenges, redirects, or auth blocks."""
-        if status_code in (401, 403):
-            self.open(f"HTTP_{status_code}")
-            return True
-        if redirect_count > 0 or (status_code in (301, 302, 303, 307, 308)) or location_header:
-            self.open("AUTHENTICATION_OR_HTTP_REDIRECT")
-            return True
-        if session_required:
-            self.open("SESSION_REQUIRED")
-            return True
-
-        low_body = (body or "").lower()
-        low_ct = (content_type or "").lower()
-        if "captcha" in low_body or "g-recaptcha" in low_body or "hcaptcha" in low_body:
-            self.open("CAPTCHA_DETECTED")
-            return True
-        if "challenge" in low_body or "akamai" in low_body or "access denied" in low_body:
-            self.open("CHALLENGE_RESPONSE")
-            return True
-        if "login" in low_body and ("ea.com" in low_body or "signin" in low_body):
-            self.open("SESSION_REQUIRED")
-            return True
-        if low_ct and "text/html" in low_ct:
-            self.open("HTML_CHALLENGE_RESPONSE")
-            return True
-
-        if malformed:
-            self.malformed_count += 1
-            if self.malformed_count >= self.malformed_threshold:
-                self.open("REPEATED_MALFORMED_RESPONSE")
+        with self._lock:
+            if status_code in (401, 403):
+                self.open(f"HTTP_{status_code}")
+                return True
+            if redirect_count > 0 or (status_code in (301, 302, 303, 307, 308)) or location_header:
+                self.open("AUTHENTICATION_OR_HTTP_REDIRECT")
+                return True
+            if session_required:
+                self.open("SESSION_REQUIRED")
                 return True
 
-        return self.is_open()
+            low_body = (body or "").lower()
+            low_ct = (content_type or "").lower()
+            if "captcha" in low_body or "g-recaptcha" in low_body or "hcaptcha" in low_body:
+                self.open("CAPTCHA_DETECTED")
+                return True
+            if "challenge" in low_body or "akamai" in low_body or "access denied" in low_body:
+                self.open("CHALLENGE_RESPONSE")
+                return True
+            if "login" in low_body and ("ea.com" in low_body or "signin" in low_body):
+                self.open("SESSION_REQUIRED")
+                return True
+            if low_ct and "text/html" in low_ct:
+                self.open("HTML_CHALLENGE_RESPONSE")
+                return True
+
+            if malformed:
+                self.malformed_count += 1
+                if self.malformed_count >= self.malformed_threshold:
+                    self.open("REPEATED_MALFORMED_RESPONSE")
+                    return True
+
+            return self.is_open()
 
 
 # ==============================================================================
@@ -2379,9 +2400,9 @@ def lookup_fc27_club(
         result.reason_codes.append("QUERY_EXPIRED")
         return result
 
-    # 3. Operation capability check: All non-identity live operations return OPERATION_NOT_ENABLED
+    # 3. Operation capability check: All non-identity operations return OPERATION_NOT_ENABLED
     caps = FC27ProviderCapabilities()
-    if query.operation not in caps.live_enabled_operations:
+    if query.operation not in caps.design_eligible_operations:
         result.availability_status = "OPERATION_NOT_ENABLED"
         result.identity_outcome = FC27IdentityOutcome.PROVIDER_UNAVAILABLE.value
         result.reason_codes.append("OPERATION_NOT_ENABLED")
