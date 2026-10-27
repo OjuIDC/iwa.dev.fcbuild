@@ -2093,6 +2093,18 @@ def test_137_east_coasters_export_pilot_package_deliverables() -> None:
     assert pkg_path.is_file()
     content = pkg_path.read_text(encoding="utf-8")
     for required_token in (
+        "## 1. East Coasters Pilot-Input Checklist",
+        "## 2. Non-Personal Supplier-Attestation Templates",
+        "## 3. Consent-Attestation Template & Scope Matrix",
+        "## 4. Blank / Synthetic JSON Export Template",
+        "## 5. Blank / Synthetic CSV Export Template",
+        "## 6. Local File Placement Instructions",
+        "## 7. Required 6-Step Operational Command Sequence",
+        "## 8. Human Metadata-Review Checklist",
+        "## 9. Readiness-Preview Interpretation Guide",
+        "## 10. Sensitive-Data Incident Procedure",
+        "## 11. Raw-File Retention and Deletion Guidance",
+        "## 12. Explicit Operational Prohibitions",
         "CLUB_MANAGER",
         "CLUB_ADMIN",
         "DATA_STEWARD",
@@ -2112,8 +2124,148 @@ def test_137_east_coasters_export_pilot_package_deliverables() -> None:
         "PROVISIONAL_TRENDS",
         "HIGH_SAMPLE_READINESS",
         "SAFE_TO_RETAIN_RAW_UPLOAD: NO",
-        "Prohibition of `--apply`",
-        "Prohibition of Recommendations",
-        "Prohibition of Committing Pilot Data",
+        "Explicit Prohibition on `--apply`",
+        "Explicit Prohibition on Recommendations",
+        "Explicit Prohibition on Committing Pilot Data",
     ):
         assert required_token in content
+
+
+def test_138_pilot_package_templates_synthetic_and_blank_no_personal_paths() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+    assert "<ABSOLUTE_LOCAL_PATH_OUTSIDE_REPOSITORY>" in content
+    assert "<CALCULATE_PAYLOAD_SHA256_BEFORE_VALIDATION>" in content
+    assert "fc27_pilot_intake" not in content
+    assert "@" not in content.replace("`@`", "").replace("`'@`", "")
+    assert "CORROBORATED" in content
+    assert "MANAGER_AUTHORITY_STATUS=UNVERIFIED" in content
+    assert "MATCHMAKING_REGION_CLAIM=East Coast US 1" in content
+
+
+def test_139_pilot_package_supplier_and_consent_attestation_rules() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+    for required_field in (
+        '"supplier_role": "CLUB_MANAGER"',
+        '"supplier_role": "CLUB_ADMIN"',
+        '"supplier_role": "DATA_STEWARD"',
+        '"club_identity_reference"',
+        '"evidence_references"',
+        '"review_status": "PENDING_HUMAN_REVIEW"',
+        '"reviewer_reference"',
+        '"review_reason"',
+        '"manager_authority_status": "UNVERIFIED"',
+        '"expires_at"',
+        '"consent_version": "1.0.0"',
+        '"revoked_at": null',
+    ):
+        assert required_field in content
+
+
+def test_140_pilot_package_json_and_csv_templates_parse_valid_once_hash_computed() -> None:
+    import json
+    import re
+    from datetime import datetime, timedelta, timezone
+    from src.fc27_user_export import (
+        compute_payload_sha256,
+        parse_fc27_user_export_csv,
+        parse_fc27_user_export_json,
+    )
+
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+
+    # Extract the full JSON export template block
+    json_blocks = re.findall(r"```json\n(\{.*?\})\n```", content, flags=re.DOTALL)
+    export_blocks = [b for b in json_blocks if '"export_id"' in b]
+    assert len(export_blocks) == 1
+    template_dict = json.loads(export_blocks[0])
+    assert template_dict["payload_sha256"] == "<CALCULATE_PAYLOAD_SHA256_BEFORE_VALIDATION>"
+    assert template_dict["game_version"] == "FC27"
+    assert template_dict["platform"] == "common-gen5"
+    assert template_dict["source_classification"] == "USER_SUPPLIED_EXPORT"
+
+    now_utc = datetime.now(timezone.utc)
+    gen_str = (now_utc - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sup_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    played_str = (now_utc - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    template_dict["generated_at"] = gen_str
+    template_dict["supplied_at"] = sup_str
+    template_dict["supplier_attestation"]["attested_at"] = gen_str
+    template_dict["consent_attestation"]["consented_at"] = gen_str
+    template_dict["matches"][0]["played_at"] = played_str
+    template_dict["payload_sha256"] = compute_payload_sha256(template_dict)
+
+    parsed_json = parse_fc27_user_export_json(json.dumps(template_dict).encode("utf-8"))
+    assert parsed_json.club.club_id == "330323"
+    assert len(parsed_json.matches) == 1
+
+    # Extract the CSV template block
+    csv_blocks = re.findall(r"```csv\n(.*?)\n```", content, flags=re.DOTALL)
+    assert len(csv_blocks) == 1
+    csv_text = csv_blocks[0].replace("2026-10-27T10:00:00Z", played_str)
+    parsed_csv = parse_fc27_user_export_csv(csv_text.encode("utf-8"))
+    assert parsed_csv.club.club_id == "330323"
+    assert len(parsed_csv.matches) == 1
+
+
+def test_141_pilot_package_csv_formula_injection_whitespace_and_apostrophe_guard() -> None:
+    from src.fc27_user_export import FC27FormulaInjectionError, parse_fc27_user_export_csv
+
+    header = "club_id,club_name,platform,game_version,external_match_id,played_at,result,goals_for,goals_against,opponent_name,formation\n"
+    for bad_cell in (
+        "=CMD()",
+        "+SUM(1,2)",
+        "-1+1",
+        "@SUM(A1)",
+        "   =CMD()",
+        "\t+CMD()",
+        "\u00a0-CMD()",
+        "\u2003@CMD()",
+        "'=CMD()",
+        " '+CMD()",
+        "'\u00a0@CMD()",
+    ):
+        row = f'330323,East Coasters,common-gen5,FC27,M-1,2026-10-25T10:00:00Z,WIN,2,1,"{bad_cell}",4-3-3\n'
+        with pytest.raises(FC27FormulaInjectionError):
+            parse_fc27_user_export_csv((header + row).encode("utf-8"))
+
+
+def test_142_pilot_package_command_ordering_and_human_review_gate() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+    validate_pos = content.index("### 7.1 Step 1 Command: Offline Validation (`--validate`)")
+    dry_run_pos = content.index("### 7.2 Step 4 Command: Offline Dry-Run (`--dry-run`)")
+    assert validate_pos < dry_run_pos
+    assert "HUMAN_DRY_RUN_APPROVAL=YES" in content
+    for idx in range(1, 29):
+        assert f"- [ ] {idx}. **" in content
+
+
+def test_143_pilot_package_readiness_tiers_and_invariants() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+    for required_phrase in (
+        "`0` to `2`",
+        "`3` to `9`",
+        "`10` to `19`",
+        "`20` or more (`20+`)",
+        "INSUFFICIENT_DATA",
+        "EXPLORATORY",
+        "PROVISIONAL_TRENDS",
+        "HIGH_SAMPLE_READINESS",
+        "Not Team-Quality Scoring",
+        "Not Coaching Confidence",
+        "Does Not Enable Recommendations",
+    ):
+        assert required_phrase in content
+
+
+def test_144_pilot_package_incident_procedure_and_retention_rules() -> None:
+    pkg_path = REPO_ROOT / "docs" / "FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md"
+    content = pkg_path.read_text(encoding="utf-8")
+    for step_num in range(1, 11):
+        assert f"{step_num}. **" in content
+    assert "must not be deleted by the agent or tooling without explicit operator instruction" in content
+    assert "AGREED_RAW_FILE_RETENTION" in content
