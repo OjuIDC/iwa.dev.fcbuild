@@ -954,10 +954,11 @@ def test_95_cli_apply_with_confirmation(capsys: pytest.CaptureFixture[str]) -> N
         "--apply",
         "--confirm-apply",
     ])
-    assert exit_code == 0
+    assert exit_code == 1  # Exit code 1 because persistence is deferred
     out = capsys.readouterr().out
     assert "IMPORT_STATUS: DEFERRED" in out
-    assert "MODE: APPLY" in out
+    assert "PERSISTENCE_APPLIED: NO" in out
+    assert "REVIEW_REQUIRED: YES" in out
 
 
 def test_96_cli_url_input_rejected() -> None:
@@ -1068,3 +1069,110 @@ def test_112_no_concrete_live_transport_exists() -> None:
     mock = FC27MockHTTPTransport()
     assert mock is not None
     assert not hasattr(mock, "connect")
+
+
+# ==============================================================================
+# SECURITY HARDENING REGRESSION TESTS
+# ==============================================================================
+
+@pytest.mark.parametrize("disallowed_constant", ["NaN", "Infinity", "-Infinity"])
+def test_113_json_constants_rejected(disallowed_constant: str) -> None:
+    raw_json = f'{{"export_id": "test", "rating": {disallowed_constant}}}'
+    with pytest.raises(ValueError, match="disallowed JSON constant"):
+        parse_fc27_user_export_json(raw_json)
+
+
+def test_114_json_deep_nesting_rejected() -> None:
+    nested: dict[str, Any] = {"val": 1}
+    for _ in range(25):
+        nested = {"child": nested}
+    raw_json = json.dumps(nested)
+    with pytest.raises(ValueError, match="JSON nesting depth exceeds maximum limit"):
+        parse_fc27_user_export_json(raw_json)
+
+
+@pytest.mark.parametrize("injection_val", [
+    " =SUM(1,1)",
+    "\t=SUM(1,1)",
+    "'=SUM(1,1)",
+    "\u00A0=SUM(1,1)",
+    " @SUM(1,1)",
+    "prefix\x00nullbyte",
+])
+def test_115_csv_formula_injection_whitespace_and_null_variants(injection_val: str) -> None:
+    header = ",".join(APPROVED_CSV_COLUMNS) + "\n"
+    # Quote the injection cell properly in CSV format
+    row = f'330323,East Coasters,common-gen5,FC27,M1,2026-10-25T10:00:00Z,WIN,1,0,"{injection_val}",4-3-3\n'
+    with pytest.raises(FC27FormulaInjectionError):
+        parse_fc27_user_export_csv(header + row)
+
+
+def test_116_csv_case_variant_duplicate_headers_rejected() -> None:
+    header = "Club_ID,club_id,platform,game_version,external_match_id,played_at,result,goals_for,goals_against,opponent_name,formation\n"
+    with pytest.raises(ValueError, match=r"duplicate columns.*detected in CSV header"):
+        parse_fc27_user_export_csv(header)
+
+
+@pytest.mark.parametrize("pascal_key", [
+    "RefreshToken",
+    "IPAddress",
+    "RawRoster",
+    "EmailAddress",
+    "AuthHeader",
+])
+def test_117_sensitive_scanner_pascal_case_and_compound_tokens(pascal_key: str) -> None:
+    test_dict = {"safeKey": 100, pascal_key: "leaked_secret"}
+    paths = scan_for_sensitive_fields(test_dict)
+    assert len(paths) >= 1
+    assert pascal_key in paths[0]
+
+
+def test_118_match_hash_scoped_prevents_cross_club_collision() -> None:
+    data = make_valid_export_dict()
+    match_dict = data["matches"][0]
+
+    h_east_coasters = compute_match_hash(
+        match_dict,
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform=EAST_COASTERS_PLATFORM,
+        game_version=EAST_COASTERS_GAME_VERSION,
+        source_classification="USER_SUPPLIED_EXPORT",
+    )
+
+    h_other_club = compute_match_hash(
+        match_dict,
+        club_id="999999",
+        platform=EAST_COASTERS_PLATFORM,
+        game_version=EAST_COASTERS_GAME_VERSION,
+        source_classification="USER_SUPPLIED_EXPORT",
+    )
+
+    h_other_platform = compute_match_hash(
+        match_dict,
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform="pc-platform",
+        game_version=EAST_COASTERS_GAME_VERSION,
+        source_classification="USER_SUPPLIED_EXPORT",
+    )
+
+    assert h_east_coasters != h_other_club
+    assert h_east_coasters != h_other_platform
+
+
+def test_119_cli_alternate_data_stream_rejected() -> None:
+    with pytest.raises(ValueError, match="Alternate data stream syntax is prohibited"):
+        validate_local_filepath("C:\\data\\export.json:stream")
+
+
+def test_120_baseline_preview_high_sample_readiness_tier() -> None:
+    data = make_valid_export_dict()
+    base_match = data["matches"][0]
+    data["matches"] = [
+        dict(base_match, external_match_id=f"m-{i}")
+        for i in range(25)
+    ]
+    data["payload_sha256"] = compute_payload_sha256(data)
+    env = parse_fc27_user_export_json(json.dumps(data))
+    preview = generate_baseline_preview(env)
+    assert preview.sample_size_confidence_tier == "HIGH_SAMPLE_READINESS"
+    assert preview.coaching_readiness is False

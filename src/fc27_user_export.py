@@ -144,6 +144,7 @@ PROHIBITED_SENSITIVE_TOKENS: set[str] = {
     "cookie",
     "session",
     "token",
+    "refreshtoken",
     "password",
     "passcode",
     "secret",
@@ -154,10 +155,13 @@ PROHIBITED_SENSITIVE_TOKENS: set[str] = {
     "nucleusid",
     "userid",
     "email",
+    "emailaddress",
+    "ipaddress",
     "deviceid",
     "gamertag",
     "authheader",
     "roster",
+    "rawroster",
 }
 
 PROHIBITED_TOKEN_COMBINATIONS: tuple[tuple[str, ...], ...] = (
@@ -172,13 +176,17 @@ PROHIBITED_TOKEN_COMBINATIONS: tuple[tuple[str, ...], ...] = (
     ("ip", "address"),
     ("auth", "header"),
     ("private", "key"),
+    ("refresh", "token"),
+    ("raw", "roster"),
 )
 
 
 def normalize_key_for_scanning(key: str) -> list[str]:
-    """Normalizes key across camelCase, snake_case, kebab-case, dotted paths, and spaces into tokens."""
+    """Normalizes key across camelCase, PascalCase, snake_case, kebab-case, dotted paths, and spaces into tokens."""
     s = str(key)
-    # Insert underscore between camelCase transitions (e.g. authToken -> auth_Token, accountId -> account_Id)
+    # Split consecutive uppercase followed by lowercase (e.g. IPAddress -> IP_Address, APIKey -> API_Key)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    # Insert underscore between camelCase/PascalCase transitions (e.g. authToken -> auth_Token, accountId -> account_Id)
     s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
     s = s.lower()
     # Replace non-alphanumeric with underscore
@@ -522,13 +530,28 @@ def compute_payload_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def compute_match_hash(match_data: dict[str, Any] | FC27SuppliedMatch) -> str:
-    """Computes deterministic record hash for a single match."""
+def compute_match_hash(
+    match_data: dict[str, Any] | FC27SuppliedMatch,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    platform: str = EAST_COASTERS_PLATFORM,
+    game_version: str = EAST_COASTERS_GAME_VERSION,
+    source_classification: str = "USER_SUPPLIED_EXPORT",
+) -> str:
+    """Computes deterministic record hash for a single match with full scoping to prevent cross-club collisions."""
     if isinstance(match_data, FC27SuppliedMatch):
         d = match_data.model_dump(exclude={"source_record_hash"})
     else:
         d = {k: v for k, v in match_data.items() if k != "source_record_hash"}
-    canonical = canonicalize_for_hashing(d)
+
+    scoped_data = {
+        "club_id": club_id,
+        "platform": platform,
+        "game_version": game_version,
+        "source_classification": source_classification,
+        "match": d,
+    }
+    canonical = canonicalize_for_hashing(scoped_data)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -544,6 +567,23 @@ def _reject_duplicate_json_keys(ordered_pairs: list[tuple[str, Any]]) -> dict[st
             raise ValueError(f"duplicate JSON key '{key}' detected")
         d[key] = value
     return d
+
+
+def _reject_json_constants(val: str) -> None:
+    """Rejects non-standard JSON constants like NaN, Infinity, -Infinity."""
+    raise ValueError(f"disallowed JSON constant '{val}' detected; RFC 8259 compliance required")
+
+
+def _check_json_max_depth(obj: Any, current_depth: int = 1, max_depth: int = 20) -> None:
+    """Enforces upper bound on nesting depth to prevent parser amplification attacks."""
+    if current_depth > max_depth:
+        raise ValueError(f"JSON nesting depth exceeds maximum limit of {max_depth}")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_json_max_depth(v, current_depth + 1, max_depth)
+    elif isinstance(obj, list):
+        for item in obj:
+            _check_json_max_depth(item, current_depth + 1, max_depth)
 
 
 def parse_fc27_user_export_json(
@@ -576,16 +616,23 @@ def parse_fc27_user_export_json(
     if text.startswith("\ufeff"):
         text = text[1:]
 
-    # 3. JSON Syntax & Duplicate Key Detection
+    # 3. JSON Syntax, Duplicate Key Detection & Constant Rejection
     try:
-        raw_dict = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
+        raw_dict = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constants,
+        )
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON structure: {exc}")
 
     if not isinstance(raw_dict, dict):
         raise ValueError("top-level export must be a JSON object, arrays are forbidden")
 
-    # 4. Sensitive Field Scanning (Fail-closed before domain acceptance)
+    # 4. Resource bound: Enforce maximum object nesting depth
+    _check_json_max_depth(raw_dict)
+
+    # 5. Sensitive Field Scanning (Fail-closed before domain acceptance)
     sensitive_paths = scan_for_sensitive_fields(raw_dict)
     if sensitive_paths:
         raise FC27SensitiveFieldDetectedError(
@@ -593,7 +640,7 @@ def parse_fc27_user_export_json(
             paths=sensitive_paths,
         )
 
-    # 5. Contract & Schema Version pre-check
+    # 6. Contract & Schema Version pre-check
     cv = raw_dict.get("contract_version")
     if cv != expected_contract_version:
         raise ValueError(f"unsupported contract_version '{cv}'; expected '{expected_contract_version}'")
@@ -666,8 +713,9 @@ def parse_fc27_user_export_csv(
         raise ValueError("CSV file is empty; missing required header row")
 
     header = rows[0]
-    # Check duplicate columns
-    if len(header) != len(set(header)):
+    # Check duplicate columns (including case-insensitive)
+    lower_headers = [h.strip().lower() for h in header]
+    if len(lower_headers) != len(set(lower_headers)):
         raise ValueError("duplicate columns detected in CSV header")
 
     # Check exact approved columns
@@ -698,7 +746,17 @@ def parse_fc27_user_export_csv(
         for col_name, val in row_dict.items():
             if len(val) > MAX_CSV_CELL_LENGTH:
                 raise ValueError(f"cell in column '{col_name}' at row {row_idx} exceeds max length {MAX_CSV_CELL_LENGTH}")
-            if any(val.startswith(p) for p in FORMULA_INJECTION_PREFIXES):
+            if "\x00" in val:
+                raise FC27FormulaInjectionError(
+                    f"null byte detected in column '{col_name}' at row {row_idx}",
+                    column=col_name,
+                    row_index=row_idx,
+                )
+            # Remove leading regular and Unicode whitespace, BOM, and leading formula-concealing apostrophes
+            stripped = val.lstrip(" \t\r\n\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000\ufeff")
+            if stripped.startswith("'"):
+                stripped = stripped[1:].lstrip(" \t\r\n\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000\ufeff")
+            if any(stripped.startswith(p) for p in FORMULA_INJECTION_PREFIXES):
                 raise FC27FormulaInjectionError(
                     f"formula injection character detected in column '{col_name}' at row {row_idx}",
                     column=col_name,
@@ -922,7 +980,13 @@ def plan_fc27_user_export_import(
     eligible_matches = 0
     for match in envelope.matches:
         mid = match.external_match_id
-        mhash = compute_match_hash(match)
+        mhash = compute_match_hash(
+            match,
+            club_id=envelope.club.club_id,
+            platform=envelope.club.platform,
+            game_version=envelope.game_version,
+            source_classification=envelope.source_classification,
+        )
 
         if mid in state.existing_match_hashes:
             existing_hash = state.existing_match_hashes[mid]
@@ -1038,7 +1102,7 @@ class FC27EastCoastersBaselinePreview(BaseModel):
         "EXPLORATORY",
         "LOW_CONFIDENCE",
         "MODERATE_CONFIDENCE",
-        "HIGH_CONFIDENCE",
+        "HIGH_SAMPLE_READINESS",
     ]
     coaching_readiness: bool = False
 
@@ -1056,7 +1120,7 @@ def generate_baseline_preview(envelope: FC27UserExportEnvelope) -> FC27EastCoast
     # 3 to 4: EXPLORATORY
     # 5 to 9: LOW_CONFIDENCE
     # 10 to 19: MODERATE_CONFIDENCE
-    # 20+: HIGH_CONFIDENCE
+    # 20+: HIGH_SAMPLE_READINESS
     if eligible_count <= 2:
         tier = "INSUFFICIENT_DATA"
     elif eligible_count <= 4:
@@ -1066,7 +1130,7 @@ def generate_baseline_preview(envelope: FC27UserExportEnvelope) -> FC27EastCoast
     elif eligible_count <= 19:
         tier = "MODERATE_CONFIDENCE"
     else:
-        tier = "HIGH_CONFIDENCE"
+        tier = "HIGH_SAMPLE_READINESS"
 
     lineups_present = sum(1 for m in eligible if len(m.lineup) > 0)
     lineup_cov = (lineups_present / eligible_count) if eligible_count > 0 else 0.0

@@ -57,18 +57,26 @@ def validate_local_filepath(path_str: str) -> Path:
     if path_str.startswith(("\\\\.\\", "\\\\?\\")):
         raise ValueError(f"Device namespace paths are prohibited: '{path_str}'.")
 
+    # 4. Reject alternate data stream syntax (e.g. file.json:stream or C:\path:stream)
+    if ":" in path_str[2:]:
+        raise ValueError(f"Alternate data stream syntax is prohibited: '{path_str}'.")
+
     p = Path(path_str)
 
-    # 4. Reject reserved device names on Windows
+    # 5. Reject reserved device names on Windows
     name_upper = p.name.split(".")[0].upper()
     if name_upper in WINDOWS_DEVICE_NAMES:
         raise ValueError(f"Reserved device name '{name_upper}' is prohibited.")
 
-    # 5. Resolve and ensure it exists as a regular file
+    # 6. Resolve and ensure it exists as a regular file
     try:
         resolved = p.resolve()
     except Exception as exc:
         raise ValueError(f"Failed to resolve path '{path_str}': {exc}")
+
+    # 7. Reject resolved UNC / network locations
+    if str(resolved).startswith(("\\\\", "//")):
+        raise ValueError(f"Resolved path points to prohibited UNC network location: '{resolved}'")
 
     if not resolved.exists():
         raise FileNotFoundError(f"Input file not found: '{resolved}'")
@@ -223,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ANALYTICS_ELIGIBLE_RECORDS: {plan.analytics_eligible_matches}")
     print(f"SAMPLE_SIZE_CONFIDENCE_TIER: {preview.sample_size_confidence_tier}")
     print(f"COACHING_READINESS: {'YES' if preview.coaching_readiness else 'NO'}")
+    if mode == "apply" and pers_result and pers_result.status == "DEFERRED":
+        print("PERSISTENCE_APPLIED: NO")
     print("HUMAN_REVIEW_REQUIRED: YES")
     print("RAW_UPLOAD_RETAINED: NO")
 
@@ -237,8 +247,10 @@ def main(argv: list[str] | None = None) -> int:
         for diag in plan.diagnostics:
             print(f"  - [{diag.get('code')}] {diag.get('path')}: {diag.get('detail')}")
 
-    # Non-zero exit code if plan is blocked or rejected
+    # Non-zero exit code if plan is blocked, rejected, or apply was deferred
     if not plan.can_apply and mode in ("apply", "dry-run"):
+        return 1
+    if mode == "apply" and pers_result and pers_result.status == "DEFERRED":
         return 1
 
     return 0
