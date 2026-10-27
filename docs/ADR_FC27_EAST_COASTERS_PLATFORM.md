@@ -247,3 +247,85 @@ The following fields are strictly rejected:
 3. Discrepancies in `club_id`, `club_name`, or `platform` transition identity to `CONFLICTED`.
 4. Duplicate imports are strictly idempotent via `payload_sha256`.
 5. Raw upload files are not retained permanently in storage.
+
+---
+
+## 12. User-Supplied Export Architecture & Operations
+
+### 12.1 Rationale for User-Supplied Export
+Due to the absence of a public, authenticated third-party developer API for EA SPORTS FC 27 Pro Clubs and the strict legal and terms-of-service risks associated with automated web scraping or undocumented endpoint reverse-engineering, `USER_SUPPLIED_EXPORT` is the authoritative primary integration path for the East Coasters.
+
+This architecture empowers club managers to collect and supply club match summaries and lineups offline, maintaining complete data custody and operational control without credentials, session hijacking, or browser scraping.
+
+### 12.2 Versioned Contracts
+- **Contract Version**: `1.0.0`
+- **Schema Version**: `1.0.0`
+- **Target Platform**: `common-gen5`
+- **Game Version**: `FC27`
+- **Expected Club ID**: `330323`
+- **Expected Club Name**: `East Coasters`
+
+### 12.3 Supplier Attestation and Team Consent
+Every import requires cryptographic metadata and attestation:
+1. **Supplier Role**: Must be one of `CLUB_MANAGER`, `CLUB_ADMIN`, or `DATA_STEWARD`.
+   - Requires authority over at least `CLUB_IDENTITY` and `MATCH_RESULTS`.
+   - Optional scopes: `LINEUPS`, `PLAYER_PERFORMANCE`, `BUILD_REFERENCES`.
+   - Prohibits personal email addresses or authentication tokens in `supplier_reference`.
+2. **Team Consent**: Attested via `FC27ConsentAttestation`:
+   - Mandatory categories: `CLUB_IDENTITY` and `MATCH_RESULTS`.
+   - Optional categories: `LINEUPS`, `PLAYER_PERFORMANCE`, `BUILD_REFERENCES`.
+   - Requires explicit acknowledgments for retention, analytics usage, and team review.
+   - Any revoked consent (`revoked_at` is set) fails closed immediately.
+   - Consent authorizes only offline analytics; it does NOT grant EA provider authorization or live verified status.
+
+### 12.4 Sensitive-Field Scanner & Incident Response
+The intake system incorporates a recursive, case-insensitive, token-based sensitive field scanner:
+- Scans JSON keys, CSV headers, nested objects, and list elements across camelCase, snake_case, kebab-case, and dotted notation.
+- Prohibited patterns include: `authorization`, `auth`, `bearer`, `cookie`, `session`, `token`, `password`, `secret`, `api_key`, `client_secret`, `account_id`, `persona_id`, `nucleus_id`, `user_id`, `email`, `ip_address`, `device_id`, `gamer_tag`, and raw unconsented roster telemetry.
+- **Fail-Closed Behavior**: When a sensitive field is detected, the import is rejected immediately with exit code 1.
+- **Zero Value Leakage**: Diagnostics and logs record only the path of the prohibited field (e.g. `matches[0].player_performances[0].email`), never the sensitive value.
+- **Non-Retention**: Detected payloads are marked `SAFE_TO_RETAIN_RAW_UPLOAD: NO` and are discarded from memory immediately without being written to disk.
+
+### 12.5 File Formats
+1. **JSON (`parse_fc27_user_export_json`)**:
+   - Max file size: 5 MiB (`5,242,880` bytes).
+   - Strict UTF-8; top-level arrays and duplicate keys rejected.
+   - Requires `payload_sha256` matching canonical digest.
+2. **CSV (`parse_fc27_user_export_csv`)**:
+   - Flat single-file match summary with exact approved columns: `club_id, club_name, platform, game_version, external_match_id, played_at, result, goals_for, goals_against, opponent_name, formation`.
+   - Formula-injection defense: Cells beginning with `=`, `+`, `-`, or `@` are rejected fail-closed.
+   - Strict cell length (max 256 chars), row bounds (max 100 matches), and strict numeric/timestamp parsing.
+
+### 12.6 Canonical Hashing & Idempotency
+- **Payload Integrity**: `compute_payload_sha256()` uses deterministic JSON serialization (sorted keys, compact separators, ISO-8601 UTC timestamps).
+- **Match Record Hashing**: `compute_match_hash()` computes SHA-256 over canonical match attributes.
+- **Idempotent Planning**: Re-importing an identical payload results in `DUPLICATE_IGNORE` across all records. If a previously imported match ID appears with different data without explicit versioning, it is quarantined as `QUARANTINE_CONFLICT` and blocks application.
+
+### 12.7 Club Identity Conflict Handling
+Supplied club identity is evaluated strictly against the East Coasters target:
+- Exact match (`330323`, `East Coasters`, `common-gen5`, `FC27`) -> `PROVISIONAL`.
+- Mismatched club ID, name, or platform -> `CONFLICTED` (blocks import).
+- No import path automatically returns `VERIFIED`.
+
+### 12.8 Baseline Preview & Sample-Size Confidence Tiers
+To prevent premature or misleading coaching conclusions, imported data is mapped to confidence tiers based on analytics-eligible completed matches:
+- **0 to 2 Matches**: `INSUFFICIENT_DATA`
+- **3 to 4 Matches**: `EXPLORATORY`
+- **5 to 9 Matches**: `LOW_CONFIDENCE`
+- **10 to 19 Matches**: `MODERATE_CONFIDENCE`
+- **20+ Matches**: `HIGH_CONFIDENCE`
+- **Coaching Recommendations**: Remain strictly disabled (`COACHING_READINESS: NO`).
+
+### 12.9 Operator Runbook & File Custody
+- **Tool**: `scripts/fc27_user_export_import.py`
+  - Validation: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --validate`
+  - Dry-Run: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --dry-run`
+  - Apply: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --apply --confirm-apply`
+- **Storage Boundary**: Persistence is reported as `DEFERRED` pending dedicated relational migrations. Raw uploads are never stored.
+- **File Deletion**: Operators are instructed to delete or archive local export source files once validated.
+
+### 12.10 Current Platform Status (Maintained)
+- `ACCESS_STATUS`: `UNAPPROVED`
+- `PROVIDER_CONTRACT_STATUS`: `PROVISIONAL`
+- `LIVE_EXECUTION_STATUS`: `BLOCKED`
+- `CLUB_ID_VERIFICATION_STATUS`: `PROVISIONAL`

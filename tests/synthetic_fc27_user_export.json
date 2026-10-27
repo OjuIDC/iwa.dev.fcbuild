@@ -1,0 +1,85 @@
+{
+  "export_id": "synthetic-export-001",
+  "contract_version": "1.0.0",
+  "schema_version": "1.0.0",
+  "generated_at": "2026-10-25T12:00:00Z",
+  "supplied_at": "2026-10-25T12:05:00Z",
+  "provider": "EA_FC_PRO_CLUBS",
+  "game_version": "FC27",
+  "platform": "common-gen5",
+  "club": {
+    "club_id": "330323",
+    "club_name": "East Coasters",
+    "platform": "common-gen5",
+    "game_version": "FC27",
+    "supplied_identity_state": "PROVISIONAL",
+    "source_reference": "synthetic_test_data"
+  },
+  "supplier_attestation": {
+    "supplier_role": "CLUB_MANAGER",
+    "supplier_reference": "manager-synth-01",
+    "attested_at": "2026-10-25T12:00:00Z",
+    "authority_scope": [
+      "CLUB_IDENTITY",
+      "MATCH_RESULTS",
+      "LINEUPS",
+      "PLAYER_PERFORMANCE"
+    ],
+    "statement_version": "1.0.0"
+  },
+  "consent_attestation": {
+    "consent_version": "1.0.0",
+    "consented_at": "2026-10-25T12:00:00Z",
+    "data_categories": [
+      "CLUB_IDENTITY",
+      "MATCH_RESULTS",
+      "LINEUPS",
+      "PLAYER_PERFORMANCE"
+    ],
+    "retention_acknowledged": true,
+    "analytics_use_acknowledged": true,
+    "team_review_acknowledged": true,
+    "revoked_at": null
+  },
+  "matches": [
+    {
+      "external_match_id": "synth-match-101",
+      "played_at": "2026-10-25T10:00:00Z",
+      "result": "WIN",
+      "goals_for": 2,
+      "goals_against": 1,
+      "opponent_name": "Synthetic Rivals FC",
+      "formation": "4-3-3",
+      "lineup": [
+        "p-synth-01",
+        "p-synth-02"
+      ],
+      "player_performances": [
+        {
+          "local_player_reference": "p-synth-01",
+          "display_alias": "StrikerOne",
+          "position": "ST",
+          "role": "Advanced Forward",
+          "minutes_played": 90,
+          "goals": 2,
+          "assists": 0,
+          "passes_attempted": 15,
+          "passes_completed": 12,
+          "tackles_attempted": 2,
+          "tackles_won": 1,
+          "interceptions": 1,
+          "shots": 4,
+          "shots_on_target": 3,
+          "saves": 0,
+          "possession_losses": 3,
+          "provider_rating": 8.2,
+          "build_reference": null
+        }
+      ],
+      "source_record_hash": null,
+      "match_status": "COMPLETED"
+    }
+  ],
+  "source_classification": "USER_SUPPLIED_EXPORT",
+  "payload_sha256": "8ec77bff6f0b91b6213854b6679b55eca170a5a15dd47d846fea8d23ed358a53"
+}
