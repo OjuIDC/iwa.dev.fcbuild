@@ -27,7 +27,9 @@ import re
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections import OrderedDict
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,11 +62,14 @@ from src.schemas import (
 from src.settings import (
     is_dispatch_enabled,
     is_dispatch_worker_enabled,
+    is_fc27_analytics_enabled,
     is_fc27_live_ingestion_enabled,
+    is_fc27_persistence_enabled,
     is_fc27_provider_dry_run,
     is_fc27_provider_enabled,
     is_fc27_public_identity_lookup_enabled,
     is_fc27_recommendations_enabled,
+    is_fc27_standard_http_transport_enabled,
     is_fc27_upstream_compatibility_enabled,
     safe_env_bool,
 )
@@ -681,6 +686,57 @@ class FC27PublicProviderPolicy(BaseModel):
         return self
 
 
+STANDARD_APPLICATION_USER_AGENT = "iwa.dev.fcbuild/0.1"
+
+PROHIBITED_USER_AGENT_TOKENS: Tuple[str, ...] = (
+    "mozilla/",
+    "chrome/",
+    "chromium/",
+    "safari/",
+    "applewebkit/",
+    "edg/",
+    "firefox/",
+    "opr/",
+    "impit",
+    "curl-impersonate",
+    "curl_cffi",
+    "playwright",
+    "puppeteer",
+    "selenium",
+    "headless",
+)
+
+
+def validate_application_user_agent(user_agent: str) -> str:
+    """Validates an optional descriptive application User-Agent header.
+
+    Permits only honest, standards-compliant application User-Agent strings
+    identifying iwa.dev.fcbuild; rejects any browser, WebKit, Chromium, or
+    impersonation tokens.
+    """
+    if not isinstance(user_agent, str) or not user_agent.strip():
+        raise FC27ProviderError("User-Agent must be a non-empty string")
+    if any(ch in user_agent for ch in ("\r", "\n", "\x00")) or not user_agent.isascii():
+        raise FC27ProviderError("Control or non-ASCII characters in User-Agent are prohibited")
+    cleaned = user_agent.strip()
+    if len(cleaned) > 160:
+        raise FC27ProviderError("User-Agent exceeds 160-character bound")
+    low = cleaned.lower()
+    for tok in PROHIBITED_USER_AGENT_TOKENS:
+        if tok in low:
+            raise FC27ProviderError(
+                f"Browser-impersonation token '{tok}' in User-Agent is prohibited"
+            )
+    if not re.fullmatch(
+        r"iwa\.dev\.fcbuild/[0-9]+\.[0-9]+(\.[0-9]+)?( \(\+https://github\.com/iwa-ojuidc/iwa\.dev\.fcbuild\))?",
+        cleaned,
+    ):
+        raise FC27ProviderError(
+            "User-Agent must match descriptive application format 'iwa.dev.fcbuild/<version>'"
+        )
+    return cleaned
+
+
 def validate_request_against_policy(
     request_spec: Mapping[str, Any],
     policy: FC27PublicProviderPolicy = FC27PublicProviderPolicy(),
@@ -724,16 +780,32 @@ def validate_request_against_policy(
         raise FC27ProviderError("Redirects are prohibited")
 
     # Validate headers: no cookies, no auth, no sec-ch-ua / sec-fetch-site / custom headers
-    for hk in headers:
+    for hk, hv in headers.items():
         low = str(hk).lower()
         if low in ("cookie", "set-cookie"):
             raise FC27ProviderError("Cookies are prohibited")
         if low in ("authorization", "proxy-authorization", "x-auth-token"):
             raise FC27ProviderError("Authorization headers are prohibited")
-        if low in ("sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-site", "sec-fetch-mode"):
+        if low in (
+            "sec-ch-ua",
+            "sec-ch-ua-mobile",
+            "sec-ch-ua-platform",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "sec-fetch-user",
+            "origin",
+            "referer",
+        ):
             raise FC27ProviderError("Browser-impersonation headers are prohibited")
-        if low not in ("accept",):
-            raise FC27ProviderError(f"Custom header '{hk}' is prohibited")
+        if low == "user-agent":
+            validate_application_user_agent(str(hv))
+            continue
+        if low == "accept":
+            if str(hv).strip().lower() != "application/json":
+                raise FC27ProviderError("Accept header must be application/json")
+            continue
+        raise FC27ProviderError(f"Custom header '{hk}' is prohibited")
 
     # Full URL parsing check
     if any(ch in url for ch in ("\r", "\n", "\x00")):
@@ -765,6 +837,8 @@ def build_fc27_club_request(
     body: Any = None,
     proxy: Optional[str] = None,
     browser_profile: Optional[str] = None,
+    include_standard_user_agent: bool = False,
+    user_agent: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Pure request builder for FC 27 club identity lookup. Never executes network calls."""
     if any(
@@ -796,6 +870,15 @@ def build_fc27_club_request(
     if headers:
         raise ValueError("Custom, cookie, or authorization headers are not permitted")
 
+    built_headers: Dict[str, str] = {"Accept": "application/json"}
+    if user_agent is not None:
+        try:
+            built_headers["User-Agent"] = validate_application_user_agent(user_agent)
+        except FC27ProviderError as exc:
+            raise ValueError(f"Invalid application User-Agent header: {exc}") from exc
+    elif include_standard_user_agent:
+        built_headers["User-Agent"] = STANDARD_APPLICATION_USER_AGENT
+
     if isinstance(club_id, bool) or not isinstance(club_id, (str, int)):
         raise ValueError("club_id must be an integer or numeric string")
     sid = str(club_id)
@@ -823,7 +906,7 @@ def build_fc27_club_request(
         "method": "GET",
         "path": path,
         "query": query_params,
-        "headers": {"Accept": "application/json"},
+        "headers": built_headers,
         "url": url,
     }
     validate_request_against_policy(req)
@@ -3372,4 +3455,1809 @@ def get_attestation_templates() -> Dict[str, FC27RoleAttestationTemplate]:
             supplier_reference="ecf-role-ref-data-steward-01",
             authorized_scopes=("CLUB_IDENTITY", "MATCH_RESULTS"),
         ),
+    }
+
+
+# ==============================================================================
+# Phase 20: East Coasters FC 27 API Acquisition, Normalized Ingestion, and Validation
+# ==============================================================================
+
+FC27_STANDARD_HTTP_TRANSPORT_ENABLED = is_fc27_standard_http_transport_enabled()
+
+UPSTREAM_PYTHON_REPOSITORY = AUDITED_UPSTREAM_REPOSITORY
+UPSTREAM_PYTHON_COMMIT = AUDITED_UPSTREAM_COMMIT
+UPSTREAM_PYTHON_VERSION = AUDITED_UPSTREAM_VERSION
+UPSTREAM_PYTHON_LICENSE = AUDITED_UPSTREAM_LICENSE
+
+UPSTREAM_NODE_REPOSITORY = "https://github.com/alex-jordan547/proclubs-sdk"
+UPSTREAM_NODE_COMMIT = "57ede368098dbb524cbf16a7577fea3e1911e328"
+UPSTREAM_NODE_VERSION = "0.3.3"
+UPSTREAM_NODE_LICENSE = "MIT"
+
+UPSTREAM_RESEARCH_REPOSITORY = "https://github.com/Interactive-63/eafc-pro-clubs-api-research"
+UPSTREAM_RESEARCH_COMMIT = "4cb629268b4f21a1d09de3f9df7012ae0b28b0a8"
+UPSTREAM_RESEARCH_LICENSE = "NONE"
+
+PROCLUBS_SDK_MIT_NOTICE = """MIT License
+
+Copyright (c) 2025 alex-jordan547
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software."""
+
+ALLOWED_API_AUTHORITY_PURPOSES: Tuple[str, ...] = (
+    "NORMALIZED_STORAGE",
+    "DATA_QUALITY_REVIEW",
+    "READ_ONLY_ANALYTICS",
+    "TEAM_REVIEW",
+)
+
+ALLOWED_API_AUTHORITY_CATEGORIES: Tuple[str, ...] = (
+    "CLUB_IDENTITY",
+    "CLUB_STATISTICS",
+    "MATCH_RESULTS",
+    "LINEUPS",
+    "PLAYER_PERFORMANCE",
+    "MEMBER_STATISTICS",
+    "CAREER_STATISTICS",
+    "BUILD_REFERENCES",
+)
+
+
+class FC27ApiAuthorityAttestation(BaseModel):
+    """Part B: Metadata-only operator club-authority and member-consent attestation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attestation_reference: str = "api-east-coasters-authority-2026-10"
+    authorization_source: Literal["OPERATOR_ATTESTATION"] = "OPERATOR_ATTESTATION"
+    club_id: Literal["330323"] = "330323"
+    platform: Literal["common-gen5"] = "common-gen5"
+    game_version: Literal["FC27"] = "FC27"
+    authority_status: Literal["USER_ATTESTED"] = "USER_ATTESTED"
+    member_consent_status: Literal["USER_ATTESTED"] = "USER_ATTESTED"
+    captain_consent_status: Literal["USER_ATTESTED"] = "USER_ATTESTED"
+    manager_authority_database_status: Literal["UNVERIFIED"] = "UNVERIFIED"
+    review_status: Literal["PENDING_HUMAN_REVIEW", "APPROVED", "REJECTED"] = "PENDING_HUMAN_REVIEW"
+    allowed_purposes: Tuple[str, ...] = ALLOWED_API_AUTHORITY_PURPOSES
+    allowed_categories: Tuple[str, ...] = ALLOWED_API_AUTHORITY_CATEGORIES
+    publication_allowed: Literal[False] = False
+    recommendations_allowed: Literal[False] = False
+    dispatch_allowed: Literal[False] = False
+    credential_use_allowed: Literal[False] = False
+    cookie_or_session_use_allowed: Literal[False] = False
+    reviewer_reference: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_attestation(self) -> FC27ApiAuthorityAttestation:
+        for ref_val in (self.attestation_reference, self.reviewer_reference or ""):
+            cleaned = ref_val.strip()
+            if not cleaned:
+                continue
+            if (
+                "@" in cleaned
+                or " " in cleaned
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{3,128}", cleaned)
+                or any(
+                    tok in cleaned.lower()
+                    for tok in (
+                        "password",
+                        "token",
+                        "secret",
+                        "bearer",
+                        "cookie",
+                        "session",
+                        "account",
+                        "persona",
+                        "nucleus",
+                        "gamertag",
+                        "gamer_tag",
+                        "signature",
+                    )
+                )
+            ):
+                raise ValueError(
+                    "Attestation reference must be a non-personal identifier without emails, gamer tags, accounts, or secrets"
+                )
+        if set(self.allowed_purposes) != set(ALLOWED_API_AUTHORITY_PURPOSES):
+            raise ValueError("allowed_purposes must match the exact approved purpose set")
+        if not set(self.allowed_categories).issubset(set(ALLOWED_API_AUTHORITY_CATEGORIES)) or not self.allowed_categories:
+            raise ValueError("allowed_categories must be a non-empty subset of approved categories")
+        if self.manager_authority_database_status != "UNVERIFIED":
+            raise ValueError("manager_authority_database_status must never be silently upgraded from UNVERIFIED")
+        return self
+
+    def can_acquire_club_identity_and_stats(self) -> bool:
+        return (
+            self.club_id == "330323"
+            and self.platform == "common-gen5"
+            and self.game_version == "FC27"
+            and self.authority_status == "USER_ATTESTED"
+            and self.review_status in ("PENDING_HUMAN_REVIEW", "APPROVED")
+        )
+
+    def can_persist_member_or_player_data(self) -> bool:
+        return (
+            self.can_acquire_club_identity_and_stats()
+            and self.review_status == "APPROVED"
+            and "PLAYER_PERFORMANCE" in self.allowed_categories
+        )
+
+
+EAST_COASTERS_API_AUTHORITY_ATTESTATION = FC27ApiAuthorityAttestation()
+
+
+class ProClubsSdkAuditRecord(BaseModel):
+    """Part C: Immutable upstream audit record for alex-jordan547/proclubs-sdk."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    upstream_repository: str = UPSTREAM_NODE_REPOSITORY
+    upstream_commit: str = UPSTREAM_NODE_COMMIT
+    upstream_version: str = UPSTREAM_NODE_VERSION
+    upstream_license: str = UPSTREAM_NODE_LICENSE
+    attribution_notice: str = PROCLUBS_SDK_MIT_NOTICE
+    node_engine_requirement: str = ">=22.18.0"
+    runtime_dependencies: Tuple[str, ...] = ("impit@0.14.5", "zod@4.6.5")
+    supported_platforms: Tuple[str, ...] = ("common-gen5", "nx")
+    deprecated_platforms: Tuple[str, ...] = ("common-gen4",)
+    adopted_concepts: Tuple[str, ...] = (
+        "src/schemas.ts (Zod field-type reference)",
+        "src/errors.ts (HTTP status taxonomy reference)",
+        "src/types.ts (operation parameter names reference)",
+    )
+    rejected_components: Tuple[str, ...] = (
+        "src/transport/impitTransport.ts (impit Chrome TLS/HTTP2 fingerprint + browser header impersonation)",
+        "src/client.ts:withRetry (automatic retry after access denial)",
+        "src/cache/memoryCache.ts (raw response caching)",
+    )
+    impit_transport_classification: str = ComponentAdoptionClassification.REJECTED.value
+    zod_schema_concept_classification: str = ComponentAdoptionClassification.CONCEPT_ONLY.value
+    review_required: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _validate_node_audit(self) -> ProClubsSdkAuditRecord:
+        if not re.fullmatch(r"[0-9a-f]{40}", self.upstream_commit):
+            raise ValueError("40-character commit SHA is required")
+        if self.upstream_commit != UPSTREAM_NODE_COMMIT:
+            raise ValueError(f"Unapproved Node upstream commit '{self.upstream_commit}'")
+        if self.upstream_version != UPSTREAM_NODE_VERSION:
+            raise ValueError(f"Unapproved Node upstream version '{self.upstream_version}'")
+        if self.impit_transport_classification != ComponentAdoptionClassification.REJECTED.value:
+            raise ValueError("impit browser/TLS impersonation transport must remain REJECTED")
+        return self
+
+
+PROCLUBS_SDK_AUDIT_RECORD = ProClubsSdkAuditRecord()
+
+UPSTREAM_TRANSPORT_BEHAVIOR_CLASSIFICATION: Dict[str, Literal["APPROVED", "REJECTED"]] = {
+    "STANDARD_HTTP": "APPROVED",
+    "DESCRIPTIVE_USER_AGENT": "APPROVED",
+    "CONTENT_NEGOTIATION": "APPROVED",
+    "BROWSER_CLIENT_HINT": "REJECTED",
+    "BROWSER_NAVIGATION_HEADER": "REJECTED",
+    "TLS_PROFILE_IMPERSONATION": "REJECTED",
+    "COOKIE_OR_SESSION": "REJECTED",
+    "PROXY": "REJECTED",
+    "CHALLENGE_HANDLING": "REJECTED",
+}
+
+
+class FC27ApiIngestionOperation(str, Enum):
+    """Part D: Explicit operations permitted in the East Coasters API transport policy."""
+
+    CLUB_IDENTITY = "CLUB_IDENTITY"
+    CLUB_STATISTICS = "CLUB_STATISTICS"
+    RECENT_MATCHES = "RECENT_MATCHES"
+    MATCH_PLAYER_STATISTICS = "MATCH_PLAYER_STATISTICS"
+    CURRENT_MEMBER_STATISTICS = "CURRENT_MEMBER_STATISTICS"
+    MEMBER_CAREER_STATISTICS = "MEMBER_CAREER_STATISTICS"
+
+
+class FC27OperationTransportPolicy(BaseModel):
+    """Part D: Exact-host, exact-path, exact-query transport policy for a single API operation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation: FC27ApiIngestionOperation
+    method: Literal["GET"] = "GET"
+    scheme: Literal["https"] = "https"
+    host: Literal["proclubs.ea.com"] = "proclubs.ea.com"
+    path: str
+    allowed_query_parameters: Tuple[str, ...]
+    required_query_parameters: Tuple[str, ...]
+    response_schema: str
+    personal_data_classification: Literal[
+        "CLUB_METADATA_ONLY",
+        "CLUB_AGGREGATE_ONLY",
+        "CONTAINS_PLAYER_IDENTIFIERS_MUST_SANITIZE",
+        "PLAYER_PERFORMANCE_PSEUDONYMIZED",
+        "MEMBER_ROSTER_PRIVACY_PREVIEW_ONLY",
+        "MEMBER_CAREER_PRIVACY_PREVIEW_ONLY",
+    ]
+    maximum_requests: int = Field(default=1, ge=1, le=3)
+    timeout_seconds: float = Field(default=10.0, gt=0.0, le=10.0)
+    maximum_bytes: int = Field(default=1048576, gt=0, le=1048576)
+    redirect_behavior: Literal["DISABLED"] = "DISABLED"
+    retry_behavior: Literal["ZERO_RETRIES"] = "ZERO_RETRIES"
+    persistence_eligibility: Literal[
+        "REQUIRES_SEPARATE_PERSISTENCE_AUTHORIZATION",
+        "REQUIRES_APPROVED_ATTESTATION_AND_AUTHORIZATION",
+        "PREVIEW_ONLY_UNTIL_APPROVED",
+    ]
+    required_attestation_status: Literal["USER_ATTESTED", "APPROVED"]
+
+
+FC27_API_INGESTION_POLICIES: Dict[FC27ApiIngestionOperation, FC27OperationTransportPolicy] = {
+    FC27ApiIngestionOperation.CLUB_IDENTITY: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.CLUB_IDENTITY,
+        path="/api/fc/clubs/info",
+        allowed_query_parameters=("platform", "clubIds"),
+        required_query_parameters=("platform", "clubIds"),
+        response_schema="FC27ClubIdentityMappedRecord",
+        personal_data_classification="CLUB_METADATA_ONLY",
+        maximum_requests=1,
+        persistence_eligibility="REQUIRES_SEPARATE_PERSISTENCE_AUTHORIZATION",
+        required_attestation_status="USER_ATTESTED",
+    ),
+    FC27ApiIngestionOperation.CLUB_STATISTICS: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.CLUB_STATISTICS,
+        path="/api/fc/clubs/overallStats",
+        allowed_query_parameters=("platform", "clubIds"),
+        required_query_parameters=("platform", "clubIds"),
+        response_schema="FC27ClubOverviewRecord",
+        personal_data_classification="CLUB_AGGREGATE_ONLY",
+        maximum_requests=1,
+        persistence_eligibility="REQUIRES_SEPARATE_PERSISTENCE_AUTHORIZATION",
+        required_attestation_status="USER_ATTESTED",
+    ),
+    FC27ApiIngestionOperation.RECENT_MATCHES: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.RECENT_MATCHES,
+        path="/api/fc/clubs/matches",
+        allowed_query_parameters=("platform", "clubIds", "matchType", "maxResultCount"),
+        required_query_parameters=("platform", "clubIds", "matchType"),
+        response_schema="FC27ClubMatchSummaryRecord",
+        personal_data_classification="CONTAINS_PLAYER_IDENTIFIERS_MUST_SANITIZE",
+        maximum_requests=1,
+        persistence_eligibility="REQUIRES_APPROVED_ATTESTATION_AND_AUTHORIZATION",
+        required_attestation_status="USER_ATTESTED",
+    ),
+    FC27ApiIngestionOperation.MATCH_PLAYER_STATISTICS: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.MATCH_PLAYER_STATISTICS,
+        path="/api/fc/clubs/matches",
+        allowed_query_parameters=("platform", "clubIds", "matchType", "maxResultCount"),
+        required_query_parameters=("platform", "clubIds", "matchType"),
+        response_schema="FC27MatchPlayerStatsRecord",
+        personal_data_classification="PLAYER_PERFORMANCE_PSEUDONYMIZED",
+        maximum_requests=1,
+        persistence_eligibility="REQUIRES_APPROVED_ATTESTATION_AND_AUTHORIZATION",
+        required_attestation_status="APPROVED",
+    ),
+    FC27ApiIngestionOperation.CURRENT_MEMBER_STATISTICS: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.CURRENT_MEMBER_STATISTICS,
+        path="/api/fc/members/stats",
+        allowed_query_parameters=("platform", "clubId"),
+        required_query_parameters=("platform", "clubId"),
+        response_schema="FC27MemberStatsRecord",
+        personal_data_classification="MEMBER_ROSTER_PRIVACY_PREVIEW_ONLY",
+        maximum_requests=1,
+        persistence_eligibility="PREVIEW_ONLY_UNTIL_APPROVED",
+        required_attestation_status="APPROVED",
+    ),
+    FC27ApiIngestionOperation.MEMBER_CAREER_STATISTICS: FC27OperationTransportPolicy(
+        operation=FC27ApiIngestionOperation.MEMBER_CAREER_STATISTICS,
+        path="/api/fc/members/career/stats",
+        allowed_query_parameters=("platform", "clubId"),
+        required_query_parameters=("platform", "clubId"),
+        response_schema="FC27MemberCareerStatsRecord",
+        personal_data_classification="MEMBER_CAREER_PRIVACY_PREVIEW_ONLY",
+        maximum_requests=1,
+        persistence_eligibility="PREVIEW_ONLY_UNTIL_APPROVED",
+        required_attestation_status="APPROVED",
+    ),
+}
+
+ALLOWED_EAST_COASTERS_PATHS: Tuple[str, ...] = tuple(
+    sorted({p.path for p in FC27_API_INGESTION_POLICIES.values()})
+)
+
+
+def build_east_coasters_api_request(
+    operation: str | FC27ApiIngestionOperation,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    platform: str = FC27Platform.COMMON_GEN5.value,
+    match_type: str = "leagueMatch",
+    max_result_count: Optional[int] = None,
+    extra_query_params: Optional[Mapping[str, Any]] = None,
+    scheme: str = "https",
+    host: str = "proclubs.ea.com",
+    method: str = "GET",
+    path_override: Optional[str] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    user_agent: str = STANDARD_APPLICATION_USER_AGENT,
+    tls_profile: Optional[str] = None,
+    proxy: Optional[str] = None,
+    allow_redirects: bool = False,
+    retries: int = 0,
+    timeout_seconds: float = 10.0,
+    maximum_bytes: int = 1048576,
+    attestation: FC27ApiAuthorityAttestation = EAST_COASTERS_API_AUTHORITY_ATTESTATION,
+) -> Dict[str, Any]:
+    """Builds and validates an East-Coasters-only API request specification for one of the 6 operations."""
+    try:
+        op_enum = (
+            operation
+            if isinstance(operation, FC27ApiIngestionOperation)
+            else FC27ApiIngestionOperation(str(operation))
+        )
+    except ValueError as exc:
+        raise FC27ProviderError(f"Unsupported API ingestion operation '{operation}'") from exc
+
+    op_policy = FC27_API_INGESTION_POLICIES[op_enum]
+
+    if not attestation.can_acquire_club_identity_and_stats():
+        raise FC27ProviderError("Operator authority attestation is not valid for East Coasters acquisition")
+
+    if str(club_id).strip() != EAST_COASTERS_CLUB_ID or str(club_id) != str(club_id).strip():
+        raise FC27ProviderError(
+            f"Club-only scope violation: only East Coasters (club_id={EAST_COASTERS_CLUB_ID}) is authorized"
+        )
+    if platform != FC27Platform.COMMON_GEN5.value:
+        raise FC27ProviderError(
+            f"Platform scope violation: only platform='{FC27Platform.COMMON_GEN5.value}' is authorized"
+        )
+
+    if scheme != "https":
+        raise FC27InvalidHostError("HTTPS scheme is required")
+    if not isinstance(host, str) or not host.isascii() or "xn--" in host.lower():
+        raise FC27InvalidHostError("Unicode or punycode lookalike hostname rejected")
+    if "@" in host:
+        raise FC27InvalidHostError("Userinfo or credentials in host rejected")
+    if ":" in host:
+        raise FC27InvalidHostError("Alternate or explicit port in host rejected")
+    if host != "proclubs.ea.com":
+        raise FC27InvalidHostError(f"Host '{host}' rejected; only 'proclubs.ea.com' is permitted")
+    if method != "GET":
+        raise FC27ProviderError("GET-only policy violation")
+
+    target_path = path_override if path_override is not None else op_policy.path
+    if "#" in target_path or "?" in target_path or target_path != op_policy.path:
+        raise FC27InvalidHostError(
+            f"Endpoint path '{target_path}' is not permitted for operation '{op_enum.value}'"
+        )
+
+    if tls_profile is not None:
+        raise FC27ProviderError("TLS-profile override or impersonation is prohibited")
+    if proxy is not None:
+        raise FC27ProviderError("Proxy configuration is prohibited")
+    if allow_redirects:
+        raise FC27ProviderError("Redirects are prohibited")
+    if retries != 0:
+        raise FC27ProviderError("Zero-retry policy violation: retries must be 0")
+    if timeout_seconds <= 0 or timeout_seconds > op_policy.timeout_seconds:
+        raise FC27ProviderError(f"timeout_seconds must be in (0, {op_policy.timeout_seconds}]")
+    if maximum_bytes <= 0 or maximum_bytes > op_policy.maximum_bytes:
+        raise FC27ProviderError(f"maximum_bytes must be in (0, {op_policy.maximum_bytes}]")
+
+    if extra_query_params:
+        for k in extra_query_params:
+            if str(k) not in op_policy.allowed_query_parameters:
+                raise FC27ProviderError(
+                    f"Unknown or unapproved query parameter '{k}' for operation '{op_enum.value}'"
+                )
+
+    if op_enum in (FC27ApiIngestionOperation.CLUB_IDENTITY, FC27ApiIngestionOperation.CLUB_STATISTICS):
+        query_params: Dict[str, str] = {"platform": platform, "clubIds": EAST_COASTERS_CLUB_ID}
+    elif op_enum in (FC27ApiIngestionOperation.RECENT_MATCHES, FC27ApiIngestionOperation.MATCH_PLAYER_STATISTICS):
+        if match_type not in ("leagueMatch", "playoffMatch", "friendlyMatch"):
+            raise FC27ProviderError(f"Unsupported matchType '{match_type}'")
+        query_params = {
+            "platform": platform,
+            "clubIds": EAST_COASTERS_CLUB_ID,
+            "matchType": match_type,
+        }
+        if max_result_count is not None:
+            if isinstance(max_result_count, bool) or not isinstance(max_result_count, int) or not (1 <= max_result_count <= 25):
+                raise FC27ProviderError("maxResultCount must be an integer between 1 and 25")
+            query_params["maxResultCount"] = str(max_result_count)
+    else:
+        query_params = {"platform": platform, "clubId": EAST_COASTERS_CLUB_ID}
+
+    if extra_query_params:
+        for k, v in extra_query_params.items():
+            query_params[str(k)] = str(v)
+
+    for req_param in op_policy.required_query_parameters:
+        if req_param not in query_params:
+            raise FC27ProviderError(f"Missing required query parameter '{req_param}'")
+
+    for qk, qv in query_params.items():
+        if qk not in op_policy.allowed_query_parameters:
+            raise FC27ProviderError(f"Query parameter '{qk}' is not in allowlist")
+        if any(ch in str(qv) for ch in ("\r", "\n", "\x00", "#", "&", "?", ";")):
+            raise FC27ProviderError(f"Unsafe characters in query parameter '{qk}'")
+
+    validated_ua = validate_application_user_agent(user_agent)
+    built_headers: Dict[str, str] = {
+        "Accept": "application/json",
+        "User-Agent": validated_ua,
+    }
+    if headers is not None:
+        for hk, hv in headers.items():
+            low = str(hk).lower()
+            if low in ("cookie", "set-cookie"):
+                raise FC27ProviderError("Cookie headers are prohibited")
+            if low in ("authorization", "proxy-authorization", "x-auth-token"):
+                raise FC27ProviderError("Authorization headers are prohibited")
+            if low in (
+                "sec-ch-ua",
+                "sec-ch-ua-mobile",
+                "sec-ch-ua-platform",
+                "sec-fetch-site",
+                "sec-fetch-mode",
+                "sec-fetch-dest",
+                "sec-fetch-user",
+                "origin",
+                "referer",
+            ):
+                raise FC27ProviderError("Browser client-hint and navigation headers are prohibited")
+            if low == "accept":
+                if str(hv).strip().lower() != "application/json":
+                    raise FC27ProviderError("Accept header must be application/json")
+            elif low == "user-agent":
+                built_headers["User-Agent"] = validate_application_user_agent(str(hv))
+            else:
+                raise FC27ProviderError(f"Unapproved header '{hk}' is prohibited")
+
+    encoded_query = urllib.parse.urlencode(query_params)
+    full_url = f"https://{host}{target_path}?{encoded_query}"
+
+    parsed = urllib.parse.urlsplit(full_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "proclubs.ea.com"
+        or parsed.port is not None
+        or parsed.username
+        or parsed.password
+        or "@" in parsed.netloc
+        or parsed.fragment
+        or parsed.path != op_policy.path
+    ):
+        raise FC27InvalidHostError("Constructed URL failed strict URL security validation")
+
+    return {
+        "operation": op_enum.value,
+        "scheme": "https",
+        "host": host,
+        "method": "GET",
+        "path": target_path,
+        "query": query_params,
+        "headers": built_headers,
+        "url": full_url,
+        "timeout_seconds": timeout_seconds,
+        "maximum_bytes": maximum_bytes,
+        "allow_redirects": False,
+        "retries": 0,
+        "tls_profile": None,
+        "proxy": None,
+        "attestation_reference": attestation.attestation_reference,
+    }
+
+
+class FC27MetadataOnlyTransportLog(BaseModel):
+    """Sanitized metadata-only transport log entry. Never logs raw bodies, gamer tags, or external IDs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation: str
+    request_url: str
+    http_status: int
+    content_type: str
+    response_size_bytes: int = Field(ge=0)
+    payload_sha256: str
+    attempt_count: Literal[1] = 1
+    retries: Literal[0] = 0
+    redirect_count: int = Field(default=0, ge=0)
+    outcome_status: str
+    sanitization_state: Literal["CLEAN", "SENSITIVE_DROPPED", "SKIPPED"]
+    sensitive_field_paths: Tuple[str, ...] = ()
+    schema_drift_paths: Tuple[str, ...] = ()
+    circuit_breaker_state: Literal["CLOSED", "OPEN"]
+    raw_body_logged: Literal[False] = False
+    raw_response_retained: Literal[False] = False
+
+
+class FC27StageEvaluationResult(BaseModel):
+    """Sanitized evaluation result for a single API operation response."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation: str
+    ok: bool
+    outcome_status: str
+    http_status: int
+    content_type: str
+    response_size_bytes: int
+    payload_sha256: str
+    attempt_count: Literal[1] = 1
+    retries: Literal[0] = 0
+    redirect_count: int = 0
+    sanitized_data: Optional[Dict[str, Any]] = None
+    sensitive_field_paths: Tuple[str, ...] = ()
+    schema_drift_paths: Tuple[str, ...] = ()
+    quarantine_metadata: Optional[Dict[str, Any]] = None
+    circuit_breaker_state: Literal["CLOSED", "OPEN"]
+    circuit_breaker_reason: Optional[str] = None
+    metadata_log: FC27MetadataOnlyTransportLog
+    raw_response_retained: Literal[False] = False
+
+
+def _detect_challenge_or_html(status_code: int, content_type: str, body_text: str) -> Optional[str]:
+    low_ct = (content_type or "").lower()
+    low_body = (body_text or "").lower()
+    if "captcha" in low_body or "g-recaptcha" in low_body or "hcaptcha" in low_body or "cf-turnstile" in low_body:
+        return "CAPTCHA_DETECTED"
+    if "akamai" in low_body or "reference #" in low_body or "access denied" in low_body or "challenge" in low_body:
+        return "AKAMAI_OR_WAF_CHALLENGE"
+    if "text/html" in low_ct or "<html" in low_body or "<!doctype html" in low_body:
+        return "HTML_RESPONSE_REJECTED"
+    return None
+
+
+def pseudonymize_east_coasters_player_reference(
+    raw_identifier: str,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+) -> str:
+    """Deterministically generates a non-reversible pseudonymous local_player_reference.
+
+    Never embeds gamer tags, account IDs, persona IDs, or nucleus IDs in the output string.
+    """
+    clean = str(raw_identifier).strip()
+    if not clean:
+        clean = "unknown_slot"
+    digest = hashlib.sha256(f"fc27:pseudonym:{club_id}:{clean}".encode("utf-8")).hexdigest()[:12]
+    return f"plr_ecf_{digest}"
+
+
+def sanitize_club_statistics_payload(
+    raw_payload: Any,
+    *,
+    requested_club_id: str = EAST_COASTERS_CLUB_ID,
+    adapter: Optional[FC27ClubsCompatibilityAdapter] = None,
+) -> Tuple[Dict[str, Any], Tuple[str, ...], Tuple[str, ...]]:
+    """Sanitizes Stage F2 aggregate club statistics and rejects any unexpected member/player/session data."""
+    sensitive_paths: List[str] = []
+
+    def _scan_sens(obj: Any, prefix: str = "") -> None:
+        if isinstance(obj, Mapping):
+            for k, v in obj.items():
+                k_str = str(k)
+                p = f"{prefix}.{k_str}" if prefix else k_str
+                if _is_sensitive_key(k_str):
+                    sensitive_paths.append(p)
+                _scan_sens(v, p)
+        elif isinstance(obj, list):
+            for idx, item in enumerate(obj):
+                _scan_sens(item, f"{prefix}[{idx}]")
+
+    _scan_sens(raw_payload)
+    if sensitive_paths:
+        return {}, tuple(sorted(set(sensitive_paths))), ()
+
+    active_adapter = adapter or FC27ClubsCompatibilityAdapter()
+    mapped = active_adapter.map_club_overview(raw_payload)
+    if mapped.club_id != str(requested_club_id):
+        raise ValueError(f"Club overview club_id mismatch: expected {requested_club_id}, got {mapped.club_id}")
+    sanitized = {
+        "club_id": mapped.club_id,
+        "games_played": mapped.games_played,
+        "wins": mapped.wins,
+        "ties": mapped.ties,
+        "losses": mapped.losses,
+        "goals": mapped.goals,
+        "goals_against": mapped.goals_against,
+        "skill_rating": mapped.skill_rating,
+        "win_streak": mapped.win_streak,
+        "unbeaten_streak": mapped.unbeaten_streak,
+        "promotions": mapped.promotions,
+        "relegations": mapped.relegations,
+        "best_division": mapped.best_division,
+        "reputation_tier": mapped.reputation_tier,
+        "provenance": mapped.provenance,
+    }
+    return sanitized, (), mapped.unknown_fields
+
+
+def sanitize_recent_matches_payload(
+    raw_payload: Any,
+    *,
+    requested_club_id: str = EAST_COASTERS_CLUB_ID,
+    match_type: str = "leagueMatch",
+    store_display_aliases: bool = False,
+    adapter: Optional[FC27ClubsCompatibilityAdapter] = None,
+) -> Tuple[Dict[str, Any], Tuple[str, ...], Tuple[str, ...]]:
+    """Sanitizes Stage F3 recent match summaries to existing internal match contracts.
+
+    - Deduplicates by external_match_id
+    - Computes canonical match hash
+    - Normalizes UTC timestamps
+    - Classifies match type
+    - Normalizes opponent, score, and result
+    - Marks unknown events
+    - Strips all raw player identifiers and gamer tags (pseudonymizes player performances)
+    """
+    from src.fc27_user_export import (
+        FC27SuppliedMatch,
+        FC27SuppliedPlayerPerformance,
+        compute_match_hash,
+    )
+
+    if isinstance(raw_payload, list):
+        items = raw_payload
+    elif isinstance(raw_payload, Mapping) and isinstance(raw_payload.get("matches"), list):
+        items = raw_payload["matches"]
+    elif isinstance(raw_payload, Mapping) and "matchId" in raw_payload:
+        items = [raw_payload]
+    else:
+        raise ValueError("Invalid recent matches payload structure")
+
+    active_adapter = adapter or FC27ClubsCompatibilityAdapter()
+    sensitive_paths: List[str] = []
+    drift_paths: List[str] = []
+    seen_match_ids: set[str] = set()
+    normalized_matches: List[Dict[str, Any]] = []
+    unknown_event_summary: Dict[str, Dict[int, int]] = {}
+
+    for idx, raw_match in enumerate(items):
+        if not isinstance(raw_match, Mapping):
+            continue
+        summary = active_adapter.map_club_match_summary(
+            raw_match,
+            perspective_club_id=requested_club_id,
+            match_type=match_type,
+        )
+        if summary.match_id in seen_match_ids:
+            continue
+        seen_match_ids.add(summary.match_id)
+        drift_paths.extend(f"matches[{idx}].{uf}" for uf in summary.unknown_fields)
+
+        if summary.goals_for > summary.goals_against:
+            res_str: Literal["WIN", "DRAW", "LOSS"] = "WIN"
+        elif summary.goals_for == summary.goals_against:
+            res_str = "DRAW"
+        else:
+            res_str = "LOSS"
+
+        played_dt = datetime.fromisoformat(summary.match_timestamp.replace("Z", "+00:00")).astimezone(timezone.utc)
+        opp_name = (summary.opponent_club_name or f"Club {summary.opponent_club_id}").strip()
+        if not opp_name or opp_name[0] in ("=", "+", "-", "@"):
+            opp_name = f"Club {summary.opponent_club_id}"
+
+        # Extract and pseudonymize player performances for East Coasters only
+        players_section = raw_match.get("players")
+        perfs: List[FC27SuppliedPlayerPerformance] = []
+        if isinstance(players_section, Mapping):
+            sensitive_paths.append(f"matches[{idx}].players")
+            club_players = players_section.get(str(requested_club_id))
+            if isinstance(club_players, Mapping):
+                for raw_pid, pstats in club_players.items():
+                    sensitive_paths.append(f"matches[{idx}].players.{requested_club_id}.<player_id>")
+                    if not isinstance(pstats, Mapping):
+                        continue
+                    for pk in pstats:
+                        if _is_sensitive_key(str(pk)):
+                            sensitive_paths.append(f"matches[{idx}].players.{requested_club_id}.{pk}")
+                    local_key = pseudonymize_east_coasters_player_reference(str(raw_pid))
+                    pstats_for_map = {
+                        k: v
+                        for k, v in pstats.items()
+                        if str(k).lower() not in ("playername", "name", "proname", "pro_name")
+                    }
+                    pstats_for_map["matchId"] = summary.match_id
+                    pstats_for_map["clubId"] = requested_club_id
+                    pstats_for_map["playerId"] = local_key
+                    mapped_p = active_adapter.map_player_match(pstats_for_map)
+                    if mapped_p.unknown_event_counts:
+                        unknown_event_summary[summary.match_id] = dict(mapped_p.unknown_event_counts)
+                    drift_paths.extend(
+                        f"matches[{idx}].player.{uf}" for uf in mapped_p.unknown_fields
+                    )
+                    passes_att = max(mapped_p.passes_made, mapped_p.pass_attempts)
+                    tackles_att = max(mapped_p.tackles_made, mapped_p.tackle_attempts)
+                    shots_total = max(mapped_p.shots, 0)
+                    shots_ot = min(shots_total, int(mapped_p.decoded_events.get("shots_on_target", mapped_p.goals)))
+                    mins = max(0, min(130, mapped_p.minutes_played))
+                    rating = max(0.0, min(10.0, round(float(mapped_p.rating), 2)))
+
+                    perfs.append(
+                        FC27SuppliedPlayerPerformance(
+                            local_player_reference=local_key,
+                            display_alias=None if not store_display_aliases else None,
+                            position="UNKNOWN",
+                            role="UNKNOWN",
+                            minutes_played=mins,
+                            goals=min(99, max(0, mapped_p.goals)),
+                            assists=min(99, max(0, mapped_p.assists)),
+                            passes_attempted=passes_att,
+                            passes_completed=min(passes_att, mapped_p.passes_made),
+                            tackles_attempted=tackles_att,
+                            tackles_won=min(tackles_att, mapped_p.tackles_made),
+                            interceptions=max(0, int(mapped_p.decoded_events.get("interceptions", 0))),
+                            shots=shots_total,
+                            shots_on_target=shots_ot,
+                            saves=max(0, mapped_p.saves),
+                            possession_losses=max(
+                                0,
+                                int(mapped_p.decoded_events.get("possession_lost_defensive_third", 0))
+                                + int(mapped_p.decoded_events.get("possession_lost_middle_third", 0))
+                                + int(mapped_p.decoded_events.get("possession_lost_attacking_third", 0)),
+                            ),
+                            provider_rating=rating,
+                            build_reference=None,
+                        )
+                    )
+
+        # Ensure sum of player goals does not exceed club goals_for
+        total_p_goals = sum(p.goals for p in perfs)
+        if total_p_goals > summary.goals_for and perfs:
+            adjusted: List[FC27SuppliedPlayerPerformance] = []
+            remaining = summary.goals_for
+            for p in perfs:
+                g = min(p.goals, remaining)
+                remaining -= g
+                adjusted.append(p.model_copy(update={"goals": g}))
+            perfs = adjusted
+
+        supplied_match = FC27SuppliedMatch(
+            external_match_id=summary.match_id,
+            played_at=played_dt,
+            result=res_str,
+            goals_for=min(99, max(0, summary.goals_for)),
+            goals_against=min(99, max(0, summary.goals_against)),
+            opponent_name=opp_name[:128],
+            formation="UNKNOWN",
+            lineup=[p.local_player_reference for p in perfs[:11]],
+            player_performances=perfs,
+            match_status="COMPLETED",
+        )
+        mhash = compute_match_hash(
+            supplied_match,
+            club_id=requested_club_id,
+            platform=FC27Platform.COMMON_GEN5.value,
+            game_version="FC27",
+            source_classification="AUTHORIZED_CAPTURE",
+        )
+        normalized_matches.append(
+            {
+                "external_match_id": supplied_match.external_match_id,
+                "played_at": supplied_match.played_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "match_type": summary.match_type,
+                "result": supplied_match.result,
+                "goals_for": supplied_match.goals_for,
+                "goals_against": supplied_match.goals_against,
+                "opponent_club_id": summary.opponent_club_id,
+                "opponent_name": supplied_match.opponent_name,
+                "formation": supplied_match.formation,
+                "match_status": supplied_match.match_status,
+                "match_hash": mhash,
+                "player_performance_count": len(perfs),
+                "supplied_match": supplied_match.model_dump(mode="json"),
+                "provenance": summary.provenance,
+            }
+        )
+
+    return (
+        {
+            "club_id": requested_club_id,
+            "platform": FC27Platform.COMMON_GEN5.value,
+            "game_version": "FC27",
+            "match_type": match_type,
+            "recent_match_count": len(normalized_matches),
+            "matches": normalized_matches,
+            "unknown_event_summary": unknown_event_summary,
+        },
+        tuple(sorted(set(sensitive_paths))),
+        tuple(sorted(set(drift_paths))),
+    )
+
+
+def build_member_and_player_privacy_preview(
+    *,
+    matches_payload: Any = None,
+    current_members_payload: Any = None,
+    career_members_payload: Any = None,
+    requested_club_id: str = EAST_COASTERS_CLUB_ID,
+) -> Dict[str, Any]:
+    """Stage F4: Computes a metadata-only privacy preview across match player stats, current members, and career stats.
+
+    Never outputs or retains actual gamer tags, aliases, external identifiers, or player names.
+    """
+    member_record_count = 0
+    career_record_count = 0
+    player_stat_record_count = 0
+    external_identifier_count = 0
+    gamer_tag_field_count = 0
+    display_alias_field_count = 0
+    sensitive_paths: List[str] = []
+    schema_drift_paths: List[str] = []
+
+    known_member_fields = {
+        "name",
+        "proName",
+        "gamesPlayed",
+        "goals",
+        "assists",
+        "manOfTheMatch",
+        "ratingAve",
+        "prevGoals",
+        "favoritePosition",
+        "proPos",
+        "proStyle",
+        "proHeight",
+        "proNationality",
+        "proOverall",
+        "cleanSheetsDef",
+        "cleanSheetsGK",
+        "winRate",
+        "passesMade",
+        "passSuccessRate",
+        "tacklesMade",
+        "tackleSuccessRate",
+        "shotSuccessRate",
+        "redCards",
+    }
+
+    def _inspect_members(payload: Any, label: str) -> int:
+        nonlocal external_identifier_count, gamer_tag_field_count, display_alias_field_count
+        if payload is None:
+            return 0
+        members_list = (
+            payload.get("members")
+            if isinstance(payload, Mapping) and isinstance(payload.get("members"), list)
+            else (payload if isinstance(payload, list) else [])
+        )
+        count = 0
+        for idx, m in enumerate(members_list):
+            if not isinstance(m, Mapping):
+                continue
+            count += 1
+            for k in m:
+                k_str = str(k)
+                low = k_str.lower()
+                if low in ("name", "gamertag", "gamer_tag", "playername"):
+                    gamer_tag_field_count += 1
+                    sensitive_paths.append(f"{label}.members[{idx}].{k_str}")
+                elif low in ("proname", "pro_name", "alias", "display_alias"):
+                    display_alias_field_count += 1
+                    sensitive_paths.append(f"{label}.members[{idx}].{k_str}")
+                elif low in ("personaid", "persona_id", "accountid", "account_id", "nucleusid", "nucleus_id", "userid", "id"):
+                    external_identifier_count += 1
+                    sensitive_paths.append(f"{label}.members[{idx}].{k_str}")
+                elif _is_sensitive_key(k_str):
+                    sensitive_paths.append(f"{label}.members[{idx}].{k_str}")
+                elif k_str not in known_member_fields:
+                    schema_drift_paths.append(f"{label}.members[{idx}].{k_str}")
+        return count
+
+    member_record_count = _inspect_members(current_members_payload, "current_members")
+    career_record_count = _inspect_members(career_members_payload, "career_members")
+
+    if matches_payload is not None:
+        match_list = (
+            matches_payload
+            if isinstance(matches_payload, list)
+            else (matches_payload.get("matches", []) if isinstance(matches_payload, Mapping) else [])
+        )
+        for m_idx, m in enumerate(match_list):
+            if not isinstance(m, Mapping):
+                continue
+            players_obj = m.get("players")
+            if isinstance(players_obj, Mapping):
+                club_p = players_obj.get(str(requested_club_id))
+                if isinstance(club_p, Mapping):
+                    for raw_pid, pstats in club_p.items():
+                        player_stat_record_count += 1
+                        external_identifier_count += 1
+                        sensitive_paths.append(f"matches[{m_idx}].players.{requested_club_id}.<external_player_id>")
+                        if isinstance(pstats, Mapping):
+                            for pk in pstats:
+                                pk_str = str(pk)
+                                low_pk = pk_str.lower()
+                                if low_pk in ("playername", "name", "gamertag", "gamer_tag"):
+                                    gamer_tag_field_count += 1
+                                    sensitive_paths.append(f"matches[{m_idx}].players.{requested_club_id}.{pk_str}")
+                                elif low_pk in ("proname", "pro_name"):
+                                    display_alias_field_count += 1
+                                    sensitive_paths.append(f"matches[{m_idx}].players.{requested_club_id}.{pk_str}")
+                                elif _is_sensitive_key(pk_str):
+                                    sensitive_paths.append(f"matches[{m_idx}].players.{requested_club_id}.{pk_str}")
+
+    unique_sens = tuple(sorted(set(sensitive_paths)))
+    unique_drift = tuple(sorted(set(schema_drift_paths)))
+
+    return {
+        "member_record_count": member_record_count,
+        "career_member_record_count": career_record_count,
+        "player_stat_record_count": player_stat_record_count,
+        "external_identifier_count": external_identifier_count,
+        "gamer_tag_field_count": gamer_tag_field_count,
+        "display_alias_field_count": display_alias_field_count,
+        "sensitive_field_path_count": len(unique_sens),
+        "sensitive_field_paths": unique_sens,
+        "schema_drift_field_count": len(unique_drift),
+        "schema_drift_fields": unique_drift,
+        "available_normalized_metric_fields": (
+            "minutes_played",
+            "goals",
+            "assists",
+            "passes_attempted",
+            "passes_completed",
+            "tackles_attempted",
+            "tackles_won",
+            "interceptions",
+            "shots",
+            "shots_on_target",
+            "saves",
+            "possession_losses",
+            "provider_rating",
+        ),
+        "unavailable_metric_fields": (
+            "expected_goals_xg",
+            "expected_assists_xa",
+            "sprint_distance_meters",
+            "verified_role_assignment",
+        ),
+        "consent_categories_required": (
+            "CLUB_IDENTITY",
+            "MATCH_RESULTS",
+            "LINEUPS",
+            "PLAYER_PERFORMANCE",
+            "MEMBER_STATISTICS",
+            "CAREER_STATISTICS",
+        ),
+        "persistence_applied": False,
+        "raw_response_retained": False,
+    }
+
+
+def evaluate_api_operation_response(
+    operation: str | FC27ApiIngestionOperation,
+    *,
+    raw_bytes: bytes,
+    status_code: int = 200,
+    content_type: str = "application/json",
+    redirect_count: int = 0,
+    location_header: str = "",
+    attempt_count: int = 1,
+    retries: int = 0,
+    breaker: Optional[FC27CircuitBreaker] = None,
+    attestation: FC27ApiAuthorityAttestation = EAST_COASTERS_API_AUTHORITY_ATTESTATION,
+) -> FC27StageEvaluationResult:
+    """Evaluates a raw HTTP response for any of the 6 East Coasters API operations.
+
+    Never logs or retains raw response bodies, gamer tags, or external player IDs.
+    """
+    if attempt_count != 1 or retries != 0:
+        raise FC27ProviderError("Zero-retry policy violation: attempt_count must be 1 and retries must be 0")
+
+    req_spec = build_east_coasters_api_request(operation, attestation=attestation)
+    op_enum = FC27ApiIngestionOperation(req_spec["operation"])
+    op_policy = FC27_API_INGESTION_POLICIES[op_enum]
+    active_breaker = breaker if breaker is not None else FC27CircuitBreaker()
+
+    response_size = len(raw_bytes)
+    payload_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
+    def _build_fail(outcome_status: str, san_state: Literal["CLEAN", "SENSITIVE_DROPPED", "SKIPPED"] = "SKIPPED") -> FC27StageEvaluationResult:
+        log_entry = FC27MetadataOnlyTransportLog(
+            operation=op_enum.value,
+            request_url=req_spec["url"],
+            http_status=status_code,
+            content_type=content_type,
+            response_size_bytes=response_size,
+            payload_sha256=payload_sha256,
+            redirect_count=redirect_count,
+            outcome_status=outcome_status,
+            sanitization_state=san_state,
+            circuit_breaker_state=active_breaker.state,
+        )
+        return FC27StageEvaluationResult(
+            operation=op_enum.value,
+            ok=False,
+            outcome_status=outcome_status,
+            http_status=status_code,
+            content_type=content_type,
+            response_size_bytes=response_size,
+            payload_sha256=payload_sha256,
+            redirect_count=redirect_count,
+            circuit_breaker_state=active_breaker.state,
+            circuit_breaker_reason=active_breaker.open_reason,
+            metadata_log=log_entry,
+        )
+
+    # 1. Response size limit guard before decoding
+    if response_size > op_policy.maximum_bytes:
+        return _build_fail("OVERSIZED_RESPONSE_REJECTED")
+
+    body_text = raw_bytes.decode("utf-8", errors="replace")
+
+    # 2. Redirect refusal
+    if redirect_count > 0 or status_code in (301, 302, 303, 307, 308) or bool(location_header):
+        active_breaker.record(
+            status_code=status_code,
+            redirect_count=max(1, redirect_count),
+            location_header=location_header,
+        )
+        return _build_fail("REDIRECT_REJECTED")
+
+    # 3. HTTP 401 / 403 / 429 open circuit breaker immediately with zero retries
+    if status_code == 401:
+        active_breaker.open("HTTP_401")
+        return _build_fail("HTTP_401_UNAUTHORIZED")
+    if status_code == 403:
+        active_breaker.open("HTTP_403")
+        return _build_fail("HTTP_403_FORBIDDEN")
+    if status_code == 429:
+        active_breaker.open("HTTP_429")
+        return _build_fail("HTTP_429_RATE_LIMITED")
+
+    # 4. HTML / CAPTCHA / Akamai challenge detection
+    challenge_code = _detect_challenge_or_html(status_code, content_type, body_text)
+    if challenge_code is not None:
+        active_breaker.open(challenge_code)
+        return _build_fail(challenge_code)
+
+    # 5. Content-Type check
+    if "application/json" not in (content_type or "").lower():
+        active_breaker.record(status_code=status_code, content_type=content_type, malformed=True)
+        return _build_fail("INVALID_CONTENT_TYPE_REJECTED")
+
+    if status_code != 200:
+        active_breaker.record(status_code=status_code, content_type=content_type, malformed=True)
+        return _build_fail(f"HTTP_{status_code}_REJECTED")
+
+    # 6. Strict JSON parse
+    try:
+        parsed_json = json.loads(body_text)
+    except Exception:
+        active_breaker.record(status_code=status_code, content_type=content_type, malformed=True)
+        return _build_fail("MALFORMED_JSON_REJECTED")
+
+    # 7. Operation-specific sanitization and validation
+    sensitive_paths: Tuple[str, ...] = ()
+    drift_paths: Tuple[str, ...] = ()
+    sanitized_data: Dict[str, Any] = {}
+
+    if op_enum == FC27ApiIngestionOperation.CLUB_IDENTITY:
+        if not isinstance(parsed_json, Mapping):
+            active_breaker.record(malformed=True)
+            return _build_fail("INVALID_IDENTITY_SCHEMA")
+        san_dict, sens_list, drop_list = sanitize_identity_payload(
+            parsed_json,
+            requested_club_id=EAST_COASTERS_CLUB_ID,
+            requested_platform=FC27Platform.COMMON_GEN5.value,
+            payload_sha256=payload_sha256,
+        )
+        sensitive_paths = tuple(sens_list)
+        drift_paths = tuple(sorted(set(drop_list) - set(sens_list)))
+        if sensitive_paths:
+            # Stop immediately on unexpected member/player data in club identity
+            return _build_fail("UNEXPECTED_SENSITIVE_DATA_IN_IDENTITY", san_state="SENSITIVE_DROPPED")
+        outcome, statuses = compare_club_identity(
+            requested_club_id=EAST_COASTERS_CLUB_ID,
+            requested_platform=FC27Platform.COMMON_GEN5.value,
+            expected_name=EAST_COASTERS_CLUB_NAME,
+            known_aliases=("EastCoasters FC",),
+            abbreviation="ECF",
+            returned=san_dict,
+        )
+        id_match = san_dict.get("club_id") == EAST_COASTERS_CLUB_ID
+        name_match = outcome == FC27IdentityOutcome.EXACT_MATCH
+        plat_match = san_dict.get("platform") == FC27Platform.COMMON_GEN5.value
+        sanitized_data = {
+            **san_dict,
+            "club_abbreviation": "ECF",
+            "stadium_name": None,
+            "schema_version": "1.0.0",
+            "identity_decision": {
+                "ID_MATCH": id_match,
+                "NAME_MATCH": name_match,
+                "PLATFORM_MATCH": plat_match,
+                "REVIEW_REQUIRED": True,
+                "outcome": outcome.value,
+                "field_statuses": statuses,
+            },
+        }
+        if not (id_match and name_match and plat_match):
+            return _build_fail("IDENTITY_MISMATCH")
+
+    elif op_enum == FC27ApiIngestionOperation.CLUB_STATISTICS:
+        try:
+            san_stats, sens_paths, unk_fields = sanitize_club_statistics_payload(
+                parsed_json,
+                requested_club_id=EAST_COASTERS_CLUB_ID,
+            )
+        except Exception:
+            active_breaker.record(malformed=True)
+            return _build_fail("INVALID_CLUB_STATISTICS_SCHEMA")
+        if sens_paths:
+            return _build_fail("UNEXPECTED_SENSITIVE_DATA_IN_CLUB_STATISTICS", san_state="SENSITIVE_DROPPED")
+        sanitized_data = san_stats
+        drift_paths = unk_fields
+
+    elif op_enum == FC27ApiIngestionOperation.RECENT_MATCHES:
+        try:
+            san_matches, sens_paths, unk_fields = sanitize_recent_matches_payload(
+                parsed_json,
+                requested_club_id=EAST_COASTERS_CLUB_ID,
+            )
+        except Exception:
+            active_breaker.record(malformed=True)
+            return _build_fail("INVALID_RECENT_MATCHES_SCHEMA")
+        sanitized_data = san_matches
+        sensitive_paths = sens_paths
+        drift_paths = unk_fields
+
+    elif op_enum == FC27ApiIngestionOperation.MATCH_PLAYER_STATISTICS:
+        preview = build_member_and_player_privacy_preview(
+            matches_payload=parsed_json,
+            requested_club_id=EAST_COASTERS_CLUB_ID,
+        )
+        sanitized_data = preview
+        sensitive_paths = preview["sensitive_field_paths"]
+        drift_paths = preview["schema_drift_fields"]
+
+    elif op_enum == FC27ApiIngestionOperation.CURRENT_MEMBER_STATISTICS:
+        preview = build_member_and_player_privacy_preview(
+            current_members_payload=parsed_json,
+            requested_club_id=EAST_COASTERS_CLUB_ID,
+        )
+        sanitized_data = preview
+        sensitive_paths = preview["sensitive_field_paths"]
+        drift_paths = preview["schema_drift_fields"]
+
+    elif op_enum == FC27ApiIngestionOperation.MEMBER_CAREER_STATISTICS:
+        preview = build_member_and_player_privacy_preview(
+            career_members_payload=parsed_json,
+            requested_club_id=EAST_COASTERS_CLUB_ID,
+        )
+        sanitized_data = preview
+        sensitive_paths = preview["sensitive_field_paths"]
+        drift_paths = preview["schema_drift_fields"]
+
+    quarantine_meta: Optional[Dict[str, Any]] = None
+    if drift_paths:
+        quarantine_meta = {
+            "club_id": EAST_COASTERS_CLUB_ID,
+            "platform": FC27Platform.COMMON_GEN5.value,
+            "game_version": "FC27",
+            "source_classification": "AUTHORIZED_CAPTURE",
+            "anomaly_category": "SCHEMA_DRIFT",
+            "reason_code": "UPSTREAM_SCHEMA_DRIFT_OBSERVED",
+            "diagnostic_paths": [re.sub(r"[^a-zA-Z0-9_.\[\]-]", "_", p)[:128] for p in drift_paths[:100]],
+            "payload_sha256": payload_sha256,
+            "raw_body_stored": False,
+        }
+
+    san_state: Literal["CLEAN", "SENSITIVE_DROPPED", "SKIPPED"] = (
+        "SENSITIVE_DROPPED" if sensitive_paths else "CLEAN"
+    )
+    log_entry = FC27MetadataOnlyTransportLog(
+        operation=op_enum.value,
+        request_url=req_spec["url"],
+        http_status=status_code,
+        content_type=content_type,
+        response_size_bytes=response_size,
+        payload_sha256=payload_sha256,
+        redirect_count=redirect_count,
+        outcome_status="SUCCESS_200",
+        sanitization_state=san_state,
+        sensitive_field_paths=sensitive_paths,
+        schema_drift_paths=drift_paths,
+        circuit_breaker_state=active_breaker.state,
+    )
+    return FC27StageEvaluationResult(
+        operation=op_enum.value,
+        ok=True,
+        outcome_status="SUCCESS_200",
+        http_status=status_code,
+        content_type=content_type,
+        response_size_bytes=response_size,
+        payload_sha256=payload_sha256,
+        redirect_count=redirect_count,
+        sanitized_data=sanitized_data,
+        sensitive_field_paths=sensitive_paths,
+        schema_drift_paths=drift_paths,
+        quarantine_metadata=quarantine_meta,
+        circuit_breaker_state=active_breaker.state,
+        circuit_breaker_reason=active_breaker.open_reason,
+        metadata_log=log_entry,
+    )
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuses all HTTP redirects without following them."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def execute_stage1_standard_python_https_request(
+    request_spec: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 10.0,
+) -> Dict[str, Any]:
+    """Executes a single Stage 1 ordinary Python HTTPS GET request.
+
+    - TLS verification enabled (ssl.create_default_context())
+    - Redirects disabled (_NoRedirectHandler)
+    - Zero retries
+    - Maximum 1 MiB response read ceiling
+    - No cookies, no credentials, no proxy, no browser headers
+    """
+    import ssl
+    import urllib.error
+
+    url = str(request_spec["url"])
+    headers = dict(request_spec.get("headers") or {})
+    max_bytes = int(request_spec.get("maximum_bytes", 1048576))
+    timeout = min(10.0, float(request_spec.get("timeout_seconds", timeout_seconds)))
+
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "proclubs.ea.com" or parsed.port is not None:
+        raise FC27InvalidHostError("Stage 1 transport only permits https://proclubs.ea.com")
+
+    ctx = ssl.create_default_context()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ctx),
+        _NoRedirectHandler(),
+        urllib.request.ProxyHandler({}),
+    )
+    req = urllib.request.Request(url=url, headers=headers, method="GET")
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            status_code = int(getattr(resp, "status", 200))
+            content_type = str(resp.headers.get("Content-Type", ""))
+            location = str(resp.headers.get("Location", ""))
+            raw_bytes = resp.read(max_bytes + 1)
+            return {
+                "raw_bytes": raw_bytes,
+                "status_code": status_code,
+                "content_type": content_type,
+                "location_header": location,
+                "redirect_count": 0,
+                "attempt_count": 1,
+                "retries": 0,
+                "transport_stage": "STANDARD_PYTHON_HTTPS",
+            }
+    except urllib.error.HTTPError as http_err:
+        status_code = int(http_err.code)
+        content_type = str(http_err.headers.get("Content-Type", "")) if http_err.headers else ""
+        location = str(http_err.headers.get("Location", "")) if http_err.headers else ""
+        try:
+            err_bytes = http_err.read(max_bytes + 1) if http_err.fp else b""
+        except Exception:
+            err_bytes = b""
+        return {
+            "raw_bytes": err_bytes,
+            "status_code": status_code,
+            "content_type": content_type,
+            "location_header": location,
+            "redirect_count": 1 if status_code in (301, 302, 303, 307, 308) or location else 0,
+            "attempt_count": 1,
+            "retries": 0,
+            "transport_stage": "STANDARD_PYTHON_HTTPS",
+        }
+    except Exception as exc:
+        return {
+            "raw_bytes": b"",
+            "status_code": 0,
+            "content_type": "",
+            "location_header": "",
+            "redirect_count": 0,
+            "attempt_count": 1,
+            "retries": 0,
+            "transport_stage": "STANDARD_PYTHON_HTTPS",
+            "transport_error": type(exc).__name__,
+        }
+
+
+class FC27Stage4BrowserProfileExceptionAssessment(BaseModel):
+    """Written Stage 4 exception assessment when EA blocks ordinary standards-compliant HTTP."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    BROWSER_PROFILE_EXCEPTION_REQUIRED: Literal["YES", "NO"] = "YES"
+    BROWSER_PROFILE_EXCEPTION_EXECUTED: Literal["NO"] = "NO"
+    upstream_python_implementation: str = f"{UPSTREAM_PYTHON_REPOSITORY}@{UPSTREAM_PYTHON_COMMIT} (src/fc_clubs_api/_http.py)"
+    upstream_node_implementation: str = f"{UPSTREAM_NODE_REPOSITORY}@{UPSTREAM_NODE_COMMIT} (src/transport/impitTransport.ts)"
+    upstream_headers: Tuple[str, ...] = (
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        'sec-ch-ua: "Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        "sec-ch-ua-mobile: ?0",
+        'sec-ch-ua-platform: "Windows"',
+        "sec-fetch-site: same-origin",
+    )
+    upstream_tls_profile_behavior: str = (
+        "fc27-clubs-api uses Python urllib TLS with Chrome 141 headers; proclubs-sdk uses impit "
+        "Rust Chrome TLS/JA3/JA4/HTTP2 fingerprint + browser headers."
+    )
+    ordinary_http_failure_reason: str
+    ea_policy_findings: str = (
+        "proclubs.ea.com is fronted by Akamai edge rules that block or stall non-browser User-Agent / "
+        "missing Referer/sec-fetch headers; EA User Agreement Section 6 prohibits unapproved automated access."
+    )
+    request_frequency: str = "Manual operator-initiated single-shot only (zero background polling)"
+    endpoint_allowlist: Tuple[str, ...] = ALLOWED_EAST_COASTERS_PATHS
+    data_fields_exposed: Tuple[str, ...] = (
+        "clubId",
+        "name",
+        "regionId",
+        "gamesPlayed",
+        "wins",
+        "ties",
+        "losses",
+        "goals",
+        "goalsAgainst",
+        "matchId",
+        "timestamp",
+        "players (pseudonymized before storage)",
+    )
+    privacy_controls: str = "Immediate in-memory sanitization, pseudonymous player refs, zero raw retention, aliases hidden by default"
+    docker_containment: str = "Isolated container with outbound egress restricted to proclubs.ea.com:443 only"
+    circuit_breaker_rules: str = "Immediate open on 401, 403, 429, redirect, CAPTCHA, or HTML challenge; manual reset required"
+    kill_switch: str = "FC27_PROVIDER_ENABLED=false and FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false"
+    rollback_plan: str = "Disable flags and fall back to offline USER_SUPPLIED_EXPORT importer"
+
+
+class FC27HumanDataReviewGate(BaseModel):
+    """Part G: Metadata-only human data-review block produced after Stages F1-F4."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    EAST_COASTERS_IDENTITY_MATCH: Literal["YES", "NO", "NOT_RUN"]
+    CLUB_STATISTICS_FIELDS: Tuple[str, ...] = ()
+    RECENT_MATCH_COUNT: Optional[int] = None
+    MEMBER_RECORD_COUNT: Optional[int] = None
+    PLAYER_STAT_RECORD_COUNT: Optional[int] = None
+    EXTERNAL_IDENTIFIER_COUNT: Optional[int] = None
+    GAMER_TAG_FIELD_COUNT: Optional[int] = None
+    DISPLAY_ALIAS_FIELD_COUNT: Optional[int] = None
+    SENSITIVE_FIELD_PATH_COUNT: Optional[int] = None
+    SCHEMA_DRIFT_FIELD_COUNT: Optional[int] = None
+    RAW_RESPONSE_RETAINED: Literal["NO"] = "NO"
+    PERSISTENCE_APPLIED: Literal["NO"] = "NO"
+    RECOMMENDATIONS_GENERATED: Literal[0] = 0
+    DISPATCH_EXECUTED: Literal["NO"] = "NO"
+
+
+def run_east_coasters_acquisition_stages(
+    transport_fn: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    *,
+    attestation: FC27ApiAuthorityAttestation = EAST_COASTERS_API_AUTHORITY_ATTESTATION,
+    breaker: Optional[FC27CircuitBreaker] = None,
+) -> Dict[str, Any]:
+    """Part F: Executes Stages F1 -> F2 -> F3 -> F4 sequentially with strict budgets and stop conditions."""
+    active_breaker = breaker if breaker is not None else FC27CircuitBreaker()
+    stage_results: Dict[str, FC27StageEvaluationResult] = {}
+    counts = {
+        "club_identity_requests": 0,
+        "club_statistics_requests": 0,
+        "recent_match_requests": 0,
+        "member_player_preview_requests": 0,
+        "total_ea_requests": 0,
+        "total_retries": 0,
+        "redirects_followed": 0,
+    }
+
+    def _exec_stage(op: FC27ApiIngestionOperation, budget_key: str) -> FC27StageEvaluationResult:
+        req = build_east_coasters_api_request(op, attestation=attestation)
+        raw_resp = transport_fn(req)
+        counts[budget_key] += 1
+        counts["total_ea_requests"] += 1
+        if int(raw_resp.get("status_code", 0)) == 0 and raw_resp.get("transport_error"):
+            active_breaker.open(f"TRANSPORT_ERROR_{raw_resp['transport_error']}")
+            log_entry = FC27MetadataOnlyTransportLog(
+                operation=op.value,
+                request_url=req["url"],
+                http_status=0,
+                content_type="",
+                response_size_bytes=0,
+                payload_sha256=hashlib.sha256(b"").hexdigest(),
+                redirect_count=0,
+                outcome_status=f"TRANSPORT_ERROR_{raw_resp['transport_error']}",
+                sanitization_state="SKIPPED",
+                circuit_breaker_state=active_breaker.state,
+            )
+            return FC27StageEvaluationResult(
+                operation=op.value,
+                ok=False,
+                outcome_status=f"TRANSPORT_ERROR_{raw_resp['transport_error']}",
+                http_status=0,
+                content_type="",
+                response_size_bytes=0,
+                payload_sha256=hashlib.sha256(b"").hexdigest(),
+                circuit_breaker_state=active_breaker.state,
+                circuit_breaker_reason=active_breaker.open_reason,
+                metadata_log=log_entry,
+            )
+        return evaluate_api_operation_response(
+            op,
+            raw_bytes=bytes(raw_resp.get("raw_bytes", b"")),
+            status_code=int(raw_resp.get("status_code", 200)),
+            content_type=str(raw_resp.get("content_type", "")),
+            redirect_count=int(raw_resp.get("redirect_count", 0)),
+            location_header=str(raw_resp.get("location_header", "")),
+            attempt_count=int(raw_resp.get("attempt_count", 1)),
+            retries=int(raw_resp.get("retries", 0)),
+            breaker=active_breaker,
+            attestation=attestation,
+        )
+
+    # Stage F1: Club Identity (max 1 request)
+    f1 = _exec_stage(FC27ApiIngestionOperation.CLUB_IDENTITY, "club_identity_requests")
+    stage_results["F1_CLUB_IDENTITY"] = f1
+    if not f1.ok or active_breaker.is_open():
+        exception_assessment = FC27Stage4BrowserProfileExceptionAssessment(
+            ordinary_http_failure_reason=f"Stage F1 failed under standard HTTP with {f1.outcome_status} (HTTP {f1.http_status})"
+        )
+        gate = FC27HumanDataReviewGate(EAST_COASTERS_IDENTITY_MATCH="NO" if f1.outcome_status == "IDENTITY_MISMATCH" else "NOT_RUN")
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F1_CLUB_IDENTITY",
+            "stop_reason": f1.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": gate,
+            "stage4_exception_assessment": exception_assessment,
+        }
+
+    # Stage F2: Aggregate Club Statistics (max 1 request)
+    f2 = _exec_stage(FC27ApiIngestionOperation.CLUB_STATISTICS, "club_statistics_requests")
+    stage_results["F2_CLUB_STATISTICS"] = f2
+    if not f2.ok or active_breaker.is_open():
+        gate = FC27HumanDataReviewGate(EAST_COASTERS_IDENTITY_MATCH="YES")
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F2_CLUB_STATISTICS",
+            "stop_reason": f2.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": gate,
+            "stage4_exception_assessment": None,
+        }
+
+    # Stage F3: Recent Match Summaries (max 1 request)
+    f3 = _exec_stage(FC27ApiIngestionOperation.RECENT_MATCHES, "recent_match_requests")
+    stage_results["F3_RECENT_MATCHES"] = f3
+    if not f3.ok or active_breaker.is_open():
+        stat_fields = tuple(sorted((f2.sanitized_data or {}).keys()))
+        gate = FC27HumanDataReviewGate(
+            EAST_COASTERS_IDENTITY_MATCH="YES",
+            CLUB_STATISTICS_FIELDS=stat_fields,
+        )
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F3_RECENT_MATCHES",
+            "stop_reason": f3.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": gate,
+            "stage4_exception_assessment": None,
+        }
+
+    # Stage F4: Player & Member Privacy Preview (max 3 requests: match player stats, current members, career stats)
+    f4_match_players = _exec_stage(FC27ApiIngestionOperation.MATCH_PLAYER_STATISTICS, "member_player_preview_requests")
+    stage_results["F4_MATCH_PLAYER_STATISTICS"] = f4_match_players
+    if not f4_match_players.ok or active_breaker.is_open():
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F4_MATCH_PLAYER_STATISTICS",
+            "stop_reason": f4_match_players.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": FC27HumanDataReviewGate(EAST_COASTERS_IDENTITY_MATCH="YES"),
+            "stage4_exception_assessment": None,
+        }
+
+    f4_members = _exec_stage(FC27ApiIngestionOperation.CURRENT_MEMBER_STATISTICS, "member_player_preview_requests")
+    stage_results["F4_CURRENT_MEMBER_STATISTICS"] = f4_members
+    if not f4_members.ok or active_breaker.is_open():
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F4_CURRENT_MEMBER_STATISTICS",
+            "stop_reason": f4_members.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": FC27HumanDataReviewGate(EAST_COASTERS_IDENTITY_MATCH="YES"),
+            "stage4_exception_assessment": None,
+        }
+
+    f4_career = _exec_stage(FC27ApiIngestionOperation.MEMBER_CAREER_STATISTICS, "member_player_preview_requests")
+    stage_results["F4_MEMBER_CAREER_STATISTICS"] = f4_career
+    if not f4_career.ok or active_breaker.is_open():
+        return {
+            "completed_all_stages": False,
+            "stopped_at_stage": "F4_MEMBER_CAREER_STATISTICS",
+            "stop_reason": f4_career.outcome_status,
+            "stage_results": stage_results,
+            "request_counts": counts,
+            "review_gate": FC27HumanDataReviewGate(EAST_COASTERS_IDENTITY_MATCH="YES"),
+            "stage4_exception_assessment": None,
+        }
+
+    p_match = f4_match_players.sanitized_data or {}
+    p_mem = f4_members.sanitized_data or {}
+    p_car = f4_career.sanitized_data or {}
+
+    all_sens = set(f1.sensitive_field_paths) | set(f2.sensitive_field_paths) | set(f3.sensitive_field_paths) | set(f4_match_players.sensitive_field_paths) | set(f4_members.sensitive_field_paths) | set(f4_career.sensitive_field_paths)
+    all_drift = set(f1.schema_drift_paths) | set(f2.schema_drift_paths) | set(f3.schema_drift_paths) | set(f4_match_players.schema_drift_paths) | set(f4_members.schema_drift_paths) | set(f4_career.schema_drift_paths)
+
+    stat_fields = tuple(sorted(k for k in (f2.sanitized_data or {}) if k != "provenance"))
+    recent_match_count = int((f3.sanitized_data or {}).get("recent_match_count", 0))
+    member_count = int(p_mem.get("member_record_count", 0))
+    player_stat_count = int(p_match.get("player_stat_record_count", 0))
+    ext_id_count = (
+        int(p_match.get("external_identifier_count", 0))
+        + int(p_mem.get("external_identifier_count", 0))
+        + int(p_car.get("external_identifier_count", 0))
+    )
+    gtag_count = (
+        int(p_match.get("gamer_tag_field_count", 0))
+        + int(p_mem.get("gamer_tag_field_count", 0))
+        + int(p_car.get("gamer_tag_field_count", 0))
+    )
+    alias_count = (
+        int(p_match.get("display_alias_field_count", 0))
+        + int(p_mem.get("display_alias_field_count", 0))
+        + int(p_car.get("display_alias_field_count", 0))
+    )
+
+    gate = FC27HumanDataReviewGate(
+        EAST_COASTERS_IDENTITY_MATCH="YES",
+        CLUB_STATISTICS_FIELDS=stat_fields,
+        RECENT_MATCH_COUNT=recent_match_count,
+        MEMBER_RECORD_COUNT=member_count,
+        PLAYER_STAT_RECORD_COUNT=player_stat_count,
+        EXTERNAL_IDENTIFIER_COUNT=ext_id_count,
+        GAMER_TAG_FIELD_COUNT=gtag_count,
+        DISPLAY_ALIAS_FIELD_COUNT=alias_count,
+        SENSITIVE_FIELD_PATH_COUNT=len(all_sens),
+        SCHEMA_DRIFT_FIELD_COUNT=len(all_drift),
+        RAW_RESPONSE_RETAINED="NO",
+        PERSISTENCE_APPLIED="NO",
+        RECOMMENDATIONS_GENERATED=0,
+        DISPATCH_EXECUTED="NO",
+    )
+
+    return {
+        "completed_all_stages": True,
+        "stopped_at_stage": None,
+        "stop_reason": None,
+        "stage_results": stage_results,
+        "request_counts": counts,
+        "review_gate": gate,
+        "stage4_exception_assessment": None,
+    }
+
+
+def normalize_api_capture_to_export_envelope(
+    *,
+    export_id: str,
+    sanitized_matches_data: Mapping[str, Any],
+    attestation: FC27ApiAuthorityAttestation = EAST_COASTERS_API_AUTHORITY_ATTESTATION,
+    store_display_aliases: bool = False,
+    store_external_player_identifiers: bool = False,
+    raw_response_retention: bool = False,
+    generated_at: Optional[datetime] = None,
+    supplied_at: Optional[datetime] = None,
+) -> Any:
+    """Part H: Normalizes sanitized East Coasters API match data into an immutable FC27UserExportEnvelope."""
+    from src.fc27_user_export import (
+        FC27ConsentAttestation,
+        FC27SuppliedClubIdentity,
+        FC27SuppliedMatch,
+        FC27SupplierAttestation,
+        FC27UserExportEnvelope,
+        compute_payload_sha256,
+    )
+
+    if store_external_player_identifiers:
+        raise FC27ProviderError("STORE_EXTERNAL_PLAYER_IDENTIFIERS=YES is strictly prohibited")
+    if raw_response_retention:
+        raise FC27ProviderError("RAW_RESPONSE_RETENTION=YES is strictly prohibited")
+    if store_display_aliases:
+        raise FC27ProviderError("STORE_DISPLAY_ALIASES=YES is prohibited by default privacy policy")
+
+    gen_dt = (generated_at or datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)).astimezone(timezone.utc)
+    sup_dt = (supplied_at or datetime(2026, 10, 28, 12, 5, 0, tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+    raw_match_entries = sanitized_matches_data.get("matches", [])
+    matches: List[FC27SuppliedMatch] = []
+    has_player_rows = False
+    for entry in raw_match_entries:
+        sm = entry.get("supplied_match") if isinstance(entry, Mapping) else None
+        if isinstance(sm, Mapping):
+            m_obj = FC27SuppliedMatch.model_validate(sm)
+            # Enforce display_alias=None
+            clean_perfs = [p.model_copy(update={"display_alias": None}) for p in m_obj.player_performances]
+            if clean_perfs:
+                has_player_rows = True
+            matches.append(m_obj.model_copy(update={"player_performances": clean_perfs}))
+
+    if has_player_rows and not attestation.can_persist_member_or_player_data():
+        raise FC27ProviderError(
+            "Member/player performance persistence requires attestation review_status='APPROVED'"
+        )
+
+    envelope_dict = {
+        "export_id": export_id,
+        "contract_version": "1.0.0",
+        "schema_version": "1.0.0",
+        "generated_at": gen_dt,
+        "supplied_at": sup_dt,
+        "provider": PROVIDER_NAME,
+        "game_version": "FC27",
+        "platform": "common-gen5",
+        "club": FC27SuppliedClubIdentity(
+            club_id=EAST_COASTERS_CLUB_ID,
+            club_name=EAST_COASTERS_CLUB_NAME,
+            platform="common-gen5",
+            game_version="FC27",
+            supplied_identity_state=ClubIdentityState.PROVISIONAL,
+            source_reference=attestation.attestation_reference,
+        ),
+        "supplier_attestation": FC27SupplierAttestation(
+            supplier_role="CLUB_MANAGER",
+            supplier_reference=attestation.attestation_reference,
+            attested_at=gen_dt,
+            authority_scope=["CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"],
+            statement_version="1.0.0",
+        ),
+        "consent_attestation": FC27ConsentAttestation(
+            consent_version="1.0.0",
+            consented_at=gen_dt,
+            data_categories=["CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"],
+            retention_acknowledged=True,
+            analytics_use_acknowledged=True,
+            team_review_acknowledged=True,
+        ),
+        "matches": matches,
+        "source_classification": "USER_SUPPLIED_EXPORT",
+    }
+    temp_for_hash = {
+        **envelope_dict,
+        "club": envelope_dict["club"].model_dump(),
+        "supplier_attestation": envelope_dict["supplier_attestation"].model_dump(),
+        "consent_attestation": envelope_dict["consent_attestation"].model_dump(),
+        "matches": [m.model_dump() for m in matches],
+        "payload_sha256": "0" * 64,
+    }
+    digest = compute_payload_sha256(temp_for_hash)
+    return FC27UserExportEnvelope(**envelope_dict, payload_sha256=digest)
+
+
+def persist_authorized_east_coasters_capture(
+    conn_or_uri: Any,
+    *,
+    export_id: str,
+    sanitized_matches_data: Mapping[str, Any],
+    attestation: FC27ApiAuthorityAttestation,
+    authorize_persistence: bool = False,
+    store_display_aliases: bool = False,
+    store_external_player_identifiers: bool = False,
+    raw_response_retention: bool = False,
+    enforce_posture: bool = True,
+) -> Any:
+    """Part H: Persists normalized East Coasters API capture records in one reviewed PostgreSQL transaction."""
+    from src.fc27_repository import apply_export_plan
+
+    if not authorize_persistence:
+        raise FC27ProviderError("AUTHORIZE_NORMALIZED_EAST_COASTERS_PERSISTENCE=YES is required before persistence")
+    if attestation.review_status != "APPROVED":
+        raise FC27ProviderError("ATTESTATION_REVIEW_STATUS=APPROVED is required before persistence")
+    if not is_fc27_provider_enabled():
+        raise FC27ProviderError("FC27_PROVIDER_ENABLED=true is required for API capture persistence")
+    if not is_fc27_standard_http_transport_enabled():
+        raise FC27ProviderError("FC27_STANDARD_HTTP_TRANSPORT_ENABLED=true is required for API capture persistence")
+    if not is_fc27_persistence_enabled():
+        raise FC27ProviderError("FC27_PERSISTENCE_ENABLED=true is required for API capture persistence")
+    if is_fc27_live_ingestion_enabled():
+        raise FC27ProviderError("FC27_LIVE_INGESTION_ENABLED must remain false (continuous polling prohibited)")
+    if is_fc27_recommendations_enabled():
+        raise FC27ProviderError("FC27_RECOMMENDATIONS_ENABLED must remain false")
+    if is_dispatch_enabled():
+        raise FC27ProviderError("DISPATCH_ENABLED must remain false")
+
+    envelope = normalize_api_capture_to_export_envelope(
+        export_id=export_id,
+        sanitized_matches_data=sanitized_matches_data,
+        attestation=attestation,
+        store_display_aliases=store_display_aliases,
+        store_external_player_identifiers=store_external_player_identifiers,
+        raw_response_retention=raw_response_retention,
+    )
+    return apply_export_plan(
+        conn_or_uri,
+        envelope=envelope,
+        actor="api_ingestion_gate",
+        enforce_posture=enforce_posture,
+        quarantine_conflicts=True,
+        source_classification_override="AUTHORIZED_CAPTURE",
+    )
+
+
+def validate_east_coasters_read_only_analytics(
+    conn_or_uri: Any,
+    *,
+    reference_now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Part I: Runs read-only analytics validation on persisted East Coasters data."""
+    from src.fc27_dashboard_queries import (
+        AnalyticsWindowSpec,
+        build_club_analytics_snapshot,
+        fetch_club_matches_window,
+        fetch_data_quality_summary,
+    )
+
+    if not is_fc27_analytics_enabled():
+        raise FC27ProviderError("FC27_ANALYTICS_ENABLED=true is required during analytics validation")
+    if is_fc27_recommendations_enabled():
+        raise FC27ProviderError("FC27_RECOMMENDATIONS_ENABLED must remain false during analytics validation")
+    if is_dispatch_enabled():
+        raise FC27ProviderError("DISPATCH_ENABLED must remain false during analytics validation")
+
+    ref_now = reference_now or datetime.now(timezone.utc)
+    spec = AnalyticsWindowSpec(
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform=FC27Platform.COMMON_GEN5.value,
+        game_version="FC27",
+        last_n_matches=20,
+        include_aliases=False,
+        reference_now=ref_now,
+    )
+    spec_recent = AnalyticsWindowSpec(
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform=FC27Platform.COMMON_GEN5.value,
+        game_version="FC27",
+        recent_n_matches=5,
+        include_aliases=False,
+        reference_now=ref_now,
+    )
+    snapshot = build_club_analytics_snapshot(conn_or_uri, spec)
+    last_20_matches = fetch_club_matches_window(conn_or_uri, spec)
+    recent_5_matches = fetch_club_matches_window(conn_or_uri, spec_recent)
+    dq_summary = fetch_data_quality_summary(
+        conn_or_uri,
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform=FC27Platform.COMMON_GEN5.value,
+        game_version="FC27",
+    )
+
+    return {
+        "club_id": EAST_COASTERS_CLUB_ID,
+        "platform": FC27Platform.COMMON_GEN5.value,
+        "game_version": "FC27",
+        "eligible_matches": snapshot.window.eligible_record_count,
+        "last_20_count": len(last_20_matches.matches),
+        "recent_5_count": len(recent_5_matches.matches),
+        "confidence_tier": snapshot.confidence_tier,
+        "formula_version": snapshot.formula_version,
+        "team_diagnostics": dict(snapshot.club_summary),
+        "formation_splits": dict(snapshot.formation_summary),
+        "data_quality_summary": dq_summary.model_dump(),
+        "analytics_writes": 0,
+        "analytics_events": 0,
+        "analytics_outbox_writes": 0,
+        "recommendations_generated": 0,
+        "dispatch_executed": False,
     }

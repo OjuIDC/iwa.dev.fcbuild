@@ -91,6 +91,11 @@ def is_fc27_upstream_compatibility_enabled() -> bool:
     return safe_env_bool("FC27_UPSTREAM_COMPATIBILITY_ENABLED", default=False)
 
 
+def is_fc27_standard_http_transport_enabled() -> bool:
+    """Check if FC 27 standards-compliant HTTP transport is enabled (default: False)."""
+    return safe_env_bool("FC27_STANDARD_HTTP_TRANSPORT_ENABLED", default=False)
+
+
 def is_fc27_live_ingestion_enabled() -> bool:
     """Check if FC 27 live ingestion is enabled (default: False)."""
     return safe_env_bool("FC27_LIVE_INGESTION_ENABLED", default=False)

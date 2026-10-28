@@ -547,3 +547,50 @@ Defense-in-depth enforcement is also applied in:
 - **Metadata-Only Tracing (`emit_pre_approval_validation_trace`)**: Emits `preapproval.validation.passed`, `preapproval.validation.failed`, or `preapproval.validation.review_required` via the existing tracer abstraction with safe metadata only (`thread_id`, `club_id`, `package_version`, `policy_version`, `package_count`, `reason_codes`, `confidence_tier`, `formula_version`, `timestamp`). Never emits player aliases, raw payloads, candidate bodies, prompts, or connection strings.
 - **Database & `PostgresSaver` Non-Modification**: No database migration is added in this phase (`migrations/0001` through `0012` are unchanged), `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched, and `GRAPH_THREAD_DB_CONSTRAINT` remains `DEFERRED`.
 - **Rollback Procedure**: Revert the pure code changes in `src/schemas.py`, `src/lead_packages.py`, `src/graph.py`, `src/approval_store.py`, and `tests/test_fc27_preapproval_validator.py`; no database schema rollback is required.
+
+---
+
+## 18. East Coasters FC 27 API Acquisition, Transport Policy, and Stage 4 Exception Gate
+
+### 18.1 Operator Club-Authority & Member-Consent Attestation (`src/fc27_clubs.py`)
+- **Attestation Record (`EAST_COASTERS_API_AUTHORITY_ATTESTATION`)**:
+  - `attestation_reference = "api-east-coasters-authority-2026-10"`
+  - `club_id = "330323"`, `club_name = "East Coasters"`, `platform = "common-gen5"`, `game_version = "FC27"`
+  - `authority_status = "USER_ATTESTED"`, `member_consent_status = "USER_ATTESTED"`, `captain_consent_status = "USER_ATTESTED"`
+  - `review_status = "PENDING_HUMAN_REVIEW"`, `manager_authority_database_status = "UNVERIFIED"`
+- **Boundary Rule**: `USER_ATTESTED` authorizes bounded technical acquisition and normalization preview for East Coasters (`330323`) only. It does **not** set `manager_authority_status = 'VERIFIED'` in `public.fc27_clubs`, and member/player performance rows cannot be persisted unless `review_status == 'APPROVED'` and `AUTHORIZE_NORMALIZED_EAST_COASTERS_PERSISTENCE=YES`.
+
+### 18.2 Upstream Client Provenance & Transport Classification
+Both community repositories are third-party client implementations for EA's underlying `https://proclubs.ea.com/api/fc/...` endpoints, not independent data providers:
+1. **Python Reference (`https://github.com/1erkandogan/fc27-clubs-api`)**:
+   - Pinned Commit: `26a5ff12ea793042bd776a858c74f3f44dd427f5` (`0.3.1`, `MIT`).
+   - Transport Note: Upstream `src/fc_clubs_api/_http.py` sends spoofed Chrome 141 headers (`User-Agent: Mozilla/5.0 ... Chrome/141.0.0.0`, `sec-ch-ua`, `sec-fetch-site: same-origin`, `Referer: https://www.ea.com/`). Only pure normalization and event-decoding logic are adapted in `src/fc27_clubs.py`; upstream HTTP headers are excluded.
+2. **TypeScript/Node Reference (`https://github.com/alex-jordan547/proclubs-sdk`)**:
+   - Pinned Commit: `57ede368098dbb524cbf16a7577fea3e1911e328` (`0.3.3`, `MIT`).
+   - Transport Note: Upstream `src/transport/impitTransport.ts` uses `impit` (`new Impit({ browser: 'chrome' })`) for Rust-level Chrome TLS/HTTP2 fingerprint impersonation alongside Chrome headers. `impit` and browser-profile headers are prohibited in standard repository code.
+
+### 18.3 Standards-Compliant 6-Operation Transport Policy
+- **Feature Gate**: `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false` by default (`is_fc27_standard_http_transport_enabled()` in `src/settings.py`).
+- **Headers**: Only `Accept: application/json` and `User-Agent: iwa.dev.fcbuild/0.1` (`STANDARD_APPLICATION_USER_AGENT`). Browser `Mozilla/5.0`, `Chrome/*`, `sec-ch-ua*`, `Sec-Fetch-*`, `Origin`, `Referer`, and `Cookie` headers are rejected before socket creation.
+- **Operations (`FC27_API_INGESTION_POLICIES`)**:
+  - `CLUB_IDENTITY`: `/api/fc/clubs/info` (`platform=common-gen5`, `clubIds=330323`, max `65,536` bytes)
+  - `CLUB_STATISTICS`: `/api/fc/clubs/overallStats` (`platform=common-gen5`, `clubIds=330323`, max `65,536` bytes)
+  - `RECENT_MATCHES`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch`, `maxResultCount=1..10`, max `262,144` bytes)
+  - `MATCH_PLAYER_STATISTICS`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch`, `maxResultCount=1..5`, max `262,144` bytes)
+  - `CURRENT_MEMBER_STATISTICS`: `/api/fc/members/stats` (`platform=common-gen5`, `clubId=330323`, max `131,072` bytes)
+  - `MEMBER_CAREER_STATISTICS`: `/api/fc/members/career/stats` (`platform=common-gen5`, `clubId=330323`, max `131,072` bytes)
+- **Safety Invariants**: `https` only, exact host `proclubs.ea.com` (default port `443`), `GET` only, `timeout_seconds = 10`, `max_attempts = 1`, `retries = 0`, `follow_redirects = False`. Any `401`, `403`, `429`, redirect (`301`/`302`/`303`/`307`/`308`), HTML challenge, or CAPTCHA immediately opens `FC27CircuitBreaker` and halts subsequent stages.
+
+### 18.4 Empirical Stage F1 Execution & Stage 4 Browser-Profile Exception Gate
+- **Stage F1 (`CLUB_IDENTITY`) Execution**:
+  - Executed `1` bounded `STANDARD_PYTHON_HTTPS` `GET` request to `https://proclubs.ea.com/api/fc/clubs/info?platform=common-gen5&clubIds=330323` with `Accept: application/json` and `User-Agent: iwa.dev.fcbuild/0.1`.
+  - Result: `HTTP 403 Forbidden` (`content_type="text/html"`, `response_size_bytes=403`, `outcome_status="HTTP_403_FORBIDDEN"`).
+  - Circuit Breaker: Immediately transitioned to `OPEN` (`circuit_breaker_reason="HTTP_403"`).
+  - Subsequent Stages (`F2_CLUB_STATISTICS`, `F3_RECENT_MATCHES`, `F4_MEMBER_AND_PLAYER_PREVIEW`): Halted with `0` requests executed, `0` retries, `0` redirects followed, and `0` raw response bytes retained.
+- **Stage 4 Exception Gate (`FC27Stage4BrowserProfileExceptionAssessment`)**:
+  - `STANDARD_HTTP_WORKED = NO`
+  - `BROWSER_PROFILE_EXCEPTION_REQUIRED = YES`
+  - `BROWSER_PROFILE_EXCEPTION_EXECUTED = NO`
+  - Executing browser headers or TLS impersonation (`impit` / `curl_cffi`) remains prohibited without a separate explicit operator exception decision, isolated Docker egress containment (`proclubs.ea.com:443` only), and legal/ToS sign-off.
+- **Normalized API Capture Persistence & Analytics Readiness**:
+  - `normalize_api_capture_to_export_envelope`, `persist_authorized_east_coasters_capture` (`source_classification='AUTHORIZED_CAPTURE'`, pseudonymous `plr_ecf_<hash12>` player keys, `display_alias=NULL`), and `validate_east_coasters_read_only_analytics` are implemented and verified in `tests/test_fc27_api_ingestion.py` using deterministic fixtures against PostgreSQL 16. No live EA data was persisted in this phase (`PERSISTENCE_APPLIED=NO`).
