@@ -22,3 +22,4 @@ tests/test_*_secret*
 # Local compose overrides
 docker-compose.override.yml
 docker-compose.local.yml
+.local-artifacts/

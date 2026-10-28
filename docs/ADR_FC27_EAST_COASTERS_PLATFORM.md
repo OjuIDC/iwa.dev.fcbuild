@@ -465,3 +465,33 @@ The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PI
 6. Readiness preview (`0-2`: `INSUFFICIENT_DATA`, `3-9`: `EXPLORATORY`, `10-19`: `PROVISIONAL_TRENDS`, `20+`: `HIGH_SAMPLE_READINESS`)
 7. No `--apply`
 8. No recommendations
+
+---
+
+## 15. PostgreSQL Performance Storage & Quarantine Foundation (Migration 0012)
+
+### 15.1 Authoritative Database Engine & Rejection of SQLite Proposal
+- **Authoritative Store**: PostgreSQL 16 (`psycopg` v3) is the sole relational store for FC 27 performance and quarantine persistence.
+- **SQLite Rejection**: External proposals to introduce SQLite containers, `sqlite3` drivers, `PRAGMA journal_mode=WAL`, or `INSERT OR IGNORE` semantics were formally **rejected** to preserve a single transactional persistence architecture with LangGraph `PostgresSaver`, `public.domain_events`, and `public.outbox`.
+
+### 15.2 Migration `0012` Tables (`migrations/0012_fc27_performance_and_quarantine.sql`)
+1. `public.fc27_clubs`: Composite primary key `(club_id, platform, game_version)`. Enforces `manager_authority_status = 'UNVERIFIED'` so club identity records can never self-grant manager authority.
+2. `public.fc27_export_batches`: Tracks applied export batch provenance (`export_id`, `contract_version`, `schema_version`, `supplier_role`, non-personal `supplier_reference`, `consent_version`, `consented_categories`, `payload_sha256`, and non-negative match counts where `accepted_matches + quarantined_matches <= total_matches`).
+3. `public.fc27_matches`: Stores normalized match outcomes with `UNIQUE (club_id, platform, game_version, external_match_id)`, score-result consistency checks, and 64-character lowercase `match_hash`.
+4. `public.fc27_player_match_stats`: Stores normalized per-player match metrics with `UNIQUE (match_id, local_player_reference)`, non-negative counts, `passes_completed <= passes_attempted`, `tackles_won <= tackles_attempted`, `shots_on_target <= shots`, `provider_rating` in `0.0..10.0`, pseudonymous `local_player_reference`, and optional `display_alias`.
+5. `public.fc27_quarantine_records`: Stores sanitized diagnostic metadata only (`anomaly_category` restricted to `VALIDATION_ANOMALY`, `SCHEMA_DRIFT`, `OUT_OF_RANGE_OBSERVATION`, `REPLAY_CONFLICT`, `INTEGRITY_MISMATCH`, `REVIEW_REQUIRED`, `SENSITIVE_FIELD_REJECTED`; `diagnostic_paths` restricted to field paths only; 30-day default retention window `expires_at`).
+
+### 15.3 Integrity Hash Semantics, Replay Conflicts, & Quarantine Retention
+- **Integrity & Change Detection Only**: Unkeyed SHA-256 digests (`payload_sha256`, `match_hash`) are classified strictly as `INTEGRITY_CHANGE_DETECTION` values. They do not authenticate the external source.
+- **Idempotency & Replay Conflict Blocking**:
+  - Re-applying an identical export or a match with an identical `(club_id, platform, game_version, external_match_id)` and `match_hash` is idempotent (`DUPLICATE_IGNORE`, emitting `fc27.export.duplicate_ignored`).
+  - Re-importing an existing `external_match_id` with a modified `match_hash` is classified as `REPLAY_CONFLICT`, blocks the entire batch apply transactionally, and records sanitized quarantine metadata (`fc27.match.quarantined`).
+- **Narrowly Authorized Retention Purge**: `fc27_app` has no `DELETE` privilege on `public.fc27_quarantine_records`. Expired records (`expires_at <= now()`) are purged exclusively through the `fc27_owner` `SECURITY DEFINER` function `public.fc27_purge_expired_quarantine(timestamptz)`, emitting `fc27.quarantine.expired`.
+
+### 15.4 Grants Policy Version 14, Feature Gate, & Deferred Phases
+- **Grants Policy Version 14**: `migrations/post/grants.sql` grants least-privilege `SELECT`/`INSERT`/column-scoped `UPDATE` to `fc27_app` and zero FC 27 persistence privileges to `fc27_dispatch` and `fc27_relay`. `PostgresSaver` internal tables remain untouched.
+- **Default-Disabled Feature Flag**: `FC27_PERSISTENCE_ENABLED=false` (`is_fc27_persistence_enabled()` in `src/settings.py`). When disabled, `--apply --confirm-apply` returns `IMPORT_STATUS: DEFERRED` (exit code `1`) and performs zero database writes.
+- **Deferred Phases**:
+  - Read-only dashboard and rolling-window analytics queries are deferred to the next phase.
+  - Pre-approval tactics validation and `graph_threads` pre-approval DB constraints remain deferred (`GRAPH_THREAD_DB_CONSTRAINT=DEFERRED`).
+  - Live EA polling, recommendations, dispatch, Langfuse egress, and Discord alert relays remain disabled.

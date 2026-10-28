@@ -250,3 +250,24 @@ def test_fc27_decision_evidence_immutability(pg_uri):
         with pytest.raises(psycopg.errors.CheckViolation, match="decision evidence is already consumed"):
             conn.execute("UPDATE public.fc27_decision_evidence SET consumed_at = NULL WHERE evidence_id = %s", (ev_id,))
 
+
+def test_fc27_performance_storage_least_privilege(pg_db_migrated):
+    """Verifies Grants Policy Version 14 least-privilege separation for Migration 0012 tables."""
+    assert GRANTS_POLICY.version == 14
+    with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
+        for tbl in (
+            "fc27_clubs",
+            "fc27_export_batches",
+            "fc27_matches",
+            "fc27_player_match_stats",
+            "fc27_quarantine_records",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                app_conn.execute(f"DELETE FROM public.{tbl}")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                app_conn.execute(f"TRUNCATE TABLE public.{tbl}")
+
+    with psycopg.connect(pg_db_migrated.dispatch, autocommit=True) as disp_conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            disp_conn.execute("SELECT count(*) FROM public.fc27_matches")
+

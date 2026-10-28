@@ -106,6 +106,17 @@ def is_fc27_provider_dry_run() -> bool:
     return safe_env_bool("FC27_PROVIDER_DRY_RUN", default=True)
 
 
+def is_fc27_persistence_enabled() -> bool:
+    """Check if FC 27 PostgreSQL performance persistence is enabled (default: False).
+
+    Rules:
+    - Missing or malformed values fail closed to False.
+    - Enabling persistence does NOT enable networking, live ingestion, recommendations,
+      dispatch, or raw payload retention, and does NOT bypass confirm_apply.
+    """
+    return safe_env_bool("FC27_PERSISTENCE_ENABLED", default=False)
+
+
 def is_dispatch_enabled() -> bool:
     """Check if dispatch is enabled (default: False)."""
     return safe_env_bool("DISPATCH_ENABLED", default=False)

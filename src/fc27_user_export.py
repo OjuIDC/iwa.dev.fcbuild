@@ -1037,6 +1037,8 @@ class FC27PersistenceResult(BaseModel):
 
     status: Literal["APPLIED", "DRY_RUN", "DEFERRED", "REJECTED"]
     applied_count: int = 0
+    duplicate_count: int = 0
+    quarantined_count: int = 0
     audit_record_id: str | None = None
     detail: str
 
@@ -1044,18 +1046,25 @@ class FC27PersistenceResult(BaseModel):
 def apply_fc27_user_export_plan(
     plan: FC27UserExportImportPlan,
     *,
+    envelope: FC27UserExportEnvelope | None = None,
     dry_run: bool = True,
     confirm_apply: bool = False,
     db_conn: Any | None = None,
+    actor: str = "operator_cli",
+    correlation_id: Any | None = None,
 ) -> FC27PersistenceResult:
     """Applies a validated import plan transactionally or cleanly defers.
 
     Rules:
     - dry-run is safe default.
     - apply requires explicit confirm_apply=True.
-    - if persistence abstractions are not available, reports DEFERRED cleanly.
+    - if FC27_PERSISTENCE_ENABLED is false, reports DEFERRED cleanly.
+    - if FC27_PERSISTENCE_ENABLED is true, requires a PostgreSQL connection and validated envelope.
     - raw payload is never stored.
     """
+    from src import settings
+    from src.db_roles import redact_conninfo
+
     if dry_run or not confirm_apply:
         return FC27PersistenceResult(
             status="DRY_RUN",
@@ -1063,19 +1072,118 @@ def apply_fc27_user_export_plan(
             detail="Dry-run completed successfully; zero writes performed.",
         )
 
+    persistence_enabled = settings.is_fc27_persistence_enabled()
+
     if not plan.can_apply:
+        if (
+            persistence_enabled
+            and db_conn is not None
+            and envelope is not None
+            and plan.conflicting_match_ids
+            and plan.club_identity_decision != ClubIdentityState.CONFLICTED
+        ):
+            from src.fc27_repository import FC27RepositoryError, apply_export_plan
+
+            try:
+                repo_res = apply_export_plan(
+                    db_conn,
+                    envelope=envelope,
+                    plan=plan,
+                    actor=actor,
+                    correlation_id=correlation_id,
+                )
+                return FC27PersistenceResult(
+                    status="REJECTED",
+                    applied_count=0,
+                    duplicate_count=repo_res.duplicate_records,
+                    quarantined_count=repo_res.quarantined_records,
+                    audit_record_id=(
+                        str(repo_res.domain_event_ids[0])
+                        if repo_res.domain_event_ids
+                        else repo_res.correlation_id
+                    ),
+                    detail=repo_res.detail,
+                )
+            except FC27RepositoryError as exc:
+                return FC27PersistenceResult(
+                    status="REJECTED",
+                    applied_count=0,
+                    detail=f"Plan rejected and quarantine persistence failed: {redact_conninfo(str(exc))}",
+                )
+
         return FC27PersistenceResult(
             status="REJECTED",
             applied_count=0,
+            quarantined_count=len(plan.conflicting_match_ids),
             detail="Plan cannot be applied due to identity conflicts or quarantined matches.",
         )
 
-    # In the current phase, persistent database tables for FC 27 club matches
-    # are deferred to prevent creating non-standard database structures.
+    if not persistence_enabled:
+        return FC27PersistenceResult(
+            status="DEFERRED",
+            applied_count=0,
+            detail="Persistence deferred: FC27_PERSISTENCE_ENABLED is false.",
+        )
+
+    conn_target = db_conn
+    if conn_target is None:
+        try:
+            conn_target = settings.read_secret("POSTGRES_URI", required=False)
+        except settings.ConfigError as exc:
+            return FC27PersistenceResult(
+                status="REJECTED",
+                applied_count=0,
+                detail=f"PostgreSQL configuration error: {redact_conninfo(str(exc))}",
+            )
+
+    if not conn_target:
+        return FC27PersistenceResult(
+            status="REJECTED",
+            applied_count=0,
+            detail="PostgreSQL connection configuration (POSTGRES_URI) is required when FC27_PERSISTENCE_ENABLED=true.",
+        )
+
+    if envelope is None:
+        return FC27PersistenceResult(
+            status="REJECTED",
+            applied_count=0,
+            detail="Validated FC27UserExportEnvelope is required for transactional PostgreSQL persistence.",
+        )
+
+    from src.fc27_repository import FC27RepositoryError, apply_export_plan
+
+    try:
+        repo_res = apply_export_plan(
+            conn_target,
+            envelope=envelope,
+            plan=plan,
+            actor=actor,
+            correlation_id=correlation_id,
+        )
+    except FC27RepositoryError as exc:
+        return FC27PersistenceResult(
+            status="REJECTED",
+            applied_count=0,
+            detail=f"Repository error: {redact_conninfo(str(exc))}",
+        )
+    except Exception as exc:
+        return FC27PersistenceResult(
+            status="REJECTED",
+            applied_count=0,
+            detail=f"Unexpected persistence error: {redact_conninfo(type(exc).__name__)}",
+        )
+
     return FC27PersistenceResult(
-        status="DEFERRED",
-        applied_count=0,
-        detail="Persistence deferred: relational storage schema for FC 27 user exports is planned for dedicated migration phase.",
+        status=repo_res.status,
+        applied_count=repo_res.accepted_records,
+        duplicate_count=repo_res.duplicate_records,
+        quarantined_count=repo_res.quarantined_records,
+        audit_record_id=(
+            str(repo_res.domain_event_ids[0])
+            if repo_res.domain_event_ids
+            else repo_res.correlation_id
+        ),
+        detail=repo_res.detail,
     )
 
 

@@ -114,6 +114,114 @@ Migrations in v2.1 are strictly forward-moving. To roll back, stop the stack, re
 
 ---
 
+## Migration 0012: FC 27 PostgreSQL Performance Storage & Quarantine Foundation
+
+### 1. Authoritative Database Engine & SQLite Rejection
+- **Authoritative Engine**: **PostgreSQL 16** (`psycopg` v3, role-separated via `fc27_owner`, `fc27_migrator`, `fc27_app`, `fc27_dispatch`, `fc27_relay`).
+- **SQLite Proposal Rejected**: Proposed SQLite database containers, `sqlite3` runtime drivers, `PRAGMA journal_mode=WAL`, and `INSERT OR IGNORE` syntax were formally **rejected** because PostgreSQL 16 is the single authoritative relational store across the platform (`src/db_migrate.py`, `src/approval_store.py`, `src/identity/store.py`, and LangGraph `PostgresSaver`). Concurrency and atomicity are enforced through PostgreSQL MVCC transactions, transaction-scoped advisory locks (`pg_advisory_xact_lock`), and relational `UNIQUE`/`CHECK`/`FOREIGN KEY` constraints.
+
+### 2. Schema Mapping (`src/fc27_user_export.py`, `src/schemas.py`, `src/fc27_clubs.py` -> Migration `0012`)
+
+| Source Model | Source Field | Database Table | Database Column | Nullable | Validation Rule | Sensitive-Data Classification | Indexing Rationale |
+|---|---|---|---|---|---|---|---|
+| `FC27SuppliedClubIdentity` / `ClubIdentityRecord` | `club_id` | `public.fc27_clubs` | `club_id` | `NOT NULL` | `^[0-9]{1,20}$` | Non-personal public club ID | Composite PK `(club_id, platform, game_version)` |
+| `FC27SuppliedClubIdentity` / `FC27ClubQuery` | `platform` | `public.fc27_clubs` | `platform` | `NOT NULL` | `IN ('common-gen5', 'nx')` | Non-personal platform enum | Composite PK `(club_id, platform, game_version)` |
+| `FC27UserExportEnvelope` | `game_version` | `public.fc27_clubs` | `game_version` | `NOT NULL` | `= 'FC27'` | Non-personal version tag | Composite PK `(club_id, platform, game_version)` |
+| `FC27SuppliedClubIdentity` | `club_name` | `public.fc27_clubs` | `club_name` | `NOT NULL` | Length `1..128`, no formula prefix | Non-personal club display name | Covered by PK lookup |
+| `FC27SuppliedClubIdentity` | `supplied_identity_state` | `public.fc27_clubs` | `identity_state` | `NOT NULL` | `ClubIdentityState` enum values | Non-personal governance state | Covered by PK lookup |
+| Platform authority boundary | *(derived)* | `public.fc27_clubs` | `manager_authority_status` | `NOT NULL` | `= 'UNVERIFIED'` (cannot grant authority) | Governance state | Covered by PK lookup |
+| `FC27UserExportEnvelope` / `ProviderEnvelope` | `source_classification` | `public.fc27_clubs` | `source_classification` | `NOT NULL` | `FixtureClassification` enum values | Provenance metadata | Covered by PK lookup |
+| `FC27UserExportEnvelope` | `export_id` | `public.fc27_export_batches` | `export_id` | `NOT NULL` | Length `1..128`, no path separators | Non-personal batch identifier | `PRIMARY KEY (export_id)` |
+| `FC27UserExportEnvelope` | `contract_version`, `schema_version` | `public.fc27_export_batches` | `contract_version`, `schema_version` | `NOT NULL` | Length `1..32` | Contract metadata | None (audit columns) |
+| `FC27SupplierAttestation` | `supplier_role`, `supplier_reference` | `public.fc27_export_batches` | `supplier_role`, `supplier_reference` | `NOT NULL` | Role enum; pseudonymous ref (no `@`, path, or secret terms) | Pseudonymous steward reference | None (audit columns) |
+| `FC27ConsentAttestation` | `consent_version`, `data_categories` | `public.fc27_export_batches` | `consent_version`, `consented_categories` | `NOT NULL` | JSONB array length `1..10` | Consent provenance | None (audit columns) |
+| `FC27UserExportEnvelope` | `payload_sha256` | `public.fc27_export_batches` | `payload_sha256` | `NOT NULL` | `^[0-9a-f]{64}$` (integrity/change detection only) | Cryptographic digest | Batch lookup by `(club_id, platform, game_version, applied_at DESC)` |
+| `FC27UserExportImportPlan` | `total_matches`, `accepted_matches`, `quarantined_matches` | `public.fc27_export_batches` | `total_matches`, `accepted_matches`, `quarantined_matches` | `NOT NULL` | Non-negative; `accepted + quarantined <= total` | Aggregate counts | `idx_fc27_export_batches_club_applied_at` |
+| `FC27SuppliedMatch` / `ClubMatch` | `external_match_id` | `public.fc27_matches` | `external_match_id` | `NOT NULL` | Length `1..64` | Non-personal match ID | `UNIQUE (club_id, platform, game_version, external_match_id)` |
+| `FC27SuppliedMatch` | `played_at` | `public.fc27_matches` | `played_at` | `NOT NULL` | `timestamptz` UTC | Match timestamp | `idx_fc27_matches_club_played_at` (`played_at DESC`) |
+| `FC27SuppliedMatch` / `ClubMatch` | `result`, `goals_for`, `goals_against` | `public.fc27_matches` | `result`, `goals_for`, `goals_against` | `NOT NULL` | `WIN`/`DRAW`/`LOSS` consistent with non-negative score | Normalized team score | Covered by club/time index |
+| `FC27SuppliedMatch` / `ClubMatch` | `opponent_name`, `formation`, `match_status` | `public.fc27_matches` | `opponent_name`, `formation`, `match_status` | `NOT NULL` | `VALID_FC27_FORMATIONS`, `COMPLETED`/`ABANDONED`/`PARTIAL` | Normalized match metadata | Covered by club/time index |
+| `compute_match_hash()` | `match_hash` | `public.fc27_matches` | `match_hash` | `NOT NULL` | `^[0-9a-f]{64}$` (integrity/replay detection) | Cryptographic digest | Evaluated on unique match lookup |
+| `FC27SuppliedPlayerPerformance` / `PlayerMatch` | `local_player_reference` | `public.fc27_player_match_stats` | `local_player_reference` | `NOT NULL` | Length `1..64`, pseudonymous (no `@` or account/persona/gamer_tag terms) | Pseudonymous club-local ref | `UNIQUE (match_id, local_player_reference)` + `idx_fc27_player_match_stats_club_player` |
+| `FC27SuppliedPlayerPerformance` | `display_alias` | `public.fc27_player_match_stats` | `display_alias` | `NULL` | Optional, length `1..64`, no `@`, excluded from audit events | Consented optional alias | Never indexed or required |
+| `FC27SuppliedPlayerPerformance` / `PlayerMatch` | `position`, `role`, `minutes_played`, `goals`, `assists`, `passes_*`, `tackles_*`, `interceptions`, `shots*`, `saves`, `possession_losses`, `provider_rating`, `build_reference` | `public.fc27_player_match_stats` | Matching normalized columns | `NOT NULL` (`role`, `build_reference` `NULL`) | Non-negative counts, `completed <= attempted`, `shots_on_target <= shots`, `minutes_played` `0..130`, `provider_rating` `0.0..10.0` | Normalized player performance | `idx_fc27_player_match_stats_match_id` + `idx_fc27_player_match_stats_club_player` |
+| Quarantine Diagnostics | `anomaly_category`, `reason_code`, `diagnostic_paths`, `payload_sha256`, `review_status`, `expires_at` | `public.fc27_quarantine_records` | Matching columns | `NOT NULL` (`external_match_id`, `export_id`, `reviewed_*` `NULL`) | 7 neutral anomaly categories; field paths only (`fc27_is_valid_diagnostic_paths`); 30-day default TTL | Sanitized diagnostic metadata (zero raw values) | `idx_fc27_quarantine_records_status_expires` + `idx_fc27_quarantine_records_club_quarantined_at` |
+
+*(Note: Raw match `lineup` arrays are not persisted as JSONB on `public.fc27_matches` to prevent unvalidated identifier storage; player participation per match is normalized relationally in `public.fc27_player_match_stats`.)*
+
+### 3. Normalized-Data Policy, Raw-Retention Prohibition, & Integrity Hashes
+- **Normalized Storage Only**: Only validated, schema-conformant normalized records are persisted in `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, and `fc27_player_match_stats`.
+- **Raw-Retention Prohibition**: No table stores raw user upload files, raw JSON/CSV bodies, raw HTTP responses, cookies, tokens, sessions, EA account IDs, persona IDs, Nucleus IDs, or unapproved gamer tags (`RAW_UPLOAD_RETAINED: NO`).
+- **Unkeyed SHA-256 Semantics**: `payload_sha256` and `match_hash` are unkeyed SHA-256 digests (`INTEGRITY_CHANGE_DETECTION`) used exclusively for canonical payload integrity and replay/change detection. They do **not** authenticate the external source.
+- **Replay-Conflict & Quarantine Retention**:
+  - Identical exports or matches with identical `(club_id, platform, game_version, external_match_id)` and `match_hash` are ignored idempotently (`fc27.export.duplicate_ignored`).
+  - If an existing `external_match_id` is re-imported with a changed `match_hash`, the entire batch apply is blocked (`IMPORT_STATUS: REJECTED`) and a sanitized quarantine metadata record (`anomaly_category = 'REPLAY_CONFLICT'`) is recorded in `public.fc27_quarantine_records` with a 30-day default expiry (`expires_at = quarantined_at + interval '30 days'`).
+  - Expired quarantine records are purged only through the `fc27_owner` `SECURITY DEFINER` function `public.fc27_purge_expired_quarantine(timestamptz)`, which emits `fc27.quarantine.expired` domain events.
+
+### 4. Grants Policy Version 14 & Feature Flag Default
+- **Grants Policy Version**: Bumped from `13` to `14` in `migrations/post/grants.sql`, `src/db_migrate.py`, and `src/db_roles.py`.
+  - `fc27_owner` owns all 5 tables, sequences, and functions.
+  - `fc27_app` receives `SELECT`, `INSERT`, sequence `USAGE`, limited column-level `UPDATE` on `fc27_clubs`, `fc27_export_batches`, and `fc27_quarantine_records`, and `EXECUTE` on `public.fc27_purge_expired_quarantine(timestamptz)`. `fc27_app` has **zero** `DELETE` privileges on any of the 5 tables.
+  - `fc27_dispatch` and `fc27_relay` receive **zero** privileges on any of the 5 FC 27 persistence tables.
+  - LangGraph `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched.
+- **Persistence Feature Flag (`FC27_PERSISTENCE_ENABLED`)**:
+  - Default is `false` (`is_fc27_persistence_enabled() -> False` in `src/settings.py`).
+  - Missing or malformed values fail closed to `false`.
+  - Enabling `FC27_PERSISTENCE_ENABLED=true` does **not** enable provider networking, live ingestion, coaching recommendations, or dispatch, and still requires explicit `--apply --confirm-apply` and `POSTGRES_URI`.
+
+### 5. Pre-Migration Backup, Operator Validation Queries, & Rollback Procedure
+
+#### Pre-Migration Backup
+Before applying Migration `0012` in any persistent environment, capture a full custom-format backup:
+```bash
+./scripts/backup_postgres.sh fc27-pre-0012.dump
+```
+
+#### Operator Validation Queries
+```sql
+-- 1. Confirm migration 0012 and grants policy version 14
+SELECT version, name, sha256, applied_at
+FROM public.schema_migrations
+WHERE version = '0012';
+
+SELECT policy, version, sha256, applied_by, applied_at
+FROM public.schema_policy_versions
+WHERE policy = 'grants' AND version = 14;
+
+-- 2. Confirm table ownership by fc27_owner
+SELECT c.relname, c.relowner::regrole::text AS owner
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname IN (
+      'fc27_clubs',
+      'fc27_export_batches',
+      'fc27_matches',
+      'fc27_player_match_stats',
+      'fc27_quarantine_records'
+  )
+ORDER BY c.relname;
+
+-- 3. Confirm quarantine status and retention window
+SELECT anomaly_category, review_status, count(*)
+FROM public.fc27_quarantine_records
+GROUP BY anomaly_category, review_status;
+```
+
+#### Rollback Procedure (Migration 0012 / Grants Policy 14)
+1. Disable `FC27_PERSISTENCE_ENABLED` (`FC27_PERSISTENCE_ENABLED=false`).
+2. Stop new FC 27 apply operations (`scripts/fc27_user_export_import.py --apply`).
+3. Back up or export approved normalized records from `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, and `fc27_player_match_stats` if required.
+4. Restore the pre-migration PostgreSQL backup (`./scripts/restore_postgres.sh fc27-pre-0012.dump`) for a full production rollback, or use a reviewed non-production down procedure in isolated test environments.
+5. **Do not** directly mutate or delete rows from `public.schema_migrations` in production without a formally reviewed recovery process.
+6. Reapply grants policy `13` only as part of a tested rollback plan paired with the restored pre-`0012` backup.
+
+### 6. Current Limitations & Subsequent Phases
+- **Dashboard & Rolling Window Analytics Queries**: Deferred to the next dedicated read-only query phase (`src/fc27_dashboard_queries.py`).
+- **Pre-Approval Tactics Validator & Graph-Thread Constraint**: Deferred to the dedicated pre-approval validation phase (`GRAPH_THREAD_DB_CONSTRAINT=DEFERRED`); `PostgresSaver` internal tables are never modified by application triggers.
+
+---
+
 ## Legacy Migration: shared-token release → 2.0.0
 
 ### 1. Rotate every credential (mandatory)

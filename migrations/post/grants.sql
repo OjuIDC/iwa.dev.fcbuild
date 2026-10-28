@@ -1,4 +1,4 @@
--- grants-policy-version: 13
+-- grants-policy-version: 14
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -229,5 +229,71 @@ BEGIN
     IF to_regclass('public.fc27_decision_evidence') IS NOT NULL THEN
         GRANT SELECT, INSERT, UPDATE ON public.fc27_decision_evidence TO fc27_app;
         GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_decision_evidence TO fc27_migrator;
+    END IF;
+
+    -- Migration 0012: FC 27 PostgreSQL Performance Storage and Quarantine Grants
+    IF to_regclass('public.fc27_clubs') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_clubs FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_clubs FROM fc27_relay';
+        END IF;
+        GRANT SELECT, INSERT, UPDATE (club_name, identity_state, source_classification, updated_at)
+            ON public.fc27_clubs TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_export_batches') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_export_batches FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_export_batches FROM fc27_relay';
+        END IF;
+        GRANT SELECT, INSERT, UPDATE (accepted_matches, quarantined_matches, applied_at)
+            ON public.fc27_export_batches TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_matches') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_matches FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_matches FROM fc27_relay';
+        END IF;
+        GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_player_match_stats') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_match_stats FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_match_stats FROM fc27_relay';
+        END IF;
+        GRANT SELECT, INSERT ON public.fc27_player_match_stats TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_player_match_stats_stat_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_match_stats_stat_id_seq FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_match_stats_stat_id_seq FROM fc27_relay';
+        END IF;
+        GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_match_stats_stat_id_seq TO fc27_app;
+    END IF;
+
+    IF to_regclass('public.fc27_quarantine_records') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_quarantine_records FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_quarantine_records FROM fc27_relay';
+        END IF;
+        GRANT SELECT, INSERT, UPDATE (review_status, reviewed_by, reviewed_at, review_notes)
+            ON public.fc27_quarantine_records TO fc27_app;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_valid_diagnostic_paths') THEN
+        REVOKE ALL ON FUNCTION public.fc27_is_valid_diagnostic_paths(jsonb) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION public.fc27_is_valid_diagnostic_paths(jsonb)
+            TO fc27_app, fc27_migrator;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_purge_expired_quarantine') THEN
+        REVOKE ALL ON FUNCTION public.fc27_purge_expired_quarantine(timestamptz) FROM PUBLIC, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_expired_quarantine(timestamptz) FROM fc27_relay';
+        END IF;
+        GRANT EXECUTE ON FUNCTION public.fc27_purge_expired_quarantine(timestamptz) TO fc27_app;
     END IF;
 END $$;
