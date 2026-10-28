@@ -31,7 +31,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, RunnableConfig, interrupt
 
 from .decision import package_version
-from .lead_packages import POLICY_VERSION, build_lead_packages, players_from_dashboard
+from .lead_packages import (
+    POLICY_VERSION,
+    build_lead_packages,
+    emit_pre_approval_validation_trace,
+    players_from_dashboard,
+    validate_pre_approval_packages,
+)
 from .model_selection import ModelRegistry
 from .roles import PROMPT_VERSION, RoleResult, run_role
 from .settings import DEFAULT_PLATFORM, FC_VERSION
@@ -63,6 +69,13 @@ class FC27State(TypedDict, total=False):
     role_reports: dict[str, dict]
     lead_packages: dict[str, dict]
     package_version: str | None
+    pre_approval_validation: dict
+    formation: str | None
+    lineup: dict | None
+    assignments: list[dict] | dict | None
+    roster: list[str] | None
+    analytics_metadata: dict | None
+    recommendations: list[dict] | None
     approval_request_id: str | None
     approval_request: dict
     approval_decision: dict
@@ -139,9 +152,46 @@ def build_graph(deps: GraphDeps) -> StateGraph:
 
     def prepare_approval(state: FC27State) -> dict:
         results = {k: RoleResult.model_validate(v) for k, v in (state.get("role_reports") or {}).items()}
-        packages = build_lead_packages(state.get("dashboard", {}), state["club_id"], results, state["thread_id"])
-        version = package_version(packages)
-        approvable = sorted(k for k, v in packages.items() if v.get("approvable"))
+        if "lead_packages" in state and state.get("lead_packages") is not None:
+            packages = state["lead_packages"]
+        else:
+            packages = build_lead_packages(state.get("dashboard", {}), state["club_id"], results, state["thread_id"])
+        computed_version = package_version(packages) if isinstance(packages, dict) else None
+        target_version = state.get("package_version") if "package_version" in state else computed_version
+
+        validation = validate_pre_approval_packages(
+            packages,
+            package_version_hash=target_version,
+            candidates=state.get("candidates"),
+            thread_id=state.get("thread_id"),
+            lineup=state.get("lineup"),
+            formation=state.get("formation"),
+            assignments=state.get("assignments"),
+            roster=state.get("roster"),
+            analytics_metadata=state.get("analytics_metadata"),
+            recommendations=state.get("recommendations"),
+        )
+        validation_summary = validation.to_safe_summary()
+
+        if not validation.valid or validation.review_required or bool(validation.reason_codes):
+            reason_list = list(validation.reason_codes) or ["APPROVAL_POLICY_VIOLATION"]
+            return {
+                "lead_packages": packages if isinstance(packages, dict) else {},
+                "package_version": None,
+                "pre_approval_validation": validation_summary,
+                "approval_request_id": None,
+                "approval_request": {},
+                "status": "failed",
+                "errors": [f"pre_approval_validation: {code}" for code in reason_list],
+                "audit_log": _audit(
+                    "prepare_approval",
+                    state,
+                    f"pre-approval validation failed: {', '.join(reason_list)}",
+                ),
+            }
+
+        version = computed_version
+        approvable = sorted(k for k, v in packages.items() if isinstance(v, dict) and v.get("approvable"))
         req_id = state.get("approval_request_id") or str(uuid4())
         request = {
             "thread_id": state["thread_id"],
@@ -153,10 +203,12 @@ def build_graph(deps: GraphDeps) -> StateGraph:
             "required_authority": "commissioner",
             "fc_version": FC_VERSION,
             "platform": state["platform"],
+            "validation_summary": validation_summary,
         }
         return {
             "lead_packages": packages,
             "package_version": version,
+            "pre_approval_validation": validation_summary,
             "approval_request_id": req_id,
             "approval_request": request,
             "status": "awaiting_approval",
@@ -164,6 +216,9 @@ def build_graph(deps: GraphDeps) -> StateGraph:
         }
 
     def approval(state: FC27State) -> dict:
+        pre_val = state.get("pre_approval_validation") or {}
+        if state.get("status") == "failed" or pre_val.get("valid") is False or pre_val.get("review_required") is True:
+            raise ApprovalNotCommitted("pre-approval validation did not pass; approval interrupt blocked")
         # Pauses here until the Graph API resumes the thread after a committed decision.
         interrupt(state["approval_request"])
         row = deps.decision_reader(state["thread_id"])
@@ -223,8 +278,22 @@ def build_graph(deps: GraphDeps) -> StateGraph:
             for err in update.get("errors", []) or []:
                 tracer.event("validation_failure", tid, {"node": name, "error": err}, level="WARNING")
             if name == "prepare_approval":
-                tracer.event("approval_interrupt", tid, {"package_version": update.get("package_version"),
-                                                         "approvable_owners": update["approval_request"]["approvable_owners"]})
+                if isinstance(update.get("pre_approval_validation"), dict):
+                    emit_pre_approval_validation_trace(
+                        tracer,
+                        thread_id=tid,
+                        club_id=state.get("club_id"),
+                        result=update["pre_approval_validation"],
+                    )
+                if update.get("status") == "awaiting_approval" and isinstance(update.get("approval_request"), dict):
+                    tracer.event(
+                        "approval_interrupt",
+                        tid,
+                        {
+                            "package_version": update.get("package_version"),
+                            "approvable_owners": update["approval_request"].get("approvable_owners", []),
+                        },
+                    )
             if name == "approval":
                 tracer.event("approval_resumed", tid, {"status": update.get("status")})
             if name in ROLE_NODES:
@@ -247,7 +316,19 @@ def build_graph(deps: GraphDeps) -> StateGraph:
     for a, b in zip(ROLE_NODES, ROLE_NODES[1:]):
         g.add_edge(a, b)
     g.add_edge(ROLE_NODES[-1], "prepare_approval")
-    g.add_edge("prepare_approval", "approval")
+    g.add_conditional_edges(
+        "prepare_approval",
+        lambda s: (
+            "finalize_decision"
+            if (
+                s.get("status") == "failed"
+                or (s.get("pre_approval_validation") or {}).get("valid") is False
+                or (s.get("pre_approval_validation") or {}).get("review_required") is True
+            )
+            else "approval"
+        ),
+        ["approval", "finalize_decision"],
+    )
     g.add_edge("approval", "finalize_decision")
     g.add_edge("finalize_decision", END)
     return g

@@ -492,6 +492,58 @@ The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PI
 - **Grants Policy Version 14**: `migrations/post/grants.sql` grants least-privilege `SELECT`/`INSERT`/column-scoped `UPDATE` to `fc27_app` and zero FC 27 persistence privileges to `fc27_dispatch` and `fc27_relay`. `PostgresSaver` internal tables remain untouched.
 - **Default-Disabled Feature Flag**: `FC27_PERSISTENCE_ENABLED=false` (`is_fc27_persistence_enabled()` in `src/settings.py`). When disabled, `--apply --confirm-apply` returns `IMPORT_STATUS: DEFERRED` (exit code `1`) and performs zero database writes.
 - **Deferred Phases**:
-  - Read-only dashboard and rolling-window analytics queries are deferred to the next phase.
-  - Pre-approval tactics validation and `graph_threads` pre-approval DB constraints remain deferred (`GRAPH_THREAD_DB_CONSTRAINT=DEFERRED`).
   - Live EA polling, recommendations, dispatch, Langfuse egress, and Discord alert relays remain disabled.
+
+---
+
+## 16. Read-Only PostgreSQL Analytics Boundary (`src/fc27/dashboard_queries.py`)
+
+### 16.1 Analytics Window Decision & Season Equivalence Posture
+- **Primary Rolling Window**: `LAST_20_COMPLETED_MATCHES` (`window_matches=20`, configurable within `1..250`).
+- **Recent Comparison Window**: `LAST_5_COMPLETED_MATCHES` (`recent_window_matches=5`, constrained to `1..min(50, window_matches)`).
+- **Maximum Calendar Cutoff**: `MAX_WINDOW_DAYS=730` (`window_days=730`, configurable within `1..730`).
+- **Season Equivalence**: `SEASON_EQUIVALENCE=UNVERIFIED`. In-game FC 27 Clubs season reset timestamps are not exposed in offline exports, so queries are explicitly bounded by match-count windows and the 730-day calendar cutoff rather than claiming verified in-game season boundaries.
+
+### 16.2 Read-Only Transaction & Privacy Enforcement
+- **Feature Gate**: `FC27_ANALYTICS_ENABLED=false` by default (`is_fc27_analytics_enabled()` in `src/settings.py`). When disabled, analytics query helpers fail closed (`FC27AnalyticsDisabledError`) before opening any database connection.
+- **Read-Only Session Posture**: Every query helper executes inside `conn.transaction()` with `SET LOCAL TRANSACTION READ ONLY` and `SET LOCAL statement_timeout = ...` (`100..30000` ms, default `5000` ms).
+- **Parameterized SQL Only**: All SQL queries use static literals with `%s` placeholders; dynamic SQL concatenation is prohibited.
+- **Aliases Hidden by Default**: `include_aliases=False` is the default across all query helpers (`query_club_overview`, `query_recent_match_log`, `query_player_rolling_summary`, `query_role_split_summary`, `query_club_analytics_snapshot`); `display_alias` is `None` unless `include_aliases=True` is explicitly requested by an authorized caller.
+- **Zero Side Effects**: Analytics queries never read or modify `PostgresSaver` internal tables, never write to `public.domain_events` or `public.outbox`, and never generate tactical or roster recommendations.
+
+---
+
+## 17. Deterministic Pre-Approval Validation Boundary (`fc27-preapproval-v1`)
+
+### 17.1 Validator Placement & Execution Order
+Deterministic pre-approval validation runs **after** lead-package construction and **before** any human approval interrupt or `public.approval_requests` insertion:
+```text
+search -> scout -> analyst -> coach -> tactics -> director
+  -> prepare_approval (build_lead_packages + validate_pre_approval_packages)
+  -> [valid & approvable & !review_required] -> approval (interrupt) -> finalize_decision -> END
+  -> [invalid or review_required]            -> finalize_decision (status="failed") -> END
+```
+Defense-in-depth enforcement is also applied in:
+1. `ApprovalStore.complete_run` (`src/approval_store.py`): Re-validates `lead_packages` and `package_version` before inserting into `public.approval_requests`. If validation fails or `review_required=True`, the thread is persisted as `status = 'failed'` with `package_version = NULL` and zero `public.approval_requests` rows.
+2. `ApprovalStore.issue_challenge` (`src/approval_store.py`): Rejects challenge nonce issuance (`409 pre_approval_validation_failed`) if `pre_approval_validation` indicates failure or `review_required=True`.
+3. `approval` node (`src/graph.py`): Raises `ApprovalNotCommitted` before `interrupt()` if invoked without a passing `pre_approval_validation` state.
+
+### 17.2 `PreApprovalValidationResult` Contract (`src/schemas.py`)
+`PreApprovalValidationResult` is a frozen Pydantic model (`ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)`) with policy version `PRE_APPROVAL_POLICY_VERSION = "fc27-preapproval-v1"` containing:
+- `valid: bool`, `approvable: bool`, `review_required: bool`
+- `policy_version: str`, `validated_at: str`, `package_version: str | None`
+- `reason_codes: tuple[PreApprovalReasonCode, ...]` (bounded `<= 64`), `warnings: tuple[str, ...]` (bounded `<= 64`)
+- `validated_package_count: int`, `rejected_package_count: int`
+- `confidence_tier: str | None`, `formula_version: str | None`, `formation_registry_version: str`
+
+### 17.3 Package Integrity, Objective Bounds, Formation Registry, & Sample Policy
+- **Package Integrity**: Verifies non-empty `lead_packages` (`EMPTY_LEAD_PACKAGES`), schema validity (`PACKAGE_SCHEMA_INVALID`), 64-hex SHA-256 `package_version` presence (`PACKAGE_HASH_MISSING`), format (`PACKAGE_HASH_INVALID`), and canonical recomputation via `src.decision.package_version` (`PACKAGE_HASH_MISMATCH`), candidate consistency against `candidates` (`CANDIDATE_ID_MISMATCH`), and duplicate role/candidate/player detection (`DUPLICATE_CANDIDATE_PACKAGE`).
+- **Objective Bounds Reuse**: Reuses `METRIC_BOUNDS` and `validate_metric_bounds` from `src/dispatch/objective.py` and `Objective` from `src/schemas.py` (`OBJECTIVE_METRIC_UNSUPPORTED`, `OBJECTIVE_BOUND_VIOLATION`, `OBJECTIVE_VALUE_NONFINITE` for `NaN`, `+Inf`, `-Inf`).
+- **Formation & Assignment Registry Reuse**: Reuses `VALID_FC27_FORMATIONS`, `VALID_FC27_POSITIONS`, and `VALID_FC27_ROLES` from `src/schemas.py` (`FORMATION_UNSUPPORTED`, `ROLE_ASSIGNMENT_INVALID`, `DUPLICATE_PLAYER_ASSIGNMENT`, `ROSTER_SIZE_INVALID`). When current role-ranking packages do not carry formation/lineup structures, `formation_registry_version` is reported truthfully as `"NOT_APPLICABLE"` rather than fabricating formation metadata; when present, it reports `"fc27-formations-v1"`.
+- **Confidence & Sample Policy**: Reuses `FORMULA_VERSION = "fc27-v1.0"` and `determine_sample_size_tier` from `src/fc27_analytics.py` (`CONFIDENCE_METADATA_MISSING`, `FORMULA_VERSION_UNSUPPORTED`, `INSUFFICIENT_SAMPLE`, `INSUFFICIENT_DATA`, `REVIEW_REQUIRED`).
+- **Recommendation Gate**: Reuses `is_fc27_recommendations_enabled()` (`FC27_RECOMMENDATIONS_ENABLED=false` by default). Any recommendation object or marker when disabled fails closed with `RECOMMENDATION_DISABLED`.
+
+### 17.4 Metadata-Only Tracing, `PostgresSaver` Non-Modification, & Rollback
+- **Metadata-Only Tracing (`emit_pre_approval_validation_trace`)**: Emits `preapproval.validation.passed`, `preapproval.validation.failed`, or `preapproval.validation.review_required` via the existing tracer abstraction with safe metadata only (`thread_id`, `club_id`, `package_version`, `policy_version`, `package_count`, `reason_codes`, `confidence_tier`, `formula_version`, `timestamp`). Never emits player aliases, raw payloads, candidate bodies, prompts, or connection strings.
+- **Database & `PostgresSaver` Non-Modification**: No database migration is added in this phase (`migrations/0001` through `0012` are unchanged), `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched, and `GRAPH_THREAD_DB_CONSTRAINT` remains `DEFERRED`.
+- **Rollback Procedure**: Revert the pure code changes in `src/schemas.py`, `src/lead_packages.py`, `src/graph.py`, `src/approval_store.py`, and `tests/test_fc27_preapproval_validator.py`; no database schema rollback is required.

@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 from . import approval
 from .decision import DecisionConflict, apply_decision_to_state, package_version, resolve_candidate
+from .lead_packages import emit_pre_approval_validation_trace, validate_pre_approval_packages
 from .dispatch.creation import NotDispatchable
 from .dispatch.transition import (
     DispatchNotFoundError,
@@ -132,11 +133,67 @@ class ApprovalStore:
         status = state.get("status")
         if status not in ("awaiting_approval", "failed"):
             raise StoreError(500, "pipeline returned an invalid status")
-        version = package_version(state.get("lead_packages")) if status == "awaiting_approval" else None
-        if status == "awaiting_approval" and version is None:
-            status = "failed"
-            state = {**state, "status": "failed", "errors": list(state.get("errors", [])) + ["no lead packages produced"]}
-        state = {**state, "package_version": version}
+
+        if status == "awaiting_approval":
+            if approval_request_id is None:
+                if isinstance(state.get("approval_request"), dict):
+                    approval_request_id = state["approval_request"].get("approval_request_id")
+                if not approval_request_id:
+                    approval_request_id = state.get("approval_request_id")
+
+            if approval_request_id is not None and not isinstance(approval_request_id, UUID):
+                try:
+                    approval_request_id = UUID(str(approval_request_id))
+                except ValueError as exc:
+                    raise StoreError(422, f"invalid approval_request_id: {approval_request_id}") from exc
+
+            computed_version = package_version(state.get("lead_packages"))
+            target_version = state.get("package_version") if state.get("package_version") is not None else computed_version
+            validation = validate_pre_approval_packages(
+                state.get("lead_packages"),
+                package_version_hash=target_version,
+                candidates=state.get("candidates"),
+                thread_id=thread_id,
+                lineup=state.get("lineup"),
+                formation=state.get("formation"),
+                assignments=state.get("assignments"),
+                roster=state.get("roster"),
+                analytics_metadata=state.get("analytics_metadata"),
+                recommendations=state.get("recommendations"),
+            )
+            emit_pre_approval_validation_trace(
+                None,
+                thread_id=thread_id,
+                club_id=state.get("club_id"),
+                result=validation,
+            )
+            state = {**state, "pre_approval_validation": validation.to_safe_summary()}
+
+            if computed_version is None or not validation.valid or validation.review_required or bool(validation.reason_codes):
+                status = "failed"
+                version = None
+                err_items = list(state.get("errors", []))
+                if computed_version is None and "no lead packages produced" not in err_items:
+                    err_items.append("no lead packages produced")
+                for code in validation.reason_codes:
+                    msg = f"pre_approval_validation: {code}"
+                    if msg not in err_items:
+                        err_items.append(msg)
+                state = {
+                    **state,
+                    "status": "failed",
+                    "package_version": None,
+                    "approval_request": None,
+                    "approval_request_id": None,
+                    "approval_expires_at": None,
+                    "errors": err_items,
+                }
+            else:
+                version = computed_version
+                state = {**state, "package_version": version}
+        else:
+            version = None
+            state = {**state, "package_version": None}
 
         with self.connect() as conn, conn.transaction():
             if status == "failed":
@@ -151,19 +208,7 @@ class ApprovalStore:
                     raise StoreError(409, f"thread {thread_id} is no longer running")
                 return state
 
-            # status == 'awaiting_approval' with version
-            if approval_request_id is None:
-                if isinstance(state.get("approval_request"), dict):
-                    approval_request_id = state["approval_request"].get("approval_request_id")
-                if not approval_request_id:
-                    approval_request_id = state.get("approval_request_id")
-
-            if approval_request_id is not None and not isinstance(approval_request_id, UUID):
-                try:
-                    approval_request_id = UUID(str(approval_request_id))
-                except ValueError as exc:
-                    raise StoreError(422, f"invalid approval_request_id: {approval_request_id}") from exc
-
+            # status == 'awaiting_approval' with validated version
             if approval_request_id is not None:
                 req_row = conn.execute(
                     """INSERT INTO public.approval_requests (
@@ -329,6 +374,14 @@ class ApprovalStore:
                 raise StoreError(409, f"thread is {thread['status']}, not awaiting_approval")
             if not thread["package_version"]:
                 raise StoreError(409, "thread has no versioned lead package; start a new run")
+            thread_state = thread["state"] if isinstance(thread["state"], dict) else {}
+            pre_val = thread_state.get("pre_approval_validation")
+            if isinstance(pre_val, dict) and (
+                pre_val.get("valid") is False
+                or pre_val.get("review_required") is True
+                or bool(pre_val.get("reason_codes"))
+            ):
+                raise StoreError(409, "pre_approval_validation_failed")
 
             try:
                 resolve_candidate(thread["state"], intent)
