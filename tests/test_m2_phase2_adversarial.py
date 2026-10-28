@@ -597,13 +597,13 @@ def test_packaging_sync_adversarial():
 
 
 def test_grants_policy_version_and_sha_synchronized():
-    """Verify grants.sql version 10 and db_migrate.py GRANTS_POLICY SHA-256 match."""
+    """Verify grants.sql version and db_migrate.py GRANTS_POLICY SHA-256 match."""
     grants_path = ROOT / "migrations" / "post" / "grants.sql"
     assert grants_path.is_file(), "migrations/post/grants.sql must exist"
 
     header_line = grants_path.read_text(encoding="utf-8").splitlines()[0]
     assert header_line.strip() == f"-- grants-policy-version: {GRANTS_POLICY.version}"
-    assert GRANTS_POLICY.version in (10, 13)
+    assert GRANTS_POLICY.version in (10, 13, 14)
     assert GRANTS_POLICY.sha256 == _compute_grants_sha256()
 
 

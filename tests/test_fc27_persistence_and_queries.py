@@ -237,8 +237,21 @@ def test_02_migration_recorded_with_sha256(pg_db_migrated) -> None:
 
 def test_03_existing_migrations_0001_to_0011_unchanged() -> None:
     """3. Existing migrations 0001 through 0011 remain unmodified in git."""
+    base_ref = "HEAD"
+    for candidate_ref in ("main", "origin/main"):
+        rev_check = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", candidate_ref],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rev_check.returncode == 0:
+            base_ref = candidate_ref
+            break
+
     proc = subprocess.run(
-        ["git", "diff", "main", "--", *[f"migrations/{m}" for m in EXPECTED_HISTORICAL_MIGRATIONS]],
+        ["git", "diff", base_ref, "--", *[f"migrations/{m}" for m in EXPECTED_HISTORICAL_MIGRATIONS]],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
