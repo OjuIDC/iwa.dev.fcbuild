@@ -776,7 +776,7 @@ def test_32_replay_conflict_creates_sanitized_quarantine_metadata(pg_uri) -> Non
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT anomaly_category, reason_code, diagnostic_paths, payload_sha256, review_status, external_match_id
+                SELECT anomaly_category, reason_code, diagnostic_paths, payload_sha256, record_hash, review_status, external_match_id
                 FROM public.fc27_quarantine_records
                 WHERE quarantine_id = %s
                 """,
@@ -787,9 +787,10 @@ def test_32_replay_conflict_creates_sanitized_quarantine_metadata(pg_uri) -> Non
             assert row[0] == "REPLAY_CONFLICT"
             assert row[1] == "MATCH_RECORD_HASH_CONFLICT"
             assert row[2] == ["matches[0].external_match_id", "matches[0].match_hash"]
-            assert len(row[3]) == 64
-            assert row[4] == "PENDING_REVIEW"
-            assert row[5] == "match-q-01"
+            assert row[3] == env2.payload_sha256
+            assert row[4] is not None and len(row[4]) == 64
+            assert row[5] == "PENDING_REVIEW"
+            assert row[6] == "match-q-01"
 
 
 def test_33_raw_payload_never_stored(pg_uri) -> None:
@@ -837,6 +838,16 @@ def test_34_sensitive_values_never_stored_in_quarantine(pg_uri) -> None:
             payload_sha256="b" * 64,
         )
 
+    with pytest.raises(ValueError, match="invalid or unsafe diagnostic path"):
+        insert_quarantine_record(
+            pg_uri,
+            club_id=EAST_COASTERS_CLUB_ID,
+            anomaly_category="VALIDATION_ANOMALY",
+            reason_code="INLINE_VALUE_REJECTED",
+            diagnostic_paths=["matches[0].goals_for=5"],
+            payload_sha256="b" * 64,
+        )
+
     # Also verify database CHECK constraint directly rejects non-path JSONB values
     with psycopg.connect(pg_uri, autocommit=True) as conn:
         with pytest.raises(psycopg.errors.CheckViolation):
@@ -866,15 +877,15 @@ def test_35_accepted_match_inserts_player_statistics(pg_uri) -> None:
             cur.execute(
                 """
                 SELECT local_player_reference, position, role, goals, assists,
-                       passes_attempted, passes_completed, provider_rating
+                       passes_attempted, passes_completed, provider_rating, alias_visibility_approved
                 FROM public.fc27_player_match_stats
                 ORDER BY local_player_reference
                 """
             )
             rows = cur.fetchall()
             assert rows == [
-                ("plr_synth_01", "ST", "Poacher", 2, 1, 24, 20, Decimal("8.60")),
-                ("plr_synth_02", "CAM", "Playmaker", 1, 2, 40, 35, Decimal("8.20")),
+                ("plr_synth_01", "ST", "Poacher", 2, 1, 24, 20, Decimal("8.60"), False),
+                ("plr_synth_02", "CAM", "Playmaker", 1, 2, 40, 35, Decimal("8.20"), False),
             ]
 
 
@@ -1036,6 +1047,16 @@ def test_41_expired_quarantine_purge(pg_uri) -> None:
         quarantined_at=past_q,
         expires_at=past_exp,
     )
+
+    # Expired quarantine records cannot be reviewed as active
+    with pytest.raises(FC27RepositoryError, match="expired"):
+        review_quarantine_record(
+            pg_uri,
+            quarantine_id=q_res.quarantine_id,
+            review_status="RESOLVED",
+            reviewed_by="steward-reviewer-01",
+            reviewed_at=eval_now,
+        )
 
     purge_res = purge_expired_quarantine_records(pg_uri, now=eval_now)
     assert purge_res.purged_count == 1
@@ -1401,4 +1422,3 @@ def test_60_matchpulse_boundary_remains_intact() -> None:
         check=True,
     )
     assert "boundary drift check: OK" in proc.stdout
-

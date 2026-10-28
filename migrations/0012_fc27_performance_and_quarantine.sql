@@ -21,6 +21,10 @@ BEGIN
         RETURN false;
     END IF;
 
+    IF pg_catalog.octet_length(p_paths::text) > 4096 THEN
+        RETURN false;
+    END IF;
+
     FOR v_elem IN SELECT pg_catalog.jsonb_array_elements(p_paths)
     LOOP
         IF pg_catalog.jsonb_typeof(v_elem) <> 'string' THEN
@@ -184,7 +188,7 @@ CREATE TABLE public.fc27_matches (
         char_length(btrim(external_match_id)) BETWEEN 1 AND 64
     ),
     CONSTRAINT fc27_matches_score_nonnegative_check CHECK (
-        goals_for >= 0 AND goals_against >= 0
+        goals_for BETWEEN 0 AND 99 AND goals_against BETWEEN 0 AND 99
     ),
     CONSTRAINT fc27_matches_result_check CHECK (
         result IN ('WIN', 'DRAW', 'LOSS')
@@ -238,6 +242,7 @@ CREATE TABLE public.fc27_player_match_stats (
     external_match_id text NOT NULL,
     local_player_reference text NOT NULL,
     display_alias text NULL,
+    alias_visibility_approved boolean NOT NULL DEFAULT false,
     position text NOT NULL,
     role text NULL,
     minutes_played integer NOT NULL DEFAULT 90,
@@ -261,7 +266,7 @@ CREATE TABLE public.fc27_player_match_stats (
     ),
     CONSTRAINT fc27_player_match_stats_match_fk FOREIGN KEY (match_id)
         REFERENCES public.fc27_matches (match_id)
-        ON DELETE CASCADE,
+        ON DELETE RESTRICT,
     CONSTRAINT fc27_player_match_stats_club_fk FOREIGN KEY (club_id, platform, game_version)
         REFERENCES public.fc27_clubs (club_id, platform, game_version)
         ON DELETE RESTRICT,
@@ -299,18 +304,18 @@ CREATE TABLE public.fc27_player_match_stats (
         )
     ),
     CONSTRAINT fc27_player_match_stats_counts_nonnegative_check CHECK (
-        minutes_played BETWEEN 0 AND 130
-        AND goals >= 0
-        AND assists >= 0
-        AND passes_attempted >= 0
-        AND passes_completed >= 0
-        AND tackles_attempted >= 0
-        AND tackles_won >= 0
-        AND interceptions >= 0
-        AND shots >= 0
-        AND shots_on_target >= 0
-        AND saves >= 0
-        AND possession_losses >= 0
+        minutes_played BETWEEN 0 AND 150
+        AND goals BETWEEN 0 AND 30
+        AND assists BETWEEN 0 AND 30
+        AND passes_attempted BETWEEN 0 AND 500
+        AND passes_completed BETWEEN 0 AND 500
+        AND tackles_attempted BETWEEN 0 AND 100
+        AND tackles_won BETWEEN 0 AND 100
+        AND interceptions BETWEEN 0 AND 100
+        AND shots BETWEEN 0 AND 100
+        AND shots_on_target BETWEEN 0 AND 100
+        AND saves BETWEEN 0 AND 100
+        AND possession_losses BETWEEN 0 AND 200
     ),
     CONSTRAINT fc27_player_match_stats_completed_le_attempted_check CHECK (
         passes_completed <= passes_attempted
@@ -339,6 +344,7 @@ CREATE TABLE public.fc27_quarantine_records (
     reason_code text NOT NULL,
     diagnostic_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
     payload_sha256 text NOT NULL,
+    record_hash text NULL,
     review_status text NOT NULL DEFAULT 'PENDING_REVIEW',
     quarantined_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL DEFAULT (now() + interval '30 days'),
@@ -390,6 +396,10 @@ CREATE TABLE public.fc27_quarantine_records (
     ),
     CONSTRAINT fc27_quarantine_records_payload_sha256_check CHECK (
         payload_sha256 ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT fc27_quarantine_records_record_hash_check CHECK (
+        record_hash IS NULL
+        OR record_hash ~ '^[0-9a-f]{64}$'
     ),
     CONSTRAINT fc27_quarantine_records_review_status_check CHECK (
         review_status IN (

@@ -90,6 +90,7 @@ class FC27QuarantineRecordResult(BaseModel):
     reason_code: str
     diagnostic_paths: list[str] = Field(default_factory=list)
     payload_sha256: str
+    record_hash: str | None = None
     review_status: str
     quarantined_at: datetime
     expires_at: datetime
@@ -186,22 +187,26 @@ def _enforce_runtime_posture(conn: psycopg.Connection) -> None:
 
 def _sanitize_diagnostic_paths(paths: Sequence[str]) -> list[str]:
     """Validates and sanitizes diagnostic field paths, rejecting any value, email, or secret content."""
+    if len(paths) > 100:
+        raise ValueError("diagnostic_paths exceeds maximum length of 100 entries")
     cleaned: list[str] = []
     for raw_path in paths:
         candidate = str(raw_path).strip()
         if not candidate:
             continue
-        # If a caller accidentally passed "path=value" or "path: value", strip everything from the separator
-        for sep in ("=", ":", " "):
-            if sep in candidate:
-                candidate = candidate.split(sep, 1)[0].strip()
-        if "@" in candidate or not _SAFE_DIAGNOSTIC_PATH_RE.fullmatch(candidate):
+        if (
+            "@" in candidate
+            or "=" in candidate
+            or ":" in candidate
+            or " " in candidate
+            or not _SAFE_DIAGNOSTIC_PATH_RE.fullmatch(candidate)
+        ):
             raise ValueError(f"invalid or unsafe diagnostic path '{candidate}'")
-        # Reject sensitive field names in diagnostic path only if someone embedded a raw secret value;
-        # note that field path names like 'matches[0].email' are legitimate diagnostic paths for SENSITIVE_FIELD_REJECTED.
         if candidate not in cleaned:
             cleaned.append(candidate)
-    return cleaned[:100]
+    if len(json.dumps(cleaned).encode("utf-8")) > 4096:
+        raise ValueError("diagnostic_paths serialized JSON size exceeds 4096 bytes")
+    return cleaned
 
 
 def _build_safe_event_reason(
@@ -388,6 +393,7 @@ def _insert_quarantine_row_in_tx(
     reason_code: str,
     diagnostic_paths: Sequence[str],
     payload_sha256: str,
+    record_hash: str | None = None,
     actor: str,
     correlation_id: uuid.UUID,
     quarantined_at: datetime | None = None,
@@ -400,6 +406,8 @@ def _insert_quarantine_row_in_tx(
         raise ValueError(f"invalid reason_code '{reason_code}'")
     if not _SHA256_HEX_RE.fullmatch(payload_sha256):
         raise ValueError("payload_sha256 must be lowercase 64-character hex")
+    if record_hash is not None and not _SHA256_HEX_RE.fullmatch(record_hash):
+        raise ValueError("record_hash must be lowercase 64-character hex when provided")
 
     clean_paths = _sanitize_diagnostic_paths(diagnostic_paths)
     now = quarantined_at or datetime.now(timezone.utc)
@@ -412,12 +420,12 @@ def _insert_quarantine_row_in_tx(
             INSERT INTO public.fc27_quarantine_records (
                 club_id, platform, game_version, external_match_id, export_id,
                 source_classification, anomaly_category, reason_code,
-                diagnostic_paths, payload_sha256, review_status,
+                diagnostic_paths, payload_sha256, record_hash, review_status,
                 quarantined_at, expires_at
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s,
-                %s::jsonb, %s, 'PENDING_REVIEW',
+                %s::jsonb, %s, %s, 'PENDING_REVIEW',
                 %s, %s
             )
             RETURNING quarantine_id, quarantined_at, expires_at
@@ -433,6 +441,7 @@ def _insert_quarantine_row_in_tx(
                 reason_code,
                 json.dumps(clean_paths),
                 payload_sha256,
+                record_hash,
                 now,
                 exp,
             ),
@@ -480,6 +489,7 @@ def _insert_quarantine_row_in_tx(
         reason_code=reason_code,
         diagnostic_paths=clean_paths,
         payload_sha256=payload_sha256,
+        record_hash=record_hash,
         review_status="PENDING_REVIEW",
         quarantined_at=q_at,
         expires_at=q_exp,
@@ -500,6 +510,7 @@ def insert_quarantine_record(
     reason_code: str,
     diagnostic_paths: Sequence[str] = (),
     payload_sha256: str,
+    record_hash: str | None = None,
     actor: str = "operator_cli",
     correlation_id: uuid.UUID | None = None,
     quarantined_at: datetime | None = None,
@@ -524,6 +535,7 @@ def insert_quarantine_record(
                 reason_code=reason_code,
                 diagnostic_paths=diagnostic_paths,
                 payload_sha256=payload_sha256,
+                record_hash=record_hash,
                 actor=actor,
                 correlation_id=corr_id,
                 quarantined_at=quarantined_at,
@@ -545,6 +557,28 @@ def review_quarantine_record(
     """Updates quarantine review status and emits an fc27.quarantine.reviewed domain event."""
     if review_status not in ("APPROVED_OVERRIDE", "REJECTED_PERMANENT", "RESOLVED"):
         raise ValueError(f"invalid review_status '{review_status}'")
+    clean_reviewer = reviewed_by.strip()
+    if not clean_reviewer or len(clean_reviewer) > 128 or "@" in clean_reviewer:
+        raise ValueError("reviewed_by must be a non-empty pseudonymous identifier without email syntax")
+    if review_notes is not None:
+        if len(review_notes) > 500 or "@" in review_notes:
+            raise ValueError("review_notes must be <= 500 characters and must not contain email addresses")
+        lowered_notes = review_notes.lower()
+        for prohibited in (
+            "password",
+            "token",
+            "secret",
+            "bearer",
+            "session",
+            "cookie",
+            "account_id",
+            "persona_id",
+            "nucleus_id",
+            "gamertag",
+            "gamer_tag",
+        ):
+            if prohibited in lowered_notes:
+                raise ValueError(f"prohibited term '{prohibited}' in review_notes")
     corr_id = correlation_id or uuid.uuid4()
     now = reviewed_at or datetime.now(timezone.utc)
 
@@ -561,13 +595,17 @@ def review_quarantine_record(
                         reviewed_at = %s,
                         review_notes = %s
                     WHERE quarantine_id = %s
+                      AND review_status = 'PENDING_REVIEW'
+                      AND expires_at > %s
                     RETURNING club_id, platform, game_version, export_id, source_classification, reason_code
                     """,
-                    (review_status, reviewed_by, now, review_notes, quarantine_id),
+                    (review_status, clean_reviewer, now, review_notes, quarantine_id, now),
                 )
                 row = cur.fetchone()
                 if not row:
-                    raise FC27RepositoryError(f"quarantine record '{quarantine_id}' not found")
+                    raise FC27RepositoryError(
+                        f"quarantine record '{quarantine_id}' not found, already reviewed, or expired"
+                    )
                 club_id, platform, game_version, export_id, source_cls, reason_code = row
 
             event_reason = _build_safe_event_reason(
@@ -859,7 +897,8 @@ def apply_export_plan(
                                 f"matches[{idx}].external_match_id",
                                 f"matches[{idx}].match_hash",
                             ],
-                            payload_sha256=mhash,
+                            payload_sha256=envelope.payload_sha256,
+                            record_hash=mhash,
                             actor=actor,
                             correlation_id=corr_id,
                             quarantined_at=now,
@@ -1148,4 +1187,3 @@ def apply_export_plan(
                 correlation_id=str(corr_id),
                 detail=f"Applied {len(accepted_matches)} match(es) and {player_stats_count} player performance row(s).",
             )
-

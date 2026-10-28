@@ -263,7 +263,7 @@ BEGIN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
             EXECUTE 'REVOKE ALL ON public.fc27_player_match_stats FROM fc27_relay';
         END IF;
-        GRANT SELECT, INSERT ON public.fc27_player_match_stats TO fc27_app;
+        GRANT SELECT, INSERT, UPDATE (alias_visibility_approved) ON public.fc27_player_match_stats TO fc27_app;
     END IF;
 
     IF to_regclass('public.fc27_player_match_stats_stat_id_seq') IS NOT NULL THEN
