@@ -15,6 +15,7 @@ ROLE_MIGRATOR = "fc27_migrator"
 ROLE_APP = "fc27_app"
 ROLE_DISPATCH = "fc27_dispatch"
 ROLE_RELAY = "fc27_relay"
+GRANTS_POLICY_VERSION = 14
 
 @dataclass
 class BootstrapReport:

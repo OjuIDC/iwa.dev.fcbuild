@@ -24,8 +24,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
+from src import settings
+from src.db_roles import redact_conninfo
 from src.fc27_user_export import (
     FC27FormulaInjectionError,
+    FC27PersistenceResult,
     FC27SensitiveFieldDetectedError,
     FC27UserExportEnvelope,
     FC27UserExportError,
@@ -156,14 +159,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         file_path = validate_local_filepath(args.input)
     except Exception as exc:
-        print(f"PATH_ERROR: {exc}", file=sys.stderr)
+        print(f"PATH_ERROR: {type(exc).__name__}", file=sys.stderr)
+        print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
 
     # Read bytes bounded
     try:
         raw_bytes = file_path.read_bytes()
     except Exception as exc:
-        print(f"READ_ERROR: Failed to read file '{file_path}': {exc}", file=sys.stderr)
+        print(f"READ_ERROR: {type(exc).__name__}", file=sys.stderr)
+        print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
 
     # Parse and validate
@@ -177,28 +182,72 @@ def main(argv: list[str] | None = None) -> int:
         print("REJECTION_REASON: SENSITIVE_FIELDS_DETECTED", file=sys.stderr)
         print(f"SENSITIVE_PATHS: {json.dumps(exc.paths)}", file=sys.stderr)
         print("SAFE_TO_RETAIN_RAW_UPLOAD: NO", file=sys.stderr)
+        print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
     except FC27FormulaInjectionError as exc:
         print("IMPORT_STATUS: REJECTED", file=sys.stderr)
         print(f"REJECTION_REASON: FORMULA_INJECTION_DETECTED (column: {exc.column}, row: {exc.row_index})", file=sys.stderr)
         print("SAFE_TO_RETAIN_RAW_UPLOAD: NO", file=sys.stderr)
+        print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
     except Exception as exc:
         print("IMPORT_STATUS: REJECTED", file=sys.stderr)
-        print(f"REJECTION_REASON: VALIDATION_FAILED ({exc})", file=sys.stderr)
+        print(f"REJECTION_REASON: VALIDATION_FAILED ({type(exc).__name__})", file=sys.stderr)
         print("SAFE_TO_RETAIN_RAW_UPLOAD: NO", file=sys.stderr)
+        print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
 
+    persistence_enabled = settings.is_fc27_persistence_enabled()
+    db_uri: str | None = None
+    existing_state = None
+    db_config_error: str | None = None
+
+    if mode == "apply" and persistence_enabled:
+        try:
+            db_uri = settings.read_secret("POSTGRES_URI", required=False)
+        except settings.ConfigError as exc:
+            db_config_error = redact_conninfo(str(exc))
+        if db_uri:
+            from src.fc27_repository import FC27RepositoryError, load_import_state
+
+            try:
+                existing_state = load_import_state(
+                    db_uri,
+                    club_id=envelope.club.club_id,
+                    platform=envelope.club.platform,
+                    game_version=envelope.game_version,
+                )
+            except FC27RepositoryError as exc:
+                db_config_error = redact_conninfo(str(exc))
+
     # Plan import
-    plan = plan_fc27_user_export_import(envelope)
+    plan = plan_fc27_user_export_import(envelope, existing_state=existing_state)
     preview = generate_baseline_preview(envelope)
 
     # Persistence / Action Execution
     if mode == "apply":
-        pers_result = apply_fc27_user_export_plan(plan, dry_run=False, confirm_apply=True)
+        if persistence_enabled and db_config_error:
+            pers_result = FC27PersistenceResult(
+                status="REJECTED",
+                applied_count=0,
+                detail=f"Database configuration or posture error: {db_config_error}",
+            )
+        else:
+            pers_result = apply_fc27_user_export_plan(
+                plan,
+                envelope=envelope,
+                dry_run=False,
+                confirm_apply=True,
+                db_conn=db_uri,
+            )
         status_str = pers_result.status
     elif mode == "dry-run":
-        pers_result = apply_fc27_user_export_plan(plan, dry_run=True, confirm_apply=False)
+        pers_result = apply_fc27_user_export_plan(
+            plan,
+            envelope=envelope,
+            dry_run=True,
+            confirm_apply=False,
+        )
         status_str = "DRY_RUN"
     else:
         status_str = "VALIDATED"
@@ -212,6 +261,25 @@ def main(argv: list[str] | None = None) -> int:
                 if p.display_alias and p.display_alias not in safe_aliases:
                     safe_aliases.append(p.display_alias)
 
+    accepted_out = (
+        pers_result.applied_count
+        if (mode == "apply" and pers_result and pers_result.status == "APPLIED")
+        else len(plan.accepted_match_ids)
+    )
+    duplicate_out = (
+        pers_result.duplicate_count
+        if (mode == "apply" and pers_result and pers_result.status == "APPLIED")
+        else len(plan.duplicate_match_ids)
+    )
+    quarantined_out = (
+        pers_result.quarantined_count
+        if (mode == "apply" and pers_result and pers_result.status in ("APPLIED", "REJECTED"))
+        else len(plan.conflicting_match_ids)
+    )
+    persistence_applied_str = (
+        "YES" if (mode == "apply" and pers_result and pers_result.status == "APPLIED") else "NO"
+    )
+
     # Output deterministic metadata-only summary
     print(f"IMPORT_STATUS: {status_str}")
     print(f"MODE: {mode.upper()}")
@@ -222,17 +290,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"SUPPLIED_CLUB_NAME: {envelope.club.club_name}")
     print(f"SUPPLIED_PLATFORM: {envelope.club.platform}")
     print(f"CLUB_IDENTITY_DECISION: {plan.club_identity_decision.value}")
-    print(f"CAN_APPLY: {'YES' if plan.can_apply else 'NO'}")
+    print(f"CAN_APPLY: {'YES' if (plan.can_apply and status_str != 'REJECTED') else 'NO'}")
     print(f"TOTAL_RECORDS: {plan.total_matches}")
-    print(f"ACCEPTED_RECORDS: {len(plan.accepted_match_ids)}")
-    print(f"DUPLICATE_RECORDS: {len(plan.duplicate_match_ids)}")
+    print(f"ACCEPTED_RECORDS: {accepted_out}")
+    print(f"DUPLICATE_RECORDS: {duplicate_out}")
+    print(f"QUARANTINED_RECORDS: {quarantined_out}")
     print(f"CONFLICTING_RECORDS: {len(plan.conflicting_match_ids)}")
     print(f"REJECTED_RECORDS: {len(plan.rejected_records)}")
     print(f"ANALYTICS_ELIGIBLE_RECORDS: {plan.analytics_eligible_matches}")
     print(f"SAMPLE_SIZE_CONFIDENCE_TIER: {preview.sample_size_confidence_tier}")
     print(f"COACHING_READINESS: {'YES' if preview.coaching_readiness else 'NO'}")
-    if mode == "apply" and pers_result and pers_result.status == "DEFERRED":
-        print("PERSISTENCE_APPLIED: NO")
+    print(f"FC27_PERSISTENCE_ENABLED: {'YES' if persistence_enabled else 'NO'}")
+    print(f"PERSISTENCE_APPLIED: {persistence_applied_str}")
+    print("RECOMMENDATIONS_GENERATED: 0")
+    print("DISPATCH_EXECUTED: NO")
     print("HUMAN_REVIEW_REQUIRED: YES")
     print("RAW_UPLOAD_RETAINED: NO")
 
@@ -240,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SAFE_ALIASES: {json.dumps(sorted(safe_aliases))}")
 
     if pers_result:
-        print(f"PERSISTENCE_DETAIL: {pers_result.detail}")
+        print(f"PERSISTENCE_DETAIL: {redact_conninfo(pers_result.detail)}")
 
     if plan.diagnostics:
         print("DIAGNOSTICS:")
@@ -250,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     # Non-zero exit code if plan is blocked, rejected, or apply was deferred
     if not plan.can_apply and mode in ("apply", "dry-run"):
         return 1
-    if mode == "apply" and pers_result and pers_result.status == "DEFERRED":
+    if mode == "apply" and (pers_result is None or pers_result.status != "APPLIED"):
         return 1
 
     return 0

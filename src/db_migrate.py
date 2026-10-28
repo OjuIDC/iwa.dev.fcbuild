@@ -18,11 +18,14 @@ class GrantsPolicy:
     version: int
     sha256: str
 
+GRANTS_POLICY_VERSION = 14
+
+
 def _compute_grants_sha256() -> str:
     p = MIGRATIONS_DIR / "post" / "grants.sql"
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
-GRANTS_POLICY = GrantsPolicy(version=13, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=14, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -95,6 +98,95 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
             has_pub = cur.fetchone()
             if has_pub and has_pub[0]:
                 violations.append("dispatch_transition_public_exec")
+
+        # check fc27_purge_expired_quarantine (Migration 0012)
+        cur.execute("""
+            SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'fc27_purge_expired_quarantine'
+        """)
+        purge_row = cur.fetchone()
+        if purge_row:
+            p_oid, p_secdef, p_owner, p_config = purge_row
+            if not p_secdef:
+                violations.append("purge_quarantine_not_secdef")
+            if p_owner != "fc27_owner":
+                violations.append("purge_quarantine_not_owner")
+            p_cfg = " ".join(p_config) if p_config else ""
+            if "search_path=pg_catalog, pg_temp" not in p_cfg:
+                violations.append("purge_quarantine_search_path")
+            cur.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')", (p_oid,))
+            p_has_pub = cur.fetchone()
+            if p_has_pub and p_has_pub[0]:
+                violations.append("purge_quarantine_public_exec")
+            cur.execute("SELECT has_function_privilege('fc27_dispatch', %s, 'EXECUTE')", (p_oid,))
+            p_has_disp = cur.fetchone()
+            if p_has_disp and p_has_disp[0]:
+                violations.append("purge_quarantine_dispatch_exec")
+
+        # check Migration 0012 tables, indexes, ownership, and least-privilege grants
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version = '0012'")
+            has_0012 = cur.fetchone() is not None
+        else:
+            has_0012 = False
+
+        if has_0012:
+            fc27_perf_tables = (
+                "fc27_clubs",
+                "fc27_export_batches",
+                "fc27_matches",
+                "fc27_player_match_stats",
+                "fc27_quarantine_records",
+            )
+            for tbl in fc27_perf_tables:
+                cur.execute(
+                    """
+                    SELECT c.relowner::regrole::text
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = %s
+                    """,
+                    (tbl,),
+                )
+                t_row = cur.fetchone()
+                if not t_row:
+                    violations.append(f"missing_table_{tbl}")
+                    continue
+                if t_row[0] != "fc27_owner":
+                    violations.append(f"table_owner_{tbl}")
+                # fc27_app must not have unrestricted DELETE on FC 27 persistence tables
+                cur.execute("SELECT has_table_privilege('fc27_app', %s, 'DELETE')", (f"public.{tbl}",))
+                if cur.fetchone()[0]:
+                    violations.append(f"app_delete_on_{tbl}")
+                # fc27_dispatch must not have access to FC 27 persistence tables
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute("SELECT has_table_privilege('fc27_dispatch', %s, %s)", (f"public.{tbl}", priv))
+                    if cur.fetchone()[0]:
+                        violations.append(f"dispatch_{priv.lower()}_on_{tbl}")
+                # fc27_relay must not have access to FC 27 persistence tables
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay'")
+                if cur.fetchone():
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute("SELECT has_table_privilege('fc27_relay', %s, %s)", (f"public.{tbl}", priv))
+                        if cur.fetchone()[0]:
+                            violations.append(f"relay_{priv.lower()}_on_{tbl}")
+
+            fc27_perf_indexes = (
+                "idx_fc27_matches_club_played_at",
+                "idx_fc27_matches_export_id",
+                "idx_fc27_player_match_stats_match_id",
+                "idx_fc27_player_match_stats_club_player",
+                "idx_fc27_quarantine_records_status_expires",
+                "idx_fc27_quarantine_records_club_quarantined_at",
+                "idx_fc27_export_batches_club_applied_at",
+            )
+            for idx_name in fc27_perf_indexes:
+                cur.execute("SELECT to_regclass(%s)", (f"public.{idx_name}",))
+                if cur.fetchone()[0] is None:
+                    violations.append(f"missing_index_{idx_name}")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
