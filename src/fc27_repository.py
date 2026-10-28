@@ -715,6 +715,7 @@ def apply_export_plan(
     correlation_id: uuid.UUID | None = None,
     enforce_posture: bool = True,
     quarantine_conflicts: bool = True,
+    source_classification_override: Literal["AUTHORIZED_CAPTURE"] | None = None,
 ) -> FC27ExportApplyResult:
     """Atomically applies a validated FC 27 export envelope and plan to PostgreSQL.
 
@@ -737,7 +738,9 @@ def apply_export_plan(
     club_id = envelope.club.club_id
     platform = envelope.club.platform
     game_version = envelope.game_version.upper()
-    source_cls = envelope.source_classification
+    if source_classification_override is not None and source_classification_override != "AUTHORIZED_CAPTURE":
+        raise FC27RepositoryError(f"unsupported source_classification_override '{source_classification_override}'")
+    source_cls = source_classification_override or envelope.source_classification
     now = datetime.now(timezone.utc)
 
     # Pre-check sensitive fields on dumped envelope as defense-in-depth
