@@ -27,9 +27,13 @@ from src.db_roles import bootstrap_cluster, bootstrap_database
 from src.fc27_analytics import FORMULA_VERSION
 from src.fc27_dashboard_queries import (
     ALL_ANALYTICS_SQL_STATEMENTS,
+    FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES,
+    FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES,
     FC27_ANALYTICS_MAX_MATCHES,
     FC27_ANALYTICS_MAX_PLAYERS,
+    FC27_ANALYTICS_MAX_WINDOW_DAYS,
     FC27_ANALYTICS_WINDOW_DAYS,
+    SEASON_EQUIVALENCE,
     SQL_SELECT_PLAYER_STATS_NO_ALIAS,
     AnalyticsWindowSpec,
     FC27AnalyticsDisabledError,
@@ -41,6 +45,7 @@ from src.fc27_dashboard_queries import (
     fetch_club_storage_summary,
     fetch_data_quality_summary,
     fetch_player_performances_window,
+    require_fc27_analytics_enabled,
 )
 from src.fc27_provider import FC27TransportClient
 from src.fc27_repository import (
@@ -240,11 +245,36 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
         admin=admin_db_uri,
         owner=_role_uri("fc27_migrator"),
         app=_role_uri("fc27_app"),
-        reader=_role_uri("fc27_app"),
+        reader=_role_uri("fc27_reader"),
         dispatch=_role_uri("fc27_dispatch"),
         dbname=dbname,
     )
     migrate(ctx.owner)
+
+    # Provision isolated least-privilege fc27_reader role for read-only analytics integration tests
+    with psycopg.connect(admin_db_uri, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_reader'")
+            if not cur.fetchone():
+                cur.execute(
+                    "CREATE ROLE fc27_reader LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE"
+                )
+            cur.execute(f'GRANT CONNECT ON DATABASE "{dbname}" TO fc27_reader')
+            cur.execute("GRANT USAGE ON SCHEMA public TO fc27_reader")
+            cur.execute("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_reader")
+            cur.execute("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fc27_reader")
+            cur.execute("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM fc27_reader")
+            cur.execute(
+                """
+                GRANT SELECT ON
+                    public.fc27_clubs,
+                    public.fc27_export_batches,
+                    public.fc27_matches,
+                    public.fc27_player_match_stats,
+                    public.fc27_quarantine_records
+                TO fc27_reader
+                """
+            )
 
     m1 = _make_match_dict("m_syn_001", REF_NOW - timedelta(days=2), result="WIN", goals_for=3, goals_against=1, formation="4-3-3(2)")
     m2 = _make_match_dict("m_syn_002", REF_NOW - timedelta(days=5), result="DRAW", goals_for=2, goals_against=2, formation="4-3-3(2)")
@@ -553,12 +583,15 @@ def test_10_explicit_start_end_window(monkeypatch: pytest.MonkeyPatch, pg_analyt
 
 
 def test_11_rolling_day_window(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
-    """11. Rolling day window (default 84 days excludes 120-day-old match)."""
+    """11. Explicit rolling day window (84 days excludes 120-day-old match; max is 730 days)."""
     monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
-    spec = AnalyticsWindowSpec(reference_now=REF_NOW)
+    assert FC27_ANALYTICS_MAX_WINDOW_DAYS == 730
+    assert FC27_ANALYTICS_WINDOW_DAYS == 730
+    spec = AnalyticsWindowSpec(window_days=84, reference_now=REF_NOW)
     res = fetch_club_matches_window(pg_analytics_db.reader, spec)
     assert res.window.window_mode == "ROLLING_DAYS"
-    assert res.window.window_days == FC27_ANALYTICS_WINDOW_DAYS == 84
+    assert res.window.window_days == 84
+    assert res.window.season_equivalence == "UNVERIFIED"
     assert "two seasons" not in res.window.window_description.lower()
     assert [m.match_id for m in res.matches] == ["m_syn_001", "m_syn_002", "m_syn_003", "m_syn_004", "m_syn_005"]
 
@@ -663,10 +696,13 @@ def test_22_unapproved_alias_remains_hidden(monkeypatch: pytest.MonkeyPatch, pg_
 
 
 def test_23_confidence_tier_returned(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
-    """23. Confidence tier returned."""
+    """23. Confidence tier and confidence reason returned."""
     monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
     snap = build_club_analytics_snapshot(pg_analytics_db.reader, AnalyticsWindowSpec(reference_now=REF_NOW))
-    assert snap.window.confidence_tier == "LOW_CONFIDENCE"  # 5 matches in 84-day rolling window
+    assert snap.window.confidence_tier == "LOW_CONFIDENCE"  # 6 eligible matches in default last-20 window
+    assert snap.confidence_tier == "LOW_CONFIDENCE"
+    assert snap.confidence_reason
+    assert snap.window.confidence_reason
     assert snap.club_summary["sample_size_tier"] == "LOW_CONFIDENCE"
 
 
@@ -681,12 +717,14 @@ def test_24_formula_version_returned(monkeypatch: pytest.MonkeyPatch, pg_analyti
 
 
 def test_25_window_metadata_returned(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
-    """25. Window metadata returned with all required fields."""
+    """25. Window metadata returned with all required fields and default LAST_N_MATCHES=20."""
     monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
     res = fetch_club_matches_window(pg_analytics_db.reader, AnalyticsWindowSpec(reference_now=REF_NOW))
     w = res.window
-    assert w.window_mode == "ROLLING_DAYS"
-    assert w.eligible_record_count == 5
+    assert w.window_mode == "LAST_N_MATCHES"
+    assert w.match_limit == FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES == 20
+    assert w.season_equivalence == "UNVERIFIED"
+    assert w.eligible_record_count == 6
     assert w.excluded_record_count == 8  # 1 abandoned + 1 partial + 1 rejected + 4 non-replay quarantine + 1 replay conflict
     assert set(w.exclusion_reasons.keys()) == {
         "ABANDONED",
@@ -723,14 +761,16 @@ def test_27_insufficient_sample_result(monkeypatch: pytest.MonkeyPatch, pg_analy
 
 
 def test_28_maximum_match_limit(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
-    """28. Maximum match limit enforced."""
-    assert FC27_ANALYTICS_MAX_MATCHES == 100
+    """28. Maximum match limit enforced (250)."""
+    assert FC27_ANALYTICS_MAX_MATCHES == 250
     with pytest.raises(ValueError):
-        AnalyticsWindowSpec(max_matches=101)
+        AnalyticsWindowSpec(max_matches=251)
     with pytest.raises(ValueError):
-        AnalyticsWindowSpec(last_n_matches=101)
+        AnalyticsWindowSpec(last_n_matches=251)
     with pytest.raises(ValueError):
-        AnalyticsWindowSpec(recent_n_matches=101)
+        AnalyticsWindowSpec(recent_n_matches=251)
+    with pytest.raises(ValueError):
+        AnalyticsWindowSpec(window_days=731)
 
 
 def test_29_maximum_player_limit(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
@@ -783,7 +823,8 @@ def test_32_no_writes_attempted(monkeypatch: pytest.MonkeyPatch, pg_analytics_db
         snap = build_club_analytics_snapshot(conn, AnalyticsWindowSpec(reference_now=REF_NOW))
         storage = fetch_club_storage_summary(conn)
         dq = fetch_data_quality_summary(conn)
-        assert snap.window.eligible_record_count == 5
+        assert snap.window.eligible_record_count == 6
+        assert snap.recent_form_summary["matches_analyzed"] == 5
         assert storage.club_exists is True
         assert dq.accepted_matches == 6
         assert dq.quarantined_matches == 4
@@ -849,7 +890,7 @@ def test_35_no_provider_call(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: A
         side_effect=AssertionError("Provider call must never occur"),
     ):
         snap = build_club_analytics_snapshot(pg_analytics_db.reader, AnalyticsWindowSpec(reference_now=REF_NOW))
-        assert snap.window.eligible_record_count == 5
+        assert snap.window.eligible_record_count == 6
 
 
 def test_36_no_recommendation_generation(monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext) -> None:
@@ -883,3 +924,277 @@ def test_38_matchpulse_boundary_intact() -> None:
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_39_default_window_last_20_and_recent_5_and_max_730(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """39. Default window is LAST_N_MATCHES=20, recent form is RECENT_N_MATCHES=5, max rolling window is 730 days."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+    assert FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES == 20
+    assert FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES == 5
+    assert FC27_ANALYTICS_MAX_WINDOW_DAYS == 730
+    assert SEASON_EQUIVALENCE == "UNVERIFIED"
+
+    default_res = fetch_club_matches_window(pg_analytics_db.reader)
+    assert default_res.window.window_mode == "LAST_N_MATCHES"
+    assert default_res.window.match_limit == 20
+    assert default_res.window.season_equivalence == "UNVERIFIED"
+    assert "two seasons" not in default_res.window.window_description.lower()
+
+    recent_spec = AnalyticsWindowSpec.recent_form(reference_now=REF_NOW)
+    recent_res = fetch_club_matches_window(pg_analytics_db.reader, recent_spec)
+    assert recent_res.window.window_mode == "RECENT_N_MATCHES"
+    assert recent_res.window.match_limit == 5
+    assert len(recent_res.matches) == 5
+
+    max_rolling_spec = AnalyticsWindowSpec(window_days=730, reference_now=REF_NOW)
+    rolling_res = fetch_club_matches_window(pg_analytics_db.reader, max_rolling_spec)
+    assert rolling_res.window.window_mode == "ROLLING_DAYS"
+    assert rolling_res.window.window_days == 730
+    assert rolling_res.window.season_equivalence == "UNVERIFIED"
+    assert "two seasons" not in rolling_res.window.window_description.lower()
+
+
+def test_40_nested_and_non_autocommit_and_pooled_transactions(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """40. Verify autocommit=False, existing outer transaction (SAVEPOINT isolation), and pooled connection reuse."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+
+    # 1. Non-autocommit connection starting in IDLE
+    with psycopg.connect(pg_analytics_db.reader, autocommit=False) as conn:
+        assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        res = fetch_club_matches_window(conn, AnalyticsWindowSpec(last_n_matches=3))
+        assert len(res.matches) == 3
+        assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+    # 2. Existing outer transaction (INTRANS) is preserved on both success and failure/timeout
+    with psycopg.connect(pg_analytics_db.admin, autocommit=False) as conn:
+        with conn.cursor() as outer_cur:
+            outer_cur.execute("CREATE TEMP TABLE fc27_outer_tx_guard (marker text)")
+            outer_cur.execute("INSERT INTO fc27_outer_tx_guard VALUES ('keep_alive')")
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+
+            # Run read-only analytics inside outer transaction
+            res = fetch_club_matches_window(conn, AnalyticsWindowSpec(last_n_matches=2))
+            assert len(res.matches) == 2
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+
+            # Trigger a query error inside _read_only_cursor; outer tx must remain INTRANS and healthy!
+            with pytest.raises(FC27AnalyticsError):
+                with _read_only_cursor(conn, timeout_ms=1000) as inner_cur:
+                    inner_cur.execute("SELECT 1 / 0")
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+
+            # Trigger a timeout inside _read_only_cursor; outer tx must remain INTRANS and healthy!
+            with pytest.raises(FC27AnalyticsTimeoutError):
+                with _read_only_cursor(conn, timeout_ms=50) as inner_cur:
+                    inner_cur.execute("SELECT pg_sleep(0.5)")
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+
+            outer_cur.execute("SELECT marker FROM fc27_outer_tx_guard")
+            assert outer_cur.fetchone()[0] == "keep_alive"
+        conn.rollback()
+
+    # 3. Pooled connection reuse
+    class _FakePool:
+        def __init__(self, uri: str) -> None:
+            self.conn = psycopg.connect(uri, autocommit=False)
+
+        @property
+        def connection(self):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def _ctx():
+                yield self.conn
+
+            return _ctx
+
+        def close(self) -> None:
+            self.conn.close()
+
+    pool = _FakePool(pg_analytics_db.reader)
+    try:
+        r1 = fetch_club_matches_window(pool, AnalyticsWindowSpec(last_n_matches=2))
+        assert len(r1.matches) == 2
+        assert pool.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        r2 = fetch_data_quality_summary(pool)
+        assert r2.accepted_matches == 6
+        assert pool.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    finally:
+        pool.close()
+
+
+def test_41_reader_role_least_privilege_posture(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """41. Verify fc27_reader has SELECT only on fc27_* tables and zero write/DDL/PostgresSaver/mutating-fn access."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+    with psycopg.connect(pg_analytics_db.reader, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_user")
+            assert cur.fetchone()[0] == "fc27_reader"
+
+            for tbl in (
+                "fc27_clubs",
+                "fc27_export_batches",
+                "fc27_matches",
+                "fc27_player_match_stats",
+                "fc27_quarantine_records",
+            ):
+                cur.execute(
+                    "SELECT has_table_privilege('fc27_reader', %s, 'SELECT')",
+                    (f"public.{tbl}",),
+                )
+                assert cur.fetchone()[0] is True
+                for forbidden_priv in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+                    cur.execute(
+                        "SELECT has_table_privilege('fc27_reader', %s, %s)",
+                        (f"public.{tbl}", forbidden_priv),
+                    )
+                    assert cur.fetchone()[0] is False, f"fc27_reader must not have {forbidden_priv} on {tbl}"
+
+            cur.execute("SELECT has_schema_privilege('fc27_reader', 'public', 'CREATE')")
+            assert cur.fetchone()[0] is False
+
+            # No access to PostgresSaver internal tables
+            for ps_tbl in (
+                "checkpoints",
+                "checkpoint_blobs",
+                "checkpoint_writes",
+                "checkpoint_migrations",
+            ):
+                cur.execute(
+                    "SELECT has_table_privilege('fc27_reader', %s, 'SELECT')",
+                    (f"public.{ps_tbl}",),
+                )
+                assert cur.fetchone()[0] is False
+
+            # Cannot execute mutating functions
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cur.execute("SELECT * FROM public.fc27_purge_expired_quarantine()")
+
+
+def test_42_quarantine_review_and_expiry_eligibility(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """42. Matches with unresolved or expired quarantine records remain ineligible until APPROVED_OVERRIDE/RESOLVED."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+    with psycopg.connect(pg_analytics_db.admin, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            # Insert an expired quarantine row targeting m_syn_001
+            cur.execute(
+                """
+                INSERT INTO public.fc27_quarantine_records (
+                    club_id, platform, game_version, external_match_id,
+                    source_classification, anomaly_category, reason_code,
+                    diagnostic_paths, payload_sha256, review_status,
+                    quarantined_at, expires_at
+                ) VALUES (
+                    %s, %s, %s, 'm_syn_001',
+                    'SYNTHETIC', 'VALIDATION_ANOMALY', 'EXPIRED_STILL_BLOCKS',
+                    '["matches[0].goals_for"]'::jsonb, %s, 'EXPIRED',
+                    %s, %s
+                )
+                RETURNING quarantine_id
+                """,
+                (
+                    EAST_COASTERS_CLUB_ID,
+                    EAST_COASTERS_PLATFORM,
+                    EAST_COASTERS_GAME_VERSION,
+                    _sha256_hex("expired-block-m1"),
+                    REF_NOW - timedelta(days=40),
+                    REF_NOW - timedelta(days=10),
+                ),
+            )
+            qid = cur.fetchone()[0]
+
+        try:
+            # Even though the quarantine metadata is EXPIRED, m_syn_001 must NOT become eligible automatically
+            res_blocked = fetch_club_matches_window(pg_analytics_db.reader)
+            assert all(m.match_id != "m_syn_001" for m in res_blocked.matches)
+
+            # When explicitly reviewed as APPROVED_OVERRIDE, m_syn_001 becomes eligible again
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE public.fc27_quarantine_records
+                    SET review_status = 'APPROVED_OVERRIDE',
+                        reviewed_by = 'steward-01',
+                        reviewed_at = %s
+                    WHERE quarantine_id = %s
+                    """,
+                    (REF_NOW, qid),
+                )
+            res_approved = fetch_club_matches_window(pg_analytics_db.reader)
+            assert any(m.match_id == "m_syn_001" for m in res_approved.matches)
+        finally:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM public.fc27_quarantine_records WHERE quarantine_id = %s",
+                    (qid,),
+                )
+
+
+def test_43_adversarial_alias_non_leakage(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """43. Unapproved aliases never leak through sorting, grouping, repr, exceptions, or timeout errors."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+    snap_default = build_club_analytics_snapshot(
+        pg_analytics_db.reader, AnalyticsWindowSpec(include_approved_aliases=False, reference_now=REF_NOW)
+    )
+    snap_approved = build_club_analytics_snapshot(
+        pg_analytics_db.reader, AnalyticsWindowSpec(include_approved_aliases=True, reference_now=REF_NOW)
+    )
+
+    assert "Unapproved_Alias_02" not in repr(snap_default)
+    assert "Unapproved_Alias_02" not in json.dumps(snap_default.model_dump())
+    assert "Approved_Alias_01" not in repr(snap_default)
+    assert "Approved_Alias_01" not in json.dumps(snap_default.model_dump())
+
+    assert "Unapproved_Alias_02" not in repr(snap_approved)
+    assert "Unapproved_Alias_02" not in json.dumps(snap_approved.model_dump())
+    assert "Approved_Alias_01" in json.dumps(snap_approved.model_dump())
+
+    with pytest.raises(FC27AnalyticsTimeoutError) as exc_info:
+        with _read_only_cursor(pg_analytics_db.reader, timeout_ms=50) as cur:
+            cur.execute("SELECT pg_sleep(0.5)")
+    assert "Unapproved_Alias_02" not in str(exc_info.value)
+    assert "Approved_Alias_01" not in str(exc_info.value)
+
+
+def test_44_query_plan_index_eligibility(
+    monkeypatch: pytest.MonkeyPatch, pg_analytics_db: AnalyticsDbContext
+) -> None:
+    """44. Verify PostgreSQL query plans use Migration 0012 indexes when sequential scans are disabled."""
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
+    with psycopg.connect(pg_analytics_db.reader, autocommit=True) as conn:
+        with _read_only_cursor(conn) as cur:
+            cur.execute("SET LOCAL enable_seqscan = off")
+            cur.execute(
+                "EXPLAIN SELECT external_match_id FROM public.fc27_matches "
+                "WHERE club_id = %s AND platform = %s AND game_version = %s "
+                "ORDER BY played_at DESC LIMIT 20",
+                (EAST_COASTERS_CLUB_ID, EAST_COASTERS_PLATFORM, EAST_COASTERS_GAME_VERSION),
+            )
+            plan_matches = "\n".join(r[0] for r in cur.fetchall())
+            assert "idx_fc27_matches_club_played_at" in plan_matches
+
+            cur.execute(
+                "EXPLAIN SELECT local_player_reference FROM public.fc27_player_match_stats "
+                "WHERE club_id = %s AND platform = %s AND game_version = %s AND local_player_reference = %s",
+                (EAST_COASTERS_CLUB_ID, EAST_COASTERS_PLATFORM, EAST_COASTERS_GAME_VERSION, "player_st_01"),
+            )
+            plan_stats = "\n".join(r[0] for r in cur.fetchall())
+            assert "idx_fc27_player_match_stats_club_player" in plan_stats
+
+            cur.execute(
+                "EXPLAIN SELECT quarantine_id FROM public.fc27_quarantine_records "
+                "WHERE club_id = %s AND platform = %s AND game_version = %s ORDER BY quarantined_at DESC",
+                (EAST_COASTERS_CLUB_ID, EAST_COASTERS_PLATFORM, EAST_COASTERS_GAME_VERSION),
+            )
+            plan_q = "\n".join(r[0] for r in cur.fetchall())
+            assert "idx_fc27_quarantine_records_club_quarantined_at" in plan_q

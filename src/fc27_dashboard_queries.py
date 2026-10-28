@@ -50,11 +50,15 @@ from src.schemas import (
 )
 
 FC27_ANALYTICS_QUERY_TIMEOUT_MS = 5000
-FC27_ANALYTICS_MAX_MATCHES = 100
+FC27_ANALYTICS_STATEMENT_TIMEOUT_MS = FC27_ANALYTICS_QUERY_TIMEOUT_MS
+FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES = 20
+FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES = 5
+FC27_ANALYTICS_MAX_WINDOW_DAYS = 730
+# Maximum optional rolling-day window. Never treated as season equivalence.
+FC27_ANALYTICS_WINDOW_DAYS = FC27_ANALYTICS_MAX_WINDOW_DAYS
+FC27_ANALYTICS_MAX_MATCHES = 250
 FC27_ANALYTICS_MAX_PLAYERS = 100
-# Configurable rolling-window default in days. This is an operator-configurable
-# rolling window and MUST NOT be treated as an authoritative EA "two seasons" rule.
-FC27_ANALYTICS_WINDOW_DAYS = 84
+SEASON_EQUIVALENCE: Literal["UNVERIFIED"] = "UNVERIFIED"
 
 _CLUB_ID_RE = r"^[0-9]{1,20}$"
 _PLATFORM_RE = r"^(common-gen5|nx)$"
@@ -105,6 +109,11 @@ def enforce_analytics_gates() -> None:
         raise FC27AnalyticsPostureError("DISPATCH_WORKER_ENABLED must remain false")
 
 
+def require_fc27_analytics_enabled() -> None:
+    """Verify FC27_ANALYTICS_ENABLED and safety posture before any database operation."""
+    enforce_analytics_gates()
+
+
 # ==============================================================================
 # Parameterized Read-Only SQL Statements (public.fc27_* only)
 # ==============================================================================
@@ -133,6 +142,24 @@ WHERE m.club_id = %s
   AND m.data_quality_status IN ('VERIFIED', 'PROVISIONAL', 'DEGRADED')
   AND m.played_at >= %s
   AND m.played_at <= %s
+  AND EXISTS (
+      SELECT 1
+      FROM public.fc27_export_batches AS b
+      WHERE b.export_id = m.export_id
+        AND b.club_id = m.club_id
+        AND b.platform = m.platform
+        AND b.game_version = m.game_version
+        AND b.accepted_matches > 0
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM public.fc27_quarantine_records AS q
+      WHERE q.club_id = m.club_id
+        AND q.platform = m.platform
+        AND q.game_version = m.game_version
+        AND q.external_match_id = m.external_match_id
+        AND q.review_status NOT IN ('APPROVED_OVERRIDE', 'RESOLVED')
+  )
 ORDER BY m.played_at DESC, m.external_match_id ASC
 LIMIT %s
 """
@@ -159,6 +186,24 @@ WHERE m.club_id = %s
   AND m.game_version = %s
   AND m.match_status = 'COMPLETED'
   AND m.data_quality_status IN ('VERIFIED', 'PROVISIONAL', 'DEGRADED')
+  AND EXISTS (
+      SELECT 1
+      FROM public.fc27_export_batches AS b
+      WHERE b.export_id = m.export_id
+        AND b.club_id = m.club_id
+        AND b.platform = m.platform
+        AND b.game_version = m.game_version
+        AND b.accepted_matches > 0
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM public.fc27_quarantine_records AS q
+      WHERE q.club_id = m.club_id
+        AND q.platform = m.platform
+        AND q.game_version = m.game_version
+        AND q.external_match_id = m.external_match_id
+        AND q.review_status NOT IN ('APPROVED_OVERRIDE', 'RESOLVED')
+  )
 ORDER BY m.played_at DESC, m.external_match_id ASC
 LIMIT %s
 """
@@ -205,6 +250,7 @@ WHERE q.club_id = %s
   AND q.game_version = %s
   AND q.quarantined_at >= %s
   AND q.quarantined_at <= %s
+  AND q.review_status NOT IN ('APPROVED_OVERRIDE', 'RESOLVED')
 """
 
 SQL_SELECT_QUARANTINE_EXCLUSION_COUNTS_ALL = """
@@ -215,6 +261,7 @@ FROM public.fc27_quarantine_records AS q
 WHERE q.club_id = %s
   AND q.platform = %s
   AND q.game_version = %s
+  AND q.review_status NOT IN ('APPROVED_OVERRIDE', 'RESOLVED')
 """
 
 # Note: SQL_SELECT_PLAYER_STATS_NO_ALIAS intentionally never selects p.display_alias.
@@ -414,7 +461,17 @@ ALL_ANALYTICS_SQL_STATEMENTS: tuple[str, ...] = (
 
 
 class AnalyticsWindowSpec(BaseModel):
-    """Immutable query specification for read-only FC 27 analytics retrieval."""
+    """Immutable query specification for read-only FC 27 analytics retrieval.
+
+    Default window decision:
+    - Default context (no window mode specified): last 20 completed eligible matches
+      (``FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES = 20``).
+    - Recent-form context: last 5 completed eligible matches
+      (``FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES = 5``).
+    - Optional rolling-day window: available only when ``window_days`` is explicitly
+      specified, capped at ``FC27_ANALYTICS_MAX_WINDOW_DAYS = 730``.
+    - Season equivalence: ``UNVERIFIED``.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -423,7 +480,9 @@ class AnalyticsWindowSpec(BaseModel):
     game_version: Literal["FC27"] = "FC27"
     start_at: datetime | None = None
     end_at: datetime | None = None
-    window_days: int | None = Field(default=None, ge=1, le=365)
+    window_days: int | None = Field(
+        default=None, ge=1, le=FC27_ANALYTICS_MAX_WINDOW_DAYS
+    )
     last_n_matches: int | None = Field(default=None, ge=1, le=FC27_ANALYTICS_MAX_MATCHES)
     recent_n_matches: int | None = Field(default=None, ge=1, le=FC27_ANALYTICS_MAX_MATCHES)
     minimum_sample_size: int = Field(default=3, ge=1, le=FC27_ANALYTICS_MAX_MATCHES)
@@ -434,8 +493,15 @@ class AnalyticsWindowSpec(BaseModel):
         default=FC27_ANALYTICS_MAX_PLAYERS, ge=1, le=FC27_ANALYTICS_MAX_PLAYERS
     )
     include_aliases: bool = False
+    include_approved_aliases: bool = False
     query_timeout_ms: int = Field(default=FC27_ANALYTICS_QUERY_TIMEOUT_MS, ge=1, le=30000)
     reference_now: datetime | None = None
+
+    @classmethod
+    def recent_form(cls, **kwargs: Any) -> AnalyticsWindowSpec:
+        """Construct a specification for the default recent-form context (last 5 completed matches)."""
+        kwargs.setdefault("recent_n_matches", FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES)
+        return cls(**kwargs)
 
     @field_validator("start_at", "end_at", "reference_now")
     @classmethod
@@ -469,7 +535,24 @@ class AnalyticsWindowSpec(BaseModel):
             raise ValueError(
                 "specify at most one of (start_at/end_at), window_days, last_n_matches, or recent_n_matches"
             )
+        effective_aliases = bool(self.include_aliases or self.include_approved_aliases)
+        object.__setattr__(self, "include_aliases", effective_aliases)
+        object.__setattr__(self, "include_approved_aliases", effective_aliases)
         return self
+
+
+def _describe_confidence_reason(
+    eligible_count: int, minimum_sample_size: int, confidence_tier: str
+) -> str:
+    if eligible_count < minimum_sample_size:
+        return (
+            f"Eligible completed match count ({eligible_count}) is below minimum_sample_size "
+            f"({minimum_sample_size}); tier={confidence_tier}."
+        )
+    return (
+        f"Computed from {eligible_count} eligible completed matches "
+        f"(minimum_sample_size={minimum_sample_size}); tier={confidence_tier}."
+    )
 
 
 class WindowMetadata(BaseModel):
@@ -491,6 +574,8 @@ class WindowMetadata(BaseModel):
     excluded_record_count: int
     exclusion_reasons: dict[str, int]
     confidence_tier: SAMPLE_SIZE_TIERS
+    confidence_reason: str = ""
+    season_equivalence: Literal["UNVERIFIED"] = SEASON_EQUIVALENCE
     formula_version: str = FORMULA_VERSION
     generated_at: str
 
@@ -625,9 +710,13 @@ class ClubAnalyticsSnapshotResult(BaseModel):
     game_version: str
     window: WindowMetadata
     club_summary: dict[str, Any]
+    recent_form_summary: dict[str, Any] = Field(default_factory=dict)
     player_form_summary: dict[str, dict[str, Any]]
     formation_summary: dict[str, dict[str, Any]]
     data_quality_summary: DataQualitySummaryResult
+    confidence_tier: SAMPLE_SIZE_TIERS
+    confidence_reason: str
+    season_equivalence: Literal["UNVERIFIED"] = SEASON_EQUIVALENCE
     formula_version: str = FORMULA_VERSION
     generated_at: str
 
@@ -646,8 +735,11 @@ def _read_only_cursor(
     """Open a strict PostgreSQL READ ONLY transaction with bounded statement_timeout.
 
     Always rolls back on exit so no transaction remains open and zero writes can commit.
+    If called inside an existing valid outer transaction, isolates the read-only scope
+    with a PostgreSQL SAVEPOINT and rolls back to that savepoint on exit so the outer
+    caller transaction is never unexpectedly rolled back or left in INERROR.
     """
-    enforce_analytics_gates()
+    require_fc27_analytics_enabled()
     if not (1 <= int(timeout_ms) <= 30000):
         raise ValueError("query_timeout_ms must be between 1 and 30000")
 
@@ -684,15 +776,30 @@ def _enter_readonly_tx(
     *,
     timeout_ms: int,
 ) -> Iterator[psycopg.Cursor[Any]]:
-    try:
-        if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
-            conn.rollback()
-    except Exception:
-        pass
+    if conn.closed:
+        raise FC27AnalyticsError("PostgreSQL connection is closed")
+
+    initial_status = conn.info.transaction_status
+    if initial_status == psycopg.pq.TransactionStatus.INERROR:
+        raise FC27AnalyticsError(
+            "Cannot execute read-only analytics query on a connection in an aborted transaction state"
+        )
+
+    in_outer_tx = initial_status == psycopg.pq.TransactionStatus.INTRANS
+    sp_name = "fc27_analytics_ro_sp"
+    savepoint_created = False
 
     try:
         with conn.cursor() as cur:
-            cur.execute("BEGIN TRANSACTION READ ONLY")
+            if in_outer_tx:
+                cur.execute(f"SAVEPOINT {sp_name}")
+                savepoint_created = True
+                cur.execute("SET LOCAL transaction_read_only = on")
+            elif conn.autocommit:
+                cur.execute("BEGIN TRANSACTION READ ONLY")
+            else:
+                cur.execute("SET LOCAL transaction_read_only = on")
+
             cur.execute(
                 "SELECT set_config('statement_timeout', %s, true)",
                 (f"{timeout_ms}ms",),
@@ -715,7 +822,12 @@ def _enter_readonly_tx(
     finally:
         try:
             if not conn.closed:
-                conn.rollback()
+                if in_outer_tx and savepoint_created:
+                    with conn.cursor() as cleanup_cur:
+                        cleanup_cur.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+                        cleanup_cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+                elif not in_outer_tx:
+                    conn.rollback()
         except Exception:
             pass
 
@@ -744,22 +856,27 @@ def _resolve_window(
         )
         return ("EXPLICIT_RANGE", desc, spec.start_at, spec.end_at, None, limit)
 
-    if spec.last_n_matches is not None:
-        limit = min(spec.last_n_matches, spec.max_matches, FC27_ANALYTICS_MAX_MATCHES)
-        desc = f"Last {limit} completed matches"
-        return ("LAST_N_MATCHES", desc, None, None, None, limit)
+    if spec.window_days is not None:
+        days = spec.window_days
+        start_utc = now_utc - timedelta(days=days)
+        end_utc = now_utc
+        limit = min(spec.max_matches, FC27_ANALYTICS_MAX_MATCHES)
+        desc = f"Optional rolling {days}-day window (max {limit} matches, season_equivalence={SEASON_EQUIVALENCE})"
+        return ("ROLLING_DAYS", desc, start_utc, end_utc, days, limit)
 
     if spec.recent_n_matches is not None:
         limit = min(spec.recent_n_matches, spec.max_matches, FC27_ANALYTICS_MAX_MATCHES)
         desc = f"Recent {limit} completed matches"
         return ("RECENT_N_MATCHES", desc, None, None, None, limit)
 
-    days = spec.window_days if spec.window_days is not None else FC27_ANALYTICS_WINDOW_DAYS
-    start_utc = now_utc - timedelta(days=days)
-    end_utc = now_utc
-    limit = min(spec.max_matches, FC27_ANALYTICS_MAX_MATCHES)
-    desc = f"Configurable rolling {days}-day window (max {limit} matches)"
-    return ("ROLLING_DAYS", desc, start_utc, end_utc, days, limit)
+    default_last_n = (
+        spec.last_n_matches
+        if spec.last_n_matches is not None
+        else FC27_ANALYTICS_DEFAULT_LAST_N_MATCHES
+    )
+    limit = min(default_last_n, spec.max_matches, FC27_ANALYTICS_MAX_MATCHES)
+    desc = f"Last {limit} completed matches (season_equivalence={SEASON_EQUIVALENCE})"
+    return ("LAST_N_MATCHES", desc, None, None, None, limit)
 
 
 def _fetch_exclusion_reasons(
@@ -960,6 +1077,7 @@ def fetch_club_matches_window(
     spec: AnalyticsWindowSpec | None = None,
 ) -> ClubMatchWindowResult:
     """Fetch bounded completed and accepted club matches for the requested window."""
+    require_fc27_analytics_enabled()
     active_spec = spec or AnalyticsWindowSpec()
     mode, desc, start_utc, end_utc, days, limit = _resolve_window(active_spec)
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -1049,6 +1167,9 @@ def fetch_club_matches_window(
 
     eligible_count = len(matches)
     confidence_tier = determine_sample_size_tier(eligible_count)
+    confidence_reason = _describe_confidence_reason(
+        eligible_count, active_spec.minimum_sample_size, confidence_tier
+    )
     window_meta = WindowMetadata(
         window_mode=mode,
         window_description=desc,
@@ -1062,6 +1183,8 @@ def fetch_club_matches_window(
         excluded_record_count=excluded_count,
         exclusion_reasons=exclusion_reasons,
         confidence_tier=confidence_tier,  # type: ignore[arg-type]
+        confidence_reason=confidence_reason,
+        season_equivalence=SEASON_EQUIVALENCE,
         formula_version=FORMULA_VERSION,
         generated_at=generated_at,
     )
@@ -1082,6 +1205,7 @@ def fetch_player_performances_window(
     local_player_ref: str | None = None,
 ) -> PlayerPerformanceWindowResult:
     """Fetch bounded player performances and pure Python form summaries for a window."""
+    require_fc27_analytics_enabled()
     active_spec = spec or AnalyticsWindowSpec()
     if local_player_ref is not None and not _LOCAL_PLAYER_REF_RE.match(local_player_ref):
         raise ValueError("invalid local_player_ref format")
@@ -1164,6 +1288,9 @@ def fetch_player_performances_window(
 
     eligible_count = len(raw_matches)
     confidence_tier = determine_sample_size_tier(eligible_count)
+    confidence_reason = _describe_confidence_reason(
+        eligible_count, active_spec.minimum_sample_size, confidence_tier
+    )
     window_meta = WindowMetadata(
         window_mode=mode,
         window_description=desc,
@@ -1177,6 +1304,8 @@ def fetch_player_performances_window(
         excluded_record_count=excluded_count,
         exclusion_reasons=exclusion_reasons,
         confidence_tier=confidence_tier,  # type: ignore[arg-type]
+        confidence_reason=confidence_reason,
+        season_equivalence=SEASON_EQUIVALENCE,
         formula_version=FORMULA_VERSION,
         generated_at=generated_at,
     )
@@ -1200,6 +1329,7 @@ def fetch_club_storage_summary(
     query_timeout_ms: int = FC27_ANALYTICS_QUERY_TIMEOUT_MS,
 ) -> ClubStorageSummaryResult:
     """Fetch read-only storage and coverage summary for a club."""
+    require_fc27_analytics_enabled()
     spec = AnalyticsWindowSpec(
         club_id=club_id,
         platform=platform,
@@ -1275,6 +1405,7 @@ def fetch_data_quality_summary(
 
     Never selects or returns diagnostic_paths or review_notes.
     """
+    require_fc27_analytics_enabled()
     spec = AnalyticsWindowSpec(
         club_id=club_id,
         platform=platform,
@@ -1314,8 +1445,10 @@ def build_club_analytics_snapshot(
     """Build a complete read-only club analytics snapshot for the requested window.
 
     SQL retrieves normalized bounded rows; pure Python functions in ``src.fc27_analytics``
-    compute team diagnostics, player form, and formation performance.
+    compute team diagnostics, recent form (last 5 completed matches), player form,
+    and formation performance.
     """
+    require_fc27_analytics_enabled()
     active_spec = spec or AnalyticsWindowSpec()
     match_window = fetch_club_matches_window(conn_or_pool, active_spec)
     player_window = fetch_player_performances_window(conn_or_pool, active_spec)
@@ -1332,6 +1465,10 @@ def build_club_analytics_snapshot(
     club_summary["minimum_sample_size"] = active_spec.minimum_sample_size
     club_summary["minimum_sample_met"] = match_window.window.minimum_sample_met
 
+    recent_matches = domain_matches[:FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES]
+    recent_form_summary = compute_team_diagnostics(recent_matches)
+    recent_form_summary["recent_n_target"] = FC27_ANALYTICS_DEFAULT_RECENT_N_MATCHES
+
     formation_summary = evaluate_formation_performance(domain_matches)
     generated_at = datetime.now(timezone.utc).isoformat()
 
@@ -1341,10 +1478,13 @@ def build_club_analytics_snapshot(
         game_version=active_spec.game_version,
         window=match_window.window,
         club_summary=club_summary,
+        recent_form_summary=recent_form_summary,
         player_form_summary=player_window.player_summaries,
         formation_summary=formation_summary,
         data_quality_summary=dq_summary,
+        confidence_tier=match_window.window.confidence_tier,
+        confidence_reason=match_window.window.confidence_reason,
+        season_equivalence=SEASON_EQUIVALENCE,
         formula_version=FORMULA_VERSION,
         generated_at=generated_at,
     )
-
