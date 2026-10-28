@@ -583,3 +583,47 @@ def generate_team_snapshot(
         sample_size_tier=determine_sample_size_tier(match_count),  # type: ignore[arg-type]
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def compute_team_diagnostics(matches: list[ClubMatch]) -> dict[str, Any]:
+    """Computes pure team-level diagnostics from normalized ClubMatch records."""
+    total = len(matches)
+    wins = sum(1 for m in matches if m.result == "WIN")
+    draws = sum(1 for m in matches if m.result == "DRAW")
+    losses = sum(1 for m in matches if m.result == "LOSS")
+    goals_for = sum(m.goals_for for m in matches)
+    goals_against = sum(m.goals_against for m in matches)
+    win_rate_pct = round((wins / total * 100.0), 1) if total > 0 else 0.0
+    points_per_game = round(((wins * 3 + draws) / total), 2) if total > 0 else 0.0
+    team_balance = calculate_team_balance(matches)
+    roster: set[str] = set()
+    for m in matches:
+        roster.update(m.lineup)
+
+    return {
+        "matches_analyzed": total,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+        "goals_for": goals_for,
+        "goals_against": goals_against,
+        "goal_difference": goals_for - goals_against,
+        "win_rate_pct": win_rate_pct,
+        "points_per_game": points_per_game,
+        "active_roster_count": len(roster),
+        "team_balance": team_balance,
+        "sample_size_tier": determine_sample_size_tier(total),
+        "formula_version": FORMULA_VERSION,
+    }
+
+
+def aggregate_player_form(performances: list[PlayerMatch]) -> dict[str, dict[str, Any]]:
+    """Groups normalized PlayerMatch records by player_id and computes per-player form."""
+    by_player: dict[str, list[PlayerMatch]] = defaultdict(list)
+    for perf in performances:
+        by_player[perf.player_id].append(perf)
+
+    result: dict[str, dict[str, Any]] = {}
+    for player_id in sorted(by_player.keys()):
+        result[player_id] = calculate_player_contribution(by_player[player_id])
+    return result

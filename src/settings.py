@@ -117,6 +117,17 @@ def is_fc27_persistence_enabled() -> bool:
     return safe_env_bool("FC27_PERSISTENCE_ENABLED", default=False)
 
 
+def is_fc27_analytics_enabled() -> bool:
+    """Check if FC 27 read-only PostgreSQL analytics queries are enabled (default: False).
+
+    Rules:
+    - Missing or malformed values fail closed to False.
+    - Enabling analytics does NOT enable persistence, networking, live ingestion,
+      recommendations, or dispatch.
+    """
+    return safe_env_bool("FC27_ANALYTICS_ENABLED", default=False)
+
+
 def is_dispatch_enabled() -> bool:
     """Check if dispatch is enabled (default: False)."""
     return safe_env_bool("DISPATCH_ENABLED", default=False)
