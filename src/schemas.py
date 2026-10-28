@@ -677,3 +677,128 @@ class EastCoastersRecommendation(BaseModel):
     caveats: list[str] = Field(default_factory=list)
     formula_version: str = "fc27-v1.0"
     config_version: str = "east-coasters-v1.0"
+
+
+PRE_APPROVAL_POLICY_VERSION = "fc27-preapproval-v1"
+FORMATION_REGISTRY_VERSION = "fc27-formations-v1"
+
+PreApprovalReasonCode = Literal[
+    "VALIDATION_ANOMALY",
+    "INSUFFICIENT_DATA",
+    "INSUFFICIENT_SAMPLE",
+    "EMPTY_LEAD_PACKAGES",
+    "PACKAGE_SCHEMA_INVALID",
+    "PACKAGE_HASH_MISSING",
+    "PACKAGE_HASH_INVALID",
+    "PACKAGE_HASH_MISMATCH",
+    "CANDIDATE_ID_MISMATCH",
+    "DUPLICATE_CANDIDATE_PACKAGE",
+    "OBJECTIVE_METRIC_UNSUPPORTED",
+    "OBJECTIVE_BOUND_VIOLATION",
+    "OBJECTIVE_VALUE_NONFINITE",
+    "FORMATION_UNSUPPORTED",
+    "ROLE_ASSIGNMENT_INVALID",
+    "DUPLICATE_PLAYER_ASSIGNMENT",
+    "ROSTER_SIZE_INVALID",
+    "CONFIDENCE_METADATA_MISSING",
+    "FORMULA_VERSION_UNSUPPORTED",
+    "RECOMMENDATION_DISABLED",
+    "APPROVAL_POLICY_VIOLATION",
+    "REVIEW_REQUIRED",
+]
+
+VALID_PRE_APPROVAL_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "VALIDATION_ANOMALY",
+        "INSUFFICIENT_DATA",
+        "INSUFFICIENT_SAMPLE",
+        "EMPTY_LEAD_PACKAGES",
+        "PACKAGE_SCHEMA_INVALID",
+        "PACKAGE_HASH_MISSING",
+        "PACKAGE_HASH_INVALID",
+        "PACKAGE_HASH_MISMATCH",
+        "CANDIDATE_ID_MISMATCH",
+        "DUPLICATE_CANDIDATE_PACKAGE",
+        "OBJECTIVE_METRIC_UNSUPPORTED",
+        "OBJECTIVE_BOUND_VIOLATION",
+        "OBJECTIVE_VALUE_NONFINITE",
+        "FORMATION_UNSUPPORTED",
+        "ROLE_ASSIGNMENT_INVALID",
+        "DUPLICATE_PLAYER_ASSIGNMENT",
+        "ROSTER_SIZE_INVALID",
+        "CONFIDENCE_METADATA_MISSING",
+        "FORMULA_VERSION_UNSUPPORTED",
+        "RECOMMENDATION_DISABLED",
+        "APPROVAL_POLICY_VIOLATION",
+        "REVIEW_REQUIRED",
+    }
+)
+
+
+class PreApprovalValidationResult(BaseModel):
+    """Immutable deterministic pre-approval validation result.
+
+    Carries bounded metadata-only validation status, reason codes, counts,
+    confidence/formula versions, and formation registry version. Never embeds
+    raw package bodies, prompts, model outputs, aliases, or credentials.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    valid: bool
+    approvable: bool
+    policy_version: str = Field(default=PRE_APPROVAL_POLICY_VERSION, min_length=1, max_length=64)
+    validated_at: str = Field(min_length=1, max_length=64)
+    package_version: str | None = Field(default=None, max_length=128)
+    reason_codes: tuple[PreApprovalReasonCode, ...] = ()
+    warnings: tuple[str, ...] = ()
+    validated_package_count: int = Field(default=0, ge=0, le=100)
+    rejected_package_count: int = Field(default=0, ge=0, le=100)
+    confidence_tier: str | None = Field(default=None, max_length=64)
+    formula_version: str | None = Field(default=None, max_length=64)
+    formation_registry_version: str = Field(default="NOT_APPLICABLE", min_length=1, max_length=64)
+    review_required: bool = False
+
+    @field_validator("reason_codes")
+    @classmethod
+    def _check_reason_codes_bound(
+        cls, v: tuple[PreApprovalReasonCode, ...]
+    ) -> tuple[PreApprovalReasonCode, ...]:
+        if len(v) > 64:
+            raise ValueError("reason_codes exceeds maximum bound of 64")
+        return v
+
+    @field_validator("warnings")
+    @classmethod
+    def _check_warnings_bound(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if len(v) > 64:
+            raise ValueError("warnings exceeds maximum bound of 64")
+        for item in v:
+            if not isinstance(item, str) or len(item) > 256:
+                raise ValueError("warning item must be a bounded string (<= 256 chars)")
+        return v
+
+    def to_safe_summary(self) -> dict[str, Any]:
+        """Return bounded metadata-only summary suitable for graph state and tracing."""
+        status = (
+            "REVIEW_REQUIRED"
+            if self.review_required
+            else ("PASSED" if (self.valid and self.approvable) else ("VALID_UNAPPROVABLE" if self.valid else "FAILED"))
+        )
+        return {
+            "validation_status": status,
+            "valid": self.valid,
+            "approvable": self.approvable,
+            "policy_version": self.policy_version,
+            "validated_at": self.validated_at,
+            "package_version": self.package_version,
+            "validated_package_version": self.package_version if self.valid else None,
+            "reason_codes": list(self.reason_codes),
+            "warnings": list(self.warnings),
+            "validated_package_count": self.validated_package_count,
+            "rejected_package_count": self.rejected_package_count,
+            "confidence_tier": self.confidence_tier,
+            "formula_version": self.formula_version,
+            "formation_registry_version": self.formation_registry_version,
+            "review_required": self.review_required,
+        }
