@@ -759,6 +759,31 @@ class PreApprovalValidationResult(BaseModel):
     formation_registry_version: str = Field(default="NOT_APPLICABLE", min_length=1, max_length=64)
     review_required: bool = False
 
+    @field_validator("validated_at")
+    @classmethod
+    def _check_validated_at_utc(cls, v: str) -> str:
+        from datetime import datetime, timedelta
+
+        normalized = v[:-1] + "+00:00" if v.endswith("Z") else v
+        try:
+            dt = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError("validated_at must be a valid ISO-8601 timestamp") from exc
+        if dt.tzinfo is None or dt.utcoffset() != timedelta(0):
+            raise ValueError("validated_at must be a UTC-aware timestamp")
+        return v
+
+    @field_validator("package_version")
+    @classmethod
+    def _check_package_version_sha256(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        import re
+
+        if not re.fullmatch(r"^[0-9a-f]{64}$", v):
+            raise ValueError("package_version must be a 64-character lowercase hex SHA-256")
+        return v
+
     @field_validator("reason_codes")
     @classmethod
     def _check_reason_codes_bound(

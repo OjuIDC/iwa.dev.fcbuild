@@ -762,3 +762,27 @@ def test_46_fc27_approval_inconsistencies_empty_after_valid_and_invalid_runs(
             "SELECT * FROM public.fc27_approval_inconsistencies WHERE kind <> 'legacy_unlinked'"
         ).fetchall()
     assert rows == []
+
+
+def test_47_pre_approval_validation_result_enforces_utc_timestamp_and_sha256_hash_format() -> None:
+    with pytest.raises(Exception):
+        PreApprovalValidationResult(
+            valid=True,
+            approvable=True,
+            validated_at="2026-10-28T00:00:00",  # naive timestamp rejected
+            package_version="a" * 64,
+        )
+    with pytest.raises(Exception):
+        PreApprovalValidationResult(
+            valid=True,
+            approvable=True,
+            validated_at="2026-10-28T00:00:00+02:00",  # non-UTC offset rejected
+            package_version="a" * 64,
+        )
+    with pytest.raises(Exception):
+        PreApprovalValidationResult(
+            valid=True,
+            approvable=True,
+            validated_at="2026-10-28T00:00:00Z",
+            package_version="NOT-A-VALID-64-HEX-HASH",
+        )

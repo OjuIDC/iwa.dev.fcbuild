@@ -39,6 +39,7 @@ from .schemas import (
     VALID_PRE_APPROVAL_REASON_CODES,
     Candidate,
     EastCoastersRecommendation,
+    LeadPackage,
     Lineup,
     Objective,
     PreApprovalReasonCode,
@@ -984,6 +985,11 @@ def validate_pre_approval_packages(
                         availability=availability,
                         **clean_selections,
                     )
+                    if len(clean_selections) == len(SELECTIONS):
+                        LeadPackage(
+                            owner=SwarmRole(owner),
+                            **clean_selections,
+                        )
                 except Exception:
                     _add_reason(reasons, "PACKAGE_SCHEMA_INVALID")
                     pkg_ok = False
