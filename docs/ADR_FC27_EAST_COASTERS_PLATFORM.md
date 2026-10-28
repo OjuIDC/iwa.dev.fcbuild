@@ -573,12 +573,12 @@ Both community repositories are third-party client implementations for EA's unde
 - **Feature Gate**: `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false` by default (`is_fc27_standard_http_transport_enabled()` in `src/settings.py`).
 - **Headers**: Only `Accept: application/json` and `User-Agent: iwa.dev.fcbuild/0.1` (`STANDARD_APPLICATION_USER_AGENT`). Browser `Mozilla/5.0`, `Chrome/*`, `sec-ch-ua*`, `Sec-Fetch-*`, `Origin`, `Referer`, and `Cookie` headers are rejected before socket creation.
 - **Operations (`FC27_API_INGESTION_POLICIES`)**:
-  - `CLUB_IDENTITY`: `/api/fc/clubs/info` (`platform=common-gen5`, `clubIds=330323`, max `65,536` bytes)
-  - `CLUB_STATISTICS`: `/api/fc/clubs/overallStats` (`platform=common-gen5`, `clubIds=330323`, max `65,536` bytes)
-  - `RECENT_MATCHES`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch`, `maxResultCount=1..10`, max `262,144` bytes)
-  - `MATCH_PLAYER_STATISTICS`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch`, `maxResultCount=1..5`, max `262,144` bytes)
-  - `CURRENT_MEMBER_STATISTICS`: `/api/fc/members/stats` (`platform=common-gen5`, `clubId=330323`, max `131,072` bytes)
-  - `MEMBER_CAREER_STATISTICS`: `/api/fc/members/career/stats` (`platform=common-gen5`, `clubId=330323`, max `131,072` bytes)
+  - `CLUB_IDENTITY`: `/api/fc/clubs/info` (`platform=common-gen5`, `clubIds=330323`, max `1,048,576` bytes)
+  - `CLUB_STATISTICS`: `/api/fc/clubs/overallStats` (`platform=common-gen5`, `clubIds=330323`, max `1,048,576` bytes)
+  - `RECENT_MATCHES`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch|friendlyMatch`, `maxResultCount=1..25`, max `1,048,576` bytes)
+  - `MATCH_PLAYER_STATISTICS`: `/api/fc/clubs/matches` (`platform=common-gen5`, `clubIds=330323`, `matchType=leagueMatch|playoffMatch|friendlyMatch`, `maxResultCount=1..25`, max `1,048,576` bytes)
+  - `CURRENT_MEMBER_STATISTICS`: `/api/fc/members/stats` (`platform=common-gen5`, `clubId=330323`, max `1,048,576` bytes)
+  - `MEMBER_CAREER_STATISTICS`: `/api/fc/members/career/stats` (`platform=common-gen5`, `clubId=330323`, max `1,048,576` bytes)
 - **Safety Invariants**: `https` only, exact host `proclubs.ea.com` (default port `443`), `GET` only, `timeout_seconds = 10`, `max_attempts = 1`, `retries = 0`, `follow_redirects = False`. Any `401`, `403`, `429`, redirect (`301`/`302`/`303`/`307`/`308`), HTML challenge, or CAPTCHA immediately opens `FC27CircuitBreaker` and halts subsequent stages.
 
 ### 18.4 Empirical Stage F1 Execution & Stage 4 Browser-Profile Exception Gate

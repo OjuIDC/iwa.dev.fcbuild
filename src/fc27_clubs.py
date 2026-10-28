@@ -3873,7 +3873,20 @@ def build_east_coasters_api_request(
 
     if extra_query_params:
         for k, v in extra_query_params.items():
-            query_params[str(k)] = str(v)
+            k_str = str(k)
+            v_str = str(v)
+            if k_str in query_params and query_params[k_str] != v_str:
+                raise FC27ProviderError(
+                    f"Query parameter override rejected for '{k_str}'"
+                )
+            if k_str == "maxResultCount":
+                try:
+                    mrc_val = int(v_str)
+                except ValueError as exc:
+                    raise FC27ProviderError("maxResultCount must be an integer between 1 and 25") from exc
+                if not (1 <= mrc_val <= 25) or str(mrc_val) != v_str:
+                    raise FC27ProviderError("maxResultCount must be an integer between 1 and 25")
+            query_params[k_str] = v_str
 
     for req_param in op_policy.required_query_parameters:
         if req_param not in query_params:
@@ -4706,6 +4719,13 @@ def execute_stage1_standard_python_https_request(
     """
     import ssl
     import urllib.error
+
+    if not is_fc27_provider_enabled():
+        raise FC27ProviderError("FC27_PROVIDER_ENABLED=true is required for Stage 1 HTTP transport")
+    if not is_fc27_standard_http_transport_enabled():
+        raise FC27ProviderError("FC27_STANDARD_HTTP_TRANSPORT_ENABLED=true is required for Stage 1 HTTP transport")
+    if is_fc27_provider_dry_run():
+        raise FC27ProviderError("FC27_PROVIDER_DRY_RUN=false is required for Stage 1 HTTP transport")
 
     url = str(request_spec["url"])
     headers = dict(request_spec.get("headers") or {})

@@ -293,6 +293,12 @@ def test_05_exact_query_allowlist() -> None:
         build_east_coasters_api_request("RECENT_MATCHES", match_type="invalidMatchType")
     with pytest.raises(FC27ProviderError, match="maxResultCount"):
         build_east_coasters_api_request("RECENT_MATCHES", max_result_count=100)
+    with pytest.raises(FC27ProviderError, match="override rejected"):
+        build_east_coasters_api_request("CLUB_IDENTITY", extra_query_params={"clubIds": "999999"})
+    with pytest.raises(FC27ProviderError, match="override rejected"):
+        build_east_coasters_api_request("CLUB_IDENTITY", extra_query_params={"platform": "common-gen4"})
+    with pytest.raises(FC27ProviderError, match="maxResultCount"):
+        build_east_coasters_api_request("RECENT_MATCHES", extra_query_params={"maxResultCount": "999"})
 
 
 def test_06_operation_request_budgets_and_no_retries_or_redirects() -> None:
