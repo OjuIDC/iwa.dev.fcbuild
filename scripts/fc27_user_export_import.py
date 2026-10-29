@@ -34,6 +34,7 @@ from src.fc27_user_export import (
     FC27UserExportError,
     apply_fc27_user_export_plan,
     generate_baseline_preview,
+    normalize_operator_displayed_capture,
     parse_fc27_user_export_csv,
     parse_fc27_user_export_json,
     plan_fc27_user_export_import,
@@ -102,15 +103,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--format",
-        required=True,
+        required=False,
+        default=None,
         choices=["json", "csv"],
-        help="Format of export file ('json' or 'csv')",
+        help="Format of export file ('json' or 'csv'; defaults to 'json' when --operator-displayed is set)",
     )
 
     # Modes (mutually exclusive group)
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--validate",
+        "--validate-only",
+        dest="validate",
         action="store_true",
         default=False,
         help="Validate export envelope and integrity only (default mode)",
@@ -140,8 +144,19 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="Include sanitized pseudonymous player aliases in output summary",
     )
+    parser.add_argument(
+        "--operator-displayed",
+        action="store_true",
+        default=False,
+        help="Validate and normalize as OPERATOR_CAPTURED_DISPLAYED_DATA for East Coasters (330323/common-gen5/FC27)",
+    )
 
     args = parser.parse_args(argv)
+    if args.format is None:
+        if args.operator_displayed:
+            args.format = "json"
+        else:
+            parser.error("the following arguments are required: --format")
 
     # Determine active mode
     if args.apply:
@@ -163,9 +178,9 @@ def main(argv: list[str] | None = None) -> int:
         print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
 
-    # Read bytes bounded
+    # Read bytes bounded into a mutable bytearray so raw input is overwritten after parsing
     try:
-        raw_bytes = file_path.read_bytes()
+        raw_buffer = bytearray(file_path.read_bytes())
     except Exception as exc:
         print(f"READ_ERROR: {type(exc).__name__}", file=sys.stderr)
         print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
@@ -173,10 +188,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # Parse and validate
     try:
-        if args.format == "json":
-            envelope = parse_fc27_user_export_json(raw_bytes)
+        if args.operator_displayed:
+            if args.format != "json":
+                raise ValueError("--operator-displayed requires --format json")
+            envelope = normalize_operator_displayed_capture(raw_buffer)
+        elif args.format == "json":
+            try:
+                envelope = parse_fc27_user_export_json(bytes(raw_buffer))
+            finally:
+                for idx in range(len(raw_buffer)):
+                    raw_buffer[idx] = 0
         else:
-            envelope = parse_fc27_user_export_csv(raw_bytes)
+            try:
+                envelope = parse_fc27_user_export_csv(bytes(raw_buffer))
+            finally:
+                for idx in range(len(raw_buffer)):
+                    raw_buffer[idx] = 0
     except FC27SensitiveFieldDetectedError as exc:
         print("IMPORT_STATUS: REJECTED", file=sys.stderr)
         print("REJECTION_REASON: SENSITIVE_FIELDS_DETECTED", file=sys.stderr)
@@ -196,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         print("SAFE_TO_RETAIN_RAW_UPLOAD: NO", file=sys.stderr)
         print("RAW_UPLOAD_RETAINED: NO", file=sys.stderr)
         return 1
+    finally:
+        del raw_buffer
 
     persistence_enabled = settings.is_fc27_persistence_enabled()
     db_uri: str | None = None
@@ -253,13 +282,15 @@ def main(argv: list[str] | None = None) -> int:
         status_str = "VALIDATED"
         pers_result = None
 
-    # Collect safe aliases if requested
+    # Collect safe aliases if requested (never emitted when --operator-displayed is active)
     safe_aliases: list[str] = []
-    if args.include_safe_aliases:
+    if args.include_safe_aliases and not args.operator_displayed:
         for m in envelope.matches:
             for p in m.player_performances:
                 if p.display_alias and p.display_alias not in safe_aliases:
                     safe_aliases.append(p.display_alias)
+
+    total_player_stat_rows = sum(len(m.player_performances) for m in envelope.matches)
 
     accepted_out = (
         pers_result.applied_count
@@ -284,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"IMPORT_STATUS: {status_str}")
     print(f"MODE: {mode.upper()}")
     print(f"EXPORT_ID: {envelope.export_id}")
+    print(f"CONTRACT_VERSION: {envelope.contract_version}")
+    print(f"SCHEMA_VERSION: {envelope.schema_version}")
     print(f"PAYLOAD_SHA256: {envelope.payload_sha256}")
     print(f"SOURCE_CLASSIFICATION: {envelope.source_classification}")
     print(f"SUPPLIED_CLUB_ID: {envelope.club.club_id}")
@@ -292,22 +325,25 @@ def main(argv: list[str] | None = None) -> int:
     print(f"CLUB_IDENTITY_DECISION: {plan.club_identity_decision.value}")
     print(f"CAN_APPLY: {'YES' if (plan.can_apply and status_str != 'REJECTED') else 'NO'}")
     print(f"TOTAL_RECORDS: {plan.total_matches}")
+    print(f"PLAYER_STAT_RECORDS: {total_player_stat_rows}")
     print(f"ACCEPTED_RECORDS: {accepted_out}")
     print(f"DUPLICATE_RECORDS: {duplicate_out}")
     print(f"QUARANTINED_RECORDS: {quarantined_out}")
     print(f"CONFLICTING_RECORDS: {len(plan.conflicting_match_ids)}")
     print(f"REJECTED_RECORDS: {len(plan.rejected_records)}")
+    print("SENSITIVE_FIELD_COUNT: 0")
     print(f"ANALYTICS_ELIGIBLE_RECORDS: {plan.analytics_eligible_matches}")
     print(f"SAMPLE_SIZE_CONFIDENCE_TIER: {preview.sample_size_confidence_tier}")
     print(f"COACHING_READINESS: {'YES' if preview.coaching_readiness else 'NO'}")
     print(f"FC27_PERSISTENCE_ENABLED: {'YES' if persistence_enabled else 'NO'}")
     print(f"PERSISTENCE_APPLIED: {persistence_applied_str}")
+    print("ANALYTICS_RUN: NO")
     print("RECOMMENDATIONS_GENERATED: 0")
     print("DISPATCH_EXECUTED: NO")
     print("HUMAN_REVIEW_REQUIRED: YES")
     print("RAW_UPLOAD_RETAINED: NO")
 
-    if args.include_safe_aliases:
+    if args.include_safe_aliases and not args.operator_displayed:
         print(f"SAFE_ALIASES: {json.dumps(sorted(safe_aliases))}")
 
     if pers_result:

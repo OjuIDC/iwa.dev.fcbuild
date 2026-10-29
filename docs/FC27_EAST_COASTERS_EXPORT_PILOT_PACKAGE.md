@@ -461,3 +461,14 @@ If `--validate` rejects an input with `REJECTION_REASON: SENSITIVE_FIELDS_DETECT
 1. **Explicit Prohibition on `--apply`:** Running `scripts/fc27_user_export_import.py --apply` or `--confirm-apply` is strictly prohibited. Persistence and transactional apply remain deferred (`PERSISTENCE_IMPLEMENTED=DEFERRED`, `TRANSACTIONAL_APPLY_IMPLEMENTED=DEFERRED`, `READY_FOR_PRODUCTION_APPLY=NO`).
 2. **Explicit Prohibition on Recommendations:** Enabling, generating, ranking, or dispatching player or tactical recommendations is strictly prohibited (`FC27_RECOMMENDATIONS_ENABLED=false`, `DISPATCH_ENABLED=false`, `DISPATCH_WORKER_ENABLED=false`).
 3. **Explicit Prohibition on Committing Pilot Data:** Committing any real East Coasters export, match history, player alias, or personal identifier into the repository is strictly prohibited.
+
+---
+
+## 13. Operator-Captured Displayed Data (`OPERATOR_CAPTURED_DISPLAYED_DATA`) & `.local-data/` Privacy Rules
+
+1. **Private Git-Ignored Directory (`.local-data/`):**
+   - `.local-data/` is ignored in `.gitignore` so private operator working files (`.local-data/east-coasters-fc27-normalized.json` and `.local-data/east-coasters-fc27-input-checklist.md`) cannot be staged or committed without explicit override, which is prohibited.
+   - The application never deletes the operator's source file automatically; "raw input discarded" means `normalize_operator_displayed_capture` overwrites its in-memory mutable `bytearray` buffer with zeroes immediately after parsing and retains zero raw copies in logs, events, quarantine records, or database tables.
+2. **Pseudonymous Player References & Private Alias Map Policy:**
+   - All player references in `OPERATOR_CAPTURED_DISPLAYED_DATA` must use the non-reversible pseudonymous format `plr_ecf_<bounded deterministic reference>` (e.g., `plr_ecf_slot_01`), with `display_alias: null` (`STORE_DISPLAY_ALIASES=NO`).
+   - If the operator maintains a private alias-to-pseudonym lookup table, it must remain in a separate ignored file outside PostgreSQL and analytics pipelines, must never be committed or printed, and must be deleted or rotated immediately upon member consent revocation or expiration of the agreed team review retention window.

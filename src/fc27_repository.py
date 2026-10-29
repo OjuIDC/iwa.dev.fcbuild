@@ -413,6 +413,11 @@ def _insert_quarantine_row_in_tx(
     now = quarantined_at or datetime.now(timezone.utc)
     exp = expires_at or (now + timedelta(days=DEFAULT_QUARANTINE_RETENTION_DAYS))
     norm_version = game_version.upper()
+    db_source_classification = (
+        "USER_SUPPLIED_EXPORT"
+        if source_classification == "OPERATOR_CAPTURED_DISPLAYED_DATA"
+        else source_classification
+    )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -436,7 +441,7 @@ def _insert_quarantine_row_in_tx(
                 norm_version,
                 external_match_id,
                 export_id,
-                source_classification,
+                db_source_classification,
                 anomaly_category,
                 reason_code,
                 json.dumps(clean_paths),
@@ -741,6 +746,11 @@ def apply_export_plan(
     if source_classification_override is not None and source_classification_override != "AUTHORIZED_CAPTURE":
         raise FC27RepositoryError(f"unsupported source_classification_override '{source_classification_override}'")
     source_cls = source_classification_override or envelope.source_classification
+    db_source_cls = (
+        "USER_SUPPLIED_EXPORT"
+        if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA"
+        else source_cls
+    )
     now = datetime.now(timezone.utc)
 
     # Pre-check sensitive fields on dumped envelope as defense-in-depth
@@ -1008,7 +1018,7 @@ def apply_export_plan(
                         game_version,
                         envelope.club.club_name,
                         safe_identity_state,
-                        source_cls,
+                        db_source_cls,
                         now,
                         now,
                     ),
@@ -1040,7 +1050,7 @@ def apply_export_plan(
                         game_version,
                         envelope.contract_version,
                         envelope.schema_version,
-                        source_cls,
+                        db_source_cls,
                         envelope.supplier_attestation.supplier_role,
                         envelope.supplier_attestation.supplier_reference,
                         envelope.consent_attestation.consent_version,
@@ -1056,7 +1066,10 @@ def apply_export_plan(
                 # Step 9: Insert accepted matches and player performance rows
                 player_stats_count = 0
                 for match, mhash in accepted_matches:
-                    dq_status = "VERIFIED" if match.match_status == "COMPLETED" else "PROVISIONAL"
+                    if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA":
+                        dq_status = "PROVISIONAL"
+                    else:
+                        dq_status = "VERIFIED" if match.match_status == "COMPLETED" else "PROVISIONAL"
                     cur.execute(
                         """
                         INSERT INTO public.fc27_matches (
@@ -1086,7 +1099,7 @@ def apply_export_plan(
                             match.formation,
                             match.match_status,
                             mhash,
-                            source_cls,
+                            db_source_cls,
                             dq_status,
                             now,
                         ),
@@ -1096,6 +1109,26 @@ def apply_export_plan(
                     match_uuid = m_row[0]
 
                     for perf in match.player_performances:
+                        if any(
+                            val is None
+                            for val in (
+                                perf.minutes_played,
+                                perf.passes_attempted,
+                                perf.passes_completed,
+                                perf.tackles_attempted,
+                                perf.tackles_won,
+                                perf.interceptions,
+                                perf.shots,
+                                perf.shots_on_target,
+                                perf.saves,
+                                perf.possession_losses,
+                                perf.provider_rating,
+                            )
+                        ):
+                            raise FC27RepositoryError(
+                                "cannot persist player performance row with null required SQL metric"
+                            )
+                        safe_alias = None if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA" else perf.display_alias
                         cur.execute(
                             """
                             INSERT INTO public.fc27_player_match_stats (
@@ -1125,7 +1158,7 @@ def apply_export_plan(
                                 game_version,
                                 match.external_match_id,
                                 perf.local_player_reference,
-                                perf.display_alias,
+                                safe_alias,
                                 perf.position,
                                 perf.role,
                                 perf.minutes_played,
@@ -1140,7 +1173,7 @@ def apply_export_plan(
                                 perf.shots_on_target,
                                 perf.saves,
                                 perf.possession_losses,
-                                Decimal(str(round(perf.provider_rating, 2))),
+                                Decimal(str(round(float(perf.provider_rating), 2))),
                                 perf.build_reference,
                                 now,
                             ),
