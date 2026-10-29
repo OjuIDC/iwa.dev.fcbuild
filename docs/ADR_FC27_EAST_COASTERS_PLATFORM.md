@@ -594,3 +594,88 @@ Both community repositories are third-party client implementations for EA's unde
   - Executing browser headers or TLS impersonation (`impit` / `curl_cffi`) remains prohibited without a separate explicit operator exception decision, isolated Docker egress containment (`proclubs.ea.com:443` only), and legal/ToS sign-off.
 - **Normalized API Capture Persistence & Analytics Readiness**:
   - `normalize_api_capture_to_export_envelope`, `persist_authorized_east_coasters_capture` (`source_classification='AUTHORIZED_CAPTURE'`, pseudonymous `plr_ecf_<hash12>` player keys, `display_alias=NULL`), and `validate_east_coasters_read_only_analytics` are implemented and verified in `tests/test_fc27_api_ingestion.py` using deterministic fixtures against PostgreSQL 16. No live EA data was persisted in this phase (`PERSISTENCE_APPLIED=NO`).
+
+---
+
+## 19. East Coasters Operator-Captured Displayed Data Workflow & Data-Portability Governance
+
+### 19.1 Operator-Captured Displayed Data Contract (`OPERATOR_CAPTURED_DISPLAYED_DATA`)
+- **Semantic Definition**:
+  - `OPERATOR_CAPTURED_DISPLAYED_DATA` denotes normalized records manually transcribed by a club-authorized East Coasters operator from values visibly displayed in an authorized game/team interface or internal club records.
+  - Data is **not** obtained by replaying hidden browser requests, using `proclubs-sdk`/`impit`, browser TLS impersonation, browser automation, or credentials stored by this repository.
+  - Normalized records remain `PROVISIONAL` (`data_quality_status = 'PROVISIONAL'`, `manager_authority_status = 'UNVERIFIED'`) until independent human review; they are never mapped conceptually to provider-verified data.
+- **PostgreSQL `0012` Persistence Mapping**:
+  - To preserve migration `0012_fc27_performance_and_quarantine.sql` unchanged (`MIGRATIONS_MODIFIED=NO`), `OPERATOR_CAPTURED_DISPLAYED_DATA` is preserved verbatim in `FC27UserExportEnvelope.source_classification`, `compute_match_hash`, and `domain_events.reason`, while `src/fc27_repository.py` maps the SQL `source_classification` column to the compatible `'USER_SUPPLIED_EXPORT'` `CHECK` value and forces `data_quality_status = 'PROVISIONAL'` and `display_alias = NULL`.
+- **Fixed Identity & Attestation Invariants**:
+  - Club Identity: `club_id = "330323"`, `club_name = "East Coasters"` (permitting only NFKC Unicode normalization, leading/trailing whitespace removal, repeated-space collapse, and case-insensitive exact match), `platform = "common-gen5"`, `game_version = "FC27"`.
+  - Attestation (`FC27OperatorCaptureAttestation`):
+    - `attestation_reference = "api-east-coasters-authority-2026-10"`
+    - `operator_authority_status = "USER_ATTESTED"`
+    - `member_consent_status = "USER_ATTESTED"`
+    - `captain_consent_status = "USER_ATTESTED"`
+    - `manager_authority_database_status = "UNVERIFIED"`
+    - `allowed_purpose = "TEAM_REVIEW"`
+    - `publication_allowed = false`, `recommendations_allowed = false`, `dispatch_allowed = false`
+- **Privacy & Raw-Input Disposal**:
+  - Player references must use pseudonymous format `plr_ecf_<bounded deterministic reference>` (`^plr_ecf_[a-z0-9_]{3,48}$`).
+  - `STORE_DISPLAY_ALIASES=NO`, `STORE_GAMER_TAGS=NO`, `STORE_EXTERNAL_PLAYER_IDENTIFIERS=NO`, `PUBLICATION_ALLOWED=NO`.
+  - Unknown optional player statistics remain `null` (`None`) in domain validation and are never silently substituted with `0`.
+  - `normalize_operator_displayed_capture` reads input into a bounded mutable `bytearray` and overwrites every byte with `0` in `finally` before releasing the buffer (`RAW_INPUT_RETAINED_BY_APPLICATION=NO`).
+
+### 19.2 JSON Schema, Synthetic Template, and CLI Commands
+- **JSON Schema (Draft 2020-12)**: [`config/fc27_east_coasters_normalized_export.schema.json`](../config/fc27_east_coasters_normalized_export.schema.json)
+- **Synthetic Test Template**: [`tests/synthetic_fc27_east_coasters_normalized_template.json`](../tests/synthetic_fc27_east_coasters_normalized_template.json) (`data_classification="SYNTHETIC"`, `real_player_data=false`, `safe_for_tests=true`)
+- **CLI Commands (`scripts/fc27_user_export_import.py`)**:
+  - **Validate (default safe mode, zero DB connections)**:
+    ```powershell
+    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --validate
+    ```
+  - **Dry-Run (zero write transactions)**:
+    ```powershell
+    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --dry-run
+    ```
+  - **Apply (separately gated by `FC27_PERSISTENCE_ENABLED=true` and `--confirm-apply`)**:
+    ```powershell
+    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --apply --confirm-apply
+    ```
+
+### 19.3 Product-Supported Export Availability Assessment
+The operator checked official EA SPORTS FC product surfaces and documentation for supported club data export mechanisms:
+
+| Export / Access Mechanism | Surface Checked | Availability Status | Notes |
+| :--- | :--- | :--- | :--- |
+| **In-Game Export** | EA SPORTS FC Clubs in-game menus (Club Overview, Match History, Squad Hub) | `NOT_FOUND` | Game UI displays recent match summaries and member stats on-screen only; no JSON/CSV export function exists in-game. |
+| **EA Account Data Export** | EA Account & Privacy Settings (`myaccount.ea.com` -> Privacy -> Download Your Data) | `REQUIRES_EA_CONFIRMATION` | Individual account archive exists for a single player's EA account, but whether it includes multi-member Club (`330323`) match tables in structured form is `NOT_DOCUMENTED`. |
+| **Downloadable Match History** | EA SPORTS FC Web App & Companion App | `NOT_FOUND` | Web/Companion apps target Ultimate Team (FUT) management and do not expose downloadable Clubs match history exports. |
+| **Club-Management Export** | Clubs Manager / Commissioner in-game tools | `NOT_FOUND` | No commissioner roster or match-log export tool is provided in the Clubs management interface. |
+| **Official API or Partner Access** | EA developer portals & public documentation | `NOT_DOCUMENTED` | EA does not publish public developer documentation, API keys, or OAuth scopes for `/api/fc/clubs/*` endpoints. |
+| **Support Request for Data Portability** | EA Help / Privacy Support (`help.ea.com`) | `REQUIRES_EA_CONFIRMATION` | Requires submitting a formal inquiry to EA Privacy / Player Support to confirm whether club-level match history for Club ID `330323` can be exported upon manager request. |
+
+### 19.4 Concise Permission / Data-Portability Request Draft to EA (`EA_PERMISSION_REQUEST_SENT=NO`)
+> **Status**: Drafted in documentation only (`EA_PERMISSION_REQUEST_SENT = NO`). Do **not** transmit automatically.
+
+```text
+Subject: Request for Authorized Access or Data Export Method – EA SPORTS FC Clubs (Club ID: 330323, "East Coasters", common-gen5)
+
+To: EA SPORTS FC Community / Developer Relations & Data Privacy Team
+
+Hello,
+
+I am the club manager for the EA SPORTS FC Clubs team "East Coasters" (Club ID: 330323, platform: common-gen5). With the explicit consent of our participating club members, we maintain a private, non-commercial team analytics repository to review our own club match results, formations, and pseudonymized player performance metrics.
+
+We observed that standard HTTPS requests (without browser TLS impersonation) to the unauthenticated web endpoints under https://proclubs.ea.com/api/fc/clubs/info are blocked by edge CDN filtering (HTTP 403), and we do not wish to use browser-profile TLS impersonation or unauthorized scraping against EA services.
+
+Could you please advise whether EA provides:
+1. An officially supported export tool or data-portability download for Club ID 330323 match history and club statistics on platform common-gen5; or
+2. Written permission, an allowlisted User-Agent/API token, or an approved read-only interface for low-volume, manual retrieval of our own club's statistics (Club ID 330323)?
+
+Scope of requested access:
+- Club: East Coasters (Club ID: 330323, platform: common-gen5)
+- Purpose: Internal, non-commercial team coaching and performance analytics
+- Frequency: Manual post-session retrieval only (no continuous polling, no public redistribution, no third-party scraping)
+
+Thank you for your time and guidance.
+
+Sincerely,
+Club Manager, East Coasters (Club ID: 330323)
+```

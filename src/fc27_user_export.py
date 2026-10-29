@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -142,6 +143,7 @@ PROHIBITED_SENSITIVE_TOKENS: set[str] = {
     "auth",
     "bearer",
     "cookie",
+    "setcookie",
     "session",
     "token",
     "refreshtoken",
@@ -162,6 +164,22 @@ PROHIBITED_SENSITIVE_TOKENS: set[str] = {
     "authheader",
     "roster",
     "rawroster",
+    "playerid",
+    "externalplayerid",
+    "eaid",
+    "psnid",
+    "xboxid",
+    "rawresponse",
+    "rawbrowserresponse",
+    "rawpayload",
+    "rawproviderpayload",
+    "httpheaders",
+    "requestheaders",
+    "responseheaders",
+    "credentials",
+    "credential",
+    "devtools",
+    "har",
 }
 
 PROHIBITED_TOKEN_COMBINATIONS: tuple[tuple[str, ...], ...] = (
@@ -178,6 +196,19 @@ PROHIBITED_TOKEN_COMBINATIONS: tuple[tuple[str, ...], ...] = (
     ("private", "key"),
     ("refresh", "token"),
     ("raw", "roster"),
+    ("player", "id"),
+    ("external", "player", "id"),
+    ("ea", "id"),
+    ("psn", "id"),
+    ("xbox", "id"),
+    ("set", "cookie"),
+    ("raw", "response"),
+    ("raw", "browser", "response"),
+    ("raw", "payload"),
+    ("raw", "provider", "payload"),
+    ("http", "headers"),
+    ("request", "headers"),
+    ("response", "headers"),
 )
 
 
@@ -338,19 +369,20 @@ class FC27SuppliedPlayerPerformance(BaseModel):
     display_alias: str | None = Field(default=None, max_length=64)
     position: str = Field(default="UNKNOWN")
     role: str = Field(default="UNKNOWN")
-    minutes_played: int = Field(default=90, ge=0, le=130)
+    minutes_played: int | None = Field(default=90, ge=0, le=130)
     goals: int = Field(default=0, ge=0, le=99)
     assists: int = Field(default=0, ge=0, le=99)
-    passes_attempted: int = Field(default=0, ge=0)
-    passes_completed: int = Field(default=0, ge=0)
-    tackles_attempted: int = Field(default=0, ge=0)
-    tackles_won: int = Field(default=0, ge=0)
-    interceptions: int = Field(default=0, ge=0)
-    shots: int = Field(default=0, ge=0)
-    shots_on_target: int = Field(default=0, ge=0)
-    saves: int = Field(default=0, ge=0)
-    possession_losses: int = Field(default=0, ge=0)
-    provider_rating: float = Field(default=6.0, ge=0.0, le=10.0)
+    passes_attempted: int | None = Field(default=0, ge=0, le=500)
+    passes_completed: int | None = Field(default=0, ge=0, le=500)
+    tackles_attempted: int | None = Field(default=0, ge=0, le=200)
+    tackles_won: int | None = Field(default=0, ge=0, le=200)
+    interceptions: int | None = Field(default=0, ge=0, le=200)
+    shots: int | None = Field(default=0, ge=0, le=100)
+    shots_on_target: int | None = Field(default=0, ge=0, le=100)
+    saves: int | None = Field(default=0, ge=0, le=100)
+    possession_losses: int | None = Field(default=0, ge=0, le=200)
+    provider_rating: float | None = Field(default=6.0, ge=0.0, le=10.0)
+    clean_sheet: bool | None = None
     build_reference: str | None = Field(default=None, max_length=64)
 
     @field_validator("position")
@@ -369,18 +401,29 @@ class FC27SuppliedPlayerPerformance(BaseModel):
 
     @model_validator(mode="after")
     def validate_bounds(self) -> FC27SuppliedPlayerPerformance:
-        if self.passes_completed > self.passes_attempted:
-            raise ValueError(
-                f"passes_completed ({self.passes_completed}) cannot exceed passes_attempted ({self.passes_attempted})"
-            )
-        if self.tackles_won > self.tackles_attempted:
-            raise ValueError(
-                f"tackles_won ({self.tackles_won}) cannot exceed tackles_attempted ({self.tackles_attempted})"
-            )
-        if self.shots_on_target > self.shots:
-            raise ValueError(
-                f"shots_on_target ({self.shots_on_target}) cannot exceed shots ({self.shots})"
-            )
+        if self.passes_completed is not None and self.passes_attempted is not None:
+            if self.passes_completed > self.passes_attempted:
+                raise ValueError(
+                    f"passes_completed ({self.passes_completed}) cannot exceed passes_attempted ({self.passes_attempted})"
+                )
+        elif self.passes_completed is not None and self.passes_attempted is None:
+            raise ValueError("passes_completed cannot be provided when passes_attempted is null")
+
+        if self.tackles_won is not None and self.tackles_attempted is not None:
+            if self.tackles_won > self.tackles_attempted:
+                raise ValueError(
+                    f"tackles_won ({self.tackles_won}) cannot exceed tackles_attempted ({self.tackles_attempted})"
+                )
+        elif self.tackles_won is not None and self.tackles_attempted is None:
+            raise ValueError("tackles_won cannot be provided when tackles_attempted is null")
+
+        if self.shots_on_target is not None and self.shots is not None:
+            if self.shots_on_target > self.shots:
+                raise ValueError(
+                    f"shots_on_target ({self.shots_on_target}) cannot exceed shots ({self.shots})"
+                )
+        elif self.shots_on_target is not None and self.shots is None:
+            raise ValueError("shots_on_target cannot be provided when shots is null")
         return self
 
 
@@ -397,9 +440,12 @@ class FC27SuppliedMatch(BaseModel):
     opponent_name: str = Field(min_length=1, max_length=128)
     formation: str = Field(default="UNKNOWN")
     lineup: list[str] = Field(default_factory=list, max_length=11)
-    player_performances: list[FC27SuppliedPlayerPerformance] = Field(default_factory=list)
+    player_performances: list[FC27SuppliedPlayerPerformance] = Field(default_factory=list, max_length=18)
     source_record_hash: str | None = None
     match_status: Literal["COMPLETED", "ABANDONED", "PARTIAL"] = "COMPLETED"
+    match_type: Literal["LEAGUE", "PLAYOFF", "FRIENDLY", "CUP", "PRACTICE", "UNKNOWN"] | None = None
+    data_quality_status: Literal["PROVISIONAL", "VERIFIED", "INCOMPLETE"] | None = None
+    source_classification: Literal["USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"] | None = None
 
     @field_validator("opponent_name")
     @classmethod
@@ -408,9 +454,11 @@ class FC27SuppliedMatch(BaseModel):
             raise ValueError(f"opponent_name '{v}' begins with unsafe formula character")
         return v.strip()
 
-    @field_validator("formation")
+    @field_validator("formation", mode="before")
     @classmethod
-    def validate_formation_allowed(cls, v: str) -> str:
+    def validate_formation_allowed(cls, v: str | None) -> str:
+        if v is None:
+            return "UNKNOWN"
         if v != "UNKNOWN" and v not in VALID_FC27_FORMATIONS:
             raise ValueError(f"formation '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_FORMATIONS)}")
         return v
@@ -450,6 +498,50 @@ class FC27SuppliedMatch(BaseModel):
 # Phase 2: Export Envelope Model
 # ==============================================================================
 
+class FC27OperatorCaptureAttestation(BaseModel):
+    """Metadata-only operator authority and team consent attestation for operator-captured displayed data."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attestation_reference: Literal["api-east-coasters-authority-2026-10"]
+    operator_authority_status: Literal["USER_ATTESTED"]
+    member_consent_status: Literal["USER_ATTESTED"]
+    captain_consent_status: Literal["USER_ATTESTED"]
+    manager_authority_database_status: Literal["UNVERIFIED"]
+    allowed_purpose: Literal["TEAM_REVIEW"]
+    publication_allowed: Literal[False]
+    recommendations_allowed: Literal[False]
+    dispatch_allowed: Literal[False]
+
+
+class FC27SuppliedClubStatistics(BaseModel):
+    """Normalized aggregate club statistics supplied in a template or operator capture."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    matches_played: int = Field(ge=0, le=10000)
+    wins: int = Field(ge=0, le=10000)
+    draws: int = Field(ge=0, le=10000)
+    losses: int = Field(ge=0, le=10000)
+    goals_for: int = Field(ge=0, le=50000)
+    goals_against: int = Field(ge=0, le=50000)
+    clean_sheets: int = Field(default=0, ge=0, le=10000)
+    skill_rating: int | None = Field(default=None, ge=0, le=5000)
+    reputation_tier: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_aggregate_consistency(self) -> FC27SuppliedClubStatistics:
+        if (self.wins + self.draws + self.losses) != self.matches_played:
+            raise ValueError(
+                f"wins ({self.wins}) + draws ({self.draws}) + losses ({self.losses}) must equal matches_played ({self.matches_played})"
+            )
+        if self.clean_sheets > self.matches_played:
+            raise ValueError(
+                f"clean_sheets ({self.clean_sheets}) cannot exceed matches_played ({self.matches_played})"
+            )
+        return self
+
+
 class FC27UserExportEnvelope(BaseModel):
     """Immutable top-level envelope for user-supplied FC 27 match exports."""
 
@@ -458,16 +550,25 @@ class FC27UserExportEnvelope(BaseModel):
     export_id: str = Field(min_length=1, max_length=128)
     contract_version: Literal["1.0.0"] = "1.0.0"
     schema_version: Literal["1.0.0"] = "1.0.0"
+    formula_version: Literal["fc27-v1.0"] = "fc27-v1.0"
     generated_at: datetime
     supplied_at: datetime
     provider: str = Field(default="EA_FC_PRO_CLUBS", min_length=1, max_length=64)
     game_version: Literal["FC27", "fc27"] = "FC27"
     platform: Literal["common-gen5"] = "common-gen5"
     club: FC27SuppliedClubIdentity
+    club_statistics: FC27SuppliedClubStatistics | None = None
     supplier_attestation: FC27SupplierAttestation
     consent_attestation: FC27ConsentAttestation
+    operator_capture_attestation: FC27OperatorCaptureAttestation | None = None
     matches: list[FC27SuppliedMatch] = Field(default_factory=list, max_length=100)
-    source_classification: Literal["USER_SUPPLIED_EXPORT"] = "USER_SUPPLIED_EXPORT"
+    source_classification: Literal[
+        "USER_SUPPLIED_EXPORT",
+        "OPERATOR_CAPTURED_DISPLAYED_DATA",
+    ] = "USER_SUPPLIED_EXPORT"
+    data_classification: Literal["SYNTHETIC", "OPERATOR_PRIVATE"] | None = None
+    real_player_data: bool | None = None
+    safe_for_tests: bool | None = None
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -539,8 +640,15 @@ def compute_match_hash(
     source_classification: str = "USER_SUPPLIED_EXPORT",
 ) -> str:
     """Computes deterministic record hash for a single match with full scoping to prevent cross-club collisions."""
+    optional_operator_fields = ("match_type", "data_quality_status", "source_classification")
     if isinstance(match_data, FC27SuppliedMatch):
         d = match_data.model_dump(exclude={"source_record_hash"})
+        for k in optional_operator_fields:
+            if d.get(k) is None:
+                d.pop(k, None)
+        for p in d.get("player_performances", []):
+            if p.get("clean_sheet") is None:
+                p.pop("clean_sheet", None)
     else:
         d = {k: v for k, v in match_data.items() if k != "source_record_hash"}
 
@@ -673,6 +781,283 @@ def parse_fc27_user_export_json(
         )
 
     return envelope
+
+
+_OPERATOR_PSEUDONYM_RE = re.compile(r"^plr_ecf_[a-z0-9_]{3,48}$")
+_EXTERNAL_URL_RE = re.compile(r"^(?:https?|ftp|ws|wss)://", re.IGNORECASE)
+_OPTIONAL_OPERATOR_PLAYER_METRICS: tuple[str, ...] = (
+    "minutes_played",
+    "passes_attempted",
+    "passes_completed",
+    "tackles_attempted",
+    "tackles_won",
+    "interceptions",
+    "shots",
+    "shots_on_target",
+    "saves",
+    "possession_losses",
+    "provider_rating",
+    "clean_sheet",
+    "build_reference",
+)
+
+
+def normalize_operator_club_name(raw_name: Any) -> str:
+    """Normalizes and validates the East Coasters club name per C2 contract.
+
+    Permitted normalization:
+    - Unicode NFKC normalization
+    - leading/trailing whitespace removal
+    - repeated-space normalization
+    - case-insensitive comparison against 'East Coasters'
+    Does NOT remove arbitrary punctuation or use edit distance or substring matching.
+    """
+    if not isinstance(raw_name, str):
+        raise ValueError("club_name must be a string")
+    nfkc = unicodedata.normalize("NFKC", raw_name).strip()
+    collapsed_spaces = re.sub(r" +", " ", nfkc)
+    if collapsed_spaces.casefold() != EAST_COASTERS_CLUB_NAME.casefold():
+        raise FC27IdentityConflictError(
+            "operator displayed capture requires exact club_name 'East Coasters' after permitted whitespace/case normalization"
+        )
+    return EAST_COASTERS_CLUB_NAME
+
+
+def _scan_operator_capture_values(obj: Any, path: str = "") -> None:
+    """Scans string values in operator capture for unreplaced placeholders, external URLs, and formula prefixes."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            sub_path = f"{path}.{k}" if path else str(k)
+            _scan_operator_capture_values(v, sub_path)
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            _scan_operator_capture_values(item, f"{path}[{idx}]")
+    elif isinstance(obj, str):
+        if "REPLACE_WITH_OPERATOR_VALUE" in obj or "<CALCULATE_PAYLOAD_SHA256" in obj:
+            raise ValueError(f"unreplaced operator placeholder detected at '{path}'")
+        if _EXTERNAL_URL_RE.match(obj.strip()):
+            raise ValueError(f"prohibited external URL detected at '{path}'")
+        stripped = obj.lstrip(" \t\r\n\u00a0\ufeff")
+        if stripped.startswith("'"):
+            stripped = stripped[1:].lstrip(" \t\r\n\u00a0\ufeff")
+        if any(stripped.startswith(p) for p in FORMULA_INJECTION_PREFIXES):
+            raise FC27FormulaInjectionError(
+                f"formula injection prefix detected at '{path}'",
+                column=path,
+                row_index=0,
+            )
+
+
+def normalize_operator_displayed_capture(
+    raw_input: bytes | str | bytearray,
+    *,
+    expected_contract_version: str = SUPPORTED_CONTRACT_VERSION,
+    expected_schema_version: str = SUPPORTED_SCHEMA_VERSION,
+    max_bytes: int = MAX_EXPORT_BYTES,
+    evaluation_time: datetime | None = None,
+    allow_display_aliases: bool = False,
+) -> FC27UserExportEnvelope:
+    """Validates and normalizes operator-captured displayed data for East Coasters.
+
+    Contract invariants enforced (Part C & Part G):
+    - Reads into a bounded mutable bytearray and overwrites it with zeroes in finally.
+    - Rejects duplicate JSON keys, NaN/Infinity constants, and sensitive fields before domain acceptance.
+    - Requires source_classification == 'OPERATOR_CAPTURED_DISPLAYED_DATA'.
+    - Requires fixed club identity: club_id='330323', club_name='East Coasters' (with C2 normalization),
+      platform='common-gen5', game_version='FC27'.
+    - Requires metadata-only operator_capture_attestation with exact reference 'api-east-coasters-authority-2026-10',
+      USER_ATTESTED statuses, manager_authority_database_status='UNVERIFIED', and publication/recommendations/dispatch=False.
+    - Requires pseudonymous player references matching 'plr_ecf_<bounded deterministic reference>' and rejects
+      display_alias by default (STORE_DISPLAY_ALIASES=NO).
+    - Preserves null/omitted optional player statistics as None (never substitutes zero for unknown values).
+    """
+    now = evaluation_time or datetime.now(timezone.utc)
+    if isinstance(raw_input, bytearray):
+        mutable_buf = raw_input
+    elif isinstance(raw_input, bytes):
+        mutable_buf = bytearray(raw_input)
+    elif isinstance(raw_input, str):
+        mutable_buf = bytearray(raw_input.encode("utf-8"))
+    else:
+        raise ValueError("raw_input must be bytes, bytearray, or str")
+
+    try:
+        if len(mutable_buf) > max_bytes:
+            raise ValueError(f"export payload size ({len(mutable_buf)} bytes) exceeds maximum limit ({max_bytes} bytes)")
+
+        try:
+            text = mutable_buf.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"invalid UTF-8 encoding in export: {exc}") from exc
+
+        if text.startswith("\ufeff"):
+            text = text[1:]
+
+        try:
+            raw_dict = json.loads(
+                text,
+                object_pairs_hook=_reject_duplicate_json_keys,
+                parse_constant=_reject_json_constants,
+            )
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON structure: {exc}") from exc
+
+        if not isinstance(raw_dict, dict):
+            raise ValueError("top-level export must be a JSON object, arrays are forbidden")
+
+        _check_json_max_depth(raw_dict)
+
+        sensitive_paths = scan_for_sensitive_fields(raw_dict)
+        if sensitive_paths:
+            raise FC27SensitiveFieldDetectedError(
+                f"prohibited sensitive fields detected in export: {sensitive_paths}",
+                paths=sensitive_paths,
+            )
+
+        _scan_operator_capture_values(raw_dict)
+
+        cv = raw_dict.get("contract_version")
+        if cv != expected_contract_version:
+            raise ValueError(f"unsupported contract_version '{cv}'; expected '{expected_contract_version}'")
+        sv = raw_dict.get("schema_version")
+        if sv != expected_schema_version:
+            raise ValueError(f"unsupported schema_version '{sv}'; expected '{expected_schema_version}'")
+
+        if raw_dict.get("source_classification") != "OPERATOR_CAPTURED_DISPLAYED_DATA":
+            raise ValueError(
+                f"operator displayed capture requires source_classification='OPERATOR_CAPTURED_DISPLAYED_DATA', "
+                f"got '{raw_dict.get('source_classification')}'"
+            )
+
+        if raw_dict.get("game_version") != EAST_COASTERS_GAME_VERSION:
+            raise ValueError(
+                f"operator displayed capture requires game_version='{EAST_COASTERS_GAME_VERSION}', "
+                f"got '{raw_dict.get('game_version')}'"
+            )
+        if raw_dict.get("platform") != EAST_COASTERS_PLATFORM:
+            raise ValueError(
+                f"operator displayed capture requires platform='{EAST_COASTERS_PLATFORM}', "
+                f"got '{raw_dict.get('platform')}'"
+            )
+
+        club_obj = raw_dict.get("club")
+        if not isinstance(club_obj, dict):
+            raise ValueError("missing or invalid 'club' object")
+        if club_obj.get("club_id") != EAST_COASTERS_CLUB_ID:
+            raise FC27IdentityConflictError(
+                f"operator displayed capture requires club_id='{EAST_COASTERS_CLUB_ID}'"
+            )
+        if club_obj.get("platform") != EAST_COASTERS_PLATFORM:
+            raise FC27IdentityConflictError(
+                f"operator displayed capture requires club.platform='{EAST_COASTERS_PLATFORM}'"
+            )
+        if club_obj.get("game_version") != EAST_COASTERS_GAME_VERSION:
+            raise FC27IdentityConflictError(
+                f"operator displayed capture requires club.game_version='{EAST_COASTERS_GAME_VERSION}'"
+            )
+        normalized_club_name = normalize_operator_club_name(club_obj.get("club_name"))
+
+        if raw_dict.get("operator_capture_attestation") is None:
+            raise FC27AttestationError(
+                "missing required 'operator_capture_attestation' for OPERATOR_CAPTURED_DISPLAYED_DATA"
+            )
+
+        claimed_sha = raw_dict.get("payload_sha256")
+        if not claimed_sha:
+            raise ValueError("missing required field 'payload_sha256'")
+        computed_sha = compute_payload_sha256(raw_dict)
+        if claimed_sha != computed_sha:
+            raise FC27PayloadIntegrityError(
+                f"payload_sha256 mismatch: claimed '{claimed_sha}' != computed '{computed_sha}'"
+            )
+
+        # Normalize club_name and preserve None for omitted optional player metrics (never substitute zero)
+        normalized_dict = dict(raw_dict)
+        normalized_club = dict(club_obj)
+        normalized_club["club_name"] = normalized_club_name
+        normalized_dict["club"] = normalized_club
+
+        raw_matches = normalized_dict.get("matches")
+        if not isinstance(raw_matches, list):
+            raise ValueError("'matches' must be a list")
+
+        normalized_matches: list[dict[str, Any]] = []
+        for m_idx, m_raw in enumerate(raw_matches):
+            if not isinstance(m_raw, dict):
+                raise ValueError(f"matches[{m_idx}] must be an object")
+            for req_match_key in (
+                "external_match_id",
+                "played_at",
+                "result",
+                "goals_for",
+                "goals_against",
+                "opponent_name",
+            ):
+                if m_raw.get(req_match_key) is None:
+                    raise ValueError(f"matches[{m_idx}] missing required field '{req_match_key}'")
+            m_copy = dict(m_raw)
+            if m_copy.get("match_type") is None:
+                m_copy["match_type"] = "LEAGUE"
+            if m_copy.get("data_quality_status") is None:
+                m_copy["data_quality_status"] = "PROVISIONAL"
+            if m_copy.get("source_classification") is None:
+                m_copy["source_classification"] = "OPERATOR_CAPTURED_DISPLAYED_DATA"
+            elif m_copy.get("source_classification") != "OPERATOR_CAPTURED_DISPLAYED_DATA":
+                raise ValueError(
+                    f"matches[{m_idx}].source_classification must be 'OPERATOR_CAPTURED_DISPLAYED_DATA'"
+                )
+
+            for l_idx, l_ref in enumerate(m_copy.get("lineup") or []):
+                if not isinstance(l_ref, str) or not _OPERATOR_PSEUDONYM_RE.fullmatch(l_ref):
+                    raise ValueError(
+                        f"matches[{m_idx}].lineup[{l_idx}] must use pseudonymous format 'plr_ecf_<reference>'"
+                    )
+
+            norm_perfs: list[dict[str, Any]] = []
+            for p_idx, p_raw in enumerate(m_copy.get("player_performances") or []):
+                if not isinstance(p_raw, dict):
+                    raise ValueError(f"matches[{m_idx}].player_performances[{p_idx}] must be an object")
+                p_ref = p_raw.get("local_player_reference")
+                if not isinstance(p_ref, str) or not _OPERATOR_PSEUDONYM_RE.fullmatch(p_ref):
+                    raise ValueError(
+                        f"matches[{m_idx}].player_performances[{p_idx}].local_player_reference "
+                        f"must use pseudonymous format 'plr_ecf_<reference>'"
+                    )
+                if not allow_display_aliases and p_raw.get("display_alias") is not None:
+                    raise ValueError(
+                        f"matches[{m_idx}].player_performances[{p_idx}].display_alias is prohibited "
+                        f"when STORE_DISPLAY_ALIASES=NO"
+                    )
+                p_copy = dict(p_raw)
+                for opt_metric in _OPTIONAL_OPERATOR_PLAYER_METRICS:
+                    if opt_metric not in p_copy:
+                        p_copy[opt_metric] = None
+                norm_perfs.append(p_copy)
+            m_copy["player_performances"] = norm_perfs
+            normalized_matches.append(m_copy)
+
+        normalized_dict["matches"] = normalized_matches
+        envelope = FC27UserExportEnvelope.model_validate(normalized_dict)
+
+        max_allowed = now.timestamp() + CLOCK_SKEW_TOLERANCE_SECONDS
+        if envelope.generated_at.timestamp() > max_allowed:
+            raise ValueError(
+                f"generated_at ({envelope.generated_at.isoformat()}) is in the future beyond tolerance"
+            )
+        if envelope.supplied_at.timestamp() > max_allowed:
+            raise ValueError(
+                f"supplied_at ({envelope.supplied_at.isoformat()}) is in the future beyond tolerance"
+            )
+        for m_idx, m_obj in enumerate(envelope.matches):
+            if m_obj.played_at.timestamp() > max_allowed:
+                raise ValueError(
+                    f"matches[{m_idx}].played_at ({m_obj.played_at.isoformat()}) is in the future beyond tolerance"
+                )
+
+        return envelope
+    finally:
+        for idx in range(len(mutable_buf)):
+            mutable_buf[idx] = 0
 
 
 # ==============================================================================
