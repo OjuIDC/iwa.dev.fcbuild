@@ -21,6 +21,7 @@ from src.fc27_authorized_provider import (
     FC27ProviderCandidateClassification,
     FC27ProviderCandidateRecord,
     FC27ProviderSelectionDecision,
+    FC27SourceProvenance,
     evaluate_provider_selection_gate,
     pseudonymize_east_coasters_player_ref,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "FC27ProviderCandidateRecord",
     "FC27ProviderSelectionDecision",
     "FC27RetryPolicy",
+    "FC27SourceProvenance",
     "MEMBER_DATA_OPERATIONS",
     "PERMITTED_AUTH_METHODS",
     "PLAYER_DATA_OPERATIONS",

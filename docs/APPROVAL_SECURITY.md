@@ -1,5 +1,7 @@
 # Commissioner approval: how it works
 
+> **Reconciliation Note**: For the current unified approval architecture—covering WebAuthn passkeys (`src/identity/webauthn.py`) as the primary Commissioner authority, 14-field `fc27_decision_evidence` single-transaction binding (`src/approval_store.py`), pre-approval coaching validation (`src/fc27_coaching.py`), and symmetric HMAC-SHA256 shared-secret CLI fallback (`APPROVAL_CLI_HMAC_ENABLED=false` by default in `src/approval.py`)—see [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md).
+
 ## Roles
 The `X-API-Key` header selects the role:
 

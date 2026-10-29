@@ -35,7 +35,11 @@ jobs:
           pip install -r requirements-dev.txt -r requirements-swarms.txt -r requirements-langfuse.txt
           pip check
       - name: Compile
-        run: python -m compileall -q src tests host_agent voice
+        run: python -m compileall -q src scripts tests host_agent voice
+      - name: Documentation consistency gate
+        run: |
+          python -m pytest tests/test_documentation_consistency.py -q
+          python scripts/check_documentation_consistency.py --check --strict
       - name: Test
         run: python -m pytest -o addopts="" -q -rs
       - name: Compose config (all profiles)

@@ -1,5 +1,7 @@
 # MCP proxy and live WebSocket server: security and reliability notes
 
+> **Current Implementation Note**: In the current codebase, MCP tools and HTTP routes are implemented in [`src/fc27_mcp_server.py`](../../src/fc27_mcp_server.py) and [`src/mcp_retry.py`](../../src/mcp_retry.py), Graph API and Commissioner routes are served by [`src/graph_api.py`](../../src/graph_api.py), and FC 27 safe-adapter rate limiting, caching, and retry classification are implemented in [`src/fc27_api_rate_limit.py`](../../src/fc27_api_rate_limit.py) and [`src/fc27_api_cache.py`](../../src/fc27_api_cache.py) (with `max_retries=0` and `FC27_PROVIDER_ENABLED=false` by default; see [`../FC27_PROVIDER_INTEGRATION.md`](../FC27_PROVIDER_INTEGRATION.md)).
+
 Covers `src/fc27_mcp_server.py`, `src/mcp_retry.py` and `src/live_ws_server.py`.
 
 ## MCP proxy (`fc27_mcp_server.py`)

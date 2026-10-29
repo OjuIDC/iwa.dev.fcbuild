@@ -1,0 +1,181 @@
+# FC 27 Tactical Hypotheses Registry
+
+> **Global Classification Defaults**:
+> - `SOURCE_CLASSIFICATION=EXTERNAL_TACTICAL_HYPOTHESIS`
+> - `EAST_COASTERS_VALIDATION=NOT_RUN`
+> - `CURRENT_CONFIDENCE=UNVERIFIED`
+> - `RECOMMENDATION_STATUS=NOT_APPROVABLE`
+
+---
+
+## 1. Governance Policy for Tactical Claims
+
+External community, creator, and competitive meta claims (spanning EA SPORTS FC 25, FC 26, and early FC 27 Pro Clubs theorycrafting) **must never** be presented as verified East Coasters (`club_id=330323`, `common-gen5`) facts or hard-coded into `src/fc27_analytics.py`.
+
+Under `src/fc27_coaching.py` (`validate_coaching_recommendation`):
+1. Every external tactical claim is registered in this document as an `EXTERNAL_TACTICAL_HYPOTHESIS` with `approval_eligibility: NOT_APPROVABLE`.
+2. No tactical hypothesis may enter a Commissioner-approvable coaching package until East Coasters has accumulated the required minimum sample size (`minimum_data_required`) of verified `COMPLETED` matches in PostgreSQL 16 and passed controlled pre/post comparison without failing its `rejection_criteria`.
+
+---
+
+## 2. Registered Tactical Hypotheses (`TH-FC27-001` through `TH-FC27-010`)
+
+### 2.1 `TH-FC27-001` — `4-2-1-3` Primary Formation Candidate
+- **`hypothesis_id`**: `TH-FC27-001`
+- **`statement`**: Operating `4-2-1-3` as East Coasters' primary balanced/transition formation improves goal difference per match and defensive transition stability compared to three-midfielder flat shapes.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (Community / Competitive Pro Clubs Meta Consensus)
+- **`source_version`**: `community-meta-2026-q4`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches (`SYNTHETIC` fixtures excluded)
+- **`dependent_metrics`**: `goals_for_per_match`, `goals_against_per_match`, `win_rate_pct`, `clean_sheet_rate_pct` (`FORMULA_VERSION=1.0.0`)
+- **`confounders`**: Opponent division/skill rating, human player count (`5v5` vs `11v11`), AI defender behavior, match-state score effects.
+- **`minimum_data_required`**: `>= 20` eligible `COMPLETED` East Coasters matches (`HIGH_SAMPLE_READINESS`) including `>= 10` matches in `4-2-1-3` and `>= 10` matches in baseline alternative formations.
+- **`experiment_design`**: Compare `compute_formation_breakdown` metrics for `4-2-1-3` vs. club baseline across matched human-squad-size sessions over a 20-match rolling window.
+- **`rejection_criteria`**: Reject if `4-2-1-3` `goals_against_per_match` exceeds club baseline by `>= 0.35` or `points_per_match` is `<=` baseline after `10+` matches.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.2 `TH-FC27-002` — `4-1-2-1-2 Narrow` Secondary Formation Candidate
+- **`hypothesis_id`**: `TH-FC27-002`
+- **`statement`**: Deploying `4-1-2-1-2 Narrow` as a secondary central-overload formation increases central pass completion and shot creation against wide-stretched opponents.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (Community Pro Clubs Tactical Guides)
+- **`source_version`**: `community-meta-2026-q4`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `goals_for_per_match`, `pass_completion_pct`, `points_per_match`, `goals_against_per_match`
+- **`confounders`**: Fullback stamina depletion, opponent wide-overload counterattacks, human striker partnership familiarity.
+- **`minimum_data_required`**: `>= 10` eligible `COMPLETED` East Coasters matches in `4-1-2-1-2 Narrow` (`PROVISIONAL_TRENDS` tier minimum).
+- **`experiment_design`**: Evaluate `compute_formation_breakdown` and midfielder `pass_completion_pct` across `>= 10` completed league/playoff matches.
+- **`rejection_criteria`**: Reject if `goals_against_per_match` increases by `>= 0.40` due to flank exposure or `win_rate_pct` trails the primary shape by `>= 15%`.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.3 `TH-FC27-003` — Staggered Dual-CDM Hypothesis (Holding + Deep-Lying Playmaker)
+- **`hypothesis_id`**: `TH-FC27-003`
+- **`statement`**: Pairing one `Holding` CDM with one `Deep-Lying Playmaker` CDM reduces central counterattack concessions while preserving first-phase build-up progression.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (FC IQ Role Theorycrafting)
+- **`source_version`**: `fciq-role-hypothesis-v1`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `goals_against_per_match`, `clean_sheet_rate_pct`, midfielder `tackle_success_pct`, midfielder `pass_completion_pct`
+- **`confounders`**: FC 27 match payloads do not expose granular in-match role instructions unless paired with verified `CLUB_SETTINGS` / tactical metadata; human CDM positioning discipline varies by player.
+- **`minimum_data_required`**: `>= 10` eligible `COMPLETED` matches in a dual-CDM shape with two human `MIDFIELDER` participants.
+- **`experiment_design`**: Compare `MIDFIELDER` `tackle_success_pct` and club `goals_against_per_match` across dual-human-CDM matches vs. single-CDM matches.
+- **`rejection_criteria`**: Reject if `tackle_success_pct` or `goals_against_per_match` shows no improvement (`< 5%` relative difference) over `10+` matches.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.4 `TH-FC27-004` — Shadow Striker CAM Hypothesis
+- **`hypothesis_id`**: `TH-FC27-004`
+- **`statement`**: Assigning the central attacking midfielder (`CAM`) to a `Shadow Striker` role increases box entries and combined CAM+ST `goal_contributions` per 90 without starving wide forwards.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (FC IQ Role Theorycrafting)
+- **`source_version`**: `fciq-role-hypothesis-v1`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `goals_per_90`, `assists_per_90`, `goal_contributions`, `average_rating` for `MIDFIELDER`/`FORWARD` roles
+- **`confounders`**: Opponent defensive line depth, human striker movement patterns, unrecorded in-game tactical toggles.
+- **`minimum_data_required`**: `>= 10` eligible `COMPLETED` matches (`>= 900` combined team minutes) with consistent human CAM assignment.
+- **`experiment_design`**: Track per-player `goals_per_90` and `assists_per_90` in `compute_player_summaries` across `10+` completed matches.
+- **`rejection_criteria`**: Reject if team `goals_for_per_match` decreases or CAM `pass_completion_pct` drops by `>= 8%` without compensating `goal_contributions`.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.5 `TH-FC27-005` — Inside Forward Winger Hypothesis
+- **`hypothesis_id`**: `TH-FC27-005`
+- **`statement`**: Utilizing wide forwards (`LW`/`RW`) as `Inside Forwards` rather than touchline wingers increases high-value central shot volume and `goals_for_per_match` in `4-2-1-3`.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (FC IQ Role Theorycrafting)
+- **`source_version`**: `fciq-role-hypothesis-v1`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: Forward `goals_per_90`, `assists_per_90`, club `goals_for_per_match`
+- **`confounders`**: Central congestion when paired with a `Shadow Striker` CAM, opponent fullback archetype, human vs. AI winger execution.
+- **`minimum_data_required`**: `>= 10` eligible `COMPLETED` matches in `4-2-1-3` with human wide forwards.
+- **`experiment_design`**: Measure forward `goals_per_90` and `assists_per_90` via `compute_player_summaries` across `10+` completed matches.
+- **`rejection_criteria`**: Reject if wide forward `goal_contributions` per 90 is `< 0.50` or club `goals_for_per_match` trails baseline.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.6 `TH-FC27-006` — Out-of-Position Penalty Hypothesis
+- **`hypothesis_id`**: `TH-FC27-006`
+- **`statement`**: Deploying human club members outside their primary `PlayerPositionGroup` incurs an AI/attribute responsiveness penalty that measurably lowers `average_rating`, `pass_completion_pct`, and `tackle_success_pct`.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (FC IQ Mechanics Hypothesis)
+- **`source_version`**: `fciq-mechanics-v1`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `average_rating`, `pass_completion_pct`, `tackle_success_pct` segmented by `position_group`
+- **`confounders`**: Small per-player out-of-position sample sizes, emergency late-game role swaps, opponent quality in mismatched games.
+- **`minimum_data_required`**: `>= 20` eligible `COMPLETED` club matches containing `>= 5` appearances per evaluated player in both primary and secondary `position_group` assignments.
+- **`experiment_design`**: Compare per-pseudonym `PlayerPositionGroup` performance splits across `COMPLETED` matches in PostgreSQL.
+- **`rejection_criteria`**: Reject if within-player `average_rating` and `pass_completion_pct` show no statistically meaningful degradation in secondary positions.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.7 `TH-FC27-007` — Role Familiarity (`+` / `++`) Hypothesis
+- **`hypothesis_id`**: `TH-FC27-007`
+- **`statement`**: Continuity of human players within the same `position_group` and formation over consecutive sessions improves off-ball synchronization and increases team `points_per_match`.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (FC IQ Role Familiarity / Squad Continuity Hypothesis)
+- **`source_version`**: `fciq-familiarity-v1`
+- **`fc_edition`**: `FC26/FC27_TRANSITIONAL`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `points_per_match`, `win_rate_pct`, `pass_completion_pct`, player `appearances` continuity
+- **`confounders`**: Standard FC 27 Club Match History endpoints do not report Role+/Role++ tier badges directly for Pro Clubs avatars; observable only via lineup-continuity proxy.
+- **`minimum_data_required`**: `>= 20` eligible `COMPLETED` matches (`HIGH_SAMPLE_READINESS`).
+- **`experiment_design`**: Compare rolling 5-match windows with stable position-group assignments (`>= 80%` lineup overlap) against high-rotation windows.
+- **`rejection_criteria`**: Reject if stable-lineup windows fail to outperform high-rotation windows in `points_per_match` or `pass_completion_pct`.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.8 `TH-FC27-008` — Player Attribute-Threshold (Breakpoint) Hypotheses
+- **`hypothesis_id`**: `TH-FC27-008`
+- **`statement`**: Crossing specific pro build attribute breakpoints (e.g., `>= 90` Pace/Agility/Dribbling or `>= 88` Interceptions/Defensive Awareness) yields non-linear animation or win-rate gains in FC 27 Pro Clubs.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (Community Build Breakpoint Claims)
+- **`source_version`**: `community-build-breakpoints-2026`
+- **`fc_edition`**: `FC25/FC26/FC27_UNVERIFIED_CARRYOVER`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `goals_per_90`, `assists_per_90`, `pass_completion_pct`, `tackle_success_pct`, `average_rating`
+- **`confounders`**: Standard FC 27 match history payloads (`FC27NormalizedPlayerMatchStatRecord`) do **not** contain individual attribute slider allocations (Sprint Speed, Finishing, etc.), making attribute breakpoints unobservable from match-history API data alone.
+- **`minimum_data_required`**: Requires both `>= 20` eligible `COMPLETED` matches **and** verified out-of-band build metadata (currently not ingested).
+- **`experiment_design`**: Cannot be evaluated from match-history endpoints alone; remains quarantined as `NOT_APPROVABLE`.
+- **`rejection_criteria`**: Automatically rejected for automated coaching packages whenever build attribute telemetry is absent from the verified schema.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.9 `TH-FC27-009` — PlayStyle+ Meta Hypotheses
+- **`hypothesis_id`**: `TH-FC27-009`
+- **`statement`**: Equipping specific PlayStyle+ combinations (e.g., `Finesse Shot+`, `Incisive Pass+`, `Anticipate+`, `Intercept+`) is a primary determinant of Pro Clubs scoring efficiency and defensive stops.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (Community PlayStyle+ Tier Lists)
+- **`source_version`**: `community-playstyle-meta-2026`
+- **`fc_edition`**: `FC25/FC26/FC27_UNVERIFIED_CARRYOVER`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `goals_per_90`, `assists_per_90`, `pass_completion_pct`, `tackle_success_pct`
+- **`confounders`**: FC 27 match and member stats endpoints do not expose per-match equipped PlayStyle+ loadouts; patch tuning frequently alters PlayStyle+ effectiveness across title updates.
+- **`minimum_data_required`**: Requires `>= 20` eligible `COMPLETED` matches plus verified loadout tracking (not present in `FC27NormalizedPlayerMatchStatRecord`).
+- **`experiment_design`**: Quarantined from automated analytics inference; observable only if future authorized schemas expose loadout telemetry.
+- **`rejection_criteria`**: Automatically rejected for automated coaching recommendations when loadout telemetry is absent from `RollingAnalyticsSnapshot`.
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`
+
+### 2.10 `TH-FC27-010` — FC 25 / FC 26 / FC 27 Shareable Tactics-Code Hypotheses
+- **`hypothesis_id`**: `TH-FC27-010`
+- **`statement`**: Importing viral community shareable tactics codes (e.g., high-depth `70+` / `95` depth press codes or preset build-up codes from FC 25/FC 26) directly improves East Coasters win rate in FC 27.
+- **`source_type`**: `EXTERNAL_TACTICAL_HYPOTHESIS` (Community Shareable Tactics Codes)
+- **`source_version`**: `community-tactics-codes-2026`
+- **`fc_edition`**: `FC25/FC26/FC27_CROSS_EDITION`
+- **`current_evidence_status`**: `EAST_COASTERS_VALIDATION=NOT_RUN`
+- **`east_coasters_sample_size`**: `0` verified live matches
+- **`dependent_metrics`**: `win_rate_pct`, `points_per_match`, `goals_for_per_match`, `goals_against_per_match`
+- **`confounders`**: Tactics codes are edition- and patch-specific, often encode extreme defensive line heights that drain AI stamina in Pro Clubs, and are not recorded in `fc27_matches` beyond the normalized formation string.
+- **`minimum_data_required`**: `>= 20` eligible `COMPLETED` East Coasters matches (`HIGH_SAMPLE_READINESS`) with controlled formation comparison.
+- **`experiment_design`**: Evaluate only the observable formation outcome via `compute_formation_breakdown`; never recommend raw external tactics codes in `src/fc27_coaching.py`.
+- **`rejection_criteria`**: Any coaching package recommending an unverified external tactics code is unconditionally rejected by `src/fc27_coaching.py` (`NOT_APPROVABLE`).
+- **`current_confidence`**: `UNVERIFIED`
+- **`approval_eligibility`**: `NOT_APPROVABLE`

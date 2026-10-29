@@ -1,5 +1,7 @@
 # Migration & Operations Guide: FC27 Data Foundation
 
+> **Reconciliation Note**: This guide documents numbered PostgreSQL 16 migrations (`0001`–`0012`), `src/db_migrate.py`, and Grants Policy Version 14 (`migrations/post/grants.sql`). For the complete current operations runbook and normalized FC 27 schema reference, see [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md).
+
 This document covers fresh installations, database secret file setup (v2.1), upgrading from legacy releases, and applying schema migrations.
 
 ---

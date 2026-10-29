@@ -1,7 +1,6 @@
 # Deployment and security hardening
 
-This page describes the implemented stack. The approval model is covered in [APPROVAL_SECURITY.md](APPROVAL_SECURITY.md)
-and the full change list is in `../SECURITY_CHANGES.md`.
+> **Reconciliation Note**: For the current authoritative runtime operations runbook, least-privilege role bootstrap (`fc27_owner`, `fc27_migrator`, `fc27_app`, `fc27_dispatch`, `fc27_relay`), and security invariants, see [`OPERATIONS.md`](OPERATIONS.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md). The approval model is covered in [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`APPROVAL_SECURITY.md`](APPROVAL_SECURITY.md). Live FC 27 provider calls are disabled by default (`FC27_PROVIDER_ENABLED=false`; see [`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)).
 
 ## 1. Host preparation
 1. Update the OS, Docker Engine/Desktop, the Compose v2 plugin, the GPU driver and the container runtime.
@@ -11,7 +10,7 @@ and the full change list is in `../SECURITY_CHANGES.md`.
 ## 2. Secrets
 1. Copy `config.example.env` to `.env` and replace every `replace_with_*` value with an independently generated random value.
 2. Store the Commissioner token in a password manager. Put only its SHA-256 in `.env`: `python scripts/commissioner_decide.py hash-token`.
-3. In this lab deployment, secrets reach containers as environment variables. `src/settings.read_secret` also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
+3. In this lab deployment, secrets reach containers as environment variables. `src/settings.py` (`read_secret`) also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
 4. Compose fails closed: `docker compose config` errors if any required secret is missing.
 
 ## 3. Credential placement (enforced by `tests/test_compose_isolation.py`)
@@ -45,7 +44,7 @@ Start with `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_NUM_PARALLEL=2`. If you see 
 - Ollama, MCP and PostgreSQL publish no host ports.
 - Redis is published on `127.0.0.1:6379` for the Windows capture agent only.
 - Put any remote access behind a VPN or a TLS reverse proxy with authentication. Do not change the bindings to `0.0.0.0`.
-- MCP is the only component that calls `proclubs.ea.com`.
+- Live calls to `proclubs.ea.com` are disabled and blocked by default (`FC27_PROVIDER_ENABLED=false`, `FC27_LIVE_INGESTION_ENABLED=false`); only the provider-neutral boundary (`src/fc27_authorized_transport.py`) may contact an approved provider after formal written authorization is configured.
 
 ## 7. Container hardening
 - Application containers run with `no-new-privileges`, `cap_drop: ALL`, an init process and non-root users.

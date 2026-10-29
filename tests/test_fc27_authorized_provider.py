@@ -15,7 +15,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Tuple
 
 import pytest
 from pydantic import ValidationError
@@ -1066,3 +1066,189 @@ def test_56_ea_access_request_draft_ready_and_not_sent() -> None:
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.club_name == "East Coasters"
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.platform == "common-gen5"
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.contact_placeholder == "[OPERATOR_CONTACT_PLACEHOLDER]"
+
+
+# ==============================================================================
+# Tests 57-64: Cache, Rate-Limiter, Budget, Circuit-Breaker, and Provenance Integration
+# ==============================================================================
+
+
+def test_57_unapproved_provider_fails_closed_and_never_calls_transport() -> None:
+    from src.fc27_api_cache import FC27BoundedNormalizedCache
+    from src.fc27_api_rate_limit import FC27ProviderTokenBucketLimiter
+
+    adapter = FC27AuthorizedProviderAdapter(
+        declaration=None,
+        transport_client=None,
+        cache=FC27BoundedNormalizedCache(enabled=True),
+        rate_limiter=FC27ProviderTokenBucketLimiter(enabled=True),
+        reference_now=REF_NOW,
+    )
+    with pytest.raises(FC27ProviderError, match="PROVIDER_NOT_AUTHORIZED"):
+        adapter.fetch_club_identity()
+
+
+def test_58_cache_cannot_bypass_provider_authorization_or_kill_switch() -> None:
+    from src.fc27_api_cache import FC27BoundedNormalizedCache
+
+    cache = FC27BoundedNormalizedCache(enabled=True)
+    adapter = make_mock_adapter(
+        {"330323": {"clubId": "330323", "name": "East Coasters", "platform": "common-gen5"}}
+    )
+    # Attach enabled cache and populate it via a valid call
+    adapter._cache = cache
+    res = adapter.fetch_club_identity()
+    assert res.club_identity is not None
+    assert cache.metrics().entry_count == 1
+
+    # Now create an adapter with kill_switch_active=True sharing the same warm cache
+    blocked_adapter = FC27AuthorizedProviderAdapter(
+        declaration=make_provider_declaration(),
+        transport_client=adapter._transport,
+        cache=cache,
+        kill_switch_active=True,
+        reference_now=REF_NOW,
+    )
+    with pytest.raises(FC27ProviderError, match="Kill switch is active"):
+        blocked_adapter.fetch_club_identity()
+
+
+def test_59_rate_limiter_cannot_enable_live_transport() -> None:
+    from src.fc27_api_rate_limit import FC27ProviderTokenBucketLimiter
+
+    limiter = FC27ProviderTokenBucketLimiter(enabled=True)
+    adapter = FC27AuthorizedProviderAdapter(
+        declaration=None,
+        transport_client=None,
+        rate_limiter=limiter,
+        reference_now=REF_NOW,
+    )
+    with pytest.raises(FC27ProviderError, match="PROVIDER_NOT_AUTHORIZED"):
+        adapter.fetch_club_statistics()
+
+
+def test_60_circuit_breaker_blocks_transport_when_open() -> None:
+    call_counter = {"count": 0}
+
+    def _counting_transport(req: Mapping[str, Any]) -> Mapping[str, Any]:
+        call_counter["count"] += 1
+        return {
+            "status_code": 200,
+            "content_type": "application/json",
+            "redirect_count": 0,
+            "location_header": "",
+            "raw_bytes": b'{"330323": {"clubId": "330323", "name": "East Coasters", "platform": "common-gen5"}}',
+        }
+
+    pol = make_transport_policy()
+    decl = make_provider_declaration(transport_policy=pol)
+    creds = FC27AuthorizedCredentials(
+        auth_method=FC27AuthMethod.API_KEY_ENV.value,
+        env_var_name="FC27_TEST_PROVIDER_API_KEY",
+    )
+    client = FC27AuthorizedTransportClient(
+        policy=pol,
+        credentials=creds,
+        transport_callable=_counting_transport,
+    )
+    adapter = FC27AuthorizedProviderAdapter(
+        declaration=decl,
+        transport_client=client,
+        reference_now=REF_NOW,
+        environ={"FC27_TEST_PROVIDER_API_KEY": "super-secret-provider-key-9999"},
+    )
+    adapter.adapter_circuit_breaker.record_failure("HTTP_403")
+    with pytest.raises(FC27TransportError, match="Circuit breaker is OPEN"):
+        adapter.fetch_club_identity()
+    assert call_counter["count"] == 0
+
+
+def test_61_normalized_value_cached_only_after_validation_and_serves_cache_hit() -> None:
+    from src.fc27_api_cache import FC27BoundedNormalizedCache
+
+    call_counter = {"count": 0}
+
+    def _counting_transport(req: Mapping[str, Any]) -> Mapping[str, Any]:
+        call_counter["count"] += 1
+        return {
+            "status_code": 200,
+            "content_type": "application/json",
+            "redirect_count": 0,
+            "location_header": "",
+            "raw_bytes": b'{"330323": {"clubId": "330323", "name": "East Coasters", "platform": "common-gen5"}}',
+        }
+
+    pol = make_transport_policy()
+    decl = make_provider_declaration(transport_policy=pol)
+    creds = FC27AuthorizedCredentials(
+        auth_method=FC27AuthMethod.API_KEY_ENV.value,
+        env_var_name="FC27_TEST_PROVIDER_API_KEY",
+    )
+    client = FC27AuthorizedTransportClient(
+        policy=pol,
+        credentials=creds,
+        transport_callable=_counting_transport,
+    )
+    cache = FC27BoundedNormalizedCache(enabled=True)
+    adapter = FC27AuthorizedProviderAdapter(
+        declaration=decl,
+        transport_client=client,
+        cache=cache,
+        reference_now=REF_NOW,
+        environ={"FC27_TEST_PROVIDER_API_KEY": "super-secret-provider-key-9999"},
+    )
+    env1 = adapter.fetch_club_identity()
+    env2 = adapter.fetch_club_identity()
+    assert call_counter["count"] == 1
+    assert env1.payload_sha256 == env2.payload_sha256
+    assert cache.metrics().hits == 1
+    assert cache.metrics().puts == 1
+
+
+def test_62_provenance_preserved_through_normalization() -> None:
+    adapter = make_mock_adapter(
+        {"330323": {"clubId": "330323", "name": "East Coasters", "platform": "common-gen5"}}
+    )
+    env = adapter.fetch_club_identity()
+    assert env.source_provenance is not None
+    assert env.source_provenance.provider_id == "ea-authorized-clubs-partner"
+    assert env.source_provenance.provider_declaration_version == "api-east-coasters-authority-2026-10"
+    assert env.source_provenance.source_operation == "CLUB_IDENTITY"
+
+
+def test_63_pseudonym_collision_in_member_statistics_fails_closed() -> None:
+    from src.fc27_clubs_api_contracts import FC27PseudonymCollisionDetector, pseudonymize_east_coasters_identifier
+
+    p_ref = pseudonymize_east_coasters_identifier("slot-collision")
+    detector = FC27PseudonymCollisionDetector(preseeded_reverse_digests={p_ref: "f" * 64})
+    adapter = make_mock_adapter(
+        {
+            "members": [
+                {
+                    "memberKey": "slot-collision",
+                    "favoritePosition": "CM",
+                    "gamesPlayed": 10,
+                    "goals": 1,
+                    "assists": 1,
+                }
+            ]
+        }
+    )
+    adapter._collision_detector = detector
+    with pytest.raises(FC27ProviderError, match="PSEUDONYM_COLLISION"):
+        adapter.fetch_current_member_statistics()
+
+
+def test_64_feature_flags_independent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.settings import is_fc27_api_cache_enabled, is_fc27_api_rate_limit_enabled
+
+    monkeypatch.setenv("FC27_API_CACHE_ENABLED", "true")
+    monkeypatch.setenv("FC27_API_RATE_LIMIT_ENABLED", "true")
+    assert is_fc27_api_cache_enabled() is True
+    assert is_fc27_api_rate_limit_enabled() is True
+    assert is_fc27_provider_enabled() is False
+    assert is_fc27_live_ingestion_enabled() is False
+    assert is_fc27_persistence_enabled() is False
+    assert is_fc27_analytics_enabled() is False
+    assert is_fc27_recommendations_enabled() is False
+    assert is_dispatch_enabled() is False

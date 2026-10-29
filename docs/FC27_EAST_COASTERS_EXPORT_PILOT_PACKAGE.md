@@ -1,5 +1,7 @@
 # Consented East Coasters User-Export Pilot Preparation Package
 
+> **Architecture Role Note**: The **primary** FC 27 acquisition architecture is the provider-neutral API boundary (`src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_clubs_api_contracts.py`; see [`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)). This document and `scripts/fc27_user_export_import.py` / `scripts/fc27_capture_preflight.py` define the **secondary/offline operator-captured export validation fallback** (`USER_SUPPLIED_EXPORT` / `AUTHORIZED_CAPTURE`).
+
 - **Status:** Approved Offline Pilot Preparation Package
 - **Target Club:** East Coasters (`330323` / `common-gen5` / `FC27`)
 - **Primary Integration Path:** `USER_SUPPLIED_EXPORT`
