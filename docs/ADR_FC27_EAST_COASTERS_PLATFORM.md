@@ -731,7 +731,7 @@ To: Electronic Arts Inc. — EA SPORTS FC Developer Relations, Partner Licensing
 - Game Version: FC27
 - Attestation Reference: api-east-coasters-authority-2026-10
 - Authority & Consent Posture: Submitted by the club-authorized operator with explicit captain and participating member consent (USER_ATTESTED) strictly for internal, non-commercial team performance analysis (INTERNAL_TEAM_ANALYTICS / TEAM_REVIEW).
-- Operator Contact: [OPERATOR_CONTACT_PLACEHOLDER — DO_NOT_COMMIT_PERSONAL_EMAIL]
+- Operator Contact: [OPERATOR_CONTACT_PLACEHOLDER]
 
 2. Requested Access Pathways (Any One Approved Pathway)
 1. Official club-data export API or scheduled archive for Club ID 330323

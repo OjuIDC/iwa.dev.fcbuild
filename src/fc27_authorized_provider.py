@@ -654,7 +654,7 @@ class FC27EAAccessRequestDraft(BaseModel):
         "Immediate deletion and correction procedure upon member consent revocation or EA request",
         "Least-privilege PostgreSQL 16 storage (Grants Policy v14) with recommendations and dispatch disabled",
     )
-    contact_placeholder: str = "[OPERATOR_CONTACT_PLACEHOLDER — DO_NOT_COMMIT_PERSONAL_EMAIL]"
+    contact_placeholder: str = "[OPERATOR_CONTACT_PLACEHOLDER]"
 
 
 EA_APPROVED_ACCESS_REQUEST_DRAFT = FC27EAAccessRequestDraft()

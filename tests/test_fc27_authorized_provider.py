@@ -568,6 +568,10 @@ def test_30_error_redaction_strips_embedded_credentials() -> None:
         )
     assert secret not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
+    pg_conn = "Database error on postgresql://fc27_app:db_secret_pass_999@db.example.com:5432/fc27"
+    redacted_conn = redact_sensitive_auth_text(pg_conn)
+    assert "db_secret_pass_999" not in redacted_conn
+    assert "postgresql://[REDACTED]@db.example.com:5432/fc27" in redacted_conn
 
 
 def test_31_metadata_only_logging() -> None:
@@ -1061,3 +1065,4 @@ def test_56_ea_access_request_draft_ready_and_not_sent() -> None:
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.club_id == "330323"
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.club_name == "East Coasters"
     assert EA_APPROVED_ACCESS_REQUEST_DRAFT.platform == "common-gen5"
+    assert EA_APPROVED_ACCESS_REQUEST_DRAFT.contact_placeholder == "[OPERATOR_CONTACT_PLACEHOLDER]"

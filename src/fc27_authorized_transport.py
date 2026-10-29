@@ -118,7 +118,7 @@ _SECRET_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;\"']+"),
     re.compile(r"(?i)(authorization\s*[:=]\s*)[^\r\n,;\"']+"),
     re.compile(r"(?i)(x-api-key\s*[:=]\s*)[^\r\n,;\"']+"),
-    re.compile(r"(?i)(https?://)([^/@\s]+@)"),
+    re.compile(r"(?i)([a-z][a-z0-9+.-]*://)([^/@\s]+@)"),
 )
 
 
