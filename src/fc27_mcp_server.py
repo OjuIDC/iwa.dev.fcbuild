@@ -687,6 +687,11 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
     def _reject_busy(self, request):
         try:
+            request.settimeout(0.05)
+            try:
+                request.recv(4096)
+            except OSError:
+                pass
             request.settimeout(1.0)
             request.sendall(_BUSY_RESPONSE)
         except OSError:
