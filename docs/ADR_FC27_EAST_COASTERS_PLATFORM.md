@@ -776,3 +776,64 @@ To: Electronic Arts Inc. — EA SPORTS FC Developer Relations, Partner Licensing
 - `LIVE_REQUEST_EXECUTED = NO`
 - `LIVE_REQUESTS_EXECUTED = 0`
 - `BLOCKER = NO_AUTHORIZED_API_SOURCE_FOUND`
+
+---
+
+## 21. Safe Adaptation of `fc27-clubs-api` Contracts, Normalization, Caching, and Rate Controls
+
+### 21.1 Upstream Attribution & Verified Bundle Provenance
+- **Upstream Repository**: `https://github.com/1erkandogan/fc27-clubs-api`
+- **Pinned Upstream Commit**: `26a5ff12ea793042bd776a858c74f3f44dd427f5` (version `0.3.1`)
+- **Upstream License**: `MIT` (`Copyright (c) 2025 Erkan Dogan`) — documented in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)
+- **Reviewed Local Bundle**: `iwa.dev.fcbuild-safe-adapter-verified.zip`
+- **Bundle SHA-256**: `eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`
+- **Bundle Size & Safety Verification**: `36,350` bytes (`29` ZIP entries: `23` regular files, `6` directories; `69,355` uncompressed bytes; compression ratio `1.91`; zero path traversal, zero symlinks, zero executables, zero embedded secrets).
+
+### 21.2 Adapted vs. Rejected Components
+| Upstream / Bundle Component | Classification | Rationale |
+|---|---|---|
+| Endpoint path & query parameter mappings (11 fixed operations) | `ADAPT` | Adapted into [`src/fc27_clubs_api_contracts.py`](../src/fc27_clubs_api_contracts.py) (`FC27ClubsEndpointOperation`, `FC27_ENDPOINT_CONTRACTS`, `build_east_coasters_endpoint_request`) scoped strictly to `East Coasters` (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`). |
+| Strict response schemas (13 model groups) & normalizers | `ADAPT` | Adapted into [`src/fc27_clubs_api_contracts.py`](../src/fc27_clubs_api_contracts.py) (`ALL_RESPONSE_SCHEMA_MODELS`, `extra="forbid"`, `hide_input_in_errors=True`, duplicate-key/NaN/Infinity/negative/score-inconsistency/completed>attempted rejection). |
+| Match-type mapping (`gameType9` -> `LEAGUE`, `gameType13` -> `PLAYOFF`, unknown -> `UNKNOWN`) | `ADAPT` | Adapted in `normalize_fc27_match_type` with `review_required=True` for unknown codes. |
+| Match event bitmap decoder (`FC27_KNOWN_EVENT_BIT_MAP`, `decode_fc27_match_events`) | `ADAPT` | Decodes known bit positions deterministically, preserves unmapped bit positions in `unknown_bit_positions`, and never emits cheating, conduct, or discipline labels. |
+| Asset and crest metadata (`FC27AssetAndCrestMetadataSchema`) | `ADAPT` | Retains only numeric IDs (`crest_asset_id`, `custom_kit_id`, `selected_kit_type`, `team_id`) and bounded `stadium_name`; never constructs external asset URLs or downloads binary assets. |
+| Bounded normalized TTL/LRU cache (`TTLCache`) | `ADAPT` | Adapted into [`src/fc27_api_cache.py`](../src/fc27_api_cache.py) (`FC27BoundedNormalizedCache`, `FC27CacheKeySpec`, `build_fc27_cache_key`). |
+| Token-bucket rate limiter, request budget, circuit breaker, & retry classifier | `ADAPT` | Adapted into [`src/fc27_api_rate_limit.py`](../src/fc27_api_rate_limit.py) (`FC27ProviderTokenBucketLimiter`, `FC27RequestBudget`, `FC27AdapterCircuitBreaker`, `classify_fc27_retry_decision`). |
+| Upstream `curl_cffi` (`impersonate="chrome"`), `playwright` (`chromium.launch(headless=True)`), spoofed Chrome headers, cookies/sessions | `REJECTED_PROHIBITED` | Violates transport-integrity and anti-impersonation governance boundaries. |
+| Upstream `get_json(endpoint, params)` arbitrary URL caller and `find_club_id` silent club-ID replacement | `REJECTED_PROHIBITED` | Arbitrary URL calls and silent club-ID substitution are prohibited; club-search mismatches fail closed with `IDENTITY_CONFLICT`. |
+| Bundle `dist/iwa_dev_fcbuild_clubs-0.1.0-py3-none-any.whl`, `pyproject.toml`, `.gitignore` | `NOT_APPLICABLE` / `SUPERSEDED_BY_REPOSITORY` | Binary wheel and standalone packaging files are not imported into the repository. |
+
+### 21.3 Contract, Schema, Normalization, & Event Mapping Versions
+- `ENDPOINT_CONTRACT_VERSION = "fc27-contracts-1.0.0"`
+- `RESPONSE_SCHEMA_VERSION = "fc27-schemas-1.0.0"`
+- `NORMALIZATION_VERSION = "fc27-norm-1.0.0"`
+- `EVENT_MAPPING_VERSION = "fc27-events-1.0.0"`
+
+### 21.4 Bounded Normalized Cache (`src/fc27_api_cache.py`)
+- **Default State**: Disabled (`FC27_API_CACHE_ENABLED=false`). Enabling the cache never enables provider access, live transport, persistence, analytics, recommendations, or dispatch.
+- **Bounds**: `DEFAULT_CACHE_MAX_ENTRIES = 128`, `DEFAULT_CACHE_MAX_VALUE_BYTES = 262_144` bytes, LRU eviction on capacity, TTL expiration via injected monotonic clock.
+- **Project Review Default TTLs (`OPERATION_DEFAULT_TTL_SECONDS`)** *(project review defaults, not EA-published limits)*:
+  - `CLUB_IDENTITY`: `21,600`s (6h)
+  - `MEMBER_CAREER_STATISTICS`, `PLAYOFF_ACHIEVEMENTS`: `3,600`s (1h)
+  - `CLUB_SEARCH`, `CLUB_STATISTICS`, `CURRENT_MEMBER_STATISTICS`, `LEADERBOARDS`, `CURRENT_SEASON_LEADERBOARD`, `ALL_TIME_LEADERBOARD`: `900`s (15m)
+  - `RECENT_MATCHES`, `RECENT_LEAGUE_MATCHES`, `RECENT_PLAYOFF_MATCHES`, `MATCH_PLAYER_STATISTICS`: `300`s (5m)
+- **Cache Key & Poisoning Protection**: SHA-256 over canonical `(provider_id, provider_authorization_version, operation, club_id="330323", platform="common-gen5", game_version="FC27", bounded_parameters, response_schema_version, normalization_version)`. Rejects any key or value containing API keys, tokens, cookies, raw HTTP payloads, gamer tags, non-null display aliases, or non-pseudonymized player identifiers.
+
+### 21.5 Rate Limiter, Request Budget, Circuit Breaker, & Pure Retry Policy (`src/fc27_api_rate_limit.py`)
+- **Provider-Scoped Token-Bucket Rate Limiter (`FC27ProviderTokenBucketLimiter`)**:
+  - Disabled by default (`FC27_API_RATE_LIMIT_ENABLED=false`).
+  - Conservative mock defaults: `MOCK_DEFAULT_CAPACITY = 1`, `MOCK_DEFAULT_REFILL_TOKENS = 1`, `MOCK_DEFAULT_REFILL_INTERVAL_SECONDS = 300.0`, `MOCK_DEFAULT_MAX_QUEUE_DEPTH = 0` (at most 1 manually initiated operation per 5 minutes in mock/review tests; immediate rejection with zero queue depth; not EA-approved rate limits).
+- **Per-Run Request Budget (`FC27RequestBudget`)**:
+  - Separate from rate limiting: `DEFAULT_MAX_ATTEMPTS = 1`, `DEFAULT_MAX_RETRIES = 0`, `DEFAULT_MAX_ELAPSED_SECONDS = 10.0`.
+  - Requires a non-empty `authorization_reference`, increments attempt count immediately before transport invocation, counts failed attempts against the budget, and never auto-resets.
+- **3-State Circuit Breaker (`FC27AdapterCircuitBreaker`)**:
+  - Enabled by default (`FC27_API_CIRCUIT_BREAKER_ENABLED=true`).
+  - States: `CLOSED`, `OPEN`, `HALF_OPEN`. Defaults to `OPEN` (`reason="NO_APPROVED_PROVIDER"`) when no approved provider is selected.
+  - Opens immediately on `HTTP_401`, `HTTP_403`, `AUTH_REDIRECT`, `HTML_CHALLENGE`, `CAPTCHA`, `IDENTITY_MISMATCH`, `SENSITIVE_FIELD_VIOLATION`, or `SCHEMA_FAILURE`.
+  - Never automatically transitions EA providers from `OPEN` to `HALF_OPEN`; requires manual operator reset or `authorize_half_open_probe(authorization_reference=...)`.
+- **Pure Retry Classifier (`classify_fc27_retry_decision`)**:
+  - Pure decision function returning `FC27RetryDecision(should_retry, delay_seconds, reason_code)` with `should_retry=False` by default. Never retries `400`, `401`, `403`, `404`, `409`, `422`, redirects, challenges, CAPTCHA, schema drift, or identity mismatch.
+
+### 21.6 18-Step Provider Adapter Pipeline & Rollback Procedure
+- `FC27AuthorizedProviderAdapter` in [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) enforces the 18-step execution pipeline: provider declaration check -> expiration check -> terms/privacy version check -> operation allowlist check -> East Coasters (`330323`/`common-gen5`/`FC27`) scope check -> kill-switch check -> circuit-breaker check -> bounded normalized cache lookup -> rate-limit token acquisition -> request-budget consumption -> bounded transport invocation -> response size/status/content-type validation -> strict JSON parse -> strict schema validation -> pseudonymization (`plr_ecf_<12-hex>`) & collision check (`PSEUDONYM_COLLISION`) -> provenance (`FC27SourceProvenance`) & hash attachment -> bounded normalized cache store -> immutable `FC27NormalizedOperationEnvelope` return.
+- **Rollback Procedure**: Revert the single commit on `feature/fc27-api-contract-cache-rate-limits` (`git revert <commit-sha>`); no database migrations (`0001`–`0012`), `PostgresSaver` tables, or MatchPulse Live runtime boundaries are modified by this phase.

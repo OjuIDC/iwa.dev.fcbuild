@@ -101,6 +101,48 @@ def is_fc27_live_ingestion_enabled() -> bool:
     return safe_env_bool("FC27_LIVE_INGESTION_ENABLED", default=False)
 
 
+def is_fc27_api_cache_enabled() -> bool:
+    """Check if FC 27 bounded normalized API cache is enabled (default: False).
+
+    Rules:
+    - Missing, blank, or malformed values fail closed to False.
+    - Enabling cache does NOT enable provider access, persistence, analytics,
+      recommendations, or dispatch.
+    """
+    return safe_env_bool("FC27_API_CACHE_ENABLED", default=False)
+
+
+def is_fc27_api_rate_limit_enabled() -> bool:
+    """Check if FC 27 provider token-bucket rate limiter is enabled (default: False).
+
+    Rules:
+    - Missing, blank, or malformed values fail closed to False.
+    - Enabling rate limiting does NOT enable provider access, persistence,
+      analytics, recommendations, or dispatch.
+    """
+    return safe_env_bool("FC27_API_RATE_LIMIT_ENABLED", default=False)
+
+
+def is_fc27_api_circuit_breaker_enabled() -> bool:
+    """Check if FC 27 circuit breaker protection is enabled (default: True).
+
+    Rules:
+    - Missing, blank, or malformed values fail closed to True so circuit breaker
+      protection remains active by default.
+    """
+    raw = os.getenv("FC27_API_CIRCUIT_BREAKER_ENABLED")
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if not value:
+        return True
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    return True
+
+
 def is_fc27_recommendations_enabled() -> bool:
     """Check if FC 27 recommendations generation is enabled (default: False)."""
     return safe_env_bool("FC27_RECOMMENDATIONS_ENABLED", default=False)

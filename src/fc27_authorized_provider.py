@@ -19,6 +19,16 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, Sequen
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.fc27_api_cache import (
+    FC27BoundedNormalizedCache,
+    FC27CacheKeySpec,
+    build_fc27_cache_key,
+)
+from src.fc27_api_rate_limit import (
+    FC27AdapterCircuitBreaker,
+    FC27ProviderTokenBucketLimiter,
+    FC27RequestBudget,
+)
 from src.fc27_authorized_transport import (
     ALL_AUTHORIZED_OPERATIONS,
     MEMBER_DATA_OPERATIONS,
@@ -29,6 +39,12 @@ from src.fc27_authorized_transport import (
     FC27AuthorizedTransportPolicy,
     FC27MetadataTransportLog,
     FC27RetryPolicy,
+)
+from src.fc27_clubs_api_contracts import (
+    ENDPOINT_CONTRACT_VERSION,
+    NORMALIZATION_VERSION,
+    RESPONSE_SCHEMA_VERSION,
+    FC27PseudonymCollisionDetector,
 )
 from src.fc27_provider import (
     EAST_COASTERS_CLUB_ID,
@@ -786,7 +802,7 @@ class FC27AuthorizedProviderDeclaration(BaseModel):
         if self.authorization_expires_at <= now_utc:
             raise FC27ProviderError("Provider authorization has expired")
 
-        op_str = operation.value if isinstance(operation, FC27AuthorizedOperation) else str(operation)
+        op_str = operation.value if isinstance(operation, FC27AuthorizedOperation) else operation
         if op_str not in ALL_AUTHORIZED_OPERATIONS:
             raise FC27ProviderError(f"Unsupported operation '{op_str}'")
         if op_str not in self.approved_operations:
@@ -811,7 +827,7 @@ class FC27AuthorizedProviderDeclaration(BaseModel):
 
 def pseudonymize_east_coasters_player_ref(raw_identifier: str, *, club_id: str = EAST_COASTERS_CLUB_ID) -> str:
     """Produces a deterministic, non-reversible pseudonymous player reference scoped to East Coasters (330323)."""
-    cleaned = str(raw_identifier).strip()
+    cleaned = raw_identifier.strip()
     if not cleaned:
         raise FC27ProviderError("Cannot pseudonymize empty player identifier")
     if re.fullmatch(r"plr_ecf_[0-9a-f]{12}", cleaned):
@@ -857,6 +873,20 @@ class FC27NormalizedPlayoffAchievement(BaseModel):
     finishing_position: Optional[int] = Field(default=None, ge=1, le=100000)
 
 
+class FC27SourceProvenance(BaseModel):
+    """Part N: Immutable source provenance metadata attached to normalized operations."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_id: str
+    provider_declaration_version: str
+    endpoint_contract_version: str = ENDPOINT_CONTRACT_VERSION
+    response_schema_version: str = RESPONSE_SCHEMA_VERSION
+    normalization_version: str = NORMALIZATION_VERSION
+    observed_timestamp: datetime
+    source_operation: str
+
+
 class FC27NormalizedOperationEnvelope(BaseModel):
     """Normalized, privacy-checked result returned by FC27AuthorizedProviderAdapter."""
 
@@ -877,6 +907,7 @@ class FC27NormalizedOperationEnvelope(BaseModel):
     playoff_achievements: Tuple[FC27NormalizedPlayoffAchievement, ...] = ()
     schema_drift_paths: Tuple[str, ...] = ()
     quarantine_metadata: Optional[Dict[str, Any]] = None
+    source_provenance: Optional[FC27SourceProvenance] = None
     transport_log: FC27MetadataTransportLog
     raw_response_retained: Literal[False] = False
     store_display_aliases: Literal[False] = False
@@ -1013,23 +1044,154 @@ class FC27AuthorizedProviderAdapter:
     def __init__(
         self,
         *,
-        declaration: FC27AuthorizedProviderDeclaration,
-        transport_client: FC27AuthorizedTransportClient,
+        declaration: Optional[FC27AuthorizedProviderDeclaration] = None,
+        transport_client: Optional[FC27AuthorizedTransportClient] = None,
         reference_now: Optional[datetime] = None,
         environ: Optional[Mapping[str, str]] = None,
+        cache: Optional[FC27BoundedNormalizedCache] = None,
+        rate_limiter: Optional[FC27ProviderTokenBucketLimiter] = None,
+        request_budget: Optional[FC27RequestBudget] = None,
+        adapter_circuit_breaker: Optional[FC27AdapterCircuitBreaker] = None,
+        collision_detector: Optional[FC27PseudonymCollisionDetector] = None,
+        kill_switch_active: bool = False,
     ) -> None:
         self._declaration = declaration
         self._transport = transport_client
         self._reference_now = reference_now
         self._environ = environ
+        self._cache = cache if cache is not None else FC27BoundedNormalizedCache(enabled=False)
+        self._rate_limiter = (
+            rate_limiter if rate_limiter is not None else FC27ProviderTokenBucketLimiter(enabled=False)
+        )
+        self._request_budget = request_budget
+        self._adapter_breaker = (
+            adapter_circuit_breaker
+            if adapter_circuit_breaker is not None
+            else FC27AdapterCircuitBreaker(approved_provider_selected=(declaration is not None))
+        )
+        self._collision_detector = (
+            collision_detector if collision_detector is not None else FC27PseudonymCollisionDetector()
+        )
+        self._kill_switch_active = kill_switch_active
 
     @property
-    def declaration(self) -> FC27AuthorizedProviderDeclaration:
+    def declaration(self) -> Optional[FC27AuthorizedProviderDeclaration]:
         return self._declaration
 
     @property
-    def transport_client(self) -> FC27AuthorizedTransportClient:
+    def transport_client(self) -> Optional[FC27AuthorizedTransportClient]:
         return self._transport
+
+    @property
+    def cache(self) -> FC27BoundedNormalizedCache:
+        return self._cache
+
+    @property
+    def rate_limiter(self) -> FC27ProviderTokenBucketLimiter:
+        return self._rate_limiter
+
+    @property
+    def request_budget(self) -> Optional[FC27RequestBudget]:
+        return self._request_budget
+
+    @property
+    def adapter_circuit_breaker(self) -> FC27AdapterCircuitBreaker:
+        return self._adapter_breaker
+
+    def _pre_transport_pipeline(
+        self,
+        *,
+        op: FC27AuthorizedOperation,
+        club_id: str,
+        platform: str,
+        game_version: str,
+        purpose: str,
+        query_params: Optional[Mapping[str, Any]] = None,
+    ) -> Tuple[FC27AuthorizedProviderDeclaration, FC27CacheKeySpec, Optional[FC27NormalizedOperationEnvelope]]:
+        """Executes Steps 1-10 of the 18-step provider-adapter pipeline before transport."""
+        # Step 1: Validate provider declaration exists
+        if self._declaration is None or self._transport is None:
+            self._adapter_breaker.record_failure("NO_APPROVED_PROVIDER")
+            raise FC27ProviderError("PROVIDER_NOT_AUTHORIZED: no approved provider declaration is configured")
+
+        # Steps 2-5: Validate expiration, terms/privacy versions, operation, club/platform/game_version
+        self._declaration.verify_active_for_operation(
+            op,
+            club_id=club_id,
+            platform=platform,
+            game_version=game_version,
+            purpose=purpose,
+            reference_now=self._reference_now,
+        )
+
+        # Step 6: Check kill switch
+        if self._kill_switch_active:
+            self._adapter_breaker.record_failure("KILL_SWITCH_ACTIVE")
+            raise FC27ProviderError("Kill switch is active; provider execution blocked")
+
+        # Step 7: Check circuit breaker
+        self._adapter_breaker.before_call()
+
+        # Step 8: Check bounded normalized cache (only after authorization, scope, kill switch, and circuit check)
+        _, cache_key_spec = build_fc27_cache_key(
+            provider_id=self._declaration.provider_id,
+            provider_authorization_version=self._declaration.authorization_reference,
+            operation=op.value,
+            club_id=club_id,
+            platform=platform,
+            game_version=game_version,
+            parameters=query_params,
+            response_schema_version=RESPONSE_SCHEMA_VERSION,
+            normalization_version=NORMALIZATION_VERSION,
+        )
+        cached_env = self._cache.get(cache_key_spec)
+        if isinstance(cached_env, FC27NormalizedOperationEnvelope):
+            self._adapter_breaker.record_success()
+            return self._declaration, cache_key_spec, cached_env
+
+        # Step 9: Acquire rate-limit token
+        self._rate_limiter.acquire(self._declaration.provider_id, op.value)
+
+        # Step 10: Consume request budget immediately before transport invocation
+        if self._request_budget is not None:
+            self._request_budget.consume_before_transport()
+
+        return self._declaration, cache_key_spec, None
+
+    def _execute_transport_with_breaker(
+        self,
+        op: FC27AuthorizedOperation,
+        *,
+        club_id: str,
+        platform: str,
+        game_version: str,
+        query_params: Optional[Mapping[str, Any]] = None,
+    ) -> Any:
+        assert self._transport is not None
+        try:
+            return self._transport.execute_operation(
+                op,
+                club_id=club_id,
+                platform=platform,
+                game_version=game_version,
+                query_params=query_params,
+                environ=self._environ,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if "401" in msg:
+                self._adapter_breaker.record_failure("HTTP_401")
+            elif "403" in msg:
+                self._adapter_breaker.record_failure("HTTP_403")
+            elif "Redirect" in msg:
+                self._adapter_breaker.record_failure("AUTH_REDIRECT")
+            elif "prohibited sensitive field" in msg:
+                self._adapter_breaker.record_failure("SENSITIVE_FIELD_VIOLATION")
+            elif "timed out" in msg:
+                self._adapter_breaker.record_failure("TIMEOUT")
+            else:
+                self._adapter_breaker.record_failure("TRANSPORT_ERROR")
+            raise
 
     def fetch_club_identity(
         self,
@@ -1040,24 +1202,26 @@ class FC27AuthorizedProviderAdapter:
         purpose: str = "INTERNAL_TEAM_ANALYTICS",
     ) -> FC27NormalizedOperationEnvelope:
         op = FC27AuthorizedOperation.CLUB_IDENTITY
-        self._declaration.verify_active_for_operation(
-            op,
+        decl, cache_key_spec, cached = self._pre_transport_pipeline(
+            op=op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             purpose=purpose,
-            reference_now=self._reference_now,
         )
-        resp = self._transport.execute_operation(
+        if cached is not None:
+            return cached
+
+        resp = self._execute_transport_with_breaker(
             op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
-            environ=self._environ,
         )
         data = resp.parsed_data
         club_node = data.get(EAST_COASTERS_CLUB_ID, data)
         if not isinstance(club_node, Mapping):
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Invalid CLUB_IDENTITY payload schema")
 
         allowed_keys = {"clubId", "club_id", "name", "club_name", "platform", "regionId", "customKit"}
@@ -1068,6 +1232,7 @@ class FC27AuthorizedProviderAdapter:
         ret_plat = str(club_node.get("platform", platform)).strip()
 
         if ret_id != EAST_COASTERS_CLUB_ID or ret_name.lower() != EAST_COASTERS_CLUB_NAME.lower() or ret_plat != "common-gen5":
+            self._adapter_breaker.record_failure("IDENTITY_MISMATCH")
             raise FC27TransportError(
                 f"Club identity mismatch: expected ({EAST_COASTERS_CLUB_ID}, {EAST_COASTERS_CLUB_NAME}, common-gen5)"
             )
@@ -1078,18 +1243,21 @@ class FC27AuthorizedProviderAdapter:
             platform="common-gen5",
         ).model_copy(
             update={
-                "provider": self._declaration.provider_id,
+                "provider": decl.provider_id,
                 "identity_verification_state": ClubIdentityState.PROVISIONAL,
                 "payload_hash": resp.payload_sha256,
-                "provenance": f"{self._declaration.provider_id}:{self._declaration.authorization_reference}",
+                "provenance": f"{decl.provider_id}:{decl.authorization_reference}",
             }
         )
-        return self._build_envelope(
+        envelope = self._build_envelope(
             op=op,
             resp=resp,
             drift=drift,
             club_identity=base_identity,
         )
+        self._cache.put(cache_key_spec, envelope)
+        self._adapter_breaker.record_success()
+        return envelope
 
     def fetch_club_statistics(
         self,
@@ -1100,28 +1268,31 @@ class FC27AuthorizedProviderAdapter:
         purpose: str = "INTERNAL_TEAM_ANALYTICS",
     ) -> FC27NormalizedOperationEnvelope:
         op = FC27AuthorizedOperation.CLUB_STATISTICS
-        self._declaration.verify_active_for_operation(
-            op,
+        _, cache_key_spec, cached = self._pre_transport_pipeline(
+            op=op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             purpose=purpose,
-            reference_now=self._reference_now,
         )
-        resp = self._transport.execute_operation(
+        if cached is not None:
+            return cached
+
+        resp = self._execute_transport_with_breaker(
             op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
-            environ=self._environ,
         )
         data = resp.parsed_data
         stats_node = data.get(EAST_COASTERS_CLUB_ID, data)
         if not isinstance(stats_node, Mapping):
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Invalid CLUB_STATISTICS payload schema")
 
         required_keys = {"gamesPlayed", "wins", "ties", "losses", "goals", "goalsAgainst"}
         if not required_keys.issubset(stats_node.keys()):
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Missing required CLUB_STATISTICS fields")
 
         allowed_keys = required_keys | {"clubId", "cleanSheets", "bestDivision", "skillRating"}
@@ -1140,14 +1311,18 @@ class FC27AuthorizedProviderAdapter:
                 reputation_tier=f"DIV_{int(stats_node['bestDivision'])}" if "bestDivision" in stats_node and stats_node["bestDivision"] is not None else None,
             )
         except Exception as exc:
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError(f"CLUB_STATISTICS validation failed: {exc}") from exc
 
-        return self._build_envelope(
+        envelope = self._build_envelope(
             op=op,
             resp=resp,
             drift=drift,
             club_statistics=club_stats,
         )
+        self._cache.put(cache_key_spec, envelope)
+        self._adapter_breaker.record_success()
+        return envelope
 
     def fetch_recent_matches(
         self,
@@ -1198,24 +1373,27 @@ class FC27AuthorizedProviderAdapter:
         match_type: str,
         purpose: str,
     ) -> FC27NormalizedOperationEnvelope:
-        self._declaration.verify_active_for_operation(
-            op,
+        _, cache_key_spec, cached = self._pre_transport_pipeline(
+            op=op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             purpose=purpose,
-            reference_now=self._reference_now,
+            query_params={"matchType": match_type},
         )
-        resp = self._transport.execute_operation(
+        if cached is not None:
+            return cached
+
+        resp = self._execute_transport_with_breaker(
             op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             query_params={"matchType": match_type},
-            environ=self._environ,
         )
         raw_matches = resp.parsed_data.get("matches")
         if not isinstance(raw_matches, list) or not raw_matches:
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Invalid or empty 'matches' list in provider response")
 
         allowed_match_keys = {
@@ -1256,6 +1434,7 @@ class FC27AuthorizedProviderAdapter:
 
         for idx, m_item in enumerate(raw_matches):
             if not isinstance(m_item, Mapping):
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError(f"Match item at index {idx} is not an object")
             for k in m_item.keys():
                 if k not in allowed_match_keys:
@@ -1263,15 +1442,18 @@ class FC27AuthorizedProviderAdapter:
 
             for req_k in ("matchId", "playedAt", "result", "goalsFor", "goalsAgainst"):
                 if req_k not in m_item or m_item[req_k] is None:
+                    self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                     raise FC27TransportError(f"Match item at index {idx} missing required field '{req_k}'")
 
             perfs: List[FC27SuppliedPlayerPerformance] = []
             if include_player_performances:
                 raw_players = m_item.get("players", [])
                 if not isinstance(raw_players, list):
+                    self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                     raise FC27TransportError("Match 'players' field must be a list")
                 for p_idx, p_item in enumerate(raw_players):
                     if not isinstance(p_item, Mapping):
+                        self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                         raise FC27TransportError("Player item must be an object")
                     for pk in p_item.keys():
                         if pk.lower() not in allowed_player_keys and pk not in allowed_player_keys:
@@ -1283,8 +1465,9 @@ class FC27AuthorizedProviderAdapter:
                         or p_item.get("playerKey")
                     )
                     if not raw_ref:
+                        self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                         raise FC27TransportError("Player performance entry missing pseudonymous source key")
-                    pseudo_ref = pseudonymize_east_coasters_player_ref(str(raw_ref), club_id=EAST_COASTERS_CLUB_ID)
+                    pseudo_ref = self._collision_detector.resolve(str(raw_ref))
 
                     try:
                         p_att = int(p_item["passesAttempted"]) if p_item.get("passesAttempted") is not None else None
@@ -1311,15 +1494,16 @@ class FC27AuthorizedProviderAdapter:
                             saves=int(p_item["saves"]) if p_item.get("saves") is not None else None,
                         )
                     except Exception as exc:
+                        self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                         raise FC27TransportError(f"Player performance validation failed: {exc}") from exc
                     perfs.append(perf)
 
             raw_comp = str(m_item.get("competitionType", match_type)).upper()
-            if "PLAYOFF" in raw_comp:
+            if "PLAYOFF" in raw_comp or "GAMETYPE13" in raw_comp:
                 mapped_type: Literal["LEAGUE", "PLAYOFF", "FRIENDLY", "CUP", "PRACTICE", "UNKNOWN"] = "PLAYOFF"
             elif "FRIENDLY" in raw_comp:
                 mapped_type = "FRIENDLY"
-            elif "LEAGUE" in raw_comp:
+            elif "LEAGUE" in raw_comp or "GAMETYPE9" in raw_comp:
                 mapped_type = "LEAGUE"
             else:
                 mapped_type = "UNKNOWN"
@@ -1338,15 +1522,19 @@ class FC27AuthorizedProviderAdapter:
                     data_quality_status="PROVISIONAL",
                 )
             except Exception as exc:
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError(f"Match normalization failed: {exc}") from exc
             normalized_matches.append(match_obj)
 
-        return self._build_envelope(
+        envelope = self._build_envelope(
             op=op,
             resp=resp,
             drift=tuple(sorted(drift_set)),
             matches=tuple(normalized_matches),
         )
+        self._cache.put(cache_key_spec, envelope)
+        self._adapter_breaker.record_success()
+        return envelope
 
     def fetch_current_member_statistics(
         self,
@@ -1392,23 +1580,25 @@ class FC27AuthorizedProviderAdapter:
         game_version: str,
         purpose: str,
     ) -> FC27NormalizedOperationEnvelope:
-        self._declaration.verify_active_for_operation(
-            op,
+        _, cache_key_spec, cached = self._pre_transport_pipeline(
+            op=op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             purpose=purpose,
-            reference_now=self._reference_now,
         )
-        resp = self._transport.execute_operation(
+        if cached is not None:
+            return cached
+
+        resp = self._execute_transport_with_breaker(
             op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
-            environ=self._environ,
         )
         raw_members = resp.parsed_data.get("members")
         if not isinstance(raw_members, list) or not raw_members:
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Invalid or empty 'members' list in provider response")
 
         allowed_member_keys = {
@@ -1429,6 +1619,7 @@ class FC27AuthorizedProviderAdapter:
         members_out: List[FC27NormalizedMemberStatistic] = []
         for idx, item in enumerate(raw_members):
             if not isinstance(item, Mapping):
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError("Member item must be an object")
             for k in item.keys():
                 if k not in allowed_member_keys and k.lower() not in allowed_member_keys:
@@ -1436,8 +1627,9 @@ class FC27AuthorizedProviderAdapter:
 
             raw_ref = item.get("localPlayerReference") or item.get("memberKey")
             if not raw_ref:
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError("Member entry missing pseudonymous source key")
-            pseudo_ref = pseudonymize_east_coasters_player_ref(str(raw_ref), club_id=EAST_COASTERS_CLUB_ID)
+            pseudo_ref = self._collision_detector.resolve(str(raw_ref))
 
             try:
                 mem = FC27NormalizedMemberStatistic(
@@ -1455,15 +1647,19 @@ class FC27AuthorizedProviderAdapter:
                     display_alias=None,
                 )
             except Exception as exc:
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError(f"Member statistics normalization failed: {exc}") from exc
             members_out.append(mem)
 
-        return self._build_envelope(
+        envelope = self._build_envelope(
             op=op,
             resp=resp,
             drift=tuple(sorted(drift_set)),
             member_statistics=tuple(members_out),
         )
+        self._cache.put(cache_key_spec, envelope)
+        self._adapter_breaker.record_success()
+        return envelope
 
     def fetch_playoff_achievements(
         self,
@@ -1474,23 +1670,25 @@ class FC27AuthorizedProviderAdapter:
         purpose: str = "INTERNAL_TEAM_ANALYTICS",
     ) -> FC27NormalizedOperationEnvelope:
         op = FC27AuthorizedOperation.PLAYOFF_ACHIEVEMENTS
-        self._declaration.verify_active_for_operation(
-            op,
+        _, cache_key_spec, cached = self._pre_transport_pipeline(
+            op=op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
             purpose=purpose,
-            reference_now=self._reference_now,
         )
-        resp = self._transport.execute_operation(
+        if cached is not None:
+            return cached
+
+        resp = self._execute_transport_with_breaker(
             op,
             club_id=club_id,
             platform=platform,
             game_version=game_version,
-            environ=self._environ,
         )
         raw_achievements = resp.parsed_data.get("achievements")
         if not isinstance(raw_achievements, list):
+            self._adapter_breaker.record_failure("SCHEMA_FAILURE")
             raise FC27TransportError("Invalid 'achievements' list in PLAYOFF_ACHIEVEMENTS response")
 
         allowed_keys = {
@@ -1506,6 +1704,7 @@ class FC27AuthorizedProviderAdapter:
         achievements_out: List[FC27NormalizedPlayoffAchievement] = []
         for idx, item in enumerate(raw_achievements):
             if not isinstance(item, Mapping):
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError("Playoff achievement item must be an object")
             for k in item.keys():
                 if k not in allowed_keys:
@@ -1521,15 +1720,19 @@ class FC27AuthorizedProviderAdapter:
                     finishing_position=int(item["finishingPosition"]) if item.get("finishingPosition") is not None else None,
                 )
             except Exception as exc:
+                self._adapter_breaker.record_failure("SCHEMA_FAILURE")
                 raise FC27TransportError(f"Playoff achievement normalization failed: {exc}") from exc
             achievements_out.append(ach)
 
-        return self._build_envelope(
+        envelope = self._build_envelope(
             op=op,
             resp=resp,
             drift=tuple(sorted(drift_set)),
             playoff_achievements=tuple(achievements_out),
         )
+        self._cache.put(cache_key_spec, envelope)
+        self._adapter_breaker.record_success()
+        return envelope
 
     def build_export_envelope_and_plan(
         self,
@@ -1543,6 +1746,7 @@ class FC27AuthorizedProviderAdapter:
         """Converts normalized match records into an FC27UserExportEnvelope and plans idempotent import."""
         if not matches_envelope.matches:
             raise FC27ProviderError("Cannot build export envelope from empty matches tuple")
+        assert self._declaration is not None
         gen_dt = (generated_at or datetime(2026, 10, 29, 12, 0, 0, tzinfo=timezone.utc)).astimezone(timezone.utc)
 
         clean_matches = [
@@ -1629,6 +1833,7 @@ class FC27AuthorizedProviderAdapter:
         member_statistics: Tuple[FC27NormalizedMemberStatistic, ...] = (),
         playoff_achievements: Tuple[FC27NormalizedPlayoffAchievement, ...] = (),
     ) -> FC27NormalizedOperationEnvelope:
+        assert self._declaration is not None
         quarantine_meta: Optional[Dict[str, Any]] = None
         if drift:
             quarantine_meta = {
@@ -1642,6 +1847,12 @@ class FC27AuthorizedProviderAdapter:
                 "payload_sha256": resp.payload_sha256,
                 "raw_body_stored": False,
             }
+        provenance = FC27SourceProvenance(
+            provider_id=self._declaration.provider_id,
+            provider_declaration_version=self._declaration.authorization_reference,
+            observed_timestamp=datetime.now(timezone.utc),
+            source_operation=op.value,
+        )
         return FC27NormalizedOperationEnvelope(
             provider_id=self._declaration.provider_id,
             operation=op.value,
@@ -1653,6 +1864,7 @@ class FC27AuthorizedProviderAdapter:
             playoff_achievements=playoff_achievements,
             schema_drift_paths=drift,
             quarantine_metadata=quarantine_meta,
+            source_provenance=provenance,
             transport_log=resp.metadata_log,
             raw_response_retained=False,
             store_display_aliases=False,
@@ -1696,6 +1908,7 @@ __all__ = [
     "FC27ProviderCandidateRecord",
     "FC27ProviderSelectionDecision",
     "FC27RetryPolicy",
+    "FC27SourceProvenance",
     "REVIEWED_API_SOURCE_CANDIDATES",
     "compute_match_hash",
     "compute_payload_sha256",
