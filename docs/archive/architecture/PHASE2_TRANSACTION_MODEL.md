@@ -1,14 +1,20 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/FC27_APPROVAL_FLOW.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_TRANSACTION_MODEL.md`.
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_TRANSACTION_MODEL.md
+> Archived on: 2026-10-29
+> Superseded by: docs/FC27_APPROVAL_FLOW.md
+> Reason: Consolidated into current approval flow and security boundaries documentation
+> Warning: Do not execute commands in this archived document.
 
 # Phase 2 Transactional Architecture & Concurrency Model
 
-**Scope**: Single-Transaction Decision Commit, Concurrency Isolation, Lock Hierarchies  
-**Primary Implementation**: `src/approval_store.py::ApprovalStore.apply_webauthn_decision`  
-**Database**: PostgreSQL 15+ (psycopg 3)  
+**Scope**: Single-Transaction Decision Commit, Concurrency Isolation, Lock Hierarchies
+**Primary Implementation**: `src/approval_store.py::ApprovalStore.apply_webauthn_decision`
+**Database**: PostgreSQL 15+ (psycopg 3)
 
 ---
 

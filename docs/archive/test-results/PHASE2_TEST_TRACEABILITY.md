@@ -1,15 +1,19 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/TESTING.md and TEST_RESULTS.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_TEST_TRACEABILITY.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_TEST_TRACEABILITY.md
+> Archived on: 2026-10-29
+> Superseded by: docs/TESTING.md
+> Reason: Point-in-time Phase 2 traceability snapshot superseded by current testing guide
 > Warning: Do not execute commands in this archived document.
 
 # Phase 2 Test Traceability Matrix: Findings R1–R15 to Test Suites
 
-**Status**: PROVISIONAL - mapping only; pass results are not claimed here and must come from a recorded host run  
-**Test Environment**: Live PostgreSQL Database (`$env:TEST_POSTGRES_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"`)  
+**Status**: PROVISIONAL - mapping only; pass results are not claimed here and must come from a recorded host run
+**Test Environment**: Live PostgreSQL Database (`$env:TEST_POSTGRES_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"`)
 
 ---
 

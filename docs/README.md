@@ -6,8 +6,7 @@ Welcome to the authoritative documentation directory for **`iwa.dev.fcbuild`**. 
 
 ## 1. Start Here
 
-- **[`../README.md`](../README.md)** — Repository overview, quickstart, target club scope (`East Coasters`, `club_id=330323`, `common-gen5`, `FC27`), component status summary, and safety boundaries.
-- **[`FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)** — Authoritative status classification (`IMPLEMENTED_AND_TESTED`, `DISABLED_BY_DEFAULT`, `BLOCKED_EXTERNAL_AUTHORIZATION`, etc.) for all 37 repository subsystems.
+- **[`FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)** — Authoritative status classification (`IMPLEMENTED`, `DISABLED`, `DEFERRED`, `REJECTED`, etc.) for all repository subsystems.
 - **[`FC27_DOCUMENTATION_TRUTH_TABLE.md`](FC27_DOCUMENTATION_TRUTH_TABLE.md)** — Complete reconciliation truth table mapping every Markdown document to its current status and code evidence.
 - **[`repository_inventory.json`](repository_inventory.json)** — Machine-readable inventory of all tracked files in the repository.
 
@@ -40,7 +39,7 @@ Welcome to the authoritative documentation directory for **`iwa.dev.fcbuild`**. 
 - **[`DEPLOYMENT_AND_SECURITY.md`](DEPLOYMENT_AND_SECURITY.md)** — Docker Compose deployment profiles (`gpu`, `cpu`, `ops`, `dispatch`), network isolation, and operational hardening checklist.
 - **[`FEATURE_FLAGS.md`](FEATURE_FLAGS.md)** — Complete specification and dependency chain for all fail-closed feature flags in `src/settings.py` and `config.example.env`.
 - **[`VOICE_CAPABILITIES.md`](VOICE_CAPABILITIES.md)** — Scope and non-inclusion boundary for voice/audio capabilities in `iwa.dev.fcbuild`.
-- **[`notes/mcp_ws.md`](notes/mcp_ws.md)** — Technical note on MCP streamable HTTP (`src/mcp_http_server.py`) and stdio (`src/mcp_server.py`) transport behavior.
+- **[`notes/mcp_ws.md`](notes/mcp_ws.md)** — Technical note on MCP streamable HTTP and stdio (`src/fc27_mcp_server.py`) transport behavior.
 
 ---
 
@@ -95,7 +94,7 @@ Welcome to the authoritative documentation directory for **`iwa.dev.fcbuild`**. 
 
 ## 13. Identity
 
-- **Identity & PII Encryption (`src/identity/`)**: Documented in [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md) and [`OPERATIONS.md`](OPERATIONS.md) (`MultiFernet` encryption in `src/identity/crypto.py`, consent & suppression ledger in `src/identity/repository.py`, and WebAuthn passkeys in `src/identity/webauthn.py`).
+- **Identity & PII Encryption (`src/identity/`)**: Documented in `docs/SECURITY_BOUNDARIES.md` and `docs/OPERATIONS.md` (`MultiFernet` encryption in `src/identity/crypto.py`, consent & suppression ledger in `src/identity/store.py`, and WebAuthn passkeys in `src/identity/webauthn.py`).
 
 ---
 

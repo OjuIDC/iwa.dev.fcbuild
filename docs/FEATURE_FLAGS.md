@@ -1,5 +1,11 @@
 # Feature Flags & Safety Gates (`iwa.dev.fcbuild`)
 
+- **Status**: Current
+- **Audience**: Operators, Developers, Security Reviewers
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `src/settings.py`, `src/graph_api.py`, `config.example.env`, `docker-compose.yml`
+- **Supersedes**: `NONE`
+
 Every network, ingestion, persistence, analytical, recommendation, authentication-fallback, observability, and outbound dispatch capability in `iwa.dev.fcbuild` is governed by explicit fail-closed feature flags defined in [`src/settings.py`](../src/settings.py) and [`config.example.env`](../config.example.env).
 
 ---
@@ -23,8 +29,8 @@ Every network, ingestion, persistence, analytical, recommendation, authenticatio
 | `DISPATCH_ENABLED` | `false` | `true`, `false` | Hard-blocks outbound player dispatch (`Phase 1 safety invariant violation` if enabled without gates) | Requires all 6 gates in `docs/DISPATCH_ACTIVATION.md` (`G-MIGRATION`..`G-OUTBOX`) | Outbound dispatch prohibited while `false` | Commissioner + Security Owner | [`DISPATCH_ACTIVATION.md`](DISPATCH_ACTIVATION.md) |
 | `DISPATCH_WORKER_ENABLED` | `false` | `true`, `false` | Prevents `src/dispatch/worker.py` from polling `dispatch_outbox` (`RuntimeError`) | Requires `DISPATCH_ENABLED=true` and Compose `--profile dispatch` | Outbox worker execution | Platform Operator | [`DISPATCH_ACTIVATION.md`](DISPATCH_ACTIVATION.md) |
 | `APPROVAL_CLI_HMAC_ENABLED` | `false` | `true`, `false` | Rejects symmetric HMAC CLI decisions; enforces WebAuthn passkey step-up only | Requires `APPROVAL_SIGNING_SECRET` (`>= 32` bytes) | Emergency Commissioner CLI step-up only | Commissioner | [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md) |
-| `LM_STUDIO_FALLBACK_ENABLED` | `false` | `true`, `false` | Disables local LM Studio (`127.0.0.1:1234`) fallback in `src/llm_router.py` | Localhost-only (`validate_local_url` rejects remote hosts) | Local inference only | Platform Operator | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| `LANGFUSE_ENABLED` | `false` | `true`, `false` | Disables Langfuse telemetry export (`src/observability.py`) | Localhost-only (`LANGFUSE_HOST`) | Local observability metadata only | Platform Operator | [`OPERATIONS.md`](OPERATIONS.md) |
+| `LM_STUDIO_FALLBACK_ENABLED` | `false` | `true`, `false` | Disables local LM Studio (`127.0.0.1:1234`) fallback in `src/model_selection.py` | Localhost-only (`validate_local_url` rejects remote hosts) | Local inference only | Platform Operator | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| `LANGFUSE_ENABLED` | `false` | `true`, `false` | Disables Langfuse telemetry export (`src/tracing.py`) | Localhost-only (`LANGFUSE_HOST`) | Local observability metadata only | Platform Operator | [`OPERATIONS.md`](OPERATIONS.md) |
 | `LANGFUSE_CAPTURE_CONTENT` | `false` | `true`, `false` | Redacts prompt/completion payloads even when `LANGFUSE_ENABLED=true` | Requires `LANGFUSE_ENABLED=true` | Telemetry content capture (keep `false` in production) | Security Owner | [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md) |
 
 ---

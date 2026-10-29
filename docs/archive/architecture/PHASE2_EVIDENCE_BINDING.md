@@ -1,15 +1,21 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/FC27_APPROVAL_FLOW.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_EVIDENCE_BINDING.md`.
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_EVIDENCE_BINDING.md
+> Archived on: 2026-10-29
+> Superseded by: docs/FC27_APPROVAL_FLOW.md
+> Reason: Consolidated into current approval flow and security boundary documentation
+> Warning: Do not execute commands in this archived document.
 
 # Phase 2 Decision Evidence Binding Specification
 
-**Authoritative Entity**: `public.fc27_decision_evidence`  
-**Migration Reference**: `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`  
-**Canonical Serialization**: RFC-8785 Canonical JSON  
-**Hash Algorithm**: SHA-256 (64 hex characters)  
+**Authoritative Entity**: `public.fc27_decision_evidence`
+**Migration Reference**: `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`
+**Canonical Serialization**: RFC-8785 Canonical JSON
+**Hash Algorithm**: SHA-256 (64 hex characters)
 
 ---
 

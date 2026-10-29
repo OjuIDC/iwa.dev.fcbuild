@@ -496,7 +496,7 @@ The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PI
 
 ---
 
-## 16. Read-Only PostgreSQL Analytics Boundary (`src/fc27/dashboard_queries.py`)
+## 16. Read-Only PostgreSQL Analytics Boundary (`src/fc27_dashboard_queries.py`)
 
 ### 16.1 Analytics Window Decision & Season Equivalence Posture
 - **Primary Rolling Window**: `LAST_20_COMPLETED_MATCHES` (`window_matches=20`, configurable within `1..250`).
@@ -545,7 +545,7 @@ Defense-in-depth enforcement is also applied in:
 
 ### 17.4 Metadata-Only Tracing, `PostgresSaver` Non-Modification, & Rollback
 - **Metadata-Only Tracing (`emit_pre_approval_validation_trace`)**: Emits `preapproval.validation.passed`, `preapproval.validation.failed`, or `preapproval.validation.review_required` via the existing tracer abstraction with safe metadata only (`thread_id`, `club_id`, `package_version`, `policy_version`, `package_count`, `reason_codes`, `confidence_tier`, `formula_version`, `timestamp`). Never emits player aliases, raw payloads, candidate bodies, prompts, or connection strings.
-- **Database & `PostgresSaver` Non-Modification**: No database migration is added in this phase (`migrations/0001` through `0012` are unchanged), `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched, and `GRAPH_THREAD_DB_CONSTRAINT` remains `DEFERRED`.
+- **Database & `PostgresSaver` Non-Modification**: No database migration is added in this phase (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` are unchanged), `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched, and `GRAPH_THREAD_DB_CONSTRAINT` remains `DEFERRED`.
 - **Rollback Procedure**: Revert the pure code changes in `src/schemas.py`, `src/lead_packages.py`, `src/graph.py`, `src/approval_store.py`, and `tests/test_fc27_preapproval_validator.py`; no database schema rollback is required.
 
 ---

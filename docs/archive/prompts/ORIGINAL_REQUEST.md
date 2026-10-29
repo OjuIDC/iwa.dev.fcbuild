@@ -1,9 +1,13 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/ARCHITECTURE.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `ORIGINAL_REQUEST.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: ORIGINAL_REQUEST.md
+> Archived on: 2026-10-29
+> Superseded by: README.md
+> Reason: Point-in-time initial user request superseded by current reconciled platform docs
 > Warning: Do not execute commands in this archived document.
 
 # Original User Request

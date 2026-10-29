@@ -1,5 +1,11 @@
 # Testing Guide
 
+- **Status**: Current
+- **Audience**: Developers, QA Engineers, Security Reviewers
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_documentation_consistency.py`, `scripts/check_matchpulse_boundary.py`
+- **Supersedes**: `docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`
+
 This guide documents the test architecture, PostgreSQL 16 integration harness, offline/DNS network guards, test suite categories, and cleanup procedures for `iwa.dev.fcbuild`.
 
 > **Note on Pass Counts**: Do not hardcode historical test counts as permanent expectations in operational guides. Dated, commit-bound pass counts are recorded in [`TEST_RESULTS.md`](../TEST_RESULTS.md).
@@ -61,7 +67,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_fc27_authorized_provider.py` & `tests/test_fc27_authorized_api.py` — 18-step provider execution pipeline, candidate source evaluation (`REVIEWED_API_SOURCE_CANDIDATES`), kill switches, and `FC27SourceProvenance`.
 
 ### 4.2 FC 27 Ingestion, Persistence, Analytics, & Pre-Approval Suites
-- `tests/test_fc27_api_ingestion.py` — End-to-end staged ingestion from mock provider envelopes into PostgreSQL 16 (`migrations/0012`).
+- `tests/test_fc27_api_ingestion.py` — End-to-end staged ingestion from mock provider envelopes into PostgreSQL 16 (`migrations/0012_fc27_performance_and_quarantine.sql`).
 - `tests/test_fc27_persistence_and_queries.py` — Normalized PostgreSQL storage (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), Grants Policy Version `14`, replay conflict detection, and `src/fc27_analytics.py`.
 - `tests/test_fc27_dashboard_queries.py` — Read-only dashboard queries (`src/fc27_dashboard_queries.py`), `READ ONLY` transaction enforcement, `5000ms` statement timeout, rolling windows (`<= 730` days), and alias suppression.
 - `tests/test_fc27_preapproval_validator.py` — Deterministic pre-approval coaching package validation (`src/fc27_coaching.py`) and tactical hypothesis blocking.
@@ -84,6 +90,11 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_archive_integrity.py` — Required repository files and README references.
 - `tests/test_compose_isolation.py` — Resolved Docker Compose secret, network, port, and digest isolation.
 - `tests/test_documentation_consistency.py` — Verifies documented paths, scripts, tests, feature flags, Compose services, archive manifest completeness, and security/tactical documentation invariants.
+- `scripts/check_documentation_consistency.py` — Standalone static and strict (`--check`, `--check --strict`, `--json`) documentation consistency validator requiring zero network, Docker, or PostgreSQL access:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check
+  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
+  ```
 - `scripts/check_matchpulse_boundary.py` — Enforces sibling-repository isolation from `..\matchpulse-live-public`.
 
 ---

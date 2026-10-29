@@ -10,7 +10,7 @@
 ## 2. Secrets
 1. Copy `config.example.env` to `.env` and replace every `replace_with_*` value with an independently generated random value.
 2. Store the Commissioner token in a password manager. Put only its SHA-256 in `.env`: `python scripts/commissioner_decide.py hash-token`.
-3. In this lab deployment, secrets reach containers as environment variables. `src/settings.read_secret` also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
+3. In this lab deployment, secrets reach containers as environment variables. `src/settings.py` (`read_secret`) also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
 4. Compose fails closed: `docker compose config` errors if any required secret is missing.
 
 ## 3. Credential placement (enforced by `tests/test_compose_isolation.py`)

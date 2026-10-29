@@ -1,15 +1,19 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/OPERATIONS.md and MIGRATION_GUIDE.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_RUNBOOKS.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_RUNBOOKS.md
+> Archived on: 2026-10-29
+> Superseded by: docs/OPERATIONS.md
+> Reason: Consolidated into current operations runbook
 > Warning: Do not execute commands in this archived document.
 
 # Phase 2 Operational Runbooks: Bootstrap, Key Rotation, and Least-Privilege DDL
 
-**Document Version**: 2.0  
-**Classification**: Operational Engineering Manual  
+**Document Version**: 2.0
+**Classification**: Operational Engineering Manual
 
 ---
 

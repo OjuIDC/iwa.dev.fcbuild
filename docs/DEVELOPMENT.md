@@ -1,5 +1,11 @@
 # Local Development Guide
 
+- **Status**: Current
+- **Audience**: Developers, Contributors
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `scripts/`, `tests/`
+- **Supersedes**: `NONE`
+
 This guide covers setting up a local development environment for `iwa.dev.fcbuild`, running focused and full test suites, validating Docker Compose configurations, and following repository contribution boundaries.
 
 ## 1. Python Environment Setup
@@ -93,7 +99,11 @@ Before staging any commit, run all static verification gates:
 .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py
 .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --mock
 
-# 4. Whitespace and conflict marker check
+# 4. Deterministic documentation consistency gate (standard and strict release mode)
+.\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check
+.\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
+
+# 5. Whitespace and conflict marker check
 git diff --check
 ```
 

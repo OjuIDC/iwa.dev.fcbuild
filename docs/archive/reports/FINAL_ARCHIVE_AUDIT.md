@@ -1,8 +1,14 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/ARCHITECTURE.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `audit/historical/FINAL_ARCHIVE_AUDIT.md`.
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: audit/historical/FINAL_ARCHIVE_AUDIT.md
+> Archived on: 2026-10-29
+> Superseded by: docs/SECURITY_BOUNDARIES.md
+> Reason: Historical audit snapshot superseded by current security boundaries
+> Warning: Do not execute commands in this archived document.
 
 > **HISTORICAL. Superseded on 2026-10-01** by IMPLEMENTATION_REPORT.md and SECURITY_CHANGES.md at the repository root.
 > Statements below describe earlier revisions. Several are now false: the shared GRAPH_API_TOKEN, the in-memory nonce store, "voice not enabled", and missing services.

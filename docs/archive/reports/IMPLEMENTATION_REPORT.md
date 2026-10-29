@@ -1,9 +1,13 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/ARCHITECTURE.md and docs/FC27_COMPONENT_STATUS.md` for the current implementation.
-> Archived on `2026-10-29` from `IMPLEMENTATION_REPORT.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: IMPLEMENTATION_REPORT.md
+> Archived on: 2026-10-29
+> Superseded by: docs/ARCHITECTURE.md
+> Reason: Point-in-time Phase 1 report superseded by current architecture and component status docs
 > Warning: Do not execute commands in this archived document.
 
 # Implementation report: fc27-full-integrated-typed-voice 2.0.0

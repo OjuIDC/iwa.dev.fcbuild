@@ -1,14 +1,20 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/SECURITY_BOUNDARIES.md and docs/FC27_APPROVAL_FLOW.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_WEBAUTHN_POLICY.md`.
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_WEBAUTHN_POLICY.md
+> Archived on: 2026-10-29
+> Superseded by: docs/SECURITY_BOUNDARIES.md
+> Reason: Consolidated into current security boundaries and approval flow documentation
+> Warning: Do not execute commands in this archived document.
 
 # Phase 2 WebAuthn & User Verification Policy Specification
 
-**Implementation**: `src/identity/webauthn.py`, `src/identity/policy.py`  
-**Standard**: W3C WebAuthn Level 3 / FIDO2  
-**Pinned Library**: `webauthn` (Python)  
+**Implementation**: `src/identity/webauthn.py`, `src/identity/policy.py`
+**Standard**: W3C WebAuthn Level 3 / FIDO2
+**Pinned Library**: `webauthn` (Python)
 
 ---
 

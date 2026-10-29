@@ -1,8 +1,14 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `README.md and docs/ARCHITECTURE.md` for the current implementation.
-> Archived on `2026-10-29` from `docs/HACKATHON_ALIGNMENT.md`.
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: docs/HACKATHON_ALIGNMENT.md
+> Archived on: 2026-10-29
+> Superseded by: docs/ARCHITECTURE.md
+> Reason: Historical hackathon rubric mapping superseded by current architecture documentation
+> Warning: Do not execute commands in this archived document.
 
 # Hackathon alignment review
 

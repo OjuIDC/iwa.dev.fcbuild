@@ -1,18 +1,22 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/SECURITY_BOUNDARIES.md and docs/FC27_COMPONENT_STATUS.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_REMEDIATION_REPORT.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_REMEDIATION_REPORT.md
+> Archived on: 2026-10-29
+> Superseded by: docs/SECURITY_BOUNDARIES.md
+> Reason: Point-in-time Phase 2 remediation report superseded by current security boundaries
 > Warning: Do not execute commands in this archived document.
 
 # Phase 2 Remediation Implementation Report: Identity & Authorization Foundation
 
-**Status**: PROVISIONAL - implementer-reported; pass counts below are NOT independently reproduced. Independent audit pending. See PHASE2_LOCAL_MERGE_GATE_REPORT.md  
-**Branch**: `fix/phase2-identity-victory-remediation`  
-**Baseline Commit**: `170e6a05966750e8ee53cdb9967e8605c31f6578`  
-**Milestones Remediated**: R1 through R6  
-**Required Phase 2 Completion Statement**:  
+**Status**: PROVISIONAL - implementer-reported; pass counts below are NOT independently reproduced. Independent audit pending. See PHASE2_LOCAL_MERGE_GATE_REPORT.md
+**Branch**: `fix/phase2-identity-victory-remediation`
+**Baseline Commit**: `170e6a05966750e8ee53cdb9967e8605c31f6578`
+**Milestones Remediated**: R1 through R6
+**Required Phase 2 Completion Statement**:
 > **"Phase 2 accepted. Identity and authorization foundation complete. Human and service identities are authenticated and scope-authorized. Dispatch remains disabled. No player delivery has occurred."**
 
 ---

@@ -1,6 +1,12 @@
 # East Coasters FC 27 Platform Architecture
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001`–`0012` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose*.yml`), and automated test suites (`tests/`).
+- **Status**: Current
+- **Audience**: Architects, Developers, Security Reviewers
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `tests/`
+- **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
+
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`), and automated test suites (`tests/`).
 
 ## 1. Architectural Status Classifications
 
@@ -49,7 +55,7 @@ flowchart TD
 
 ## 3. Component & Network-Boundary Diagram
 
-Docker Compose (`docker-compose.yml`) partitions containers across three isolated bridge networks (`fc27_data`, `fc27_ai`, `fc27_internal`) plus optional `fc27_langfuse`:
+Docker Compose (`docker-compose.yml` and `docker-compose.langfuse.yml`) partitions containers across isolated bridge networks (`fc27_data`, `fc27_net`, plus optional `fc27_obs` and `fc27_obs_edge`):
 
 ```mermaid
 flowchart LR
@@ -57,31 +63,33 @@ flowchart LR
         PG[("postgres (PostgreSQL 16)\nNo host port")]
         Bootstrap["db-bootstrap (--profile bootstrap)\npostgres_admin_uri"]
         Migrate["db-migrate\nfc27_migrator_uri"]
+        Relay["outbox-relay\nfc27_relay_uri"]
+        Worker["dispatch-worker\nfc27_dispatch_uri"]
     end
 
-    subgraph NetCore["Bridged Core Service"]
+    subgraph NetCore["Bridged Core Service (fc27_net + fc27_data)"]
         GraphAPI["graph-api (127.0.0.1:8001)\nfc27_app_uri + signing/service secrets"]
     end
 
-    subgraph NetAI["fc27_ai (internal: true)"]
-        Ollama["ollama + ollama-init\nNo host port"]
-    end
-
-    subgraph NetInternal["fc27_internal"]
+    subgraph NetApp["fc27_net (bridge)"]
+        Ollama["ollama + ollama-init + model-health\nNo host port"]
         Redis[("redis (127.0.0.1:6379)")]
         MCP["fc27-mcp (No host port)"]
         Watcher["live-watcher"]
         Rundown["post-match-rundown"]
-        WS["ws-server (127.0.0.1:8765)"]
+        WS["ws-server (127.0.0.1:8765 / 8766)"]
         Voice["voice-gateway / stt / tts\n(--profile voice, 127.0.0.1:9000)"]
         RTSP["rtsp-analyzer (--profile rtsp)"]
     end
 
     Bootstrap --> PG
     Migrate --> PG
+    Relay --> PG
+    Relay --> Redis
+    Worker --> PG
+    Worker --> Redis
     GraphAPI --> PG
     GraphAPI --> Ollama
-    Rundown --> Ollama
     GraphAPI --> MCP
     GraphAPI --> Redis
     Watcher --> MCP
@@ -96,9 +104,10 @@ flowchart LR
 ```
 
 ### Network Boundary Invariants (Enforced by `tests/test_compose_isolation.py`)
-1. **`fc27_data` (`internal: true`)**: Joined **only** by `postgres`, `db-bootstrap`, `db-migrate`, and `graph-api`. `fc27-mcp`, `live-watcher`, `post-match-rundown`, `ws-server`, `voice-gateway`, `stt`, `tts`, and `rtsp-analyzer` have **zero** network route to PostgreSQL.
-2. **`fc27_ai` (`internal: true`)**: Isolates `ollama` and `ollama-init` from external egress after initialization; reachable only by `graph-api` and `post-match-rundown`.
-3. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`, `3000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
+1. **`fc27_data` (`internal: true`)**: Joined **only** by `postgres`, `db-bootstrap`, `db-migrate`, `graph-api`, `outbox-relay`, and `dispatch-worker`. `fc27-mcp`, `live-watcher`, `post-match-rundown`, `ws-server`, `ollama`, `voice-gateway`, `stt`, `tts`, and `rtsp-analyzer` have **zero** network route to PostgreSQL.
+2. **`fc27_net` (`bridge`)**: Shared application network for `redis`, `fc27-mcp`, `ollama`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, and optional `--profile voice` / `--profile rtsp` services.
+3. **`fc27_obs` (`internal: true` in `docker-compose.langfuse.yml`)**: Isolates optional `--profile langfuse` datastores (`langfuse-postgres`, `langfuse-clickhouse`, `langfuse-minio`, `langfuse-redis`, `langfuse-worker`), joined only by `graph-api` and `langfuse-web` (`127.0.0.1:3000` via `fc27_obs_edge`).
+4. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`, `3000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
 
 ---
 
@@ -116,7 +125,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 8. **Cache & Rate Controls (`src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`)**: Bounded normalized-object cache (`FC27BoundedNormalizedCache`, default `disabled`, `max_entries=128`, `max_value_bytes=262144`) and provider token-bucket limiter (`FC27ProviderTokenBucketLimiter`, default `disabled`, `1` token / `300s` mock default, `max_queue_depth=0`).
 9. **Request Budget & Circuit Breaker (`src/fc27_api_rate_limit.py`)**: `FC27RequestBudget` (`max_attempts=1`, `max_retries=0`, `max_elapsed_seconds=10.0`, requires `authorization_reference`) and `FC27AdapterCircuitBreaker` (`FC27_API_CIRCUIT_BREAKER_ENABLED=true`, defaults to `OPEN` when no approved provider is selected; trips on `401`/`403`/redirect/CAPTCHA/drift).
 10. **Replay & Idempotency Planning (`src/fc27_repository.py`, `src/fc27_user_export.py`)**: Computes deterministic `payload_sha256` and `match_hash`; skips identical replays idempotently and rejects changed-hash conflicts (`REPLAY_CONFLICT`).
-11. **Separately Gated PostgreSQL Persistence (`src/fc27_repository.py`, `migrations/0012`)**: Requires `FC27_PERSISTENCE_ENABLED=true` plus explicit `--apply --confirm-apply`; writes normalized records to `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under `pg_advisory_xact_lock`.
+11. **Separately Gated PostgreSQL Persistence (`src/fc27_repository.py`, `migrations/0012_fc27_performance_and_quarantine.sql`)**: Requires `FC27_PERSISTENCE_ENABLED=true` plus explicit `--apply --confirm-apply`; writes normalized records to `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under `pg_advisory_xact_lock`.
 12. **Separately Gated Read-Only Analytics (`src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`)**: Requires `FC27_ANALYTICS_ENABLED=true`; runs inside PostgreSQL `READ ONLY` transactions (`5000ms` timeout) over `COMPLETED` matches only, suppressing display aliases by default.
 13. **Separately Gated Recommendation Generation (`src/fc27_coaching.py`, `src/graph.py`)**: Requires `FC27_RECOMMENDATIONS_ENABLED=true`; role agents (`Scout`, `Analyst`, `Coach`, `Tactics`, `Director`) produce bounded `RoleOutput` adjustments (`±10`) reduced into immutable `LeadPackageSet` (`package_version` SHA-256).
 14. **Deterministic Pre-Approval Validation (`src/fc27_coaching.py`)**: Validates sample-size tier (`>=10` completed matches), evidence references, and blocks unverified tactical hypotheses (`EXTERNAL_TACTICAL_HYPOTHESIS`) before the graph pauses at `interrupt()` in node `approval`.

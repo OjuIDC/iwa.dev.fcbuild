@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
-  "total_files": 303,
+  "total_files": 305,
   "files": [
     {
       "path": ".gitattributes",
@@ -163,6 +163,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "config/documentation_consistency_policy.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Deterministic documentation consistency policy (fc27-documentation-consistency-v1)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Authoritative policy configuration for scripts/check_documentation_consistency.py",
+      "last_relevant_commit": "7649f98701947addbe09403d93cbebb5856d06b3"
     },
     {
       "path": "config/fc27_east_coasters_normalized_export.schema.json",
@@ -943,6 +953,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "5487dde091961a7312d71052f34b0c798a50fcf0"
+    },
+    {
+      "path": "scripts/check_documentation_consistency.py",
+      "category": "scripts_and_tooling",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Deterministic documentation consistency CLI validator (scripts/check_documentation_consistency.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active static documentation consistency validator",
+      "last_relevant_commit": "7649f98701947addbe09403d93cbebb5856d06b3"
     },
     {
       "path": "scripts/check_matchpulse_boundary.py",

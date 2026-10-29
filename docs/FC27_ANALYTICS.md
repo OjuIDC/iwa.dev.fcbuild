@@ -1,5 +1,11 @@
 # FC 27 Deterministic Analytics Specification
 
+- **Status**: Current
+- **Audience**: Analysts, Developers, Commissioners
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`, `src/fc27_clubs.py`, `src/settings.py`
+- **Supersedes**: `NONE`
+
 > **Formula Version**: `FORMULA_VERSION = "1.0.0"` ([`src/fc27_analytics.py`](../src/fc27_analytics.py))
 > **Default Runtime Gate**: `FC27_ANALYTICS_ENABLED=false` ([`src/settings.py`](../src/settings.py))
 
@@ -10,7 +16,7 @@
 The FC 27 analytics engine in `src/fc27_analytics.py` is a **100% deterministic, side-effect-free pure computation layer**:
 
 - **No LLM / Generative Inference**: Analytics metrics are computed exclusively using exact integer and `Decimal` arithmetic (`ROUND_HALF_UP`).
-- **No Network or Database Side Effects in `src/fc27_analytics.py`**: Pure functions accept immutable sequences of `FC27NormalizedMatchRecord` and `FC27NormalizedPlayerMatchStatRecord` and return frozen Pydantic summary models (`ClubAnalyticsSummary`, `FormationBreakdownItem`, `PlayerAnalyticsSummary`, `RecentFormSummary`, `RollingAnalyticsSnapshot`).
+- **No Network or Database Side Effects in `src/fc27_analytics.py`**: Pure functions accept immutable sequences of normalized match and player-stat records (`src/fc27_clubs.py`) and return frozen Pydantic summary models (`ClubAnalyticsSummary`, `FormationBreakdownItem`, `PlayerAnalyticsSummary`, `RecentFormSummary`, `RollingAnalyticsSnapshot`).
 - **Formula Version Pinning**: Every output model and coaching package binds `formula_version="1.0.0"`. Modifying any formula requires an explicit version bump and regression suite update.
 
 ---
@@ -29,7 +35,7 @@ The FC 27 analytics engine in `src/fc27_analytics.py` is a **100% deterministic,
 
 ## 3. Sample-Size Confidence Tiers (`classify_sample_size_tier`)
 
-To prevent small-sample over-interpretation, `classify_sample_size_tier(eligible_match_count)` in `src/fc27_analytics.py` classifies every analytical snapshot into one of four tiers (`SampleSizeTier` in `src/fc27_Complete_models.py`):
+To prevent small-sample over-interpretation, `classify_sample_size_tier(eligible_match_count)` in `src/fc27_analytics.py` classifies every analytical snapshot into one of four tiers (`SampleSizeTier` in `src/fc27_clubs.py`):
 
 | Tier Enum | Eligible Completed Matches | Analytical & Coaching Interpretation |
 |---|---|---|
@@ -53,7 +59,7 @@ Defined as module constants in `src/fc27_analytics.py`:
 ## 5. Pure Analytical Functions (`src/fc27_analytics.py`)
 
 1. **`compute_club_summary`**: Computes `eligible_match_count`, `excluded_match_count`, `abandoned_match_count`, `partial_match_count`, `wins`, `draws`, `losses`, `win_rate_pct`, `points_per_match` (`3` for win, `1` for draw, `0` for loss), `goals_for`, `goals_against`, `goal_difference`, `goals_for_per_match`, `goals_against_per_match`, `clean_sheets`, `clean_sheet_rate_pct`, and `sample_size_tier`.
-2. **`compute_formation_breakdown`**: Groups eligible matches by normalized formation (`normalize_formation`, e.g., `"4-2-1-3"`, `"4-1-2-1-2 Narrow"`, `"UNSPECIFIED"`), computing per-formation match count, W/D/L, `win_rate_pct`, `goals_for_per_match`, `goals_against_per_match`, and per-formation `sample_size_tier` (minimum `MIN_FORMATION_SAMPLE_MATCHES = 5` required for formation-specific coaching claims).
+2. **`compute_formation_breakdown`**: Groups eligible matches by normalized formation (`normalize_formation`), computing per-formation match count, W/D/L, `win_rate_pct`, `goals_for_per_match`, `goals_against_per_match`, and per-formation `sample_size_tier` (minimum `MIN_FORMATION_SAMPLE_MATCHES = 5` required for formation-specific coaching claims).
 3. **`compute_player_summaries`**: Aggregates per-player appearances (`appearances > 0`), `total_minutes_played`, `goals`, `assists`, `goal_contributions`, `goals_per_90`, `assists_per_90`, `pass_completion_pct`, `tackle_success_pct`, `average_rating`, `man_of_the_match_count`, `primary_position_group`, and per-player `sample_size_tier`.
 4. **`compute_recent_form`**: Computes the last-5 match form breakdown.
 5. **`compute_rolling_snapshot`**: Combines club summary, recent form, formation breakdown, and player summaries into an immutable `RollingAnalyticsSnapshot` stamped with `formula_version="1.0.0"`.
@@ -62,7 +68,7 @@ Defined as module constants in `src/fc27_analytics.py`:
 
 ## 6. Alias Privacy & Read-Only PostgreSQL Dashboard Queries
 
-- **Alias Suppression by Default**: Both `compute_player_summaries(..., include_safe_aliases=False)` and `FC27DashboardQueryService` (`src/fc27_dashboard_queries.py`) default to `include_safe_aliases=False`, emitting only deterministic `player_pseudonym` (`plr_ecf_<12-hex>`) values and setting `safe_alias=None`.
+- **Alias Suppression by Default**: Both `src/fc27_analytics.py` and `src/fc27_dashboard_queries.py` default to suppressing display aliases (`include_display_aliases=False` / `include_safe_aliases=False`), emitting only deterministic `player_pseudonym` (`plr_ecf_<12-hex>`) values.
 - **PostgreSQL `READ ONLY` Enforcement (`src/fc27_dashboard_queries.py`)**:
   - Every dashboard query executes inside `SET TRANSACTION READ ONLY` with `SET LOCAL statement_timeout = '5000ms'` (`READ_ONLY_STATEMENT_TIMEOUT_MS = 5000`).
   - Queries read exclusively from normalized PostgreSQL tables (`fc27_clubs`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`) and never trigger external network calls.

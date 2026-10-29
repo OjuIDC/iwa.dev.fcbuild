@@ -1,5 +1,11 @@
 # East Coasters FC 27 Platform (`iwa.dev.fcbuild`)
 
+- **Status**: Current
+- **Audience**: Developers, Operators, Commissioners, Security Reviewers
+- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
+- **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
+
 ## 1. Project Purpose
 
 `iwa.dev.fcbuild` is a security-hardened, human-in-the-loop football analytics, tactical evaluation, and decision-support platform built for **EA Sports FC 27 Pro Clubs**. Throughout the platform, **models advise and humans decide**: autonomous agents and analytical pipelines may summarize evidence and propose structured candidates, but only an authenticated human Commissioner (or explicitly authorized human delegate/player within scoped boundaries) can record an authoritative decision.
@@ -8,7 +14,7 @@
 
 - **Primary Architecture (API-First Provider Boundary)**: Provider-neutral FC 27 endpoint contracts (`src/fc27_clubs_api_contracts.py`), normalized-object caching (`src/fc27_api_cache.py`), conservative rate/budget/circuit-breaker controls (`src/fc27_api_rate_limit.py`), and the 18-step `FC27AuthorizedProviderAdapter` pipeline (`src/fc27_authorized_provider.py`) are implemented and verified against hermetic mocks, ready for a compliant authorized API provider.
 - **Secondary Offline Fallback**: Consented user-export (`USER_SUPPLIED_EXPORT`) and operator-captured displayed data (`OPERATOR_CAPTURED_DISPLAYED_DATA`) validation and dry-run workflows (`src/fc27_user_export.py`, `src/fc27_capture.py`) are available for offline validation, but manual JSON/CSV files are **not** the primary long-term architecture.
-- **PostgreSQL 16 Governance & Audit Foundation**: Role-separated PostgreSQL 16 storage (`migrations/0001`–`0012`, Grants Policy Version `14`), LangGraph `StateGraph` orchestration with single `interrupt()` approval boundaries, deterministic pre-approval validation (`src/fc27_coaching.py`), and Phase 2 WebAuthn/HMAC identity and evidence binding (`src/identity/`, `src/approval_store.py`) are implemented and verified against local PostgreSQL 16.
+- **PostgreSQL 16 Governance & Audit Foundation**: Role-separated PostgreSQL 16 storage (`migrations/0001_initial.sql`–`migrations/0012_fc27_performance_and_quarantine.sql`, Grants Policy Version `14`), LangGraph `StateGraph` orchestration with single `interrupt()` approval boundaries, deterministic pre-approval validation (`src/fc27_coaching.py`), and Phase 2 WebAuthn/HMAC identity and evidence binding (`src/identity/`, `src/approval_store.py`) are implemented and verified against local PostgreSQL 16.
 
 ## 3. East Coasters Identity
 
@@ -23,7 +29,7 @@
 ## 4. Current Architecture
 
 - **`graph-api` (`src/graph_api.py`, `src/graph.py`)**: FastAPI HTTP boundary and LangGraph `StateGraph` (`search` -> `scout` -> `analyst` -> `coach` -> `tactics` -> `director` -> `prepare_approval` -> `approval` [`interrupt()`] -> `finalize_decision`).
-- **PostgreSQL 16 (`migrations/0001`–`0012`, `migrations/post/grants.sql`)**: Single authoritative audit of record across `graph_threads`, `recommendation_packages`, `approval_requests`, `approval_audit`, `fc27_decision_evidence`, `domain_events`, `outbox`, identity tables (`fc27_users`, `fc27_sessions`, `fc27_webauthn_credentials`, `fc27_challenges`), and normalized FC 27 performance tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`). LangGraph `PostgresSaver` tables (`checkpoints*`) store workflow state only and are strictly separated from normalized FC 27 tables and authorization state.
+- **PostgreSQL 16 (`migrations/0001_initial.sql`–`migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/post/grants.sql`)**: Single authoritative audit of record across `graph_threads`, `recommendation_packages`, `approval_requests`, `approval_audit`, `fc27_decision_evidence`, `domain_events`, `outbox`, identity tables (`fc27_users`, `fc27_sessions`, `fc27_webauthn_credentials`, `fc27_challenges`), and normalized FC 27 performance tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`). LangGraph `PostgresSaver` tables (`checkpoints*`) store workflow state only and are strictly separated from normalized FC 27 tables and authorization state.
 - **Redis (`redis:7.4.2-alpine`)**: Ephemeral pub/sub and watcher lease transport only. **Redis is never audit of record or authorization authority.**
 - **Safe FC 27 Provider & Contract Layer (`src/fc27_authorized_provider.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`)**: Data-only adaptation of fixed FC 27 endpoint contracts, strict Pydantic response schemas, 23-bit match event bitmap (`ev`) decoding, bounded normalized-object caching, token-bucket rate limiting, per-run request budgets (`max_attempts=1`, `max_retries=0`), and a 3-state circuit breaker.
 

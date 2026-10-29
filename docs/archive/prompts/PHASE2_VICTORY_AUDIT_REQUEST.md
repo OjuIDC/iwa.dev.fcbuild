@@ -1,9 +1,13 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `docs/TESTING.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_VICTORY_AUDIT_REQUEST.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_VICTORY_AUDIT_REQUEST.md
+> Archived on: 2026-10-29
+> Superseded by: docs/ARCHITECTURE.md
+> Reason: Point-in-time Phase 2 audit request prompt superseded by current architecture docs
 > Warning: Do not execute commands in this archived document.
 
 # Phase 2 Independent Victory Audit Request

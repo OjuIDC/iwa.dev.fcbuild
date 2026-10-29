@@ -1,9 +1,13 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `TEST_RESULTS.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
-> Archived on `2026-10-29` from `PHASE2_LOCAL_MERGE_GATE_REPORT.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: PHASE2_LOCAL_MERGE_GATE_REPORT.md
+> Archived on: 2026-10-29
+> Superseded by: TEST_RESULTS.md
+> Reason: Point-in-time Phase 2 gate report superseded by current test results report
 > Warning: Do not execute commands in this archived document.
 
 # Phase 2 Local Merge-Gate Report (PROVISIONAL)

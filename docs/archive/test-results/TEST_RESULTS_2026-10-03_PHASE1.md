@@ -1,9 +1,13 @@
 > Archived document
 >
 > This file is retained for historical context and is not an authoritative
-> operational guide. See `TEST_RESULTS.md and docs/TESTING.md` for the current implementation.
-> Archived on `2026-10-29` from `TEST_RESULTS.md`.
->
+> operational guide for the current repository state.
+> Status: Non-authoritative historical record.
+> Operational status: DO NOT USE
+> Original path: TEST_RESULTS.md
+> Archived on: 2026-10-29
+> Superseded by: TEST_RESULTS.md
+> Reason: Point-in-time 2026-10-03 test execution report superseded by current TEST_RESULTS.md
 > Warning: Do not execute commands in this archived document.
 
 # Test Results & Phase 1 Acceptance Trace (2026-10-03)
@@ -69,23 +73,23 @@ $env:DISPATCH_WORKER_ENABLED = "false"
 
 Per Plan Task 10 verbatim requirements: "Phase 1 is complete only when":
 
-- [x] **1. The full existing and new test suite passes**  
+- [x] **1. The full existing and new test suite passes**
   *Proof*: 100% of baseline tests, milestone unit/security tests, and all 81 opaque-box E2E tests (Tiers 1–4) pass with 0 failures and 0 errors.
-- [x] **2. Runtime DB roles have the documented least privileges**  
+- [x] **2. Runtime DB roles have the documented least privileges**
   *Proof*: `fc27_app` has DML-only permissions on application tables; cannot run DDL; cannot update `dispatches`; is not a member of `fc27_owner`. `fc27_dispatch` has 0 table write permissions and can only execute `public.fc27_dispatch_transition`.
-- [x] **3. Migration and bootstrap tests pass against representative legacy 0002 data**  
+- [x] **3. Migration and bootstrap tests pass against representative legacy 0002 data**
   *Proof*: `tests/test_migration_0003.py::test_0003_applies_on_legacy_0002_data` verifies backfilling of awaiting threads, while terminal rows remain frozen. `tests/test_db_roles.py::test_bootstrap_is_idempotent` confirms bootstrap idempotency.
-- [x] **4. Approval expiry and decision races have exactly one valid outcome**  
+- [x] **4. Approval expiry and decision races have exactly one valid outcome**
   *Proof*: `tests/test_approval_lifecycle.py::test_expiry_and_decision_race_has_single_outcome` and `tests/test_dispatch_creation.py::test_parallel_duplicate_approvals_single_dispatch` prove concurrency serialization without duplicate wins.
-- [x] **5. Approval-to-dispatch atomicity is proven in tests with synthetic gates**  
+- [x] **5. Approval-to-dispatch atomicity is proven in tests with synthetic gates**
   *Proof*: `tests/test_dispatch_creation.py::test_approve_creates_dispatch_atomically` and `test_dispatch_failure_rolls_back_decision` prove atomic pairing of approval, request update, dispatch row, domain event, and outbox record.
-- [x] **6. Deployed configuration still keeps dispatch disabled**  
+- [x] **6. Deployed configuration still keeps dispatch disabled**
   *Proof*: `docker-compose.yml` sets `DISPATCH_ENABLED: "false"`. `/health/ready` probe fails immediately if `DISPATCH_ENABLED=true`.
-- [x] **7. Compose isolation tests pass**  
+- [x] **7. Compose isolation tests pass**
   *Proof*: `tests/test_compose_isolation.py` (17 tests) proves file-based secrets under `./secrets/`, secret isolation per container, and internal network bridge.
-- [x] **8. Skipped validations are explicitly documented**  
+- [x] **8. Skipped validations are explicitly documented**
   *Proof*: Documented in Section 9 (Docker daemon live smoke test and live third-party services).
-- [x] **9. Docker runtime success is claimed only if the live smoke test was actually executed**  
+- [x] **9. Docker runtime success is claimed only if the live smoke test was actually executed**
   *Proof*: No unrun Docker container smoke test is claimed. Compose validation is static.
 
 ---
