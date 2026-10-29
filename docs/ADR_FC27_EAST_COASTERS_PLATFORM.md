@@ -679,3 +679,100 @@ Thank you for your time and guidance.
 Sincerely,
 Club Manager, East Coasters (Club ID: 330323)
 ```
+
+---
+
+## 20. Authorized API-First Source Discovery, Provider-Neutral Contract, & Selection Gate
+
+### 20.1 API-First Requirement & Non-Negotiable Transport Boundaries
+- **API-First Objective (`API_FIRST_REQUIREMENT=YES`, `MANUAL_FILE_PRIMARY_PATH=NO`)**:
+  - The operator requires API-based automated read-only acquisition for East Coasters (`club_id = "330323"`, `platform = "common-gen5"`, `game_version = "FC27"`). Manual JSON/CSV entry is retained only as an auxiliary fallback and is not the primary solution.
+- **Strict Prohibition of Bypass Transports**:
+  - Ordinary standards-compliant HTTPS requests to `https://proclubs.ea.com/api/fc/clubs/info` return `HTTP 403 Forbidden` (Akamai edge filtering).
+  - Using Chromium, Chrome, Playwright, Puppeteer, Selenium, `impit`, `curl-impersonate`, browser client hints (`sec-ch-ua*`, `Sec-Fetch-*`), TLS/JA3/JA4/HTTP2 fingerprint impersonation, EA cookies, EA sessions, CAPTCHA handling, or proxy rotation to bypass `HTTP 403` is strictly prohibited.
+  - A provider or API endpoint may be integrated for live automated access **only** if it explicitly grants automated read-only access rights, normalized-storage rights, 730-day retention rights, and consented member/player data processing rights.
+
+### 20.2 Candidate API Source Discovery & Evaluation Matrix (`PROVIDERS_REVIEWED=9`)
+Nine candidates across all seven source categories were evaluated in `src/fc27_authorized_provider.py` (`REVIEWED_API_SOURCE_CANDIDATES`):
+
+| # | Candidate Provider | Legal Entity | Category | Classification | FC 27 `330323` (`common-gen5`) Support | Proxies `proclubs.ea.com` | Browser / TLS Impersonation or Session Required | Storage & 730-Day Retention Rights | Selection Decision |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | `EA_FC_PROCLUBS_PUBLIC_WEB_ENDPOINTS` | Electronic Arts Inc. | 1. Official EA web surface | `NOT_ACCEPTABLE` | Yes (blocked by HTTP 403) | No (first-party) | Yes (Akamai blocks standard HTTP) | `NOT_GRANTED` (EA User Agreement Sec. 6) | **Rejected** (HTTP 403 without browser/TLS impersonation) |
+| 2 | `EA_APPROVED_PARTNER_OR_WRITTEN_ACCESS_PROGRAM` | Electronic Arts Inc. | 2. EA partner / approved access | `NOT_ACCEPTABLE` (until granted) | Yes (subject to EA approval) | No (first-party) | No (once allowlisted/keyed) | `REQUIRES_WRITTEN_EA_APPROVAL` | **Blocked Pending EA Response** (`EA_ACCESS_REQUEST_SENT=NO`) |
+| 3 | `EA_ACCOUNT_DATA_PORTABILITY_EXPORT_SERVICE` | Electronic Arts Inc. | 3. EA data-portability export | `NOT_ACCEPTABLE` | Individual account archive only | No | Yes (manual account login) | Personal archive only | **Rejected** (not an automated Club `330323` API) |
+| 4 | `PANDASCORE_AND_SPORTRADAR_ESPORTS_APIS` | PandaScore SAS / Sportradar AG | 4. Licensed esports providers | `NOT_ACCEPTABLE` | No (pro broadcast tournaments only) | No | No | Commercial contract (tournament data only) | **Rejected** (zero retail FC 27 Clubs `330323` coverage) |
+| 5 | `FC27_CLUBS_API_PYTHON_CLIENT` | Erkan Dogan (`1erkandogan/fc27-clubs-api`) | 5. Open-source client | `UNOFFICIAL_CLIENT` | Client code only | Yes (calls `proclubs.ea.com`) | Yes (spoofed Chrome 141 headers) | `NONE` (MIT covers code only, not EA data) | **Rejected** (`UNOFFICIAL_CLIENT`) |
+| 6 | `PROCLUBS_SDK_TYPESCRIPT_CLIENT` | Alex Jordan (`alex-jordan547/proclubs-sdk`) | 5. Open-source client | `UNOFFICIAL_CLIENT` | Client code only | Yes (calls `proclubs.ea.com`) | Yes (`impit` Rust Chrome TLS impersonation) | `NONE` (MIT covers code only, not EA data) | **Rejected** (`UNOFFICIAL_CLIENT`) |
+| 7 | `PROCLUBSHEAD_AND_TRACKER_WEB_SITES` | Third-party stat sites (`proclubshead.com`, `tracker.gg`) | 6. Gaming stat websites | `UNVERIFIED_RELAY` | Partial web views only | Yes | Yes | `PROHIBITED_BY_SITE_TERMS` | **Rejected** (`UNVERIFIED_RELAY`) |
+| 8 | `COMMUNITY_HOSTED_PROCLUBS_PROXY_RELAYS` | Unverified community proxy hosts | 6. Community proxy wrappers | `UNVERIFIED_RELAY` | Unverified proxy | Yes | Yes (server-side bypass) | `UNVERIFIED` (no EA sublicense) | **Rejected** (`UNVERIFIED_RELAY`) |
+| 9 | `PUBLIC_STATIC_EAFC_RATINGS_DATASETS` | Community open-data contributors (Kaggle) | 7. Public static datasets | `NOT_ACCEPTABLE` | No (offline attributes only) | No | No | Static offline ratings only | **Rejected** (no East Coasters Clubs records) |
+
+- **Summary Counts**:
+  - `PROVIDERS_REVIEWED = 9`
+  - `OFFICIAL_AUTHORIZED_PROVIDERS = 0` (`OFFICIAL_PROVIDERS_FOUND = 0`)
+  - `LICENSED_THIRD_PARTY_PROVIDERS = 0` (`LICENSED_THIRD_PARTY_PROVIDERS_FOUND = 0`)
+  - `COMMUNITY_DOCUMENTED_PROVIDERS = 0` (`COMMUNITY_DOCUMENTED_PROVIDERS_FOUND = 0`)
+  - `UNOFFICIAL_CLIENTS_REJECTED = 2`
+  - `UNVERIFIED_RELAYS_REJECTED = 2`
+  - `NOT_ACCEPTABLE_REJECTED = 5`
+
+### 20.3 Refined EA Approved-Access & Data-Portability Request (`EA_ACCESS_REQUEST_READY=YES`, `EA_ACCESS_REQUEST_SENT=NO`)
+> **Status**: Ready in [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) (`EA_APPROVED_ACCESS_REQUEST_DRAFT`) and below (`EA_PERMISSION_REQUEST_READY = YES`, `EA_ACCESS_REQUEST_READY = YES`, `EA_PERMISSION_REQUEST_SENT = NO`, `EA_ACCESS_REQUEST_SENT = NO`). Do **not** transmit without separate operator authorization.
+
+```text
+Subject: Formal Request for Approved Read-Only API Access or Structured Club Data Portability — EA SPORTS FC 27 Clubs ("East Coasters", Club ID: 330323, Platform: common-gen5)
+
+To: Electronic Arts Inc. — EA SPORTS FC Developer Relations, Partner Licensing, & Data Privacy Team
+
+1. Requesting Club & Authority Attestation
+- Club Name: East Coasters
+- Club ID: 330323
+- Platform: common-gen5
+- Game Version: FC27
+- Attestation Reference: api-east-coasters-authority-2026-10
+- Authority & Consent Posture: Submitted by the club-authorized operator with explicit captain and participating member consent (USER_ATTESTED) strictly for internal, non-commercial team performance analysis (INTERNAL_TEAM_ANALYTICS / TEAM_REVIEW).
+- Operator Contact: [OPERATOR_CONTACT_PLACEHOLDER — DO_NOT_COMMIT_PERSONAL_EMAIL]
+
+2. Requested Access Pathways (Any One Approved Pathway)
+1. Official club-data export API or scheduled archive for Club ID 330323
+2. Approved read-only API endpoint with an allowlisted application User-Agent or API key
+3. EA Partner or developer-program read-only credentials
+4. Written authorization for low-rate, standards-compliant HTTPS read-only access to Club ID 330323 records
+5. Structured data-portability archive containing Club ID 330323 match and member records
+
+3. Requested Read-Only Data Scope (Scoped Exclusively to Club ID 330323 on common-gen5)
+- CLUB_IDENTITY (club ID, name, platform, region/kit metadata)
+- CLUB_STATISTICS (aggregate matches played, wins, draws, losses, goals for/against, division, skill rating)
+- RECENT_MATCHES (match ID, UTC timestamp, competition type, result, score, opponent name, formation)
+- MATCH_TEAM_STATISTICS (possession, shots, shots on target, pass accuracy, tackles, fouls)
+- MATCH_PLAYER_STATISTICS (per-match position, minutes, goals, assists, rating, passes, tackles, interceptions, saves)
+- CURRENT_MEMBER_STATISTICS (current club games, goals, assists, clean sheets, average rating, pass/tackle success)
+- MEMBER_CAREER_STATISTICS (career club games, goals, assists, average rating)
+- PLAYOFF_ACHIEVEMENTS (season ID, season name, best division, playoff record, finishing position)
+
+4. Technical, Security, Privacy, Retention, & Deletion Controls
+- Request Rate Budget: Read-only HTTPS GET only; initially 1 request per manually authorized operation, strictly capped at <= 5 requests/minute and <= 6 requests/session. Continuous background polling is disabled.
+- Standards-Compliant Transport: No cookie or session reuse, no EA account credential storage, and no browser automation or TLS fingerprint impersonation (no Impit/Chromium).
+- Data Minimization & Pseudonymization: Raw HTTP responses are zeroed in memory immediately after parsing and never persisted. All member/player identifiers are deterministically pseudonymized (plr_ecf_<hash12>); gamer tags, PSN/Xbox IDs, EA IDs, Persona IDs, and Nucleus IDs are suppressed.
+- Non-Publication & Non-Resale: No public player-data publication and no commercial redistribution or resale.
+- Retention & Deletion Procedure: Maximum 730-day retention for normalized records in access-controlled PostgreSQL 16 storage (Grants Policy v14), with immediate record purge upon member consent withdrawal or EA request. Recommendations and automated dispatch remain disabled.
+```
+
+### 20.4 Provider-Neutral Contract & Bounded Transport Policy
+- **Modules**:
+  - [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) & [`src/fc27_provider_contract.py`](../src/fc27_provider_contract.py)
+  - [`src/fc27_authorized_transport.py`](../src/fc27_authorized_transport.py) & [`src/fc27_authorized_api.py`](../src/fc27_authorized_api.py)
+- **Supported Operations (`FC27AuthorizedOperation`)**:
+  - `CLUB_IDENTITY`, `CLUB_STATISTICS`, `RECENT_MATCHES`, `MATCH_PLAYER_STATISTICS`, `CURRENT_MEMBER_STATISTICS`, `MEMBER_CAREER_STATISTICS`, `PLAYOFF_ACHIEVEMENTS`.
+- **Fail-Closed Declaration (`FC27AuthorizedProviderDeclaration`)**:
+  - Requires `OFFICIAL_AUTHORIZED` or `LICENSED_THIRD_PARTY` classification, HTTPS documentation/terms/privacy URLs, non-empty `terms_version`, `privacy_policy_version`, `license_or_agreement`, `authorization_reference`, future UTC `authorization_expires_at`, exact scope `approved_club_ids=("330323",)`, `approved_platforms=("common-gen5",)`, `approved_game_versions=("FC27",)`, `normalized_storage_permission=True`, `retention_permission=True` (`max_retention_days >= 730`), and operation-specific `member_data_permission` / `player_data_permission`.
+- **Bounded Transport (`FC27AuthorizedTransportClient`)**:
+  - Enforces HTTPS only, exact host/path/query allowlists, timeout `<= 10.0`s, response ceiling `<= 1,048,576` bytes, redirect refusal, duplicate-key and `NaN`/`Infinity` JSON rejection, recursive sensitive-field scanning, in-place `bytearray` zeroing in `finally`, API-key/Authorization redaction (`redact_sensitive_auth_text`), rate-budget tracking (`FC27RateBudgetTracker`), and `FC27CircuitBreaker`. Exposes zero arbitrary URL (`get_json`) methods.
+
+### 20.5 Provider Selection Gate Decision (`Part H`)
+- `SELECTED_PROVIDER = NONE`
+- `SELECTED_PROVIDER_CLASSIFICATION = NONE`
+- `LIVE_PROVIDER_IMPLEMENTATION = NOT_STARTED`
+- `LIVE_REQUEST_EXECUTED = NO`
+- `LIVE_REQUESTS_EXECUTED = 0`
+- `BLOCKER = NO_AUTHORIZED_API_SOURCE_FOUND`
