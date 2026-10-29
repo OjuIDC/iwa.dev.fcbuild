@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_SECURITY_INVARIANTS.md`.
+
 # Phase 2 Security Invariants Specification
 
 **Document Version**: 2.0  

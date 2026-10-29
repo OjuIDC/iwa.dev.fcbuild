@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/ARCHITECTURE.md, docs/FC27_DATA_MODEL.md, and docs/DISPATCH_ACTIVATION.md` for the current implementation.
+> Archived on `2026-10-29` from `docs/superpowers/specs/2026-10-02-player-dispatch-design.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Player observer agents and approved-recommendation dispatch: architecture specification
 
 | | |

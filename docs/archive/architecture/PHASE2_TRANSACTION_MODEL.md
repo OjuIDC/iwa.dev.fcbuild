@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/FC27_APPROVAL_FLOW.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_TRANSACTION_MODEL.md`.
+
 # Phase 2 Transactional Architecture & Concurrency Model
 
 **Scope**: Single-Transaction Decision Commit, Concurrency Isolation, Lock Hierarchies  

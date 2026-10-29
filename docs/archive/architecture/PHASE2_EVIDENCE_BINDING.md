@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/FC27_APPROVAL_FLOW.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_EVIDENCE_BINDING.md`.
+
 # Phase 2 Decision Evidence Binding Specification
 
 **Authoritative Entity**: `public.fc27_decision_evidence`  

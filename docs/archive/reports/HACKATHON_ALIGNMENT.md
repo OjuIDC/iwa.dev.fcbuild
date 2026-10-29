@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `README.md and docs/ARCHITECTURE.md` for the current implementation.
+> Archived on `2026-10-29` from `docs/HACKATHON_ALIGNMENT.md`.
+
 # Hackathon alignment review
 
 The attached brief requires synthetic, football-realistic data and rewards explainable match intelligence, narratives, recaps, and personalized experiences. The implementation therefore keeps evidence references in every candidate, uses deterministic calculations outside the model, and treats generated recommendations as advisory.

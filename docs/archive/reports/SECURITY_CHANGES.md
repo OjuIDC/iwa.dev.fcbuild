@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `SECURITY_CHANGES.md`.
+
 # Security Changes: Phase 1 Secure Data Foundation
 
 Each entry documents the security requirement or defect, the hardened architecture and fix, and the proving test evidence. Test names refer to files located under `tests/`.

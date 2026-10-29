@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/SECURITY_BOUNDARIES.md and docs/FC27_COMPONENT_STATUS.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_REMEDIATION_REPORT.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Phase 2 Remediation Implementation Report: Identity & Authorization Foundation
 
 **Status**: PROVISIONAL - implementer-reported; pass counts below are NOT independently reproduced. Independent audit pending. See PHASE2_LOCAL_MERGE_GATE_REPORT.md  

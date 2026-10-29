@@ -17,12 +17,13 @@ Only the latest commit on `main` is supported.
 
 ## Security model
 
-- Approval boundary, roles and signed decisions: [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md)
-- Credential placement and network exposure: [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md)
-- Change history and residual risks: [`SECURITY_CHANGES.md`](SECURITY_CHANGES.md)
+- Authoritative security boundaries & invariants: [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md)
+- Approval boundary, WebAuthn primary authority, and symmetric HMAC shared-secret fallback: [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md) and [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md)
+- Credential placement, least-privilege PostgreSQL roles, and network exposure: [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md)
+- Feature flags and fail-closed gates: [`docs/FEATURE_FLAGS.md`](docs/FEATURE_FLAGS.md)
 
 In scope: anything that lets a component other than the Commissioner approve or reject a recommendation,
-bypasses the LangGraph approval interrupt, reaches EA from outside the MCP proxy, exposes secrets, or
+bypasses the LangGraph approval interrupt or 14-field `fc27_decision_evidence` verification, executes unapproved live traffic to EA or any unapproved provider, exposes secrets, or
 widens network exposure beyond `127.0.0.1`.
 
 Out of scope: findings that require an already-compromised host or a leaked `.env`.

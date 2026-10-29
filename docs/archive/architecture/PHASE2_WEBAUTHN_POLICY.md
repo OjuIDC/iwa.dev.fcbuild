@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/SECURITY_BOUNDARIES.md and docs/FC27_APPROVAL_FLOW.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_WEBAUTHN_POLICY.md`.
+
 # Phase 2 WebAuthn & User Verification Policy Specification
 
 **Implementation**: `src/identity/webauthn.py`, `src/identity/policy.py`  

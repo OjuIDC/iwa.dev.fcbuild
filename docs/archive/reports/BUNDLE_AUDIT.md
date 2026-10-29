@@ -1,3 +1,9 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/ARCHITECTURE.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `audit/historical/BUNDLE_AUDIT.md`.
+
 > **HISTORICAL. Superseded on 2026-10-01** by IMPLEMENTATION_REPORT.md and SECURITY_CHANGES.md at the repository root.
 > Statements below describe earlier revisions. Several are now false: the shared GRAPH_API_TOKEN, the in-memory nonce store, "voice not enabled", and missing services.
 

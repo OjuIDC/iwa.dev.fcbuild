@@ -1,0 +1,3038 @@
+{
+  "schema_version": "1.0.0",
+  "repository": "iwa.dev.fcbuild",
+  "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
+  "total_files": 303,
+  "files": [
+    {
+      "path": ".gitattributes",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (.gitattributes)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "ba5afd13281b3a64e6f1bdba1fdf91cb53b553d6"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (.github/dependabot.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "13a6d1919bdf86e7150bb7d0a4b1c8acff2f63ff"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (.github/workflows/ci.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "fa0d2663c8b684ffdb62ef34559bca573b6f1d46"
+    },
+    {
+      "path": ".github/workflows/security-scan.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (.github/workflows/security-scan.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "fa0d2663c8b684ffdb62ef34559bca573b6f1d46"
+    },
+    {
+      "path": ".gitignore",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (.gitignore)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "Dockerfile.graph",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.graph)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "af0a45e0ee124ded951e4c0d2a11e0227eedc652"
+    },
+    {
+      "path": "Dockerfile.mcp",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.mcp)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "af0a45e0ee124ded951e4c0d2a11e0227eedc652"
+    },
+    {
+      "path": "Dockerfile.stt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.stt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "af0a45e0ee124ded951e4c0d2a11e0227eedc652"
+    },
+    {
+      "path": "Dockerfile.tts",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.tts)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "af0a45e0ee124ded951e4c0d2a11e0227eedc652"
+    },
+    {
+      "path": "LICENSE",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (LICENSE)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "341fa61480f9efd77e08f17f6347b5acadc8044c"
+    },
+    {
+      "path": "MIGRATION_GUIDE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (MIGRATION_GUIDE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "README.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (README.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "SECURITY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (SECURITY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "f8b6a4c23ebaa4f947f0eca41f2f9a40f9d48f59"
+    },
+    {
+      "path": "TEST_RESULTS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (TEST_RESULTS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (THIRD_PARTY_NOTICES.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "config.example.env",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (config.example.env)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "config/fc27_east_coasters_normalized_export.schema.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (config/fc27_east_coasters_normalized_export.schema.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "config/model_catalog.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (config/model_catalog.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "config/role_benchmark_matrix.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (config/role_benchmark_matrix.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docker-compose.cpu.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.cpu.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docker-compose.gpu.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.gpu.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docker-compose.langfuse.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.langfuse.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "2431d160c6435b498984e560051f42af793c8e06"
+    },
+    {
+      "path": "docker-compose.voice-gpu.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.voice-gpu.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docker-compose.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "2431d160c6435b498984e560051f42af793c8e06"
+    },
+    {
+      "path": "docs/ADR_FC27_EAST_COASTERS_PLATFORM.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/ADR_FC27_EAST_COASTERS_PLATFORM.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/APPROVAL_SECURITY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/APPROVAL_SECURITY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/ARCHITECTURE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/DEPLOYMENT_AND_SECURITY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/DEPLOYMENT_AND_SECURITY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "f2fd35d60dc73412437f45def0c7f305837404be"
+    },
+    {
+      "path": "docs/DEVELOPMENT.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/DEVELOPMENT.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/DISPATCH_ACTIVATION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/DISPATCH_ACTIVATION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "docs/EA_PLAYER_IDENTITY_VERIFICATION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/EA_PLAYER_IDENTITY_VERIFICATION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "docs/FC27_ANALYTICS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_ANALYTICS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_APPROVAL_FLOW.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_APPROVAL_FLOW.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_COMPONENT_STATUS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_COMPONENT_STATUS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_DATA_MODEL.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_DATA_MODEL.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_DOCUMENTATION_TRUTH_TABLE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "docs/FC27_PROVIDER_INTEGRATION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_PROVIDER_INTEGRATION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_TACTICAL_HYPOTHESES.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_TACTICAL_HYPOTHESES.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FEATURE_FLAGS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FEATURE_FLAGS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/MATCHPULSE_INTEGRATION_BOUNDARY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/MATCHPULSE_INTEGRATION_BOUNDARY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "docs/MODEL_SELECTION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/MODEL_SELECTION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "f2fd35d60dc73412437f45def0c7f305837404be"
+    },
+    {
+      "path": "docs/OPERATIONS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/OPERATIONS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/README.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/README.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/ROLE_MODEL_BENCHMARK_MATRIX.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/ROLE_MODEL_BENCHMARK_MATRIX.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docs/SECURITY_BOUNDARIES.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/SECURITY_BOUNDARIES.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/TESTING.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/TESTING.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/VOICE_CAPABILITIES.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/VOICE_CAPABILITIES.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "f2fd35d60dc73412437f45def0c7f305837404be"
+    },
+    {
+      "path": "docs/WINDHOVER_INTEGRATION_GAP.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/WINDHOVER_INTEGRATION_GAP.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "d4e50424c1be3a305b6fb6edc67eebf4d5a7b333"
+    },
+    {
+      "path": "docs/archive/ARCHIVE_MANIFEST.md",
+      "category": "archive_index",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative index and manifest for archived historical documents",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Provides archive governance and replacement traceability",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/README.md",
+      "category": "archive_index",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative index and manifest for archived historical documents",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Provides archive governance and replacement traceability",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/FC27_APPROVAL_FLOW.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/architecture/PHASE2_RUNBOOKS.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/OPERATIONS.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/FC27_APPROVAL_FLOW.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/plans/2026-10-02-player-dispatch-design.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/DISPATCH_ACTIVATION.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/prompts/ORIGINAL_REQUEST.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "README.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/ARCHITECTURE.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/BUNDLE_AUDIT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/FINAL_ARCHIVE_AUDIT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/HACKATHON_ALIGNMENT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/ARCHITECTURE.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/IMPLEMENTATION_REPORT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/ARCHITECTURE.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "TEST_RESULTS.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/PHASE2_REMEDIATION_REPORT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/SECURITY_CHANGES.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/VOICE_CAPABILITIES.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "docs/TESTING.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Non-authoritative historical record preserved for Git/security provenance",
+      "replacement_path": "TEST_RESULTS.md",
+      "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
+      "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/notes/installer.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/notes/installer.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "e4aac9b530d24a50e5f1c2bfee5fb1261359daeb"
+    },
+    {
+      "path": "docs/notes/mcp_ws.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/notes/mcp_ws.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "d52a8b8d1eaee4a75fe13692ee9daf913c5a4c9f"
+    },
+    {
+      "path": "docs/notes/watcher_ocr_rundown.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/notes/watcher_ocr_rundown.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "1ea4cbae92a28030169707fd6541219e98cd95fb"
+    },
+    {
+      "path": "docs/repository_inventory.json",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/repository_inventory.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "host_agent/capture_agent.py",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (host_agent/capture_agent.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "host_agent/install.ps1",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (host_agent/install.ps1)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "e4aac9b530d24a50e5f1c2bfee5fb1261359daeb"
+    },
+    {
+      "path": "host_agent/requirements_windows.txt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (host_agent/requirements_windows.txt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "cc2239610778784c82d60649beaf5a3fd7d10fd1"
+    },
+    {
+      "path": "migrations/0001_initial.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0001_initial.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "migrations/0002_approval_security.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0002_approval_security.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "migrations/0003_dispatch_foundation.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0003_dispatch_foundation.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "migrations/0004_identity_foundation.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0004_identity_foundation.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "migrations/0005_delegations.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0005_delegations.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "migrations/0006_bootstrap_and_recovery.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0006_bootstrap_and_recovery.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "migrations/0007_decision_evidence.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0007_decision_evidence.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "d3fde93f38341066fed9edfb74834606cf969467"
+    },
+    {
+      "path": "migrations/0008_r2_remediation.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0008_r2_remediation.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "d3fde93f38341066fed9edfb74834606cf969467"
+    },
+    {
+      "path": "migrations/0009_r3_evidence_binding.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0009_r3_evidence_binding.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "d3fde93f38341066fed9edfb74834606cf969467"
+    },
+    {
+      "path": "migrations/0010_outbox_claim_ownership.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0010_outbox_claim_ownership.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "b6be76b130e21b3c48ce2a2b5be9c03b044aad26"
+    },
+    {
+      "path": "migrations/0011_dispatch_worker_claims.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0011_dispatch_worker_claims.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "8fd9af45d1ca5e20f2eb7ca95d6def3537c6ce50"
+    },
+    {
+      "path": "migrations/0012_fc27_performance_and_quarantine.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/0012_fc27_performance_and_quarantine.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "migrations/post/grants.sql",
+      "category": "database_migration",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative PostgreSQL 16 migration or post-migration grants policy (migrations/post/grants.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Checksum-verified SQL migration required by src/db_migrate.py",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "pyproject.toml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (pyproject.toml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "5487dde091961a7312d71052f34b0c798a50fcf0"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (requirements-dev.txt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "requirements-langfuse.txt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (requirements-langfuse.txt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "20ed8eeaa1a1d0a0f3755767860d3a43be20eeea"
+    },
+    {
+      "path": "requirements-swarms.txt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (requirements-swarms.txt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "b8825d6051edca7449691788a4be8f53c4ccbbdd"
+    },
+    {
+      "path": "requirements.txt",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (requirements.txt)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "5487dde091961a7312d71052f34b0c798a50fcf0"
+    },
+    {
+      "path": "scripts/check_matchpulse_boundary.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/check_matchpulse_boundary.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "scripts/commissioner_decide.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/commissioner_decide.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "scripts/fc27_capture_preflight.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_capture_preflight.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "ea384538c70e21deb334726b0571605d2404a5d3"
+    },
+    {
+      "path": "scripts/fc27_club_lookup.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_club_lookup.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "a19aa20115f69928d285e70e178858751a9f9347"
+    },
+    {
+      "path": "scripts/fc27_user_export_import.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_user_export_import.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "scripts/matchpulse_conformance.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/matchpulse_conformance.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "scripts/model_health.py",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/model_health.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "scripts/ollama-init.sh",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/ollama-init.sh)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "scripts/test_postgres.sh",
+      "category": "operational_script",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative CLI or boundary check script (scripts/test_postgres.sh)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI helper verified by regression tests",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "src/__init__.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "src/approval.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/approval.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "src/approval_store.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/approval_store.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "src/audit_query.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/audit_query.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b8825d6051edca7449691788a4be8f53c4ccbbdd"
+    },
+    {
+      "path": "src/benchmark.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/benchmark.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "src/correlation.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/correlation.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "src/db_migrate.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/db_migrate.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "src/db_roles.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/db_roles.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "src/decision.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/decision.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "a69752cd30bade68de78e6dfa31c9c3af13c5b78"
+    },
+    {
+      "path": "src/dispatch/__init__.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "src/dispatch/creation.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/creation.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/dispatch/gates.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/gates.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b86d46b9f14c0b680a73b3ee245e6d02f35fcc9d"
+    },
+    {
+      "path": "src/dispatch/objective.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/objective.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "src/dispatch/outbox_relay.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/outbox_relay.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "2a10d957b57f505fc4453900ae1f257689251992"
+    },
+    {
+      "path": "src/dispatch/transition.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/transition.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c99fac1c77cb71413450aa793a3f5b76a9c0f41e"
+    },
+    {
+      "path": "src/dispatch/worker.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/dispatch/worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "8fd9af45d1ca5e20f2eb7ca95d6def3537c6ce50"
+    },
+    {
+      "path": "src/events.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/events.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
+    },
+    {
+      "path": "src/fc27_analytics.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_analytics.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
+    },
+    {
+      "path": "src/fc27_api_cache.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_api_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_api_rate_limit.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_api_rate_limit.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_authorized_api.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_api.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_authorized_provider.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_provider.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_authorized_transport.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_transport.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "3377226cbdd11ce95580c2020d8bc6b457351fbb"
+    },
+    {
+      "path": "src/fc27_capture.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_capture.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "098f919084c0527d0d9e53cfae2cbe3bb8f75c5a"
+    },
+    {
+      "path": "src/fc27_clubs.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_clubs.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "bdad68b7b68f3293c68fb6214af64b5e1759c97e"
+    },
+    {
+      "path": "src/fc27_clubs_api_contracts.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_clubs_api_contracts.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_coaching.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_coaching.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
+    },
+    {
+      "path": "src/fc27_dashboard_queries.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_dashboard_queries.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
+    },
+    {
+      "path": "src/fc27_mcp_server.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_mcp_server.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/fc27_provider.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_provider.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
+    },
+    {
+      "path": "src/fc27_provider_contract.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_provider_contract.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_repository.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_repository.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "src/fc27_user_export.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_user_export.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "src/graph.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/graph.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "src/graph_api.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/graph_api.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/hierarchy.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/hierarchy.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "src/identity/__init__.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "src/identity/crypto.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/crypto.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/identity/deps.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/deps.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/identity/policy.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/policy.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/identity/readiness.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/readiness.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "src/identity/recovery.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/recovery.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "src/identity/routers/__init__.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "src/identity/routers/delegations.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/delegations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/identity/routers/invitations.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/invitations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d3fde93f38341066fed9edfb74834606cf969467"
+    },
+    {
+      "path": "src/identity/routers/passkeys.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/passkeys.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "200d34ab54735060955870b8b2d8b720e2fe677e"
+    },
+    {
+      "path": "src/identity/routers/player.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/player.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/identity/routers/recovery.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/recovery.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "src/identity/routers/sessions.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/sessions.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/routers/step_up.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/step_up.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "src/identity/routers/totp.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/totp.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/routers/users.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/routers/users.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/services.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/services.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/store.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/store.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b86d46b9f14c0b680a73b3ee245e6d02f35fcc9d"
+    },
+    {
+      "path": "src/identity/tokens.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/tokens.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/totp.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/totp.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "0bec9c0a829bc02bd618b9d1ad7c11453ba2ec3d"
+    },
+    {
+      "path": "src/identity/webauthn.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/identity/webauthn.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "200d34ab54735060955870b8b2d8b720e2fe677e"
+    },
+    {
+      "path": "src/lead_packages.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/lead_packages.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "src/live_match_watcher.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/live_match_watcher.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/live_ws_server.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/live_ws_server.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/mcp_healthcheck.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/mcp_healthcheck.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "src/mcp_retry.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/mcp_retry.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/model_selection.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/model_selection.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d558628936f2710f165fdedda469c2633e85c435"
+    },
+    {
+      "path": "src/ocr_parsing.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/ocr_parsing.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/post_match_rundown.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/post_match_rundown.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/roles.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/roles.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b8825d6051edca7449691788a4be8f53c4ccbbdd"
+    },
+    {
+      "path": "src/rtsp_frame_analyzer.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/rtsp_frame_analyzer.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/schemas.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/schemas.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "src/security.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/security.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "src/settings.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/settings.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/swarms_backend.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/swarms_backend.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/thread_ids.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/thread_ids.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "src/tracing.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/tracing.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/voice_gateway.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/voice_gateway.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "tests/__init__.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/adversarial/__init__.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/adversarial/test_adversarial_phase2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_adversarial_phase2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "511bd0bfc641ce59eed2a286a9837b56fdfef12a"
+    },
+    {
+      "path": "tests/adversarial/test_r3_it3_stress_harness.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r3_it3_stress_harness.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/adversarial/test_r3_r4_empirical_challenger.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r3_r4_empirical_challenger.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/adversarial/test_r4_adversarial_empirical_challenge.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r4_adversarial_empirical_challenge.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/adversarial/test_r4_empirical_concurrency_race.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r4_empirical_concurrency_race.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/adversarial/test_r5_it2_adversarial_empirical_challenge.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r5_it2_adversarial_empirical_challenge.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "tests/adversarial/test_r6_empirical_security_boundary_challenges.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/adversarial/test_r6_empirical_security_boundary_challenges.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/conftest.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/conftest.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/dispatch/test_outbox_relay.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/dispatch/test_outbox_relay.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "98337ff492a6c00faa14edbffc49aac04aa4da77"
+    },
+    {
+      "path": "tests/dispatch/test_worker.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/dispatch/test_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "8fd9af45d1ca5e20f2eb7ca95d6def3537c6ce50"
+    },
+    {
+      "path": "tests/e2e/__init__.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/e2e/conftest.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/conftest.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/phase2_helpers.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/phase2_helpers.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_phase2_tier1_features.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_phase2_tier1_features.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_phase2_tier2_boundaries.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_phase2_tier2_boundaries.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_phase2_tier3_combinations.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_phase2_tier3_combinations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_phase2_tier4_scenarios.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_phase2_tier4_scenarios.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/e2e/test_tier1_features.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_tier1_features.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_tier2_boundaries.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_tier2_boundaries.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_tier3_combinations.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_tier3_combinations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/e2e/test_tier4_scenarios.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/e2e/test_tier4_scenarios.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/fc27_fixtures.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/fc27_fixtures.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
+    },
+    {
+      "path": "tests/helpers.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/helpers.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/__init__.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_adversarial_m2_1.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_adversarial_m2_1.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "tests/identity/test_adversarial_m3_2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_adversarial_m3_2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "580932089fa08c1898069c542eeca476f2ad7ea6"
+    },
+    {
+      "path": "tests/identity/test_adversarial_m4_1.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_adversarial_m4_1.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "511bd0bfc641ce59eed2a286a9837b56fdfef12a"
+    },
+    {
+      "path": "tests/identity/test_adversarial_r1_2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_adversarial_r1_2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "511bd0bfc641ce59eed2a286a9837b56fdfef12a"
+    },
+    {
+      "path": "tests/identity/test_adversarial_r2_2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_adversarial_r2_2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "511bd0bfc641ce59eed2a286a9837b56fdfef12a"
+    },
+    {
+      "path": "tests/identity/test_bootstrap.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_bootstrap.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "tests/identity/test_bootstrap_ceremony.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_bootstrap_ceremony.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "tests/identity/test_bootstrap_secret_fail_closed.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_bootstrap_secret_fail_closed.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "tests/identity/test_crypto.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_crypto.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_crypto_stress.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_crypto_stress.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_decision_proof_discriminated_union.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_decision_proof_discriminated_union.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_delegations.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_delegations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_player.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_player.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/test_policy.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_policy.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r12_model_validation.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r12_model_validation.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r3_atomic_decision_commit.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r3_atomic_decision_commit.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r3_evidence_binding.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r3_evidence_binding.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r4_concurrency_race.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r4_concurrency_race.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r4_player_concurrency.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r4_player_concurrency.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r4_player_decision_proofs.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r4_player_decision_proofs.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_r5_legacy_tokens.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r5_legacy_tokens.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/test_r5_negative_matrix.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_r5_negative_matrix.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/test_recovery.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_recovery.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_routers_delegations.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_routers_delegations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_routers_invitations.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_routers_invitations.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "580932089fa08c1898069c542eeca476f2ad7ea6"
+    },
+    {
+      "path": "tests/identity/test_routers_player_verification.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_routers_player_verification.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b86d46b9f14c0b680a73b3ee245e6d02f35fcc9d"
+    },
+    {
+      "path": "tests/identity/test_routers_sessions.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_routers_sessions.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "580932089fa08c1898069c542eeca476f2ad7ea6"
+    },
+    {
+      "path": "tests/identity/test_routers_users.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_routers_users.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_services.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_services.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_session_lifecycle_adversarial.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_session_lifecycle_adversarial.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/test_step_up.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_step_up.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_store.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_store.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "cc38f912e4e2b1745d1fafb7da978dac1ce8aa91"
+    },
+    {
+      "path": "tests/identity/test_store_totp_atomic.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_store_totp_atomic.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "a6d951e76ba1a70f4eaa23813fa8bcc19ec9cebe"
+    },
+    {
+      "path": "tests/identity/test_tokens.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_tokens.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/identity/test_totp.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_totp.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/identity/test_webauthn.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/identity/test_webauthn.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/synthetic_fc27_east_coasters_normalized_template.json",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_east_coasters_normalized_template.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "tests/synthetic_fc27_user_export.csv",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_user_export.csv)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
+    },
+    {
+      "path": "tests/synthetic_fc27_user_export.json",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_user_export.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
+    },
+    {
+      "path": "tests/test_adversarial_m1.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_adversarial_m1.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_adversarial_m2_2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_adversarial_m2_2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_adversarial_m2_it2_2.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_adversarial_m2_it2_2.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_adversarial_m3_challenger.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_adversarial_m3_challenger.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_approval_lifecycle.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_approval_lifecycle.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "fa0d2663c8b684ffdb62ef34559bca573b6f1d46"
+    },
+    {
+      "path": "tests/test_approval_security.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_approval_security.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "820957f1ac6e98af1b9632bf85d169462e81bf68"
+    },
+    {
+      "path": "tests/test_archive_integrity.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_archive_integrity.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_commissioner_cli.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_commissioner_cli.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_compose_isolation.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_compose_isolation.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/test_db_migrate_roles.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_db_migrate_roles.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "tests/test_db_roles.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_db_roles.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "21c1b5edff3c0587f58e18ff85db9973ca9b53da"
+    },
+    {
+      "path": "tests/test_dispatch_creation.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_dispatch_creation.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b86d46b9f14c0b680a73b3ee245e6d02f35fcc9d"
+    },
+    {
+      "path": "tests/test_dispatch_schema.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_dispatch_schema.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_dispatch_transition.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_dispatch_transition.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_dispatch_transition_probe.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_dispatch_transition_probe.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_documentation_consistency.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_documentation_consistency.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "tests/test_end_to_end.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_end_to_end.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_events_outbox.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_events_outbox.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
+    },
+    {
+      "path": "tests/test_fc27_api_cache.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_api_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "tests/test_fc27_api_ingestion.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_api_ingestion.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "bdad68b7b68f3293c68fb6214af64b5e1759c97e"
+    },
+    {
+      "path": "tests/test_fc27_api_rate_limit.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_api_rate_limit.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "tests/test_fc27_authorized_api.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_authorized_api.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "3377226cbdd11ce95580c2020d8bc6b457351fbb"
+    },
+    {
+      "path": "tests/test_fc27_authorized_provider.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_authorized_provider.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "tests/test_fc27_clubs_api_contracts.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_clubs_api_contracts.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "tests/test_fc27_clubs_compatibility.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_clubs_compatibility.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e32291afbb3cc58673e96787200ff0021da3d179"
+    },
+    {
+      "path": "tests/test_fc27_dashboard_queries.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_dashboard_queries.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
+    },
+    {
+      "path": "tests/test_fc27_operator_capture.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_operator_capture.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "tests/test_fc27_persistence_and_queries.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_persistence_and_queries.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "tests/test_fc27_platform.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_platform.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "098f919084c0527d0d9e53cfae2cbe3bb8f75c5a"
+    },
+    {
+      "path": "tests/test_fc27_preapproval_validator.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_preapproval_validator.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "tests/test_fc27_user_export.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_user_export.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
+    },
+    {
+      "path": "tests/test_graph_api_v1.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_graph_api_v1.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/test_graph_persistence.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_graph_persistence.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_identifiers_and_tts.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_identifiers_and_tts.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_installer_static.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_installer_static.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "1a8f4a2e12e8ae5d0cf761af394199a85f327d40"
+    },
+    {
+      "path": "tests/test_integrated_services.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_integrated_services.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d558628936f2710f165fdedda469c2633e85c435"
+    },
+    {
+      "path": "tests/test_langgraph_flow.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_langgraph_flow.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_m1_adversarial_challenger.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_m1_adversarial_challenger.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/test_m1_phase2_adversarial.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_m1_phase2_adversarial.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "170e6a05966750e8ee53cdb9967e8605c31f6578"
+    },
+    {
+      "path": "tests/test_m2_adversarial_challenger.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_m2_adversarial_challenger.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_m2_phase2_adversarial.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_m2_phase2_adversarial.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "tests/test_m4_phase2_adversarial.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_m4_phase2_adversarial.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
+    },
+    {
+      "path": "tests/test_mcp_http_server.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_mcp_http_server.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d52a8b8d1eaee4a75fe13692ee9daf913c5a4c9f"
+    },
+    {
+      "path": "tests/test_mcp_retry_and_tools.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_mcp_retry_and_tools.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d52a8b8d1eaee4a75fe13692ee9daf913c5a4c9f"
+    },
+    {
+      "path": "tests/test_migration_0003.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_migration_0003.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
+    },
+    {
+      "path": "tests/test_model_selection.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_model_selection.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d558628936f2710f165fdedda469c2633e85c435"
+    },
+    {
+      "path": "tests/test_ocr_parsing.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_ocr_parsing.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "1ea4cbae92a28030169707fd6541219e98cd95fb"
+    },
+    {
+      "path": "tests/test_packaging.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_packaging.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b8825d6051edca7449691788a4be8f53c4ccbbdd"
+    },
+    {
+      "path": "tests/test_phase1_scope.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_phase1_scope.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "tests/test_roles.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_roles.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d558628936f2710f165fdedda469c2633e85c435"
+    },
+    {
+      "path": "tests/test_rundown_match_and_prompt.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_rundown_match_and_prompt.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "1ea4cbae92a28030169707fd6541219e98cd95fb"
+    },
+    {
+      "path": "tests/test_swarms_backend.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_swarms_backend.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "tests/test_tracing.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_tracing.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "20ed8eeaa1a1d0a0f3755767860d3a43be20eeea"
+    },
+    {
+      "path": "tests/test_typed_graph_voice.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_typed_graph_voice.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d558628936f2710f165fdedda469c2633e85c435"
+    },
+    {
+      "path": "tests/test_voice_gateway_api.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_voice_gateway_api.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_watcher_processing.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_watcher_processing.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "1ea4cbae92a28030169707fd6541219e98cd95fb"
+    },
+    {
+      "path": "tests/test_workflow.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_workflow.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "tests/test_ws_server.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_ws_server.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "d52a8b8d1eaee4a75fe13692ee9daf913c5a4c9f"
+    },
+    {
+      "path": "voice/__init__.py",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (voice/__init__.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "voice/stt_service.py",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (voice/stt_service.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "voice/tts_service.py",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (voice/tts_service.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    }
+  ]
+}

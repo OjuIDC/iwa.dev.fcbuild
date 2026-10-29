@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/ARCHITECTURE.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `ORIGINAL_REQUEST.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Original User Request
 
 ## 2026-10-03T13:58:40Z

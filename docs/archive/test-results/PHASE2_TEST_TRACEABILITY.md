@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/TESTING.md and TEST_RESULTS.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_TEST_TRACEABILITY.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Phase 2 Test Traceability Matrix: Findings R1–R15 to Test Suites
 
 **Status**: PROVISIONAL - mapping only; pass results are not claimed here and must come from a recorded host run  

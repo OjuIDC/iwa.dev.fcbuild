@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `TEST_RESULTS.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_LOCAL_MERGE_GATE_REPORT.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Phase 2 Local Merge-Gate Report (PROVISIONAL)
 
 Generated 2026-10-05. This report is evidence preparation, not a victory claim. Nothing below says a command passed unless it is listed with an exit code in section 8-12 as actually run.

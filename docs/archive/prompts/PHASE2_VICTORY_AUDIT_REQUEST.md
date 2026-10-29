@@ -1,3 +1,11 @@
+> Archived document
+>
+> This file is retained for historical context and is not an authoritative
+> operational guide. See `docs/TESTING.md and docs/SECURITY_BOUNDARIES.md` for the current implementation.
+> Archived on `2026-10-29` from `PHASE2_VICTORY_AUDIT_REQUEST.md`.
+>
+> Warning: Do not execute commands in this archived document.
+
 # Phase 2 Independent Victory Audit Request
 
 **Status**: REQUEST ONLY. No verdict is claimed. Every rubric row below is `UNVERIFIED` until an independent auditor fills it from commands they ran themselves.
