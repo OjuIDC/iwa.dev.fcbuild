@@ -164,19 +164,25 @@ _SAFE_MATCH_ID_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
 
 # Prohibited causal / prescriptive / player-pejorative / external-meta patterns
 _PROHIBITED_EVIDENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bcaused?\b", re.IGNORECASE),
-    re.compile(r"\bproves?\b", re.IGNORECASE),
-    re.compile(r"\bguarantees?\b", re.IGNORECASE),
+    re.compile(r"\bcaus(?:e|ed|es|ing)\b", re.IGNORECASE),
+    re.compile(r"\bprov(?:e|ed|es|ing)\b", re.IGNORECASE),
+    re.compile(r"\bguarantee(?:d|s|ing)?\b", re.IGNORECASE),
+    re.compile(r"\bguaranteed\s+win\b", re.IGNORECASE),
     re.compile(r"\boptimal\b", re.IGNORECASE),
     re.compile(r"\bbest\b", re.IGNORECASE),
     re.compile(r"\bworst\b", re.IGNORECASE),
     re.compile(r"\bshould\s+replace\b", re.IGNORECASE),
     re.compile(r"\bmust\s+use\b", re.IGNORECASE),
+    re.compile(r"\bmust\s+bench\b", re.IGNORECASE),
+    re.compile(r"\bdrop\s+player\b", re.IGNORECASE),
     re.compile(r"\bmaximizes?\s+win\s+probability\b", re.IGNORECASE),
     re.compile(r"\bplayer\s+is\s+(?:weak|poor|unsuitable)\b", re.IGNORECASE),
     re.compile(r"\b(?:weak|poor|unsuitable)\s+player\b", re.IGNORECASE),
-    re.compile(r"\blacks?\s+(?:effort|commitment|intent)\b", re.IGNORECASE),
-    re.compile(r"\b(?:attitude|chemistry|emotion|commitment)\b", re.IGNORECASE),
+    re.compile(r"\blacks?\s+(?:effort|commitment|intent|motivation)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:personality|attitude|motivation|effort|intent|chemistry|emotion|commitment)\b",
+        re.IGNORECASE,
+    ),
 )
 
 _ALLOWED_CORRELATION_PHRASES: tuple[str, ...] = (
@@ -652,6 +658,7 @@ class FC27NormalizedMatchEvidenceRecord(BaseModel):
     goals_against: int = Field(ge=0, le=50)
     formation: str | None = None
     opponent_name: str | None = None
+    opponent_formation: str | None = None
     match_type: str = "LEAGUE"
     club_side: Literal["HOME", "AWAY"] | None = None
     possession_pct: float | None = None
@@ -696,6 +703,14 @@ class FC27NormalizedMatchEvidenceRecord(BaseModel):
 
         if self.formation is not None and self.formation not in VALID_FC27_FORMATIONS:
             raise FC27SearchScoutError(f"Unsupported formation '{self.formation}'")
+        if (
+            self.opponent_formation is not None
+            and self.opponent_formation != "UNKNOWN_OPPONENT_FORMATION"
+            and self.opponent_formation not in VALID_FC27_FORMATIONS
+        ):
+            raise FC27SearchScoutError(
+                f"Unsupported opponent_formation '{self.opponent_formation}'"
+            )
         if self.opponent_name is not None:
             opp = self.opponent_name.strip()
             if not opp or len(opp) > 80:
@@ -1100,6 +1115,7 @@ class FC27OpponentEvidence(BaseModel):
     goals_against: int = Field(ge=0)
     goal_differential: int
     match_type_split: dict[str, int] = Field(default_factory=dict)
+    opponent_formation_split: dict[str, int] = Field(default_factory=dict)
     eligible_sample_count: int = Field(ge=1, le=BASELINE_MATCH_LIMIT)
     confidence_tier: ConfidenceTierLiteral
     data_quality_status: str = "ACCEPTED"
@@ -1126,6 +1142,7 @@ class FC27Hypothesis(BaseModel):
     supporting_player_refs: tuple[str, ...] = ()
     supporting_formation_refs: tuple[str, ...] = ()
     supporting_role_refs: tuple[str, ...] = ()
+    evidence_references: tuple[FC27EvidenceReference, ...] = ()
     confidence_tier: ConfidenceTierLiteral
     data_quality_status: str = "ACCEPTED"
     source_classification: Literal["EAST_COASTERS_NORMALIZED_EVIDENCE"] = (
@@ -1133,6 +1150,9 @@ class FC27Hypothesis(BaseModel):
     )
     formula_version: str = FORMULA_VERSION
     limitations: tuple[str, ...]
+    falsification_criteria: tuple[str, ...] = (
+        "Invalidate if subgroup win-rate delta converges toward baseline across >= 10 additional completed matches.",
+    )
     confounders: tuple[str, ...]
     status: Literal["OBSERVATIONAL_ONLY"] = "OBSERVATIONAL_ONLY"
 
@@ -1184,8 +1204,24 @@ class FC27Hypothesis(BaseModel):
                 raise FC27PrivacyViolationError(
                     f"Non-pseudonymous supporting_player_ref '{pr}' rejected"
                 )
+        if not self.evidence_references:
+            default_ref = FC27EvidenceReference(
+                evidence_id=f"ev_hyp_{self.hypothesis_id[-16:]}",
+                scope_type="HYPOTHESIS",
+                scope_key=self.hypothesis_id,
+                eligible_sample_count=self.eligible_match_count,
+                match_hashes=self.supporting_match_hashes,
+                player_refs=self.supporting_player_refs,
+                formation_refs=self.supporting_formation_refs,
+                role_refs=self.supporting_role_refs,
+                source_classification=self.source_classification,
+                data_quality_status=self.data_quality_status,
+            )
+            object.__setattr__(self, "evidence_references", (default_ref,))
         if not self.limitations:
             raise FC27SearchScoutError("Hypothesis must populate non-empty limitations")
+        if not self.falsification_criteria:
+            raise FC27SearchScoutError("Hypothesis must populate non-empty falsification_criteria")
         if not self.confounders:
             raise FC27SearchScoutError("Hypothesis must populate non-empty confounders")
         return self
@@ -1704,6 +1740,10 @@ def build_fc27_search_context(
         if opp_val is not None:
             opp_val = str(opp_val).strip() or None
 
+        opp_form_val = raw_dict.get("opponent_formation")
+        if opp_form_val is not None:
+            opp_form_val = str(opp_form_val).strip() or None
+
         src_class = str(
             raw_dict.get("source_classification") or validated_input.source_classification
         ).strip()
@@ -1725,6 +1765,7 @@ def build_fc27_search_context(
             goals_against=int(ga_raw),
             formation=formation_val,
             opponent_name=opp_val,
+            opponent_formation=opp_form_val,
             match_type=match_type,
             club_side=raw_dict.get("club_side"),
             possession_pct=raw_dict.get("possession_pct"),
@@ -2335,9 +2376,13 @@ def _build_build_evidence(context: FC27SearchContext) -> tuple[FC27BuildEvidence
     ] = {}
     for m in context.baseline_matches:
         for app in m.player_appearances:
-            if app.build_reference is not None:
-                key = (app.build_reference, app.position, app.role)
-                by_build.setdefault(key, []).append((m, app))
+            build_key = (
+                app.build_reference
+                if app.build_reference is not None
+                else "UNKNOWN_BUILD"
+            )
+            key = (build_key, app.position, app.role)
+            by_build.setdefault(key, []).append((m, app))
 
     results: list[FC27BuildEvidence] = []
     for key in sorted(by_build.keys(), key=lambda k: (k[0], k[1], k[2] or ""))[
@@ -2518,8 +2563,15 @@ def _build_opponent_evidence(
         gf = sum(m.goals_for for m in m_list)
         ga = sum(m.goals_against for m in m_list)
         mtype_split: dict[str, int] = {}
+        opp_form_split: dict[str, int] = {}
         for m in m_list:
             mtype_split[m.match_type] = mtype_split.get(m.match_type, 0) + 1
+            opp_form_key = (
+                m.opponent_formation
+                if m.opponent_formation is not None
+                else "UNKNOWN_OPPONENT_FORMATION"
+            )
+            opp_form_split[opp_form_key] = opp_form_split.get(opp_form_key, 0) + 1
 
         o_hashes = tuple(m.match_hash for m in m_list)
         o_tier = _cap_confidence_tier(
@@ -2545,6 +2597,7 @@ def _build_opponent_evidence(
                 goals_against=ga,
                 goal_differential=gf - ga,
                 match_type_split=dict(sorted(mtype_split.items())),
+                opponent_formation_split=dict(sorted(opp_form_split.items())),
                 eligible_sample_count=count,
                 confidence_tier=o_tier,
                 data_quality_status="ACCEPTED",
@@ -2647,6 +2700,7 @@ def _build_hypotheses(
                     eligible_match_count=f_item.eligible_sample_count,
                     supporting_match_hashes=f_hashes,
                     supporting_formation_refs=(f_item.formation,),
+                    evidence_references=f_item.evidence_references,
                     confidence_tier=f_item.confidence_tier,
                     data_quality_status=f_item.data_quality_status,
                     limitations=f_item.limitations,
@@ -2691,6 +2745,7 @@ def _build_hypotheses(
                     supporting_match_hashes=r_ref.match_hashes,
                     supporting_player_refs=r_ref.player_refs,
                     supporting_role_refs=(r_item.role,),
+                    evidence_references=r_item.evidence_references,
                     confidence_tier=r_item.confidence_tier,
                     data_quality_status=r_item.data_quality_status,
                     limitations=r_item.limitations,
@@ -2698,10 +2753,11 @@ def _build_hypotheses(
                 )
             )
 
-    # 3. BUILD_ASSOCIATION hypotheses (subgroups with >= 3 distinct matches)
+    # 3. BUILD_ASSOCIATION hypotheses (subgroups with >= 3 distinct matches; exclude UNKNOWN_BUILD)
     for b_item in build_ev:
         if (
-            b_item.eligible_sample_count >= MINIMUM_HYPOTHESIS_SAMPLE_SIZE
+            b_item.build_reference != "UNKNOWN_BUILD"
+            and b_item.eligible_sample_count >= MINIMUM_HYPOTHESIS_SAMPLE_SIZE
             and b_item.confidence_tier != "INSUFFICIENT_DATA"
             and b_item.team_win_rate is not None
         ):
@@ -2734,6 +2790,7 @@ def _build_hypotheses(
                     supporting_match_hashes=b_ref.match_hashes,
                     supporting_player_refs=b_ref.player_refs,
                     supporting_role_refs=(b_item.role,) if b_item.role else (),
+                    evidence_references=b_item.evidence_references,
                     confidence_tier=b_item.confidence_tier,
                     data_quality_status=b_item.data_quality_status,
                     limitations=b_item.limitations,
@@ -2777,6 +2834,7 @@ def _build_hypotheses(
                     eligible_match_count=p_item.eligible_sample_count,
                     supporting_match_hashes=p_ref.match_hashes,
                     supporting_player_refs=(p_item.player_ref_a, p_item.player_ref_b),
+                    evidence_references=p_item.evidence_references,
                     confidence_tier=p_item.confidence_tier,
                     data_quality_status=p_item.data_quality_status,
                     limitations=p_item.limitations,
@@ -2821,6 +2879,7 @@ def _build_hypotheses(
                     relative_delta=rel_delta,
                     eligible_match_count=team_ev.recent_matches_played,
                     supporting_match_hashes=rec_hashes,
+                    evidence_references=team_ev.evidence_references,
                     confidence_tier=rec_tier,
                     data_quality_status=team_ev.data_quality_status,
                     limitations=_build_limitations_for_sample(

@@ -675,6 +675,80 @@ def test_88_no_external_tactical_hypothesis_promoted_automatically() -> None:
     report = _build_sample_report(_sample_ten_matches())
     for h in report.hypotheses:
         assert h.source_classification == EAST_COASTERS_NORMALIZED_EVIDENCE
+        assert len(h.evidence_references) >= 1
+        assert len(h.falsification_criteria) >= 1
         assert "EXTERNAL_TACTICAL_HYPOTHESIS" not in h.statement
         assert "4-2-1-3" not in h.statement
         assert "4-1-2-1-2 Narrow" not in h.statement
+
+
+def test_unknown_build_and_opponent_formation_isolated() -> None:
+    p_unknown = _make_player(
+        "plr_ecf_000000000001",
+        position="ST",
+        role="Advanced Forward",
+        build_reference=None,
+    )
+    p_known = _make_player(
+        "plr_ecf_000000000002",
+        position="CM",
+        role="Box-to-Box",
+        build_reference="bld_ecf_cm_v1",
+    )
+    m1 = _make_match(1, player_appearances=[p_unknown, p_known])
+    m2 = _make_match(2, player_appearances=[p_unknown, p_known])
+    m3 = _make_match(3, player_appearances=[p_unknown, p_known])
+    m3["opponent_formation"] = "4-3-3(2)"
+    report = _build_sample_report([m1, m2, m3])
+    build_refs = {b.build_reference: b for b in report.build_evidence}
+    assert "UNKNOWN_BUILD" in build_refs
+    assert "bld_ecf_cm_v1" in build_refs
+    assert build_refs["UNKNOWN_BUILD"].appearances == 3
+    assert all(
+        "UNKNOWN_BUILD" not in h.statement
+        for h in report.hypotheses
+        if h.category == "BUILD_ASSOCIATION"
+    )
+    opp_ev = report.opponent_evidence[0]
+    assert opp_ev.opponent_formation_split == {
+        "4-3-3(2)": 1,
+        "UNKNOWN_OPPONENT_FORMATION": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "forbidden_clause",
+    [
+        "proves team success",
+        "causes higher scoring",
+        "guarantees promotion",
+        "guaranteed win in league play",
+        "optimal tactical setup",
+        "best option available",
+        "worst option available",
+        "must bench the midfielder",
+        "drop player from starting lineup",
+        "maximizes win probability",
+        "reflects poor player attitude and motivation",
+    ],
+)
+def test_hypothesis_rejects_prohibited_causal_and_prescriptive_claims(
+    forbidden_clause: str,
+) -> None:
+    with pytest.raises(FC27SearchScoutError, match="prohibited"):
+        FC27Hypothesis(
+            hypothesis_id="hyp_fc27_0123456789abcdef0123",
+            category="FORMATION_ASSOCIATION",
+            statement=f"Formation 4-3-3(2) is associated with a 75.0% win rate and {forbidden_clause}.",
+            metric_name="win_rate_pct",
+            direction="HIGHER",
+            baseline_value=50.0,
+            comparison_value=75.0,
+            absolute_delta=25.0,
+            relative_delta=50.0,
+            eligible_match_count=4,
+            supporting_match_hashes=(_sha256("m1"), _sha256("m2"), _sha256("m3"), _sha256("m4")),
+            confidence_tier="EXPLORATORY",
+            limitations=("Exploratory sample only.",),
+            confounders=("opponent_strength",),
+        )

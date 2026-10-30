@@ -334,6 +334,20 @@ def test_105_reader_game_version_scope_enforced() -> None:
         search_node(bad_state, reader=reader, analysis_generated_at=REF_NOW)
 
 
+def test_postgres_reader_analytics_disabled_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.fc27_dashboard_queries import FC27AnalyticsDisabledError
+
+    monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "false")
+    pg_reader = PostgresFC27AnalyticsReader("postgresql://localhost:5432/unused")
+    state = _initial_graph_state()
+    with pytest.raises(FC27AnalyticsDisabledError):
+        search_node(state, reader=pg_reader, analysis_generated_at=REF_NOW)
+    with pytest.raises(FC27AnalyticsDisabledError):
+        pg_reader.get_replay_conflicts()
+
+
 def test_postgres_analytics_reader_integration(
     pg_admin_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
