@@ -118,6 +118,8 @@ MAX_EVIDENCE_REFERENCES = 100
 MAX_STRING_LENGTH = 600
 MAX_CLOCK_SKEW_SECONDS = 300
 
+ANALYST_SYNTHESIS_VERSION = "fc27-analyst-v1.0"
+ANALYST_POLICY_VERSION = "fc27-analyst-policy-v1"
 NOT_A_RECOMMENDATION_STATUS = "NOT_A_RECOMMENDATION"
 
 ClusterCategoryLiteral = Literal[
@@ -310,14 +312,14 @@ _PROHIBITED_ANALYST_LANGUAGE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] =
     (
         "PRESCRIPTIVE_RECOMMENDATION",
         re.compile(
-            r"\b(must\s+use|must\s+bench|must\s+drop|must\s+replace|must\s+start|should\s+drop|should\s+replace|should\s+bench|should\s+use|should\s+switch|should\s+adopt|we\s+recommend|recommend\s+switching|bench\s+player|replace\s+player|drop\s+player)\b",
+            r"\b(must\s+use|must\s+bench|must\s+drop|must\s+replace|must\s+start|should\s+drop|should\s+replace|should\s+bench|should\s+use|should\s+switch|should\s+adopt|we\s+recommend|recommend\s+switching|bench\s+player|replace\s+player|drop\s+player|switch\s+to|assign|promote|demote)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "PSYCHOLOGICAL_OR_EFFORT_INFERENCE",
         re.compile(
-            r"\b(player\s+lacks\s+effort|lacks\s+effort|low\s+effort|player\s+is\s+selfish|is\s+selfish|selfish|player\s+is\s+unreliable|is\s+unreliable|player\s+has\s+poor\s+attitude|poor\s+attitude|bad\s+attitude|lazy|uncommitted|choked|tilted|lack\s+of\s+motivation|lack\s+of\s+leadership|emotionally|toxicity|toxic|blame)\b",
+            r"\b(player\s+lacks\s+effort|lacks\s+effort|low\s+effort|effort|player\s+is\s+selfish|is\s+selfish|selfish|player\s+is\s+unreliable|is\s+unreliable|unreliable|reliable\s+player|reliability|player\s+has\s+poor\s+attitude|poor\s+attitude|bad\s+attitude|attitude|psycholog(?:y|ical)|lazy|uncommitted|choked|tilted|lack\s+of\s+motivation|lack\s+of\s+leadership|emotionally|toxicity|toxic|blame)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1210,17 +1212,37 @@ def detect_evidence_contradictions(
             (ctx.identity.club_id, rep.identity.club_id),
         )
 
-    # 2. Formula version mismatch
+    # 2. Formula and policy version mismatch
+    ctx_rank_ver = ctx.provenance.get("ranking_policy_version") if isinstance(ctx.provenance, Mapping) else None
+    in_rank_ver = (
+        analyst_input.provenance.get("ranking_policy_version")
+        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+        else None
+    )
+    in_synth_ver = (
+        analyst_input.provenance.get("analyst_synthesis_version")
+        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+        else None
+    )
+    in_pol_ver = (
+        analyst_input.provenance.get("analyst_policy_version")
+        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+        else None
+    )
     if (
         ctx.formula_version != FORMULA_VERSION
         or rep.formula_version != FORMULA_VERSION
         or ctx.formula_version != rep.formula_version
         or (analyst_input is not None and analyst_input.formula_version != FORMULA_VERSION)
+        or (ctx_rank_ver is not None and ctx_rank_ver != RANKING_POLICY_VERSION)
+        or (in_rank_ver is not None and in_rank_ver != RANKING_POLICY_VERSION)
+        or (in_synth_ver is not None and in_synth_ver != ANALYST_SYNTHESIS_VERSION)
+        or (in_pol_ver is not None and in_pol_ver != ANALYST_POLICY_VERSION)
     ):
         _add(
             "FORMULA_VERSION_MISMATCH",
             "BLOCKING",
-            f"Formula version mismatch across Search ({ctx.formula_version}) and Scout ({rep.formula_version}).",
+            f"Formula or policy version mismatch across Search ({ctx.formula_version}) and Scout ({rep.formula_version}).",
             (ctx.formula_version, rep.formula_version),
         )
 
@@ -1489,6 +1511,12 @@ def detect_evidence_contradictions(
     known_player_refs = {
         p.player_ref for m in ctx.baseline_matches for p in m.player_appearances
     } | {p.player_ref for p in rep.player_evidence}
+    known_formations = {m.formation for m in ctx.baseline_matches if m.formation} | {
+        f.formation for f in rep.formation_evidence
+    }
+    known_roles = {
+        p.role for m in ctx.baseline_matches for p in m.player_appearances if p.role
+    } | {r.role for r in rep.role_evidence}
 
     seen_rep_ev_ids: set[str] = set()
     for ref in rep.evidence_references:
@@ -1500,6 +1528,13 @@ def detect_evidence_contradictions(
                 (ref.evidence_id,),
             )
         seen_rep_ev_ids.add(ref.evidence_id)
+        if len(set(ref.match_hashes)) != len(ref.match_hashes) or len(set(ref.player_refs)) != len(ref.player_refs):
+            _add(
+                "DUPLICATE_EVIDENCE_REFERENCE",
+                "BLOCKING",
+                f"Evidence reference '{ref.evidence_id}' contains duplicate match_hashes or player_refs.",
+                (ref.evidence_id,),
+            )
         unknown_mhashes = [mh for mh in ref.match_hashes if mh not in known_match_hashes]
         unknown_prefs = [pr for pr in ref.player_refs if pr not in known_player_refs]
         if unknown_mhashes or unknown_prefs:
@@ -1508,6 +1543,26 @@ def detect_evidence_contradictions(
                 "BLOCKING",
                 f"Evidence reference '{ref.evidence_id}' cites unknown matches or player_refs.",
                 (ref.evidence_id,),
+            )
+
+    for hyp in rep.hypotheses:
+        if len(set(hyp.supporting_match_hashes)) != len(hyp.supporting_match_hashes):
+            _add(
+                "DUPLICATE_EVIDENCE_REFERENCE",
+                "BLOCKING",
+                f"Hypothesis '{hyp.hypothesis_id}' contains duplicate supporting_match_hashes.",
+                (hyp.hypothesis_id,),
+            )
+        bad_hyp_m = [mh for mh in hyp.supporting_match_hashes if mh not in known_match_hashes]
+        bad_hyp_p = [pr for pr in hyp.supporting_player_refs if pr not in known_player_refs]
+        bad_hyp_f = [fr for fr in hyp.supporting_formation_refs if fr not in known_formations]
+        bad_hyp_r = [rr for rr in hyp.supporting_role_refs if rr not in known_roles]
+        if bad_hyp_m or bad_hyp_p or bad_hyp_f or bad_hyp_r:
+            _add(
+                "UNKNOWN_EVIDENCE_REFERENCE",
+                "BLOCKING",
+                f"Hypothesis '{hyp.hypothesis_id}' cites unknown supporting references.",
+                (hyp.hypothesis_id,),
             )
 
     # 13. Cluster and finding level checks (if supplied)
@@ -3689,6 +3744,8 @@ def build_fc27_analyst_report(
         "scout_report_hash": rep.report_hash,
         "formula_version": FORMULA_VERSION,
         "ranking_policy_version": RANKING_POLICY_VERSION,
+        "analyst_synthesis_version": ANALYST_SYNTHESIS_VERSION,
+        "analyst_policy_version": ANALYST_POLICY_VERSION,
         "source_classification": EAST_COASTERS_NORMALIZED_EVIDENCE,
         "hypothesis_count_evaluated": len(rep.hypotheses),
         **copy.deepcopy(coerced.provenance),
@@ -3743,6 +3800,101 @@ def build_fc27_analyst_report(
         approvable=False,
         dispatchable=False,
     )
+
+
+def build_counter_evidence(
+    search_context: FC27SearchContext,
+    scout_report: FC27ScoutReport,
+    clusters: Sequence[FC27EvidenceCluster] = (),
+) -> dict[str, tuple[FC27CounterEvidence, ...]]:
+    """Build deterministic counter-evidence mapped by `cluster_id`."""
+    return analyze_counter_evidence(search_context, scout_report, clusters)
+
+
+def build_confounders_for_cluster(
+    cluster: FC27EvidenceCluster,
+    all_confounders: Sequence[FC27Confounder],
+    finding_id: str | None = None,
+) -> tuple[FC27Confounder, ...]:
+    """Select and bound (`<= MAX_CONFOUNDERS`) deterministic confounders for a cluster."""
+    resolved_finding_id = finding_id or cluster.cluster_id
+    return _select_confounders_for_cluster(cluster, all_confounders, resolved_finding_id)
+
+
+def build_competing_explanations_for_cluster(
+    cluster: FC27EvidenceCluster,
+) -> tuple[FC27CompetingExplanation, ...]:
+    """Build deterministic template-based competing explanations for an evidence cluster."""
+    return generate_competing_explanations(
+        cluster.category,
+        cluster.subject_reference,
+        evidence_references=cluster.evidence_references,
+    )
+
+
+def build_data_gaps(
+    search_context: FC27SearchContext,
+    scout_report: FC27ScoutReport,
+    clusters: Sequence[FC27EvidenceCluster] = (),
+    finding_ids_by_cluster: Mapping[str, str] | None = None,
+) -> tuple[FC27DataGap, ...]:
+    """Build deterministic data-gap records from Search and Scout coverage."""
+    return identify_data_gaps(
+        search_context,
+        scout_report,
+        clusters=clusters,
+        finding_ids_by_cluster=finding_ids_by_cluster,
+    )
+
+
+def build_unresolved_questions(
+    data_gaps: Sequence[FC27DataGap],
+    contradictions: Sequence[FC27Contradiction],
+    findings: Sequence[FC27AnalystFinding] = (),
+) -> tuple[FC27UnresolvedQuestion, ...]:
+    """Build deterministic analytical follow-up questions strictly from gaps and contradictions."""
+    return generate_unresolved_questions(
+        data_gaps, contradictions, findings=findings
+    )
+
+
+def reconcile_cluster_confidence(
+    cluster: FC27EvidenceCluster,
+    contradictions: Sequence[FC27Contradiction] = (),
+) -> ConfidenceTierLiteral:
+    """Reconcile and cap cluster confidence against sample size and supporting observations."""
+    _, capped_conf, _ = _determine_finding_status_and_statement(
+        cluster, contradictions
+    )
+    return capped_conf
+
+
+def reconcile_overall_confidence(
+    search_context: FC27SearchContext,
+    scout_report: FC27ScoutReport,
+    contradictions: Sequence[FC27Contradiction] = (),
+) -> ConfidenceTierLiteral:
+    """Reconcile and cap overall Analyst confidence against Search, Scout, and contradictions."""
+    sample_tier = cast_confidence_tier(
+        determine_sample_size_tier(search_context.eligible_match_count)
+    )
+    overall_conf = _cap_confidence_tier(
+        _cap_confidence_tier(search_context.confidence_tier, scout_report.confidence_tier),
+        sample_tier,
+    )
+    if (
+        any(c.severity == "WARNING" for c in contradictions)
+        and CONFIDENCE_TIER_RANK[overall_conf] > CONFIDENCE_TIER_RANK["MODERATE_CONFIDENCE"]
+    ):
+        overall_conf = "MODERATE_CONFIDENCE"
+    return overall_conf
+
+
+def build_analyst_findings(
+    analyst_input: FC27AnalystInput | Mapping[str, Any],
+) -> tuple[FC27AnalystFinding, ...]:
+    """Build bounded (`<= MAX_ANALYST_FINDINGS`) observational Analyst findings."""
+    return build_fc27_analyst_report(analyst_input).findings
 
 
 # ==============================================================================

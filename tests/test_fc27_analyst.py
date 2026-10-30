@@ -1251,21 +1251,33 @@ def test_104_worst_player_rejected() -> None:
 
 
 def test_105_must_bench_rejected() -> None:
-    with pytest.raises(FC27AnalystLanguageError, match="PRESCRIPTIVE_RECOMMENDATION"):
-        validate_analyst_evidence_language(
-            "In the available East Coasters sample, the club must bench plr_ecf_000000000002."
-        )
-    with pytest.raises(FC27AnalystLanguageError, match="PRESCRIPTIVE_RECOMMENDATION"):
-        validate_analyst_evidence_language(
-            "In the available East Coasters sample, the club should replace plr_ecf_000000000002."
-        )
+    for phrase in (
+        "must bench plr_ecf_000000000002",
+        "must use 4-3-3(2)",
+        "should drop plr_ecf_000000000002",
+        "should replace plr_ecf_000000000002",
+        "switch to 4-2-3-1",
+        "assign plr_ecf_000000000002 to striker",
+        "promote plr_ecf_000000000002",
+        "demote plr_ecf_000000000002",
+    ):
+        with pytest.raises(FC27AnalystLanguageError, match="PRESCRIPTIVE_RECOMMENDATION"):
+            validate_analyst_evidence_language(
+                f"In the available East Coasters sample, the club {phrase}."
+            )
 
 
 def test_106_psychological_inference_rejected() -> None:
-    with pytest.raises(FC27AnalystLanguageError, match="PSYCHOLOGICAL_OR_EFFORT_INFERENCE"):
-        validate_analyst_evidence_language(
-            "In the available East Coasters sample, player is selfish and has poor attitude."
-        )
+    for phrase in (
+        "player is selfish and has poor attitude",
+        "psychological profile indicates tilt",
+        "reliability issues in late minutes",
+        "attitude problem during losses",
+    ):
+        with pytest.raises(FC27AnalystLanguageError, match="PSYCHOLOGICAL_OR_EFFORT_INFERENCE"):
+            validate_analyst_evidence_language(
+                f"In the available East Coasters sample, {phrase}."
+            )
 
 
 def test_107_effort_inference_rejected() -> None:
@@ -1295,8 +1307,37 @@ def test_109_correlational_wording_accepted() -> None:
 
 
 def test_110_mixed_evidence_wording_accepted() -> None:
+    from src.fc27_analyst import (
+        ANALYST_POLICY_VERSION,
+        ANALYST_SYNTHESIS_VERSION,
+        build_analyst_findings,
+        build_competing_explanations_for_cluster,
+        build_confounders_for_cluster,
+        build_counter_evidence,
+        build_data_gaps,
+        build_unresolved_questions,
+        reconcile_cluster_confidence,
+        reconcile_overall_confidence,
+    )
+
     stmt = (
         "In the available East Coasters sample, the evidence is mixed across recent and baseline matches; "
         "the result may be affected by opponent mix."
     )
     assert validate_analyst_evidence_language(stmt) == stmt
+    assert ANALYST_SYNTHESIS_VERSION == "fc27-analyst-v1.0"
+    assert ANALYST_POLICY_VERSION == "fc27-analyst-policy-v1"
+    a_in = _make_analyst_input(count=6)
+    rep = build_fc27_analyst_report(a_in)
+    assert rep.provenance["analyst_synthesis_version"] == "fc27-analyst-v1.0"
+    assert rep.provenance["analyst_policy_version"] == "fc27-analyst-policy-v1"
+    clusters = rep.evidence_clusters
+    assert build_counter_evidence(a_in.search_context, a_in.scout_report, clusters)
+    assert build_confounders_for_cluster(clusters[0], rep.confounders)
+    assert build_competing_explanations_for_cluster(clusters[0])
+    gaps = build_data_gaps(a_in.search_context, a_in.scout_report, clusters)
+    assert gaps
+    assert build_unresolved_questions(gaps, rep.contradictions, rep.findings)
+    assert reconcile_cluster_confidence(clusters[0], rep.contradictions) == clusters[0].confidence_tier
+    assert reconcile_overall_confidence(a_in.search_context, a_in.scout_report, rep.contradictions) == rep.overall_confidence
+    assert build_analyst_findings(a_in) == rep.findings
