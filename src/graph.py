@@ -75,6 +75,11 @@ class FC27State(TypedDict, total=False):
     assignments: list[dict] | dict | None
     roster: list[str] | None
     analytics_metadata: dict | None
+    search_context: dict | None
+    scout_report: dict | None
+    analysis_report_hash: str | None
+    analysis_confidence: str | None
+    analysis_limitations: list[str] | None
     recommendations: list[dict] | None
     approval_request_id: str | None
     approval_request: dict

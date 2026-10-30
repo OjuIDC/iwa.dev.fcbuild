@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
-- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Last verified commit**: `f014a855b479e00a76ce3639520518e8b61f0091`
 - **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
@@ -13,7 +13,7 @@ This document defines the authoritative architecture of `iwa.dev.fcbuild` derive
 Every subsystem in this document is labeled with one of five explicit states:
 - `CURRENT` — Implemented in active source code and verified by automated tests.
 - `OPTIONAL` — Implemented behind an opt-in Docker Compose profile or feature flag (`voice`, `rtsp`, `langfuse`, `LM_STUDIO_FALLBACK_ENABLED`).
-- `PROPOSED` — Planned for a subsequent roadmap phase (such as upgrading `search` and `scout` graph nodes to read directly from the normalized FC 27 analytical foundation).
+- `PROPOSED` — Planned for a subsequent roadmap phase (such as normalized `Analyst`, `Coach`, `Tactics`, and `Director` synthesis phases).
 - `DEFERRED` — Intentionally gated off or postponed (`DISPATCH_ENABLED=false`, `FC27_RECOMMENDATIONS_ENABLED=false`, `Windhover` mobile view).
 - `REJECTED` — Evaluated and permanently prohibited (`Impit`/Chromium TLS impersonation sidecar, SQLite persistence, raw payload retention, cookie/session scraping).
 
@@ -126,7 +126,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 9. **Request Budget & Circuit Breaker (`src/fc27_api_rate_limit.py`)**: `FC27RequestBudget` (`max_attempts=1`, `max_retries=0`, `max_elapsed_seconds=10.0`, requires `authorization_reference`) and `FC27AdapterCircuitBreaker` (`FC27_API_CIRCUIT_BREAKER_ENABLED=true`, defaults to `OPEN` when no approved provider is selected; trips on `401`/`403`/redirect/CAPTCHA/drift).
 10. **Replay & Idempotency Planning (`src/fc27_repository.py`, `src/fc27_user_export.py`)**: Computes deterministic `payload_sha256` and `match_hash`; skips identical replays idempotently and rejects changed-hash conflicts (`REPLAY_CONFLICT`).
 11. **Separately Gated PostgreSQL Persistence (`src/fc27_repository.py`, `migrations/0012_fc27_performance_and_quarantine.sql`)**: Requires `FC27_PERSISTENCE_ENABLED=true` plus explicit `--apply --confirm-apply`; writes normalized records to `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under `pg_advisory_xact_lock`.
-12. **Separately Gated Read-Only Analytics (`src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`)**: Requires `FC27_ANALYTICS_ENABLED=true`; runs inside PostgreSQL `READ ONLY` transactions (`5000ms` timeout) over `COMPLETED` matches only, suppressing display aliases by default.
+12. **Separately Gated Read-Only Analytics & Search/Scout Foundation (`src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`, `src/fc27_search_scout.py`)**: Pure Search context assembly (`build_fc27_search_context`) and Scout evidence/hypothesis synthesis (`build_fc27_scout_report`) operate deterministically over normalized East Coasters records (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`, `FORMULA_VERSION="fc27-v1.0"`). PostgreSQL reads (`PostgresFC27AnalyticsReader`) require `FC27_ANALYTICS_ENABLED=true`, run inside PostgreSQL `READ ONLY` transactions (`5000ms` timeout) over `COMPLETED` matches only, suppress display aliases (`include_aliases=False`), and emit bounded `FC27SearchScoutStateUpdate` dictionaries via `search_node` and `scout_node` without changing graph topology or executing LLM calls.
 13. **Separately Gated Recommendation Generation (`src/fc27_coaching.py`, `src/graph.py`)**: Requires `FC27_RECOMMENDATIONS_ENABLED=true`; role agents (`Scout`, `Analyst`, `Coach`, `Tactics`, `Director`) produce bounded `RoleOutput` adjustments (`±10`) reduced into immutable `LeadPackageSet` (`package_version` SHA-256).
 14. **Deterministic Pre-Approval Validation (`src/fc27_coaching.py`)**: Validates sample-size tier (`>=10` completed matches), evidence references, and blocks unverified tactical hypotheses (`EXTERNAL_TACTICAL_HYPOTHESIS`) before the graph pauses at `interrupt()` in node `approval`.
 15. **Authenticated Commissioner Decision (`src/approval_store.py`, `src/identity/`)**: Committed in a single PostgreSQL transaction via WebAuthn step-up (`require_user_verification=True`, 14-field `fc27_decision_evidence`) or CLI HMAC-SHA256 (`approval_nonces`), after which the resumed graph re-reads PostgreSQL and transitions to `APPROVED, NOT DISPATCHED` or `REJECTED, NO ACTION TAKEN`.
