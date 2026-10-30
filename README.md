@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
-- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Last verified commit**: `f014a855b479e00a76ce3639520518e8b61f0091`
 - **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
 - **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
 
@@ -39,7 +39,7 @@
 2. **LangGraph Single-Interrupt Approval Workflow**: Persisted recommendation packages (`package_version` SHA-256), single `interrupt()` at node `approval`, and mandatory PostgreSQL decision re-read on resume (`ApprovalNotCommitted` if missing or mismatched).
 3. **Human Identity, WebAuthn Step-Up, & CLI HMAC Verification**: Phase 2 user/session/passkey/TOTP/delegation store (`src/identity/`), 14-field bound `fc27_decision_evidence` with mandatory WebAuthn User Verification (`require_user_verification=True`), and constant-time symmetric HMAC-SHA256 verification (`src/approval.py`, `scripts/commissioner_decide.py`).
 4. **FC 27 Safe Provider Adapter & Contracts**: 11 fixed endpoint operations, 13 strict response schemas, match event bitmap (`ev`) decoder, `plr_ecf_<12-hex>` pseudonymization with collision detection (`PSEUDONYM_COLLISION`), `FC27SourceProvenance`, bounded normalized cache, token-bucket rate limiter, request budget, circuit breaker, and pure retry classifier.
-5. **Normalized Performance Storage & Read-Only Analytics**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "1.0.0"`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval coaching validation (`src/fc27_coaching.py`).
+5. **Normalized Performance Storage, Read-Only Analytics, & Search/Scout Foundation**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "fc27-v1.0"`), deterministic Search context assembly and Scout evidence/hypothesis synthesis (`src/fc27_search_scout.py`, `FC27AnalyticsReader`, `search_node`, `scout_node`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval coaching validation (`src/fc27_coaching.py`).
 
 ## 6. Disabled Capabilities
 
@@ -172,12 +172,11 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 
 ## 17. Next Development Phase
 
-Following review of the safe-adapter integration and this documentation reconciliation phase, the ordered roadmap is:
-1. **Search and Scout Analytical Foundation** (replacing the legacy MCP search/scout seam in `src/graph.py` with the normalized FC 27 repository and provider contract boundary)
-2. **Analyst Evidence Synthesis**
-3. **Coach Hypothesis Generation**
-4. **Tactics Candidate Construction**
-5. **Director Conflict Resolution**
-6. **Recommendation Review**
-7. **Separate Dispatch-Activation Review**
-8. **Live-Provider Integration** (only if and when a compliant, authorized transport exists)
+Following the Search and Scout Analytical Foundation (`src/fc27_search_scout.py`), the ordered roadmap is:
+1. **Analyst Evidence Synthesis** (next phase)
+2. **Coach Hypothesis Generation**
+3. **Tactics Candidate Construction**
+4. **Director Conflict Resolution**
+5. **Recommendation Review**
+6. **Separate Dispatch-Activation Review**
+7. **Live-Provider Integration** (only if and when a compliant, authorized transport exists)
