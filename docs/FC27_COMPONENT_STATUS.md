@@ -2,8 +2,8 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Security Reviewers
-- **Last verified commit**: `f014a855b479e00a76ce3639520518e8b61f0091`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `tests/`
+- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `tests/`
 - **Supersedes**: `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md` (historical, non-authoritative)
 
 ---
@@ -44,6 +44,7 @@ Every component in `iwa.dev.fcbuild` is classified using one of the nine canonic
 | `pre-approval validator` | `IMPLEMENTED` | Verified in unit suites | `src/fc27_coaching.py` | `tests/test_fc27_preapproval_validator.py` | `FC27_RECOMMENDATIONS_ENABLED=false` |
 | `provider-neutral boundary` | `DISABLED` | Mock-validated only | `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_authorized_api.py` | `tests/test_fc27_authorized_provider.py`, `tests/test_fc27_authorized_api.py` | `FC27_PROVIDER_ENABLED=false` |
 | `endpoint contracts` | `IMPLEMENTED` | Verified in unit suites | `src/fc27_clubs_api_contracts.py` | `tests/test_fc27_clubs_api_contracts.py` | `FC27_UPSTREAM_COMPATIBILITY_ENABLED=false` |
+| `safe adapter bundle manifest` | `IMPLEMENTED` | Verified in unit suites (`fc27-safe-adapter-manifest-v1`) | `config/fc27_safe_adapter_bundle_manifest.json`, `THIRD_PARTY_NOTICES.md` | `tests/test_fc27_safe_adapter_bundle_manifest.py` | `FC27_PROVIDER_ENABLED=false` |
 | `cache` | `DISABLED` | Verified in unit suites | `src/fc27_api_cache.py` | `tests/test_fc27_api_cache.py` | `FC27_API_CACHE_ENABLED=false` |
 | `rate limiter` | `DISABLED` | Verified in unit suites | `src/fc27_api_rate_limit.py` | `tests/test_fc27_api_rate_limit.py` | `FC27_API_RATE_LIMIT_ENABLED=false` |
 | `request budget` | `IMPLEMENTED` | Verified in unit suites | `src/fc27_api_rate_limit.py` | `tests/test_fc27_api_rate_limit.py` | Enforces `max_attempts=1`, `max_retries=0` |

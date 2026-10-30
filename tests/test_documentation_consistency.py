@@ -1051,5 +1051,21 @@ def test_repository_inventory_json_is_valid_and_metadata_only() -> None:
     assert "README.md" in paths_seen
     assert "docs/ARCHITECTURE.md" in paths_seen
     assert "docs/archive/ARCHIVE_MANIFEST.md" in paths_seen
+    assert "config/fc27_safe_adapter_bundle_manifest.json" in paths_seen
     assert settings_module.is_fc27_provider_enabled() is False
     assert settings_module.is_fc27_api_circuit_breaker_enabled() is True
+
+
+def test_safe_adapter_bundle_documentation_consistency_checks(tmp_path: Path) -> None:
+    repo, policy = _make_minimal_repo(tmp_path)
+    (repo / "SECURITY.md").write_text(
+        ".local-artifacts/ is tracked in git.\n"
+        "The runtime uses zipimport to load modules.\n"
+        ".local-artifacts/ is required for CI.\n",
+        encoding="utf-8",
+    )
+    report = dc.validate_repository(repo, policy_path=policy)
+    codes = {r.reason_code for r in report.results}
+    assert "SAFE_BUNDLE_LOCAL_ARTIFACTS_MISSTATED" in codes
+    assert "SAFE_BUNDLE_ZIP_RUNTIME_MISSTATED" in codes
+    assert "SAFE_BUNDLE_CI_DEPENDENCY_MISSTATED" in codes

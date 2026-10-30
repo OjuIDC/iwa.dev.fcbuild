@@ -1,0 +1,263 @@
+{
+  "manifest_version": "fc27-safe-adapter-manifest-v1",
+  "bundle_name": "iwa.dev.fcbuild-safe-adapter-verified.zip",
+  "bundle_sha256": "eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8",
+  "upstream_repository": "https://github.com/1erkandogan/fc27-clubs-api",
+  "upstream_commit": "26a5ff12ea793042bd776a858c74f3f44dd427f5",
+  "upstream_version": "0.3.1",
+  "upstream_license": "MIT",
+  "integration_commit": "f014a855b479e00a76ce3639520518e8b61f0091",
+  "target_club_scope": {
+    "club_id": "330323",
+    "club_name": "East Coasters",
+    "platform": "common-gen5",
+    "game_version": "FC27"
+  },
+  "feature_flag_defaults": {
+    "FC27_PROVIDER_ENABLED": false,
+    "FC27_LIVE_INGESTION_ENABLED": false,
+    "FC27_API_CACHE_ENABLED": false,
+    "FC27_API_RATE_LIMIT_ENABLED": false,
+    "FC27_API_CIRCUIT_BREAKER_ENABLED": true,
+    "FC27_PERSISTENCE_ENABLED": false,
+    "FC27_ANALYTICS_ENABLED": false,
+    "FC27_RECOMMENDATIONS_ENABLED": false,
+    "DISPATCH_ENABLED": false
+  },
+  "components": [
+    {
+      "logical_component_name": "fc27_clubs_api_contracts",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/contracts.py",
+      "additional_source_bundle_paths": [
+        "iwa.dev.fcbuild/fcbuild_clubs/schema.py",
+        "iwa.dev.fcbuild/fcbuild_clubs/normalize.py",
+        "iwa.dev.fcbuild/fcbuild_clubs/exceptions.py"
+      ],
+      "repository_destination": "src/fc27_clubs_api_contracts.py",
+      "integration_status": "ADAPT",
+      "source_sha256": "6235a1037ad2aa5e03768fb22bb8ef398798d3703a74d0ba86baacd95a31198e",
+      "repository_sha256": "42c3d99c4e2bbbeab2931a5d194653361e7b336fd2bc0b1157d997f173bced4e",
+      "adaptation_summary": "Adapted endpoint contracts, response schemas, event normalization, and exception types into a single repository-native module with East Coasters scope locks and strict privacy/PII rejection.",
+      "tests": [
+        "tests/test_fc27_clubs_api_contracts.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED",
+        "FC27_LIVE_INGESTION_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "INACTIVE_BY_DEFAULT_CONTRACT_AND_NORMALIZATION"
+    },
+    {
+      "logical_component_name": "fc27_api_cache",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/resilience.py",
+      "repository_destination": "src/fc27_api_cache.py",
+      "integration_status": "ADAPT",
+      "source_sha256": "4b237e1d510da0c9387709a132e3e153f493bfb7974df9df4edaf1a6fdc27c36",
+      "repository_sha256": "8451100acd7cc9245be5df45635e8b90eb5dc4ef44951cb42b31a986b41741dc",
+      "adaptation_summary": "Adapted bounded TTL cache into repository-native normalized-payload-only cache with sensitive-field rejection and fail-closed default.",
+      "tests": [
+        "tests/test_fc27_api_cache.py"
+      ],
+      "feature_flags": [
+        "FC27_API_CACHE_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "INACTIVE_BY_DEFAULT_CACHE_CONTROL"
+    },
+    {
+      "logical_component_name": "fc27_api_rate_limit",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/resilience.py",
+      "repository_destination": "src/fc27_api_rate_limit.py",
+      "integration_status": "ADAPT",
+      "source_sha256": "4b237e1d510da0c9387709a132e3e153f493bfb7974df9df4edaf1a6fdc27c36",
+      "repository_sha256": "583bbe512ccf9b346a032c75ddf508b81640e7516fd07b91fd5172f137b5d7f6",
+      "adaptation_summary": "Adapted token-bucket rate limiter, session/daily request budget, retry classifier, and fail-closed circuit breaker (enabled by default).",
+      "tests": [
+        "tests/test_fc27_api_rate_limit.py"
+      ],
+      "feature_flags": [
+        "FC27_API_RATE_LIMIT_ENABLED",
+        "FC27_API_CIRCUIT_BREAKER_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "circuit_breaker_enabled_by_default": true,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "FAIL_CLOSED_RATE_AND_CIRCUIT_BREAKER_CONTROL"
+    },
+    {
+      "logical_component_name": "fc27_authorized_provider",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/provider.py",
+      "repository_destination": "src/fc27_authorized_provider.py",
+      "integration_status": "ADAPT",
+      "source_sha256": "8ac785ef62103a847e72cf6061a0c2b9b42d481b332ebf16ffe3fd17bb749f11",
+      "repository_sha256": "098e83e4f369a1145c3def713d648ee4fa1cac8aa6fda50845f744e70e22697e",
+      "adaptation_summary": "Integrated safe adapter contracts, cache, and rate controls into the repository-native authorized provider client boundary.",
+      "tests": [
+        "tests/test_fc27_authorized_provider.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED",
+        "FC27_LIVE_INGESTION_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "INACTIVE_BY_DEFAULT_PROVIDER_ADAPTER"
+    },
+    {
+      "logical_component_name": "fc27_authorized_transport",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/transport.py",
+      "repository_destination": "src/fc27_authorized_transport.py",
+      "integration_status": "SUPERSEDED",
+      "source_sha256": "4cea4ab53dde7c71f57bf82dd727eb23a66fd01f88bb45ac37f8d5536f1e934e",
+      "repository_sha256": "4692d93ff8998eaabeb56a349e9a7dc2c02929860d7ee6c5610cecaddb2f1132",
+      "adaptation_summary": "Superseded by stronger repository-native authorized transport enforcing allowlisted HTTPS endpoints, zero browser/TLS impersonation, and blocked live execution by default.",
+      "tests": [
+        "tests/test_fc27_authorized_provider.py",
+        "tests/test_fc27_authorized_api.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED",
+        "FC27_LIVE_INGESTION_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "FAIL_CLOSED_TRANSPORT_BOUNDARY"
+    },
+    {
+      "logical_component_name": "fc27_provider_contract",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/contracts.py",
+      "repository_destination": "src/fc27_provider_contract.py",
+      "integration_status": "ALREADY_PRESENT",
+      "source_sha256": "6235a1037ad2aa5e03768fb22bb8ef398798d3703a74d0ba86baacd95a31198e",
+      "repository_sha256": "9528bd460b8a62019e3ca6512b5126f70259a47f96b35aef9496cba999c1e6ba",
+      "adaptation_summary": "Repository-native provider declaration and compliance contract validating legal/technical readiness before any provider activation.",
+      "tests": [
+        "tests/test_fc27_authorized_provider.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "NONE",
+      "runtime_classification": "FAIL_CLOSED_PROVIDER_CONTRACT"
+    },
+    {
+      "logical_component_name": "fc27_authorized_api",
+      "source_bundle_path": "iwa.dev.fcbuild/fcbuild_clubs/provider.py",
+      "repository_destination": "src/fc27_authorized_api.py",
+      "integration_status": "ADAPT",
+      "source_sha256": "8ac785ef62103a847e72cf6061a0c2b9b42d481b332ebf16ffe3fd17bb749f11",
+      "repository_sha256": "03f9cfd01bde797cf5e3953a536aa2695c60776fc96219582ca386234d6df53e",
+      "adaptation_summary": "Integrated safe adapter normalization and resilience gates into the repository-native bounded ingestion pipeline.",
+      "tests": [
+        "tests/test_fc27_authorized_api.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED",
+        "FC27_LIVE_INGESTION_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "INACTIVE_BY_DEFAULT_INGESTION_ORCHESTRATOR"
+    },
+    {
+      "logical_component_name": "third_party_attribution",
+      "source_bundle_path": "iwa.dev.fcbuild/README.md",
+      "repository_destination": "THIRD_PARTY_NOTICES.md",
+      "integration_status": "ADAPT",
+      "source_sha256": "11ea991f4ba6787d52642a2ce912d1f820cb6621ff0bf1218607a7ede9f4f8fe",
+      "repository_sha256": "dfb1151f79cedfe6696bdc528e557bce62b4b9c2ade17194b48b47711b275386",
+      "adaptation_summary": "Retained MIT license notice and explicit scope disclaimer for adapted contract/resilience concepts from 1erkandogan/fc27-clubs-api.",
+      "tests": [
+        "tests/test_fc27_safe_adapter_bundle_manifest.py"
+      ],
+      "feature_flags": [
+        "FC27_PROVIDER_ENABLED"
+      ],
+      "enabled_by_default": false,
+      "attribution": "MIT (THIRD_PARTY_NOTICES.md)",
+      "runtime_classification": "DOCUMENTATION_AND_LICENSE_ATTRIBUTION"
+    }
+  ],
+  "rejected_components": [
+    {
+      "component": "browser_transport_impersonation",
+      "source_path": "upstream:fc27-clubs-api/http_transport",
+      "rejection_reason": "Browser transport emulation and headless browser clients violate repository security boundaries.",
+      "prohibited_capability": "browser_transport",
+      "replacement": "src/fc27_authorized_transport.py"
+    },
+    {
+      "component": "browser_spoofed_headers",
+      "source_path": "upstream:fc27-clubs-api/browser_headers",
+      "rejection_reason": "Spoofed Chrome User-Agent, sec-ch-ua, Sec-Fetch-*, Origin, and Referer headers are prohibited.",
+      "prohibited_capability": "browser_headers",
+      "replacement": "src/fc27_authorized_transport.py"
+    },
+    {
+      "component": "tls_fingerprint_impersonation",
+      "source_path": "upstream:fc27-clubs-api/tls_impersonation",
+      "rejection_reason": "Impit, curl_cffi, and TLS fingerprint impersonation libraries are prohibited.",
+      "prohibited_capability": "tls_impersonation",
+      "replacement": "NONE"
+    },
+    {
+      "component": "cookie_jar_and_set_cookie_persistence",
+      "source_path": "upstream:fc27-clubs-api/cookie_store",
+      "rejection_reason": "Cookie jars, Set-Cookie persistence, and browser cookie extraction are prohibited.",
+      "prohibited_capability": "cookies",
+      "replacement": "NONE"
+    },
+    {
+      "component": "session_store_and_credential_forwarding",
+      "source_path": "upstream:fc27-clubs-api/session_store",
+      "rejection_reason": "User session tokens, EA credentials, and session stores are prohibited.",
+      "prohibited_capability": "sessions",
+      "replacement": "NONE"
+    },
+    {
+      "component": "arbitrary_url_and_host_execution",
+      "source_path": "upstream:fc27-clubs-api/arbitrary_url_request",
+      "rejection_reason": "Unbounded URLs, unapproved hosts, and direct EA host resolution are prohibited.",
+      "prohibited_capability": "arbitrary_urls",
+      "replacement": "src/fc27_provider_contract.py"
+    },
+    {
+      "component": "raw_provider_response_retention",
+      "source_path": "upstream:fc27-clubs-api/raw_response_capture",
+      "rejection_reason": "Persisting or caching unredacted raw provider payloads or player PII is prohibited.",
+      "prohibited_capability": "raw_response_storage",
+      "replacement": "src/fc27_api_cache.py"
+    },
+    {
+      "component": "prebuilt_wheel_binary_archive",
+      "source_path": "iwa.dev.fcbuild/dist/iwa_dev_fcbuild_clubs-0.1.0-py3-none-any.whl",
+      "rejection_reason": "Prebuilt wheel/binary archives inside the bundle are never installed, imported, or committed.",
+      "prohibited_capability": "executable_binary_or_wheel_archive",
+      "replacement": "NONE"
+    },
+    {
+      "component": "generated_bundle_test_results_log",
+      "source_path": "iwa.dev.fcbuild/docs/test-results.txt",
+      "rejection_reason": "Generated bundle test output logs are local inspection artifacts and not tracked documentation.",
+      "prohibited_capability": "generated_report_tracking",
+      "replacement": "NONE"
+    }
+  ],
+  "verification": {
+    "bundle_static_safety_pass": true,
+    "zip_tracked": false,
+    "zip_runtime_dependency": false,
+    "extraction_tracked": false,
+    "extraction_runtime_dependency": false,
+    "repository_native_imports_pass": true,
+    "single_owner_per_capability": true,
+    "prohibited_executable_components": 0,
+    "network_requests_executed": 0,
+    "ea_dns_resolutions_executed": 0,
+    "live_ea_requests_executed": 0
+  }
+}

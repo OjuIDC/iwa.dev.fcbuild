@@ -8,6 +8,7 @@
 - **Upstream License**: `MIT`
 - **Verified Safe Adapter Bundle**: `iwa.dev.fcbuild-safe-adapter-verified.zip`
 - **Verified Bundle SHA-256**: `eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`
+- **Tracked Repository-Native Manifest**: `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`)
 
 ### Important Scope and Licensing Notice
 The MIT license below governs **only** the open-source software structure and code artifacts adapted from `1erkandogan/fc27-clubs-api`. It does **not** grant any license, permission, or right to access Electronic Arts Inc. ("EA") infrastructure, bypass EA edge access controls, or store/redistribute EA SPORTS FC Clubs data. Live provider access in `iwa.dev.fcbuild` remains disabled by default (`FC27_PROVIDER_ENABLED=false`) pending an approved provider declaration and written authorization.

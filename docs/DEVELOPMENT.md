@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Contributors
-- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
 - **Source of truth**: `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `scripts/`, `tests/`
 - **Supersedes**: `NONE`
 
@@ -57,12 +57,18 @@ docker rm -f fc27-test-postgres
 
 ### Focused Offline Suites (No PostgreSQL Required)
 ```powershell
-# FC 27 safe-adapter contracts, cache, rate limiter, and provider boundary
-.\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py `
+# FC 27 safe-adapter manifest, contracts, cache, rate limiter, and provider boundary
+.\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py `
+  tests/test_fc27_clubs_api_contracts.py `
   tests/test_fc27_api_cache.py `
   tests/test_fc27_api_rate_limit.py `
   tests/test_fc27_authorized_provider.py `
   tests/test_fc27_authorized_api.py -q
+
+# FC 27 Search and Scout analytical foundation
+.\.venv\Scripts\pytest.exe tests/test_fc27_search.py `
+  tests/test_fc27_scout.py `
+  tests/test_fc27_search_scout_graph.py -q
 
 # Pre-approval validator, operator capture, and user export
 .\.venv\Scripts\pytest.exe tests/test_fc27_preapproval_validator.py `
@@ -131,13 +137,13 @@ Remove-Item -Recurse -Force $dockerCfgDir
 ### Recommended First Contributions
 - Extending unit/adversarial tests in `tests/`
 - Adding pure analytical helper coverage or documentation improvements
-- Working on the next planned roadmap phase (**Search and Scout analytical foundation**) on a dedicated feature branch
+- Working on the next planned roadmap phase (**Analyst Evidence Synthesis**) on a dedicated feature branch
 
 ### Files Requiring Special Governance / Avoid Modifying Unnecessarily
 - **Immutable Applied Migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql`)**: Applied migrations are SHA-256 checksummed by `src/db_migrate.py`. Never edit an existing migration; new schema changes require a new numbered migration (`0013_*.sql`) and a bumped `-- grants-policy-version:` in `migrations/post/grants.sql` + `src/db_migrate.py`.
 - **Approval & Security Core (`src/approval.py`, `src/approval_store.py`, `src/identity/webauthn.py`, `src/identity/policy.py`, `src/dispatch/gates.py`)**: Governed by strict Phase 1/2 security invariants and concurrency lock hierarchies.
 - **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_phase1_scope.py` and `tests/test_fc27_clubs_compatibility.py`.
-- **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories.
+- **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories. Any local bundle archive (`.local-artifacts/iwa.dev.fcbuild-safe-adapter-verified.zip`) or extracted inspection workspace (`.local-artifacts/safe-adapter-inspection-eb9c42745f99`) is strictly git-ignored, never required by CI, and never imported at runtime; the tracked source of truth is `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`).
 
 ---
 
