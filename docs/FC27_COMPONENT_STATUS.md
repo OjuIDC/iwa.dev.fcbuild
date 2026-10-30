@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Security Reviewers
-- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
 - **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `tests/`
 - **Supersedes**: `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md` (historical, non-authoritative)
 
@@ -34,12 +34,12 @@ Every component in `iwa.dev.fcbuild` is classified using one of the nine canonic
 | `LangGraph StateGraph` | `IMPLEMENTED` | Verified against PostgreSQL 16 | `src/graph.py`, `src/hierarchy.py`, `src/lead_packages.py` | `tests/test_langgraph_flow.py`, `tests/test_graph_persistence.py` | Active inside `graph-api` |
 | `PostgresSaver` | `IMPLEMENTED` | Verified against PostgreSQL 16 | `src/graph.py`, `src/db_migrate.py` | `tests/test_graph_persistence.py`, `tests/test_db_migrate_roles.py` | Separated from normalized `fc27_*` tables |
 | `normalized FC27 PostgreSQL storage` | `IMPLEMENTED` | Verified against PostgreSQL 16 | `migrations/0012_fc27_performance_and_quarantine.sql`, `src/fc27_repository.py` | `tests/test_fc27_persistence_and_queries.py` | `FC27_PERSISTENCE_ENABLED=false` |
-| `read-only analytics` | `IMPLEMENTED` | Verified against PostgreSQL 16 | `src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`, `src/fc27_search_scout.py` | `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_search.py`, `tests/test_fc27_scout.py` | `FC27_ANALYTICS_ENABLED=false` |
+| `read-only analytics` | `IMPLEMENTED` | Verified against PostgreSQL 16 | `src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`, `src/fc27_search_scout.py`, `src/fc27_analyst.py` | `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_search.py`, `tests/test_fc27_scout.py`, `tests/test_fc27_analyst.py` | `FC27_ANALYTICS_ENABLED=false` |
 | `Search` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic context + reader adapter) | `src/fc27_search_scout.py` | `tests/test_fc27_search.py`, `tests/test_fc27_search_scout_graph.py` | Pure / Read-only (`FC27_ANALYTICS_ENABLED=false` for PG reader) |
 | `Scout` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic evidence + hypotheses) | `src/fc27_search_scout.py` | `tests/test_fc27_scout.py`, `tests/test_fc27_search_scout_graph.py` | Pure / Observational only (`OBSERVATIONAL_ONLY`) |
-| `Analyst` | `DEFERRED` | Next roadmap phase (Analyst evidence synthesis) | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized synthesis deferred |
+| `Analyst` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic Analyst evidence synthesis + graph adapter) | `src/fc27_analyst.py`, `src/graph.py` | `tests/test_fc27_analyst.py`, `tests/test_fc27_analyst_graph.py` | Pure / Observational only (`OBSERVATIONAL_ONLY`, `NOT_A_RECOMMENDATION`) |
 | `Coach recommendation activation` | `DISABLED` | Gated fail-closed by default | `src/fc27_coaching.py`, `src/settings.py` | `tests/test_fc27_preapproval_validator.py` | `FC27_RECOMMENDATIONS_ENABLED=false` |
-| `Tactics` | `DEFERRED` | Deferred pending Analyst and Coach phases | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized tactics deferred |
+| `Tactics` | `DEFERRED` | Deferred pending Coach phase | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized tactics deferred |
 | `Director` | `DEFERRED` | Deferred pending Tactics phase | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized director deferred |
 | `pre-approval validator` | `IMPLEMENTED` | Verified in unit suites | `src/fc27_coaching.py` | `tests/test_fc27_preapproval_validator.py` | `FC27_RECOMMENDATIONS_ENABLED=false` |
 | `provider-neutral boundary` | `DISABLED` | Mock-validated only | `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_authorized_api.py` | `tests/test_fc27_authorized_provider.py`, `tests/test_fc27_authorized_api.py` | `FC27_PROVIDER_ENABLED=false` |

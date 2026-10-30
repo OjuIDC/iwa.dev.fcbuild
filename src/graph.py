@@ -80,6 +80,13 @@ class FC27State(TypedDict, total=False):
     analysis_report_hash: str | None
     analysis_confidence: str | None
     analysis_limitations: list[str] | None
+    analyst_report: dict | None
+    analyst_report_hash: str | None
+    analyst_confidence: str | None
+    analyst_findings: list[dict] | None
+    analyst_data_gaps: list[dict] | None
+    analyst_unresolved_questions: list[dict] | None
+    analyst_limitations: list[str] | None
     recommendations: list[dict] | None
     approval_request_id: str | None
     approval_request: dict

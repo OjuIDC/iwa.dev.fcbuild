@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
-  "total_files": 305,
+  "total_files": 308,
   "files": [
     {
       "path": ".gitattributes",
@@ -1223,6 +1223,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
+    },
+    {
+      "path": "src/fc27_analyst.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_analyst.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active runtime code verified by automated test suites",
+      "last_relevant_commit": "b0ff4bae36ab1f31defe2f39682eb105e30254e5"
     },
     {
       "path": "src/fc27_analytics.py",
@@ -2623,6 +2633,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
+    },
+    {
+      "path": "tests/test_fc27_analyst.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_analyst.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b0ff4bae36ab1f31defe2f39682eb105e30254e5"
+    },
+    {
+      "path": "tests/test_fc27_analyst_graph.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_analyst_graph.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "b0ff4bae36ab1f31defe2f39682eb105e30254e5"
     },
     {
       "path": "tests/test_fc27_api_cache.py",
