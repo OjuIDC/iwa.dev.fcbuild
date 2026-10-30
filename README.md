@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
-- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
 - **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
 - **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
 
@@ -39,7 +39,7 @@
 2. **LangGraph Single-Interrupt Approval Workflow**: Persisted recommendation packages (`package_version` SHA-256), single `interrupt()` at node `approval`, and mandatory PostgreSQL decision re-read on resume (`ApprovalNotCommitted` if missing or mismatched).
 3. **Human Identity, WebAuthn Step-Up, & CLI HMAC Verification**: Phase 2 user/session/passkey/TOTP/delegation store (`src/identity/`), 14-field bound `fc27_decision_evidence` with mandatory WebAuthn User Verification (`require_user_verification=True`), and constant-time symmetric HMAC-SHA256 verification (`src/approval.py`, `scripts/commissioner_decide.py`).
 4. **FC 27 Safe Provider Adapter & Contracts**: 11 fixed endpoint operations, 13 strict response schemas, match event bitmap (`ev`) decoder, `plr_ecf_<12-hex>` pseudonymization with collision detection (`PSEUDONYM_COLLISION`), `FC27SourceProvenance`, bounded normalized cache, token-bucket rate limiter, request budget, circuit breaker, and pure retry classifier.
-5. **Normalized Performance Storage, Read-Only Analytics, & Search/Scout Foundation**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "fc27-v1.0"`), deterministic Search context assembly and Scout evidence/hypothesis synthesis (`src/fc27_search_scout.py`, `FC27AnalyticsReader`, `search_node`, `scout_node`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval coaching validation (`src/fc27_coaching.py`).
+5. **Normalized Performance Storage, Read-Only Analytics, Search/Scout Foundation, & Analyst Evidence Synthesis**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "fc27-v1.0"`), deterministic Search context assembly and Scout evidence/hypothesis synthesis (`src/fc27_search_scout.py`, `FC27AnalyticsReader`, `search_node`, `scout_node`), deterministic Analyst evidence validation, clustering, counter-evidence, confounder/uncertainty analysis, and bounded observational finding synthesis (`src/fc27_analyst.py`, `analyst_evidence_node`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval coaching validation (`src/fc27_coaching.py`).
 
 ## 6. Disabled Capabilities
 
@@ -101,9 +101,9 @@ All external networking, persistence writes, analytics execution, recommendation
 
 ## 10. Testing
 
-- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, & Provider Tests (No DB required)**:
+- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, Provider, Search/Scout, & Analyst Tests (No DB required)**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py -q
+  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py -q
   ```
 - **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
   ```powershell
@@ -172,11 +172,10 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 
 ## 17. Next Development Phase
 
-Following the Search and Scout Analytical Foundation (`src/fc27_search_scout.py`), the ordered roadmap is:
-1. **Analyst Evidence Synthesis** (next phase)
-2. **Coach Hypothesis Generation**
-3. **Tactics Candidate Construction**
-4. **Director Conflict Resolution**
-5. **Recommendation Review**
-6. **Separate Dispatch-Activation Review**
-7. **Live-Provider Integration** (only if and when a compliant, authorized transport exists)
+Following the Search and Scout Analytical Foundation (`src/fc27_search_scout.py`) and Analyst Evidence Synthesis (`src/fc27_analyst.py`), the ordered roadmap is:
+1. **Coach Hypothesis Generation** (next phase)
+2. **Tactics Candidate Construction**
+3. **Director Conflict Resolution**
+4. **Recommendation Review**
+5. **Separate Dispatch-Activation Review**
+6. **Live-Provider Integration** (only if and when a compliant, authorized transport exists)

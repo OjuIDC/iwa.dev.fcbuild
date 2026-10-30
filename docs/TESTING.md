@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, QA Engineers, Security Reviewers
-- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
 - **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_documentation_consistency.py`, `scripts/check_matchpulse_boundary.py`
 - **Supersedes**: `docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`
 
@@ -72,6 +72,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_fc27_persistence_and_queries.py` — Normalized PostgreSQL storage (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), Grants Policy Version `14`, replay conflict detection, and `src/fc27_analytics.py`.
 - `tests/test_fc27_dashboard_queries.py` — Read-only dashboard queries (`src/fc27_dashboard_queries.py`), `READ ONLY` transaction enforcement, `5000ms` statement timeout, rolling windows (`<= 730` days), and alias suppression.
 - `tests/test_fc27_search.py`, `tests/test_fc27_scout.py`, `tests/test_fc27_search_scout_graph.py` — Deterministic Search context assembly (`build_fc27_search_context`), Scout evidence metrics and observational hypotheses (`build_fc27_scout_report`), `FC27AnalyticsReader` (`InMemoryFC27AnalyticsReader` and `PostgresFC27AnalyticsReader`), and LangGraph `search_node` / `scout_node` adapters (`106` focused tests across items `1`–`105` + PostgreSQL 16 reader integration).
+- `tests/test_fc27_analyst.py`, `tests/test_fc27_analyst_graph.py` — Deterministic Analyst evidence validation (`validate_analyst_input`, `detect_evidence_contradictions`), clustering (`build_evidence_clusters`), counter-evidence (`analyze_counter_evidence`), confounders (`identify_confounders`), competing explanations (`generate_competing_explanations`), data gaps (`identify_data_gaps`), unresolved questions (`generate_unresolved_questions`), bounded observational finding synthesis (`build_fc27_analyst_report`), language safety validation (`validate_analyst_evidence_language`), and LangGraph `analyst_evidence_node` adapter (`129` focused tests across items `1`–`128` + PostgreSQL 16 end-to-end `PostgresFC27AnalyticsReader -> search_node -> scout_node -> analyst_evidence_node` integration).
 - `tests/test_fc27_preapproval_validator.py` — Deterministic pre-approval coaching package validation (`src/fc27_coaching.py`) and tactical hypothesis blocking.
 - `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_clubs_compatibility.py`, `tests/test_fc27_platform.py` — Offline export validation, CSV formula-injection defense, operator capture normalization, and ADR/pilot-package compatibility checks.
 
