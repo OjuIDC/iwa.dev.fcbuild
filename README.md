@@ -2,8 +2,8 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
-- **Last verified commit**: `f014a855b479e00a76ce3639520518e8b61f0091`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
+- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
 - **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
 
 ## 1. Project Purpose
@@ -31,7 +31,7 @@
 - **`graph-api` (`src/graph_api.py`, `src/graph.py`)**: FastAPI HTTP boundary and LangGraph `StateGraph` (`search` -> `scout` -> `analyst` -> `coach` -> `tactics` -> `director` -> `prepare_approval` -> `approval` [`interrupt()`] -> `finalize_decision`).
 - **PostgreSQL 16 (`migrations/0001_initial.sql`–`migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/post/grants.sql`)**: Single authoritative audit of record across `graph_threads`, `recommendation_packages`, `approval_requests`, `approval_audit`, `fc27_decision_evidence`, `domain_events`, `outbox`, identity tables (`fc27_users`, `fc27_sessions`, `fc27_webauthn_credentials`, `fc27_challenges`), and normalized FC 27 performance tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`). LangGraph `PostgresSaver` tables (`checkpoints*`) store workflow state only and are strictly separated from normalized FC 27 tables and authorization state.
 - **Redis (`redis:7.4.2-alpine`)**: Ephemeral pub/sub and watcher lease transport only. **Redis is never audit of record or authorization authority.**
-- **Safe FC 27 Provider & Contract Layer (`src/fc27_authorized_provider.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`)**: Data-only adaptation of fixed FC 27 endpoint contracts, strict Pydantic response schemas, 23-bit match event bitmap (`ev`) decoding, bounded normalized-object caching, token-bucket rate limiting, per-run request budgets (`max_attempts=1`, `max_retries=0`), and a 3-state circuit breaker.
+- **Safe FC 27 Provider & Contract Layer (`src/fc27_authorized_provider.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`)**: Repository-native data-only adaptation (`fc27-safe-adapter-manifest-v1`) of fixed FC 27 endpoint contracts, strict Pydantic response schemas, 23-bit match event bitmap (`ev`) decoding, bounded normalized-object caching, token-bucket rate limiting, per-run request budgets (`max_attempts=1`, `max_retries=0`), and a 3-state circuit breaker.
 
 ## 5. Implemented Capabilities
 
@@ -101,9 +101,9 @@ All external networking, persistence writes, analytics execution, recommendation
 
 ## 10. Testing
 
-- **Focused FC 27 Adapter, Cache, Rate-Limit, & Provider Tests (No DB required)**:
+- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, & Provider Tests (No DB required)**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py -q
+  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py -q
   ```
 - **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
   ```powershell

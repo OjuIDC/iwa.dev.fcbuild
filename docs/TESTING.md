@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, QA Engineers, Security Reviewers
-- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
+- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
 - **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_documentation_consistency.py`, `scripts/check_matchpulse_boundary.py`
 - **Supersedes**: `docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`
 
@@ -61,6 +61,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 ## 4. Test Suite Categories
 
 ### 4.1 Focused FC 27 Provider, Contract, Cache, & Rate-Limit Suites
+- `tests/test_fc27_safe_adapter_bundle_manifest.py` — 40 deterministic tests verifying `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`), repository-native SHA-256 digests, rejected unsafe/non-applicable components, MIT attribution in `THIRD_PARTY_NOTICES.md`, and zero runtime dependency on `.local-artifacts/` or ZIP archives.
 - `tests/test_fc27_clubs_api_contracts.py` — 11 fixed endpoint operations, query parameter builders, 13 response schema models, normalizers, 23-bit event bitmap (`ev`) decoder, and `FC27PseudonymCollisionDetector`.
 - `tests/test_fc27_api_cache.py` — `FC27BoundedNormalizedCache` TTL expiration, LRU eviction, byte bounds (`256 KiB`), key isolation, and cache-poisoning/raw-response rejection.
 - `tests/test_fc27_api_rate_limit.py` — `FC27ProviderTokenBucketLimiter`, `Retry-After` cooldowns, `FC27RequestBudget` (`max_attempts=1`), `FC27AdapterCircuitBreaker` (`CLOSED`/`OPEN`/`HALF_OPEN`), and `classify_fc27_retry_decision`.

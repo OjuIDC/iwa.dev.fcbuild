@@ -1354,6 +1354,57 @@ def validate_repository(
                 tr_rel,
             )
 
+    # Safe Adapter Bundle Manifest validation (config/fc27_safe_adapter_bundle_manifest.json)
+    bundle_manifest_rel = "config/fc27_safe_adapter_bundle_manifest.json"
+    if bundle_manifest_rel in all_repo_files_set:
+        try:
+            bm_data = json.loads(
+                (resolved_root / bundle_manifest_rel).read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            bm_data = None
+            add_finding(
+                "SOURCE_OF_TRUTH",
+                "SAFE_BUNDLE_MANIFEST_INVALID",
+                "ERROR",
+                bundle_manifest_rel,
+                1,
+                bundle_manifest_rel,
+                f"Malformed JSON in {bundle_manifest_rel}: {exc}",
+                "Fix JSON syntax in config/fc27_safe_adapter_bundle_manifest.json",
+                bundle_manifest_rel,
+            )
+        if isinstance(bm_data, dict):
+            b_sha = str(bm_data.get("bundle_sha256", ""))
+            if not re.fullmatch(r"[0-9a-f]{64}", b_sha):
+                add_finding(
+                    "SOURCE_OF_TRUTH",
+                    "SAFE_BUNDLE_MANIFEST_INVALID",
+                    "ERROR",
+                    bundle_manifest_rel,
+                    1,
+                    b_sha or "bundle_sha256",
+                    "bundle_sha256 in config/fc27_safe_adapter_bundle_manifest.json is not valid 64-character lowercase hex",
+                    "Provide a valid 64-character lowercase hex SHA-256 digest",
+                    bundle_manifest_rel,
+                )
+            for comp in bm_data.get("components") or []:
+                if not isinstance(comp, dict):
+                    continue
+                dest = str(comp.get("repository_destination", ""))
+                if not dest or not (resolved_root / dest).is_file():
+                    add_finding(
+                        "PATH_REFERENCE",
+                        "SAFE_BUNDLE_DESTINATION_MISSING",
+                        "ERROR",
+                        bundle_manifest_rel,
+                        1,
+                        dest or "<empty>",
+                        f"Repository-native destination '{dest}' in {bundle_manifest_rel} does not exist",
+                        "Ensure all repository_destination files in config/fc27_safe_adapter_bundle_manifest.json exist",
+                        bundle_manifest_rel,
+                    )
+
     # Scan each Markdown document in scope
     docs_to_scan = list(current_md_docs)
     if include_archive:
@@ -1763,6 +1814,62 @@ def validate_repository(
                     "Documentation prescribes browser/TLS impersonation or session cookies",
                     "Remove browser/TLS bypass instructions",
                     "docs/SECURITY_BOUNDARIES.md",
+                )
+
+            # Safe Adapter Bundle documentation hygiene checks
+            if re.search(
+                r"\.local-artifacts(?:/|\b).*?\b(?:is\s+tracked|are\s+tracked|tracked\s+in\s+git|committed\s+to\s+git)\b",
+                lower_line,
+            ) and not any(
+                neg in lower_line
+                for neg in ("never", "not", "do not", "don't", "prohibited", "ignored", "untracked")
+            ):
+                add_finding(
+                    "SECURITY_INVARIANT",
+                    "SAFE_BUNDLE_LOCAL_ARTIFACTS_MISSTATED",
+                    "ERROR",
+                    doc_rel,
+                    lno,
+                    ".local-artifacts tracked",
+                    "Documentation misdescribes .local-artifacts as tracked or committed to Git",
+                    "State that .local-artifacts/ is git-ignored and never committed",
+                    ".gitignore",
+                )
+            if re.search(
+                r"\b(?:uses\s+zipimport|imported\s+directly\s+from\s+(?:the\s+)?zip|runtime\s+zip\s+import\s+is\s+enabled)\b",
+                lower_line,
+            ) and not any(
+                neg in lower_line
+                for neg in ("never", "no ", "not", "do not", "prohibited", "forbidden", "zero")
+            ):
+                add_finding(
+                    "SECURITY_INVARIANT",
+                    "SAFE_BUNDLE_ZIP_RUNTIME_MISSTATED",
+                    "ERROR",
+                    doc_rel,
+                    lno,
+                    "ZIP runtime import",
+                    "Documentation describes importing from a ZIP archive at runtime",
+                    "State that only tracked repository-native modules in src/ are imported at runtime",
+                    "docs/FC27_PROVIDER_INTEGRATION.md",
+                )
+            if re.search(
+                r"\.local-artifacts(?:/|\b).*?\b(?:is\s+required\s+(?:by|for)\s+ci|are\s+required\s+(?:by|for)\s+ci|required\s+in\s+ci)\b",
+                lower_line,
+            ) and not any(
+                neg in lower_line
+                for neg in ("never", "not", "do not", "don't", "without", "zero")
+            ):
+                add_finding(
+                    "SECURITY_INVARIANT",
+                    "SAFE_BUNDLE_CI_DEPENDENCY_MISSTATED",
+                    "ERROR",
+                    doc_rel,
+                    lno,
+                    ".local-artifacts required for CI",
+                    "Documentation states that .local-artifacts is required for CI",
+                    "State that .local-artifacts/ is never required by CI",
+                    "docs/FC27_PROVIDER_INTEGRATION.md",
                 )
 
             # DC5: Markdown link validation

@@ -2745,6 +2745,66 @@
       "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
     },
     {
+      "path": "config/fc27_safe_adapter_bundle_manifest.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository-native FC 27 safe adapter bundle provenance manifest (config/fc27_safe_adapter_bundle_manifest.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active machine-readable provenance and component manifest for the verified FC 27 safe adapter bundle",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "src/fc27_search_scout.py",
+      "category": "source_code",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative East Coasters Search and Scout analytical foundation (src/fc27_search_scout.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active pure deterministic Search context and Scout evidence/hypothesis module",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_safe_adapter_bundle_manifest.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "tests/test_fc27_scout.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_scout.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "tests/test_fc27_search.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_search.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "tests/test_fc27_search_scout_graph.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_search_scout_graph.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding runtime and documentation invariants",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
       "path": "tests/test_fc27_user_export.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",

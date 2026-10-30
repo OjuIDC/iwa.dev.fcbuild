@@ -2,8 +2,8 @@
 
 - **Status**: Current
 - **Audience**: Developers, Architects, Security Reviewers
-- **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `THIRD_PARTY_NOTICES.md`
+- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Source of truth**: `src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`, `THIRD_PARTY_NOTICES.md`
 - **Supersedes**: `NONE`
 
 > **Current Authorization Status**: `EA_APPROVED_ACCESS_REQUEST_DRAFT` (`SELECTED_PROVIDER=NONE`, `LIVE_PROVIDER_TRAFFIC=BLOCKED_SAFE`)
@@ -112,3 +112,20 @@ Adapted safely from the MIT-licensed `1erkandogan/fc27-clubs-api` endpoint and e
   .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --mock
   .\.venv\Scripts\python.exe scripts/fc27_club_lookup.py --help
   ```
+
+---
+
+## 6. Repository-Native Safe Adapter Bundle Configuration (`config/fc27_safe_adapter_bundle_manifest.json`)
+
+The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-verified.zip`, `BUNDLE_SHA256=eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`) is governed by a repository-native provenance manifest (`MANIFEST_VERSION=fc27-safe-adapter-manifest-v1` in `config/fc27_safe_adapter_bundle_manifest.json`) and validated deterministically by `tests/test_fc27_safe_adapter_bundle_manifest.py`:
+
+1. **Original bundle artifact**:
+   - Stored only as a git-ignored local input under `.local-artifacts/` (`iwa.dev.fcbuild-safe-adapter-verified.zip`).
+   - Never committed to Git and never required by CI or production runtime.
+2. **Temporary inspection workspace**:
+   - Extracted locally under `.local-artifacts/safe-adapter-inspection-eb9c42745f99` (with local inventory map `.local-artifacts/safe-adapter-folder-map.json`) strictly for static verification.
+   - Never committed to Git and never imported at runtime (`no zipimport` or `.local-artifacts` imports).
+3. **Repository-native integration**:
+   - Tracked source and test modules (`src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_authorized_api.py`, and `tests/test_fc27_*.py`).
+   - Tracked provenance manifest `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`) recording exact SHA-256 digests, adaptation summaries, feature flags, and rejected unsafe/non-applicable components.
+   - Tracked upstream MIT license attribution in `THIRD_PARTY_NOTICES.md`.
