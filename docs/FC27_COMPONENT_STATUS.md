@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Security Reviewers
-- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
+- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
 - **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `tests/`
 - **Supersedes**: `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md` (historical, non-authoritative)
 
@@ -38,6 +38,11 @@ Every component in `iwa.dev.fcbuild` is classified using one of the nine canonic
 | `Search` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic context + reader adapter) | `src/fc27_search_scout.py` | `tests/test_fc27_search.py`, `tests/test_fc27_search_scout_graph.py` | Pure / Read-only (`FC27_ANALYTICS_ENABLED=false` for PG reader) |
 | `Scout` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic evidence + hypotheses) | `src/fc27_search_scout.py` | `tests/test_fc27_scout.py`, `tests/test_fc27_search_scout_graph.py` | Pure / Observational only (`OBSERVATIONAL_ONLY`) |
 | `Analyst` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (pure deterministic Analyst evidence synthesis + graph adapter) | `src/fc27_analyst.py`, `src/graph.py` | `tests/test_fc27_analyst.py`, `tests/test_fc27_analyst_graph.py` | Pure / Observational only (`OBSERVATIONAL_ONLY`, `NOT_A_RECOMMENDATION`) |
+| `FC27 Demo Fixture Server` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (loopback `127.0.0.1` synthetic FC 27 HTTP server) | `scripts/fc27_demo_fixture_server.py` | `tests/test_fc27_demo.py` | `127.0.0.1` loopback fixture server (`DEMO_FIXTURE_SYNTHETIC`) |
+| `FC27 One-Shot Demo CLI` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (one-shot ingestion + Search/Scout/Analyst CLI) | `scripts/fc27_demo_ingest.py`, `src/fc27_demo.py` | `tests/test_fc27_demo.py` | `--source fixture` default (`max_requests=1`, `max_retries=0`) |
+| `FC27 Demo API` | `IMPLEMENTED` | `IMPLEMENTED_AND_TESTED` (loopback JSON & self-contained HTML inspection API) | `src/fc27_demo_api.py`, `src/fc27_demo.py` | `tests/test_fc27_demo.py` | `FC27_DEMO_MODE=false` (`127.0.0.1` only) |
+| `FC27 Live Probe` | `DISABLED` | `IMPLEMENTED_NOT_EXECUTED` (fail-closed live-probe gate boundary; never executed) | `src/fc27_demo.py`, `scripts/fc27_demo_ingest.py` | `tests/test_fc27_demo.py` | `FC27_LIVE_INGESTION_ENABLED=false` (`LIVE_PROBE_EXECUTED=NO`) |
+| `Coach` | `DEFERRED` | Deferred pending Coach hypothesis phase | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized Coach deferred |
 | `Coach recommendation activation` | `DISABLED` | Gated fail-closed by default | `src/fc27_coaching.py`, `src/settings.py` | `tests/test_fc27_preapproval_validator.py` | `FC27_RECOMMENDATIONS_ENABLED=false` |
 | `Tactics` | `DEFERRED` | Deferred pending Coach phase | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized tactics deferred |
 | `Director` | `DEFERRED` | Deferred pending Tactics phase | `src/graph.py`, `src/roles.py` | `tests/test_langgraph_flow.py` | Legacy role seam; normalized director deferred |

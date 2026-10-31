@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
-  "total_files": 308,
+  "total_files": 320,
   "files": [
     {
       "path": ".gitattributes",
@@ -185,6 +185,16 @@
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
+      "path": "config/fc27_safe_adapter_bundle_manifest.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository-native FC 27 safe adapter bundle provenance manifest (config/fc27_safe_adapter_bundle_manifest.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active machine-readable provenance and component manifest for the verified FC 27 safe adapter bundle",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
       "path": "config/model_catalog.json",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -363,6 +373,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_DEMO.md",
+      "category": "documentation_current",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative documentation for East Coasters FC 27 one-shot ingestion and analytics demo (docs/FC27_DEMO.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Authoritative guide for the loopback-only FC 27 synthetic ingestion and analytics demo",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
     },
     {
       "path": "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md",
@@ -1005,6 +1025,26 @@
       "last_relevant_commit": "a19aa20115f69928d285e70e178858751a9f9347"
     },
     {
+      "path": "scripts/fc27_demo_fixture_server.py",
+      "category": "scripts_and_tools",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Executable operational/validation script (scripts/fc27_demo_fixture_server.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Loopback-only (127.0.0.1) synthetic FC 27 fixture HTTP server for deterministic demo scenarios",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
+      "path": "scripts/fc27_demo_ingest.py",
+      "category": "scripts_and_tools",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Executable operational/validation script (scripts/fc27_demo_ingest.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "One-shot FC 27 ingestion and Search/Scout/Analyst demo CLI",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
       "path": "scripts/fc27_user_export_import.py",
       "category": "operational_script",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1345,6 +1385,26 @@
       "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
     },
     {
+      "path": "src/fc27_demo.py",
+      "category": "executable_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative runtime implementation module (src/fc27_demo.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Loopback transport, one-shot ingestion pipeline, optional PostgreSQL persistence gate, and Search/Scout/Analyst orchestration",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
+      "path": "src/fc27_demo_api.py",
+      "category": "executable_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative runtime implementation module (src/fc27_demo_api.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Loopback-only FastAPI demo routes and self-contained HTML inspection view gated by FC27_DEMO_MODE",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
       "path": "src/fc27_mcp_server.py",
       "category": "runtime_source",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1383,6 +1443,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "src/fc27_search_scout.py",
+      "category": "source_code",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative East Coasters Search and Scout analytical foundation (src/fc27_search_scout.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active pure deterministic Search context and Scout evidence/hypothesis module",
+      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
     },
     {
       "path": "src/fc27_user_export.py",
@@ -2735,6 +2805,16 @@
       "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
     },
     {
+      "path": "tests/test_fc27_demo.py",
+      "category": "automated_tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Automated verification suite (tests/test_fc27_demo.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "80 end-to-end and adversarial tests for the FC 27 one-shot ingestion and analytics demo",
+      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
       "path": "tests/test_fc27_operator_capture.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -2773,26 +2853,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
-    },
-    {
-      "path": "config/fc27_safe_adapter_bundle_manifest.json",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository-native FC 27 safe adapter bundle provenance manifest (config/fc27_safe_adapter_bundle_manifest.json)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active machine-readable provenance and component manifest for the verified FC 27 safe adapter bundle",
-      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
-    },
-    {
-      "path": "src/fc27_search_scout.py",
-      "category": "source_code",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative East Coasters Search and Scout analytical foundation (src/fc27_search_scout.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active pure deterministic Search context and Scout evidence/hypothesis module",
-      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
     },
     {
       "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",

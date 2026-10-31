@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
-- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
+- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
 - **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
@@ -148,7 +148,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 
 ### 5.3 Provider, Analytics, Recommendation, & Dispatch Boundaries
 - **Provider Boundary**: No browser/TLS impersonation sidecar is part of the production architecture. The experimental `feature/fc27-proclubs-sdk-sidecar` branch was evaluated and **rejected** for merge to `main`. The verified safe-adapter bundle (`iwa.dev.fcbuild-safe-adapter-verified.zip`, SHA-256 `eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`) is integrated strictly as tracked repository-native Python modules (`src/fc27_*.py`) governed by `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`) and `THIRD_PARTY_NOTICES.md`, while any local ZIP archive or inspection workspace under `.local-artifacts/` remains git-ignored, unreferenced at runtime, and never required by CI.
-- **Analytics Boundary**: Pure deterministic calculations (`src/fc27_analytics.py`), Search/Scout foundation (`src/fc27_search_scout.py`), Analyst evidence synthesis (`src/fc27_analyst.py`), and read-only SQL queries (`src/fc27_dashboard_queries.py`) cannot mutate database state, enable recommendations, or expose unconsented aliases.
+- **Analytics Boundary**: Pure deterministic calculations (`src/fc27_analytics.py`), Search/Scout foundation (`src/fc27_search_scout.py`), Analyst evidence synthesis (`src/fc27_analyst.py`), read-only SQL queries (`src/fc27_dashboard_queries.py`), and the local loopback-only one-shot ingestion and analytics demo (`src/fc27_demo.py`, `src/fc27_demo_api.py`, `scripts/fc27_demo_fixture_server.py`, `scripts/fc27_demo_ingest.py`; documented in [`docs/FC27_DEMO.md`](FC27_DEMO.md)) cannot mutate database state unless both `--persist` and `FC27_PERSISTENCE_ENABLED=true` are enabled, and never enable recommendations, approvals, or dispatch.
 - **Recommendation & Tactical Hypothesis Boundary**: External FC 27 formations (`4-2-1-3`, `4-1-2-1-2 Narrow`), player roles, attribute thresholds, PlayStyle+ claims, and tactics codes are cataloged as `EXTERNAL_TACTICAL_HYPOTHESIS` (`NOT_APPROVABLE`) in [`docs/FC27_TACTICAL_HYPOTHESES.md`](FC27_TACTICAL_HYPOTHESES.md).
 - **Dispatch Boundary**: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are enforced at startup and in `/health/ready`.
 

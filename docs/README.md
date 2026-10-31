@@ -65,6 +65,7 @@ Welcome to the authoritative documentation directory for **`iwa.dev.fcbuild`**. 
 ## 8. Analytics
 
 - **[`FC27_ANALYTICS.md`](FC27_ANALYTICS.md)** — Deterministic pure analytics engine (`FORMULA_VERSION = "fc27-v1.0"`, `src/fc27_analytics.py`), Search and Scout analytical foundation (`src/fc27_search_scout.py`), Analyst evidence synthesis (`src/fc27_analyst.py`, `analyst_evidence_node`), `COMPLETED`-only match eligibility, 5-tier sample-size confidence model (`INSUFFICIENT_DATA`, `EXPLORATORY`, `LOW_CONFIDENCE`, `MODERATE_CONFIDENCE`, `HIGH_CONFIDENCE`), last-20 baseline, last-5 recent form, 730-day rolling horizon, and PostgreSQL `READ ONLY` dashboard/reader queries (`src/fc27_dashboard_queries.py`).
+- **[`FC27_DEMO.md`](FC27_DEMO.md)** — End-to-end East Coasters FC 27 one-shot synthetic ingestion and analytics demo (`scripts/fc27_demo_fixture_server.py`, `scripts/fc27_demo_ingest.py`, `src/fc27_demo.py`, `src/fc27_demo_api.py`, `tests/test_fc27_demo.py`).
 
 ---
 

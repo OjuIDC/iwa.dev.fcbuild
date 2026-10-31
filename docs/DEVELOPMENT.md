@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Contributors
-- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
+- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
 - **Source of truth**: `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `scripts/`, `tests/`
 - **Supersedes**: `NONE`
 
@@ -65,10 +65,20 @@ docker rm -f fc27-test-postgres
   tests/test_fc27_authorized_provider.py `
   tests/test_fc27_authorized_api.py -q
 
-# FC 27 Search and Scout analytical foundation
+# FC 27 Search, Scout, Analyst, and One-Shot Ingestion Demo
 .\.venv\Scripts\pytest.exe tests/test_fc27_search.py `
   tests/test_fc27_scout.py `
-  tests/test_fc27_search_scout_graph.py -q
+  tests/test_fc27_search_scout_graph.py `
+  tests/test_fc27_analyst.py `
+  tests/test_fc27_analyst_graph.py `
+  tests/test_fc27_demo.py -q
+
+# Start the local loopback Demo API (requires FC27_DEMO_MODE=true; canonical factory create_demo_app)
+$env:FC27_DEMO_MODE = "true"
+.\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app `
+  --factory `
+  --host 127.0.0.1 `
+  --port 8001
 
 # Pre-approval validator, operator capture, and user export
 .\.venv\Scripts\pytest.exe tests/test_fc27_preapproval_validator.py `

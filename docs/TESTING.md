@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, QA Engineers, Security Reviewers
-- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
+- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
 - **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_documentation_consistency.py`, `scripts/check_matchpulse_boundary.py`
 - **Supersedes**: `docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`
 
@@ -73,6 +73,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_fc27_dashboard_queries.py` — Read-only dashboard queries (`src/fc27_dashboard_queries.py`), `READ ONLY` transaction enforcement, `5000ms` statement timeout, rolling windows (`<= 730` days), and alias suppression.
 - `tests/test_fc27_search.py`, `tests/test_fc27_scout.py`, `tests/test_fc27_search_scout_graph.py` — Deterministic Search context assembly (`build_fc27_search_context`), Scout evidence metrics and observational hypotheses (`build_fc27_scout_report`), `FC27AnalyticsReader` (`InMemoryFC27AnalyticsReader` and `PostgresFC27AnalyticsReader`), and LangGraph `search_node` / `scout_node` adapters (`106` focused tests across items `1`–`105` + PostgreSQL 16 reader integration).
 - `tests/test_fc27_analyst.py`, `tests/test_fc27_analyst_graph.py` — Deterministic Analyst evidence validation (`validate_analyst_input`, `detect_evidence_contradictions`), clustering (`build_evidence_clusters`), counter-evidence (`analyze_counter_evidence`), confounders (`identify_confounders`), competing explanations (`generate_competing_explanations`), data gaps (`identify_data_gaps`), unresolved questions (`generate_unresolved_questions`), bounded observational finding synthesis (`build_fc27_analyst_report`), language safety validation (`validate_analyst_evidence_language`), and LangGraph `analyst_evidence_node` adapter (`129` focused tests across items `1`–`128` + PostgreSQL 16 end-to-end `PostgresFC27AnalyticsReader -> search_node -> scout_node -> analyst_evidence_node` integration).
+- `tests/test_fc27_demo.py` — `80` end-to-end and adversarial tests verifying the loopback synthetic FC 27 fixture server (`scripts/fc27_demo_fixture_server.py`), one-shot ingestion CLI (`scripts/fc27_demo_ingest.py`), bounded loopback transport (`src/fc27_demo.py`), cache/rate-limit/budget/circuit-breaker integration, optional PostgreSQL 16 persistence gate (`--persist` + `FC27_PERSISTENCE_ENABLED=true`), live-probe non-execution (`LIVE_PROBE_EXECUTED=NO`), and the local Demo API & HTML view (`src/fc27_demo_api.py`).
 - `tests/test_fc27_preapproval_validator.py` — Deterministic pre-approval coaching package validation (`src/fc27_coaching.py`) and tactical hypothesis blocking.
 - `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_clubs_compatibility.py`, `tests/test_fc27_platform.py` — Offline export validation, CSV formula-injection defense, operator capture normalization, and ADR/pilot-package compatibility checks.
 

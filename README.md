@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
-- **Last verified commit**: `b0ff4bae36ab1f31defe2f39682eb105e30254e5`
+- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
 - **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
 - **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
 
@@ -40,6 +40,7 @@
 3. **Human Identity, WebAuthn Step-Up, & CLI HMAC Verification**: Phase 2 user/session/passkey/TOTP/delegation store (`src/identity/`), 14-field bound `fc27_decision_evidence` with mandatory WebAuthn User Verification (`require_user_verification=True`), and constant-time symmetric HMAC-SHA256 verification (`src/approval.py`, `scripts/commissioner_decide.py`).
 4. **FC 27 Safe Provider Adapter & Contracts**: 11 fixed endpoint operations, 13 strict response schemas, match event bitmap (`ev`) decoder, `plr_ecf_<12-hex>` pseudonymization with collision detection (`PSEUDONYM_COLLISION`), `FC27SourceProvenance`, bounded normalized cache, token-bucket rate limiter, request budget, circuit breaker, and pure retry classifier.
 5. **Normalized Performance Storage, Read-Only Analytics, Search/Scout Foundation, & Analyst Evidence Synthesis**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "fc27-v1.0"`), deterministic Search context assembly and Scout evidence/hypothesis synthesis (`src/fc27_search_scout.py`, `FC27AnalyticsReader`, `search_node`, `scout_node`), deterministic Analyst evidence validation, clustering, counter-evidence, confounder/uncertainty analysis, and bounded observational finding synthesis (`src/fc27_analyst.py`, `analyst_evidence_node`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval coaching validation (`src/fc27_coaching.py`).
+6. **Local FC 27 One-Shot Ingestion & Analytics Demo**: Loopback synthetic FC 27 fixture server (`scripts/fc27_demo_fixture_server.py`), one-shot ingestion CLI (`scripts/fc27_demo_ingest.py`), vertical demo pipeline (`src/fc27_demo.py`), and loopback-only Demo API & self-contained HTML inspection view (`src/fc27_demo_api.py`, canonical ASGI factory `src.fc27_demo_api:create_demo_app`, gated by `FC27_DEMO_MODE=false` by default; documented in [`docs/FC27_DEMO.md`](docs/FC27_DEMO.md)).
 
 ## 6. Disabled Capabilities
 
@@ -101,9 +102,9 @@ All external networking, persistence writes, analytics execution, recommendation
 
 ## 10. Testing
 
-- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, Provider, Search/Scout, & Analyst Tests (No DB required)**:
+- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, Provider, Search/Scout, Analyst, & Demo Tests (No DB required)**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py -q
+  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_demo.py -q
   ```
 - **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
   ```powershell
@@ -161,7 +162,7 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 - **Architecture & Status**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/FC27_COMPONENT_STATUS.md`](docs/FC27_COMPONENT_STATUS.md), [`docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`](docs/ADR_FC27_EAST_COASTERS_PLATFORM.md)
 - **Development, Testing, & Operations**: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`docs/TESTING.md`](docs/TESTING.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md), [`TEST_RESULTS.md`](TEST_RESULTS.md)
 - **Security & Feature Flags**: [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md), [`docs/FEATURE_FLAGS.md`](docs/FEATURE_FLAGS.md), [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md), [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md), [`SECURITY.md`](SECURITY.md)
-- **Provider, Data Model, Analytics, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
+- **Provider, Data Model, Analytics, Demo, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_DEMO.md`](docs/FC27_DEMO.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
 - **Dispatch, Offline Export, Voice, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md), [`docs/VOICE_CAPABILITIES.md`](docs/VOICE_CAPABILITIES.md), [`docs/archive/README.md`](docs/archive/README.md)
 
 ## 16. Current Limitations
