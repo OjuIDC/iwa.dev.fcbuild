@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
-  "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
-  "total_files": 328,
+  "base_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0",
+  "total_files": 333,
   "files": [
     {
       "path": ".gitattributes",
@@ -185,6 +185,16 @@
       "last_relevant_commit": "7649f98701947addbe09403d93cbebb5856d06b3"
     },
     {
+      "path": "config/fc27_archive_manifest.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Machine-readable archive manifest (config/fc27_archive_manifest.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Machine-readable registry of archived files and branch-only provider research records",
+      "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
+    },
+    {
       "path": "config/fc27_east_coasters_normalized_export.schema.json",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -193,6 +203,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "config/fc27_removed_items_manifest.json",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Machine-readable removed-items proof manifest (config/fc27_removed_items_manifest.json)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Machine-readable registry of proven dead/duplicate files removed from the repository",
+      "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
     },
     {
       "path": "config/fc27_safe_adapter_bundle_manifest.json",
@@ -545,16 +565,6 @@
       "last_relevant_commit": "f2fd35d60dc73412437f45def0c7f305837404be"
     },
     {
-      "path": "docs/WINDHOVER_INTEGRATION_GAP.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/WINDHOVER_INTEGRATION_GAP.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "d4e50424c1be3a305b6fb6edc67eebf4d5a7b333"
-    },
-    {
       "path": "docs/archive/ARCHIVE_MANIFEST.md",
       "category": "archive_index",
       "status": "CURRENT_AUTHORITATIVE",
@@ -625,6 +635,36 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
+      "path": "docs/archive/experiments/WINDHOVER_INTEGRATION_GAP.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Historical unimplemented Windhover contract gap note (docs/archive/experiments/WINDHOVER_INTEGRATION_GAP.md)",
+      "replacement_path": "docs/FC27_COMPONENT_STATUS.md",
+      "archive_decision": "ARCHIVE_TO_DOCS_ARCHIVE",
+      "reason": "Historical 2026-10-01 unimplemented Windhover contract gap note; not part of the supported FC27 community-provider architecture.",
+      "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "docs/archive/phases/installer.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Historical v2.0.0 Windows host-agent installer phase note (docs/archive/phases/installer.md)",
+      "replacement_path": "docs/DEVELOPMENT.md",
+      "archive_decision": "ARCHIVE_TO_DOCS_ARCHIVE",
+      "reason": "Historical v2.0.0 Windows host-agent installer phase note; retained in archive for historical context.",
+      "last_relevant_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81"
+    },
+    {
+      "path": "docs/archive/phases/watcher_ocr_rundown.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Historical v2.0.0 watcher, OCR, and rundown phase note (docs/archive/phases/watcher_ocr_rundown.md)",
+      "replacement_path": "docs/FC27_COMPONENT_STATUS.md",
+      "archive_decision": "ARCHIVE_TO_DOCS_ARCHIVE",
+      "reason": "Historical v2.0.0 watcher/OCR/rundown phase note; non-primary legacy subsystem outside the current FC27 community-provider path.",
+      "last_relevant_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81"
+    },
+    {
       "path": "docs/archive/plans/2026-10-02-player-dispatch-design.md",
       "category": "archived_documentation",
       "status": "ARCHIVED_HISTORICAL",
@@ -653,6 +693,16 @@
       "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
       "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/archive/providers/mcp_ws.md",
+      "category": "archived_documentation",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Historical v2.0.0 MCP proxy and EA retry note (docs/archive/providers/mcp_ws.md)",
+      "replacement_path": "docs/FC27_PROVIDER_INTEGRATION.md",
+      "archive_decision": "ARCHIVE_TO_DOCS_ARCHIVE",
+      "reason": "Historical v2.0.0 PR implementation note for early MCP proxy and EA retry wiring; superseded by current security and provider documentation.",
+      "last_relevant_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81"
     },
     {
       "path": "docs/archive/reports/BUNDLE_AUDIT.md",
@@ -753,36 +803,6 @@
       "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
       "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
-      "path": "docs/notes/installer.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/notes/installer.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "e4aac9b530d24a50e5f1c2bfee5fb1261359daeb"
-    },
-    {
-      "path": "docs/notes/mcp_ws.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/notes/mcp_ws.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "d52a8b8d1eaee4a75fe13692ee9daf913c5a4c9f"
-    },
-    {
-      "path": "docs/notes/watcher_ocr_rundown.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/notes/watcher_ocr_rundown.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "1ea4cbae92a28030169707fd6541219e98cd95fb"
     },
     {
       "path": "docs/repository_inventory.json",
@@ -1005,6 +1025,26 @@
       "last_relevant_commit": "5487dde091961a7312d71052f34b0c798a50fcf0"
     },
     {
+      "path": "scripts/README.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative index of active and archived repository scripts (scripts/README.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Classifies every active script in scripts/ and archived scripts in scripts/archive/",
+      "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
+    },
+    {
+      "path": "scripts/archive/experiments/matchpulse_conformance.py",
+      "category": "archived_script",
+      "status": "ARCHIVED_HISTORICAL",
+      "authoritative_role": "Archived placeholder MatchPulse conformance script (scripts/archive/experiments/matchpulse_conformance.py)",
+      "replacement_path": "scripts/check_matchpulse_boundary.py",
+      "archive_decision": "ARCHIVE_TO_SCRIPTS_ARCHIVE",
+      "reason": "Superseded placeholder MatchPulse conformance script; active repository isolation is enforced by scripts/check_matchpulse_boundary.py.",
+      "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
       "path": "scripts/check_documentation_consistency.py",
       "category": "scripts_and_tooling",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1093,16 +1133,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active CLI helper verified by regression tests",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
-    },
-    {
-      "path": "scripts/matchpulse_conformance.py",
-      "category": "operational_script",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative CLI or boundary check script (scripts/matchpulse_conformance.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active CLI helper verified by regression tests",
-      "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
     },
     {
       "path": "scripts/model_health.py",
@@ -2815,6 +2845,16 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
+      "path": "tests/test_fc27_archive_manifest.py",
+      "category": "test_suite",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Automated archive manifest and notice verification suite (tests/test_fc27_archive_manifest.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Verifies archive manifest, archive notices, non-reachability, and current real-data path modules",
+      "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
+    },
+    {
       "path": "tests/test_fc27_authorized_api.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -2933,6 +2973,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "7f572bffe74515ded56fef661010321b94199155"
+    },
+    {
+      "path": "tests/test_fc27_repository_cleanup.py",
+      "category": "test_suite",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Automated repository cleanup and current-path boundary suite (tests/test_fc27_repository_cleanup.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Verifies repository cleanup invariants, logic consolidation, inventory sync, and entrypoint resolution",
+      "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
     },
     {
       "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",
