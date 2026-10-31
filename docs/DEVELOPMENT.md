@@ -2,9 +2,9 @@
 
 - **Status**: Current
 - **Audience**: Developers, Contributors
-- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
+- **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `scripts/`, `tests/`
-- **Supersedes**: `NONE`
+- **Supersedes**: `docs/archive/phases/installer.md`
 
 This guide covers setting up a local development environment for `iwa.dev.fcbuild`, running focused and full test suites, validating Docker Compose configurations, and following repository contribution boundaries.
 

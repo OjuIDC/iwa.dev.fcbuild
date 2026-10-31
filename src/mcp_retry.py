@@ -3,7 +3,7 @@ mcp_retry.py
 ============
 Bounded retry policy for upstream EA calls made by the MCP proxy.
 
-Rules (see docs/notes/mcp_ws.md):
+Rules (see docs/FC27_PROVIDER_INTEGRATION.md and docs/SECURITY_BOUNDARIES.md):
   * 429            -> honor a valid Retry-After (delta-seconds or HTTP-date),
                       capped at ``max_retry_after``; otherwise exponential
                       backoff with jitter.

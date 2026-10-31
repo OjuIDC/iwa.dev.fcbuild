@@ -43,6 +43,7 @@ from src.fc27_clubs_api_contracts import (
     TARGET_GAME_VERSION,
     TARGET_PLATFORM,
 )
+from src.fc27_community_provider import LIVE_EA_CLUBS_COMMUNITY_CLIENT
 from src.fc27_demo import (
     DEFAULT_DEMO_STATE_STORE,
     DEMO_DEFAULT_GENERATED_AT,
@@ -144,14 +145,29 @@ def _ensure_artifacts(
     )
 
 
+LIVE_EA_CLUBS_COMMUNITY_CLIENT_LABEL: Final[str] = (
+    "Live EA Clubs Data via pinned community client"
+)
+SYNTHETIC_FIXTURE_LABEL: Final[str] = "Synthetic Fixture Data"
+
+
 def _resolve_source_classification(source_mode: str) -> str:
     if source_mode in (
-        "LIVE_EA_CLUBS_COMMUNITY_CLIENT",
+        LIVE_EA_CLUBS_COMMUNITY_CLIENT,
         "LIVE_EA_CLUBS_READ_ONLY",
         "LIVE_EA_CLUBS_BROWSER_OBSERVED",
     ):
         return source_mode
     return "SYNTHETIC_FIXTURE"
+
+
+def resolve_dashboard_source_label(source_cls: str, *, include_mode_suffix: bool = False) -> str:
+    """Resolves the human-readable dashboard source banner label from source classification."""
+    if source_cls == LIVE_EA_CLUBS_COMMUNITY_CLIENT:
+        if include_mode_suffix:
+            return f"{LIVE_EA_CLUBS_COMMUNITY_CLIENT_LABEL} ({source_cls})"
+        return LIVE_EA_CLUBS_COMMUNITY_CLIENT_LABEL
+    return SYNTHETIC_FIXTURE_LABEL
 
 
 def _build_status_dict(
@@ -170,11 +186,7 @@ def _build_status_dict(
         "source_mode": res.source_mode,
         "source_classification": source_cls,
         "synthetic_data_classification": source_cls,
-        "source_label": (
-            "Live EA Clubs Data via pinned community client"
-            if source_cls == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
-            else "Synthetic Fixture Data"
-        ),
+        "source_label": resolve_dashboard_source_label(source_cls),
         "club_identity": dict(res.identity),
         "last_operation": artifacts.last_operation,
         "last_ingestion_time": last_ingested_at,
@@ -356,10 +368,9 @@ def _render_demo_html(
         )
     gaps_html = "\n".join(gap_items) if gap_items else "<li>No data gaps recorded.</li>"
 
-    banner_label = (
-        f"Live EA Clubs Data via pinned community client ({artifacts.result.source_mode})"
-        if artifacts.result.source_mode == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
-        else "Synthetic Fixture Data"
+    banner_label = resolve_dashboard_source_label(
+        artifacts.result.source_mode,
+        include_mode_suffix=True,
     )
     return f"""<!DOCTYPE html>
 <html lang="en">

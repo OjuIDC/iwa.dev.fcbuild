@@ -1,0 +1,52 @@
+{
+  "manifest_version": "fc27-removed-items-manifest-v1",
+  "generated_on": "2026-10-31",
+  "deleted_in_current_phase_count": 0,
+  "removed_items": [
+    {
+      "path": "src/agency_org.py",
+      "classification": "DEAD_CODE_PROVEN",
+      "deleted_in_current_phase": false,
+      "proof_summary": "Zero direct imports, zero transitive imports, zero dynamic imports, zero CLI/Docker/Compose/workflow/test/documentation references; superseded by src/graph.py and src/schemas.py.",
+      "replacement": "src/graph.py",
+      "last_commit": "d4e50424c1be305b6fb6edc67eebf4d5a7b333",
+      "reason": "Superseded early agency prototype module removed after typed LangGraph workflow stabilization.",
+      "tests_run": [
+        "tests/test_archive_integrity.py",
+        "tests/test_workflow.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "rollback_method": "git checkout d4e50424c1be305b6fb6edc67eebf4d5a7b333~1 -- src/agency_org.py"
+    },
+    {
+      "path": ".env.models.example",
+      "classification": "DUPLICATE",
+      "deleted_in_current_phase": false,
+      "proof_summary": "Zero runtime, Docker, Compose, workflow, or test references; model environment settings consolidated into config.example.env.",
+      "replacement": "config.example.env",
+      "last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "reason": "Duplicate model configuration template consolidated into authoritative config.example.env.",
+      "tests_run": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "rollback_method": "git checkout 92c540ab19d538e9a5783e096357b6783e2701da~1 -- .env.models.example"
+    },
+    {
+      "path": "requirements-test.txt",
+      "classification": "DUPLICATE",
+      "deleted_in_current_phase": false,
+      "proof_summary": "Zero workflow, Docker, Compose, or packaging references; test dependencies declared in pyproject.toml [project.optional-dependencies].dev and requirements.txt.",
+      "replacement": "pyproject.toml",
+      "last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "reason": "Duplicate dependency list superseded by pyproject.toml and requirements.txt.",
+      "tests_run": [
+        "tests/test_packaging.py",
+        "tests/test_archive_integrity.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "rollback_method": "git checkout 92c540ab19d538e9a5783e096357b6783e2701da~1 -- requirements-test.txt"
+    }
+  ]
+}

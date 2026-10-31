@@ -2,7 +2,7 @@
 
 - **Status**: Current
 - **Audience**: Operators, Developers, Security Reviewers
-- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
+- **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `src/settings.py`, `src/graph_api.py`, `config.example.env`, `docker-compose.yml`
 - **Supersedes**: `NONE`
 

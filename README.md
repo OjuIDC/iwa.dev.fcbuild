@@ -2,9 +2,51 @@
 
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
-- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
+- **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
 - **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
+
+## 0. Five-Minute Operator Quickstart (Current Real-Data Path)
+
+For **East Coasters (`CLUB_ID=330323`, `PLATFORM=common-gen5`, `GAME_VERSION=FC27`)**, the working end-to-end architecture is:
+
+```text
+pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUNITY_CLIENT)
+  -> repository endpoint contracts & schema validation (src/fc27_clubs_api_contracts.py)
+  -> normalization, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
+  -> optional single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
+  -> Search context assembly (src/fc27_search_scout.py)
+  -> Scout evidence synthesis (src/fc27_search_scout.py)
+  -> Analyst evidence synthesis (src/fc27_analyst.py)
+  -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app)
+```
+
+1. **Working Provider & How to Run It (`scripts/fc27_community_eval.py`)**:
+   - Provider ID: `fc-clubs-api-community-v1` (`LIVE_EA_CLUBS_COMMUNITY_CLIENT`, documented in [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md)).
+   - Run deterministic offline verification (zero network requests):
+     ```powershell
+     .\.venv\Scripts\python.exe scripts/fc27_community_eval.py --operation mock-eval
+     ```
+2. **Start Disposable PostgreSQL 16 & Run Persistence / Analytics (`Search -> Scout -> Analyst`)**:
+   ```powershell
+   docker run -d --name fc27-test-postgres -e POSTGRES_USER=fc27test -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:16 -c max_connections=300
+   $env:TEST_POSTGRES_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
+   $env:TEST_POSTGRES_ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
+   .\.venv\Scripts\python.exe scripts/fc27_demo_ingest.py --source fixture --operation full-demo --scenario valid
+   ```
+3. **Start the Existing Local Dashboard (`src.fc27_demo_api:create_demo_app`)**:
+   ```powershell
+   $env:FC27_DEMO_MODE = "true"
+   .\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app --factory --host 127.0.0.1 --port 8001
+   # Open http://127.0.0.1:8001/demo , /demo/status , /demo/matches , /demo/analysis
+   ```
+4. **Run Tests**:
+   ```powershell
+   .\.venv\Scripts\pytest.exe tests/test_fc27_community_provider.py tests/test_fc27_pandas_view.py tests/test_fc27_demo.py -q
+   ```
+5. **Disabled Features & Historical Material**:
+   - Continuous polling, browser scraping, raw response storage, player aliases/handles, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and player dispatch (`DISPATCH_ENABLED=false`) remain **disabled**.
+   - Historical and superseded documents/scripts live in [`docs/archive/README.md`](docs/archive/README.md), [`docs/archive/ARCHIVE_MANIFEST.md`](docs/archive/ARCHIVE_MANIFEST.md), and `scripts/archive/` (indexed in [`scripts/README.md`](scripts/README.md)).
 
 ## 1. Project Purpose
 
