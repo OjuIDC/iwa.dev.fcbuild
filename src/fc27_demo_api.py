@@ -144,6 +144,16 @@ def _ensure_artifacts(
     )
 
 
+def _resolve_source_classification(source_mode: str) -> str:
+    if source_mode in (
+        "LIVE_EA_CLUBS_COMMUNITY_CLIENT",
+        "LIVE_EA_CLUBS_READ_ONLY",
+        "LIVE_EA_CLUBS_BROWSER_OBSERVED",
+    ):
+        return source_mode
+    return "SYNTHETIC_FIXTURE"
+
+
 def _build_status_dict(
     artifacts: FC27DemoSessionArtifacts,
     store: FC27DemoStateStore,
@@ -152,8 +162,8 @@ def _build_status_dict(
     cache_metrics = store.cache.metrics()
     return {
         "demo_enabled": res.demo_mode,
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": res.source_mode,
+        "synthetic_data_classification": _resolve_source_classification(res.source_mode),
         "club_identity": dict(res.identity),
         "last_operation": artifacts.last_operation,
         "scenario": artifacts.scenario,
@@ -184,8 +194,8 @@ def _build_status_dict(
 
 def _build_matches_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
     return {
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": artifacts.result.source_mode,
+        "synthetic_data_classification": _resolve_source_classification(artifacts.result.source_mode),
         "club_identity": {
             "club_id": TARGET_CLUB_ID,
             "club_name": TARGET_CLUB_NAME,
@@ -230,8 +240,8 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
             counter_evidence_items.append(ce_dump)
 
     return {
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": artifacts.result.source_mode,
+        "synthetic_data_classification": _resolve_source_classification(artifacts.result.source_mode),
         "formula_version": FORMULA_VERSION,
         "ranking_policy_version": RANKING_POLICY_VERSION,
         "analyst_synthesis_version": ANALYST_SYNTHESIS_VERSION,
@@ -325,6 +335,11 @@ def _render_demo_html(
         )
     gaps_html = "\n".join(gap_items) if gap_items else "<li>No data gaps recorded.</li>"
 
+    banner_label = (
+        f"Community Client Data ({artifacts.result.source_mode})"
+        if artifacts.result.source_mode == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
+        else "Synthetic Fixture Data"
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -350,9 +365,9 @@ def _render_demo_html(
 </head>
 <body>
   <div class="banner-bar">
-    <div class="banner banner-fixture" id="banner-synthetic-fixture">Synthetic Fixture Data</div>
+    <div class="banner banner-fixture" id="banner-synthetic-fixture">{esc(banner_label)}</div>
     <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled</div>
-    <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(DEMO_FIXTURE_LOOPBACK)} (East Coasters 330323 / common-gen5 / FC27)</div>
+    <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(artifacts.result.source_mode)} (East Coasters 330323 / common-gen5 / FC27)</div>
   </div>
 
   <h1>East Coasters FC 27 Local Ingestion &amp; Analytics Demo</h1>
