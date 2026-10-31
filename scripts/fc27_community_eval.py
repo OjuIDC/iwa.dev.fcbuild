@@ -11,6 +11,7 @@ Coach, Tactics, Director, recommendations, or dispatch.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 from typing import Dict, List, Optional
@@ -34,6 +35,7 @@ from src.fc27_community_provider import (
     FC27CommunityProviderAdapter,
     FC27LiveProbeBlockedError,
     LIVE_EA_CLUBS_COMMUNITY_CLIENT,
+    build_community_persistence_preview,
     build_demo_session_artifacts_from_community_envelope,
     ingest_community_provider_envelope,
     is_fc27_community_provider_enabled,
@@ -265,15 +267,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     player_stat_rows = sum(
         len(rec.get("player_statistics", [])) for rec in match_env.normalized_records
     )
+    pg_uri = os.environ.get("FC27_COMMUNITY_POSTGRES_URI") if args.persist else None
+    preview = build_community_persistence_preview(
+        match_env,
+        match_envelopes=adapter.last_match_envelopes,
+        postgres_conn_or_uri=pg_uri,
+    )
     summary, _, _, _ = ingest_community_provider_envelope(
         match_env,
         match_envelopes=adapter.last_match_envelopes,
         persist=args.persist,
+        postgres_conn=pg_uri,
+        enforce_posture=False,
     )
     _ = build_demo_session_artifacts_from_community_envelope(
         match_env,
         request_count=adapter.total_requests_executed,
         circuit_state=adapter.circuit_state,
+        persistence_status="APPLIED" if summary.persistence_executed == "YES" else "SKIPPED_BY_DEFAULT",
     )
 
     print("MATCH_REQUEST_EXECUTED=YES")
@@ -287,11 +298,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"ACCEPTED_MATCH_COUNT={match_env.accepted_record_count}")
     print(f"REJECTED_MATCH_COUNT={match_env.rejected_record_count}")
     print(f"PLAYER_STAT_ROW_COUNT={player_stat_rows}")
+    print(f"EARLIEST_MATCH={preview.earliest_match}")
+    print(f"LATEST_MATCH={preview.latest_match}")
+    print(f"MATCH_TYPES={','.join(preview.match_types)}")
+    print(f"DUPLICATE_PLAN={preview.duplicate_plan}")
+    print(f"CONFLICT_PLAN={preview.conflict_plan}")
     print(f"MATCH_PAYLOAD_HASH={match_env.payload_hash}")
     print("PLAYER_MATCH_LIVE_REQUEST_EXECUTED=NO")
     print("PERSISTENCE_ENABLED_BY_DEFAULT=NO")
     print(f"PERSISTENCE_EXECUTED={summary.persistence_executed}")
     print(f"DATABASE_ROWS_WRITTEN={summary.database_rows_written}")
+    print(f"MATCH_ROWS_INSERTED={summary.match_rows_inserted}")
+    print(f"TEAM_STAT_ROWS_INSERTED={summary.team_stat_rows_inserted}")
+    print(f"PLAYER_STAT_ROWS_INSERTED={summary.player_stat_rows_inserted}")
+    print(f"DUPLICATES_IGNORED={summary.duplicates_ignored}")
+    print(f"REPLAY_CONFLICTS={summary.replay_conflicts}")
     print(f"SEARCH_EXECUTED={summary.search_executed}")
     print(f"SCOUT_EXECUTED={summary.scout_executed}")
     print(f"ANALYST_EXECUTED={summary.analyst_executed}")

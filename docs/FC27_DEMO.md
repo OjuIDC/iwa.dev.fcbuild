@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Developers, Operators, Reviewers
 - **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
-- **Source of truth**: `src/fc27_demo.py`, `src/fc27_demo_api.py`, `scripts/fc27_demo_fixture_server.py`, `scripts/fc27_demo_ingest.py`, `tests/test_fc27_demo.py`
+- **Source of truth**: `src/fc27_demo.py`, `src/fc27_demo_api.py`, `src/fc27_community_provider.py`, `scripts/fc27_demo_fixture_server.py`, `scripts/fc27_demo_ingest.py`, `tests/test_fc27_demo.py`
 - **Supersedes**: `NONE`
 
 This guide documents the local, loopback-only East Coasters FC 27 one-shot ingestion and analytics demonstration vertical slice (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`).

@@ -63,3 +63,4 @@ The local East Coasters FC 27 one-shot ingestion and analytics demo (`src/fc27_d
 - **`FC27_DEMO_MAX_RETRIES`** (default `0`; accepted `0`): Prohibits transport retries (`get_fc27_demo_max_retries()`).
 - **`FC27_DEMO_RAW_RESPONSE_RETENTION`** (default `false`; accepted `false` only): Prohibits raw HTTP response retention (`is_fc27_demo_raw_response_retention_enabled()`); setting `true` fails closed with `RAW_RESPONSE_RETENTION_FORBIDDEN`.
 - **`FC27_DEMO_PORT`** (default `8097`; accepted `0` or `1024..65535`): Local port for `src/fc27_demo_api.py` (`get_fc27_demo_port()`).
+- **`FC27_COMMUNITY_PROVIDER_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for the bounded one-shot community client wrapper in `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` (`is_fc27_community_provider_enabled()`). Requires explicit `--confirm` on the CLI; see [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).

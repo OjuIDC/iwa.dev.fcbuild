@@ -69,7 +69,7 @@ from src.fc27_provider import (
     FC27ProviderError,
     FC27TransportError,
 )
-from src.fc27_repository import FC27ReplayConflictError, apply_export_plan
+from src.fc27_repository import FC27ReplayConflictError, apply_export_plan, load_import_state
 from src.fc27_search_scout import (
     FC27AnalysisIdentity,
     FC27PrivacyViolationError,
@@ -1716,6 +1716,44 @@ class FC27CommunityProviderAdapter:
 # =====================================================================
 
 
+class FC27CommunityPersistencePreview(BaseModel):
+    """Metadata-only pre-persistence preview (`PART I`)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_id: str = COMMUNITY_PROVIDER_ID
+    source_classification: Literal["LIVE_EA_CLUBS_COMMUNITY_CLIENT"] = LIVE_EA_CLUBS_COMMUNITY_CLIENT  # type: ignore[assignment]
+    club_id: str = TARGET_CLUB_ID
+    club_name: str = TARGET_CLUB_NAME
+    platform: str = TARGET_PLATFORM
+    game_version: str = TARGET_GAME_VERSION
+    match_count: int = Field(ge=0)
+    player_stat_row_count: int = Field(ge=0)
+    earliest_match: str
+    latest_match: str
+    match_types: Tuple[str, ...]
+    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalization_status: Literal["PASS", "FAIL"]
+    privacy_status: Literal["PASS", "FAIL"]
+    duplicate_plan: int = Field(ge=0)
+    conflict_plan: int = Field(ge=0)
+
+
+class FC27CommunityPersistenceApplySummary(BaseModel):
+    """Transactional persistence summary for a validated community provider batch (`PART J` & `PART K`)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    live_data_persisted: Literal["YES", "NO"]
+    match_rows_inserted: int = Field(ge=0)
+    team_stat_rows_inserted: int = Field(ge=0)
+    player_stat_rows_inserted: int = Field(ge=0)
+    duplicates_ignored: int = Field(ge=0)
+    replay_conflicts: int = Field(ge=0)
+    idempotent_duplicate: bool = False
+    export_id: str
+
+
 class FC27CommunityPipelineResult(BaseModel):
     """Summary of running validated community provider records through Search -> Scout -> Analyst."""
 
@@ -1724,6 +1762,11 @@ class FC27CommunityPipelineResult(BaseModel):
     source_classification: Literal["LIVE_EA_CLUBS_COMMUNITY_CLIENT"] = LIVE_EA_CLUBS_COMMUNITY_CLIENT  # type: ignore[assignment]
     persistence_executed: Literal["YES", "NO"]
     database_rows_written: int = Field(ge=0)
+    match_rows_inserted: int = Field(default=0, ge=0)
+    team_stat_rows_inserted: int = Field(default=0, ge=0)
+    player_stat_rows_inserted: int = Field(default=0, ge=0)
+    duplicates_ignored: int = Field(default=0, ge=0)
+    replay_conflicts: int = Field(default=0, ge=0)
     search_executed: Literal["YES", "NO"]
     scout_executed: Literal["YES", "NO"]
     analyst_executed: Literal["YES", "NO"]
@@ -1742,6 +1785,285 @@ class FC27CommunityPipelineResult(BaseModel):
     dispatch_enabled: Literal["NO"] = "NO"
 
 
+def build_community_persistence_preview(
+    match_envelope: FC27CommunityProviderEnvelope,
+    *,
+    match_envelopes: Optional[Sequence[Any]] = None,
+    postgres_conn_or_uri: Optional[Any] = None,
+    generated_at: Optional[datetime] = None,
+) -> FC27CommunityPersistencePreview:
+    """Builds a metadata-only pre-persistence preview (`PART I`)."""
+    if match_envelope.operation != "RECENT_MATCHES":
+        raise FC27ContractError("build_community_persistence_preview requires operation='RECENT_MATCHES'")
+
+    timestamps = sorted(
+        str(rec["played_at"]) for rec in match_envelope.normalized_records if "played_at" in rec
+    )
+    earliest = timestamps[0] if timestamps else "NONE"
+    latest = timestamps[-1] if timestamps else "NONE"
+    m_types = tuple(
+        sorted(
+            {
+                str(rec.get("match_type") or "LEAGUE")
+                for rec in match_envelope.normalized_records
+            }
+        )
+    )
+    p_stat_count = sum(
+        len(rec.get("player_statistics", [])) for rec in match_envelope.normalized_records
+    )
+
+    dup_plan = int(match_envelope.rejected_record_count)
+    conf_plan = 0
+
+    if postgres_conn_or_uri is not None and match_envelopes:
+        from src.fc27_demo import _build_export_envelope_for_persistence
+
+        gen_dt = generated_at or datetime.now(timezone.utc)
+        supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
+        export_env = _build_export_envelope_for_persistence(
+            supplied_matches,
+            export_id=f"comm_eval_{match_envelope.payload_hash[:16]}",
+            generated_at=gen_dt,
+        )
+        existing_state = load_import_state(
+            postgres_conn_or_uri,
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+        )
+        plan = plan_fc27_user_export_import(
+            export_env,
+            existing_state=existing_state,
+            evaluation_time=gen_dt,
+        )
+        dup_plan += len(plan.duplicate_match_ids)
+        conf_plan = len(plan.conflicting_match_ids)
+
+    return FC27CommunityPersistencePreview(
+        provider_id=match_envelope.provider_declaration.provider_id,
+        source_classification=LIVE_EA_CLUBS_COMMUNITY_CLIENT,  # type: ignore[arg-type]
+        club_id=TARGET_CLUB_ID,
+        club_name=TARGET_CLUB_NAME,
+        platform=TARGET_PLATFORM,
+        game_version=TARGET_GAME_VERSION,
+        match_count=match_envelope.accepted_record_count,
+        player_stat_row_count=p_stat_count,
+        earliest_match=earliest,
+        latest_match=latest,
+        match_types=m_types,
+        payload_hash=match_envelope.payload_hash,
+        normalization_status=match_envelope.normalization_status,
+        privacy_status=match_envelope.privacy_status,
+        duplicate_plan=dup_plan,
+        conflict_plan=conf_plan,
+    )
+
+
+def persist_community_provider_batch(
+    match_envelope: FC27CommunityProviderEnvelope,
+    *,
+    match_envelopes: Sequence[Any],
+    postgres_conn_or_uri: Any,
+    persist_requested: bool = True,
+    persistence_enabled: Optional[bool] = None,
+    enforce_posture: bool = False,
+    quarantine_conflicts: bool = False,
+    export_id: Optional[str] = None,
+    generated_at: Optional[datetime] = None,
+) -> FC27CommunityPersistenceApplySummary:
+    """Persists a validated `FC27CommunityProviderEnvelope` batch in one PostgreSQL transaction (`PART J` & `PART K`)."""
+    if match_envelope.operation != "RECENT_MATCHES":
+        raise FC27ContractError("persist_community_provider_batch requires operation='RECENT_MATCHES'")
+    if (
+        match_envelope.schema_status != "PASS"
+        or match_envelope.normalization_status != "PASS"
+        or match_envelope.privacy_status != "PASS"
+    ):
+        raise FC27ContractError("Envelope must have PASS schema, normalization, and privacy status")
+
+    pg_flag = (
+        settings.is_fc27_persistence_enabled()
+        if persistence_enabled is None
+        else bool(persistence_enabled)
+    )
+    if not persist_requested or not pg_flag:
+        raise FC27LiveProbeBlockedError(
+            "Community provider persistence requires both --persist and FC27_PERSISTENCE_ENABLED=true"
+        )
+    if postgres_conn_or_uri is None:
+        raise FC27LiveProbeBlockedError("PostgreSQL connection or URI is required for persistence")
+
+    from src.fc27_demo import _build_export_envelope_for_persistence
+
+    gen_dt = generated_at or datetime.now(timezone.utc)
+    eff_export_id = export_id or f"comm_eval_{match_envelope.payload_hash[:16]}"
+    supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
+    export_env = _build_export_envelope_for_persistence(
+        supplied_matches,
+        export_id=eff_export_id,
+        generated_at=gen_dt,
+    )
+    existing_state = load_import_state(
+        postgres_conn_or_uri,
+        club_id=TARGET_CLUB_ID,
+        platform=TARGET_PLATFORM,
+        game_version=TARGET_GAME_VERSION,
+    )
+    plan = plan_fc27_user_export_import(
+        export_env,
+        existing_state=existing_state,
+        evaluation_time=gen_dt,
+    )
+    apply_res = apply_export_plan(
+        postgres_conn_or_uri,
+        envelope=export_env,
+        plan=plan,
+        actor="fc27_community_eval",
+        enforce_posture=enforce_posture,
+        quarantine_conflicts=quarantine_conflicts,
+    )
+    if apply_res.status == "REJECTED" or apply_res.replay_conflict:
+        raise FC27ReplayConflictError(
+            f"Replay conflict rejected during community batch persistence: {apply_res.detail}"
+        )
+
+    return FC27CommunityPersistenceApplySummary(
+        live_data_persisted="YES",
+        match_rows_inserted=apply_res.accepted_records,
+        team_stat_rows_inserted=apply_res.accepted_records,
+        player_stat_rows_inserted=apply_res.player_stat_records,
+        duplicates_ignored=apply_res.duplicate_records,
+        replay_conflicts=1 if apply_res.replay_conflict else 0,
+        idempotent_duplicate=apply_res.idempotent_duplicate,
+        export_id=eff_export_id,
+    )
+
+
+def run_analytics_from_persisted_community_records(
+    postgres_conn_or_uri: Any,
+    *,
+    payload_sha256: Optional[str] = None,
+    analysis_generated_at: Optional[datetime] = None,
+    analytics_enabled_override: bool = True,
+) -> Tuple[FC27SearchContext, FC27ScoutReport, FC27AnalystReport]:
+    """Reads persisted East Coasters records from PostgreSQL and executes `Search -> Scout -> Analyst` (`PART M`)."""
+    from src.fc27_demo import _default_build_for_position, _default_role_for_position
+    from src.fc27_search_scout import PostgresFC27AnalyticsReader
+
+    gen_dt = analysis_generated_at or datetime.now(timezone.utc)
+    if isinstance(gen_dt, str):
+        gen_dt = datetime.fromisoformat(gen_dt.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+    prev_env = os.environ.get("FC27_ANALYTICS_ENABLED")
+    if analytics_enabled_override:
+        os.environ["FC27_ANALYTICS_ENABLED"] = "true"
+    try:
+        reader = PostgresFC27AnalyticsReader(postgres_conn_or_uri)
+        identity = reader.get_club_identity(
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+        )
+        rows = reader.get_recent_eligible_matches(
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+            limit=20,
+            reference_now=gen_dt,
+        )
+        conflicts = reader.get_replay_conflicts(
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+        )
+        q_summary = reader.get_quarantine_summary(
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+        )
+    finally:
+        if analytics_enabled_override:
+            if prev_env is None:
+                os.environ.pop("FC27_ANALYTICS_ENABLED", None)
+            else:
+                os.environ["FC27_ANALYTICS_ENABLED"] = prev_env
+
+    candidates: List[Dict[str, Any]] = []
+    for row in rows:
+        apps: List[Dict[str, Any]] = []
+        for idx, p in enumerate(row.player_performances):
+            pos = str(p.position_code or "CM")
+            apps.append(
+                {
+                    "player_ref": p.local_player_ref,
+                    "position": pos,
+                    "role": p.role_name or _default_role_for_position(pos),
+                    "role_focus": "Balanced",
+                    "build_reference": p.build_reference or _default_build_for_position(pos),
+                    "started": idx < 11,
+                    "minutes_played": p.minutes_played if p.minutes_played is not None else 90,
+                    "match_rating": p.match_rating,
+                    "goals": p.goals or 0,
+                    "assists": p.assists or 0,
+                    "passes_attempted": p.passes_attempted,
+                    "passes_completed": p.passes_completed,
+                    "tackles_attempted": p.tackles_attempted,
+                    "tackles_won": p.tackles_won,
+                    "interceptions": p.interceptions,
+                    "shots": p.shots,
+                    "shots_on_target": p.shots_on_target,
+                    "saves": p.saves,
+                }
+            )
+        candidates.append(
+            {
+                "match_id": row.match_id,
+                "match_hash": row.record_hash,
+                "payload_sha256": payload_sha256,
+                "club_id": row.club_id,
+                "club_name": TARGET_CLUB_NAME,
+                "platform": row.platform,
+                "game_version": row.game_version,
+                "played_at": row.played_at,
+                "completion_state": row.completion_state,
+                "result": row.result,
+                "goals_for": row.goals_for,
+                "goals_against": row.goals_against,
+                "formation": (
+                    row.formation
+                    if row.formation not in (None, "UNKNOWN")
+                    else None
+                ),
+                "opponent_name": row.opponent_club_name_sanitized or "Opponent Club",
+                "match_type": "LEAGUE",
+                "data_quality_status": row.data_quality_status,
+                "source_classification": "NORMALIZED_REPOSITORY_READ",
+                "player_appearances": apps,
+            }
+        )
+
+    search_ctx = build_fc27_search_context(
+        FC27SearchInput(
+            identity=identity,
+            analysis_generated_at=gen_dt,
+            candidate_matches=tuple(candidates),
+            quarantined_match_ids=frozenset(q_summary.get("quarantined_match_ids") or ()),
+            conflicted_match_ids=frozenset(conflicts),
+            source_classification="NORMALIZED_REPOSITORY_READ",
+        )
+    )
+    scout_rep = build_fc27_scout_report(search_ctx)
+    analyst_rep = build_fc27_analyst_report(
+        FC27AnalystInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analysis_generated_at=gen_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+    )
+    return search_ctx, scout_rep, analyst_rep
+
+
 def ingest_community_provider_envelope(
     match_envelope: FC27CommunityProviderEnvelope,
     *,
@@ -1749,6 +2071,7 @@ def ingest_community_provider_envelope(
     persist: bool = False,
     persistence_enabled: Optional[bool] = None,
     postgres_conn: Optional[Any] = None,
+    enforce_posture: bool = False,
     analysis_generated_at: Optional[datetime] = None,
 ) -> Tuple[FC27CommunityPipelineResult, FC27SearchContext, FC27ScoutReport, FC27AnalystReport]:
     """Runs a validated `FC27CommunityProviderEnvelope` through optional persistence and
@@ -1771,6 +2094,11 @@ def ingest_community_provider_envelope(
         gen_at = _dt.now(timezone.utc)
     persisted: Literal["YES", "NO"] = "NO"
     rows_written = 0
+    match_rows_inserted = 0
+    team_stat_rows_inserted = 0
+    player_stat_rows_inserted = 0
+    duplicates_ignored = 0
+    replay_conflicts = 0
 
     if persist:
         pg_flag = (
@@ -1783,21 +2111,22 @@ def ingest_community_provider_envelope(
                 "Community provider persistence requires both --persist and FC27_PERSISTENCE_ENABLED=true"
             )
         if postgres_conn is not None and match_envelopes:
-            from src.fc27_demo import _build_export_envelope_for_persistence
-
-            supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
-            export_env = _build_export_envelope_for_persistence(
-                supplied_matches,
-                export_id=f"comm_eval_{match_envelope.payload_hash[:16]}",
+            apply_summary = persist_community_provider_batch(
+                match_envelope,
+                match_envelopes=match_envelopes,
+                postgres_conn_or_uri=postgres_conn,
+                persist_requested=True,
+                persistence_enabled=pg_flag,
+                enforce_posture=enforce_posture,
                 generated_at=gen_at,
             )
-            plan = plan_fc27_user_export_import(export_env, existing_state=None)
-            apply_res = apply_export_plan(postgres_conn, envelope=export_env, plan=plan)
-            persisted = "YES"
-            # Use available attributes from apply result
-            rows_written = getattr(apply_res, "accepted_matches", 0) or getattr(apply_res, "total_matches", 0) or 0
-            if not isinstance(rows_written, int):
-                rows_written = int(rows_written)
+            persisted = apply_summary.live_data_persisted
+            match_rows_inserted = apply_summary.match_rows_inserted
+            team_stat_rows_inserted = apply_summary.team_stat_rows_inserted
+            player_stat_rows_inserted = apply_summary.player_stat_rows_inserted
+            duplicates_ignored = apply_summary.duplicates_ignored
+            replay_conflicts = apply_summary.replay_conflicts
+            rows_written = match_rows_inserted + player_stat_rows_inserted
 
     # Convert normalized records into Search candidates
     candidates: List[Dict[str, Any]] = []
@@ -1878,6 +2207,11 @@ def ingest_community_provider_envelope(
         source_classification=LIVE_EA_CLUBS_COMMUNITY_CLIENT,  # type: ignore[arg-type, assignment]
         persistence_executed=persisted,
         database_rows_written=rows_written,
+        match_rows_inserted=match_rows_inserted,
+        team_stat_rows_inserted=team_stat_rows_inserted,
+        player_stat_rows_inserted=player_stat_rows_inserted,
+        duplicates_ignored=duplicates_ignored,
+        replay_conflicts=replay_conflicts,
         search_executed="YES",
         scout_executed="YES",
         analyst_executed="YES",
@@ -1904,6 +2238,7 @@ def build_demo_session_artifacts_from_community_envelope(
     match_envelopes: Optional[Sequence[Any]] = None,
     request_count: int = 2,
     circuit_state: str = "CLOSED",
+    persistence_status: str = "SKIPPED_BY_DEFAULT",
     analysis_generated_at: Optional[datetime] = None,
 ) -> Any:
     """Builds `FC27DemoSessionArtifacts` labeled `LIVE_EA_CLUBS_COMMUNITY_CLIENT` for `/demo*` (`PART Q`)."""
@@ -1975,7 +2310,7 @@ def build_demo_session_artifacts_from_community_envelope(
         accepted_count=match_envelope.accepted_record_count,
         duplicate_count=match_envelope.rejected_record_count,
         conflict_count=0,
-        persistence_status="SKIPPED_BY_DEFAULT",
+        persistence_status=persistence_status,
         search_context_hash=search_ctx.context_hash,
         scout_report_hash=scout_rep.report_hash,
         analyst_report_hash=analyst_rep.report_hash,
@@ -1988,6 +2323,114 @@ def build_demo_session_artifacts_from_community_envelope(
     return FC27DemoSessionArtifacts(
         last_operation="community-eval",
         scenario="community_one_shot",
+        result=demo_res,
+        matches=tuple(match_summaries),
+        search_context=search_ctx,
+        scout_report=scout_rep,
+        analyst_report=analyst_rep,
+    )
+
+
+def build_demo_session_artifacts_from_persisted_records(
+    postgres_conn_or_uri: Any,
+    *,
+    payload_sha256: Optional[str] = None,
+    request_count: int = 2,
+    circuit_state: str = "CLOSED",
+    persistence_status: str = "APPLIED",
+    analysis_generated_at: Optional[datetime] = None,
+) -> Any:
+    """Builds `FC27DemoSessionArtifacts` labeled `LIVE_EA_CLUBS_COMMUNITY_CLIENT` directly from
+    persisted normalized PostgreSQL records (`PART M` & `PART N`).
+    """
+    from src.fc27_demo import (
+        FC27DemoMatchSummary,
+        FC27DemoResult,
+        FC27DemoSessionArtifacts,
+        _pseudonymize_match_ref,
+    )
+
+    search_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
+        postgres_conn_or_uri,
+        payload_sha256=payload_sha256,
+        analysis_generated_at=analysis_generated_at,
+    )
+    match_summaries: List[FC27DemoMatchSummary] = []
+    player_stat_total = 0
+    for m_rec in search_ctx.baseline_matches:
+        p_apps = m_rec.player_appearances
+        player_stat_total += len(p_apps)
+        p_refs = tuple(str(a.player_ref) for a in p_apps)
+        match_summaries.append(
+            FC27DemoMatchSummary(
+                pseudonymous_match_ref=_pseudonymize_match_ref(m_rec.match_id),
+                match_hash=m_rec.match_hash,
+                played_timestamp=m_rec.played_at,
+                match_type=m_rec.match_type,
+                formation=m_rec.formation or "UNKNOWN",
+                result=m_rec.result,  # type: ignore[arg-type]
+                goals_for=m_rec.goals_for,
+                goals_against=m_rec.goals_against,
+                safe_opponent_label=m_rec.opponent_name or "Opponent Club",
+                data_quality_status=m_rec.data_quality_status,
+                player_count=len(p_apps),
+                pseudonymous_player_refs=p_refs,
+            )
+        )
+
+    eff_payload_hash = payload_sha256 or (
+        search_ctx.payload_hashes[0] if search_ctx.payload_hashes else search_ctx.context_hash
+    )
+    exec_payload = json.dumps(
+        {
+            "source_mode": LIVE_EA_CLUBS_COMMUNITY_CLIENT,
+            "payload_hash": eff_payload_hash,
+            "search": search_ctx.context_hash,
+            "scout": scout_rep.report_hash,
+            "analyst": analyst_rep.report_hash,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    exec_hash = hashlib.sha256(exec_payload).hexdigest()
+
+    demo_res = FC27DemoResult(
+        demo_mode=True,
+        source_mode=LIVE_EA_CLUBS_COMMUNITY_CLIENT,  # type: ignore[arg-type]
+        identity={
+            "club_id": TARGET_CLUB_ID,
+            "club_name": TARGET_CLUB_NAME,
+            "platform": TARGET_PLATFORM,
+            "game_version": TARGET_GAME_VERSION,
+        },
+        request_count=min(4, max(0, request_count)),
+        cache_hits=0,
+        cache_misses=request_count,
+        rate_limit_status="COMMUNITY_ONE_SHOT",
+        request_budget_status="WITHIN_BUDGET",
+        circuit_state=circuit_state,
+        validation_status="PASS",
+        normalized_counts={
+            "clubs": 1,
+            "matches": len(match_summaries),
+            "player_match_stats": player_stat_total,
+        },
+        accepted_count=len(match_summaries),
+        duplicate_count=search_ctx.exclusion_summary.excluded_duplicates,
+        conflict_count=search_ctx.exclusion_summary.excluded_conflicts,
+        persistence_status=persistence_status,
+        search_context_hash=search_ctx.context_hash,
+        scout_report_hash=scout_rep.report_hash,
+        analyst_report_hash=analyst_rep.report_hash,
+        confidence=analyst_rep.overall_confidence,
+        finding_count=len(analyst_rep.findings),
+        data_gap_count=len(analyst_rep.data_gaps),
+        limitations=tuple(analyst_rep.limitations),
+        execution_hash=exec_hash,
+    )
+    return FC27DemoSessionArtifacts(
+        last_operation="community-persisted-read",
+        scenario="community_persisted_batch",
         result=demo_res,
         matches=tuple(match_summaries),
         search_context=search_ctx,

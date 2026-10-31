@@ -92,3 +92,22 @@ Executed inside `fc27-community-client-evaluation` (`Dockerfile.community-eval` 
 | `DISPATCH_ENABLED` | `NO` |
 | `CIRCUIT_STATE` | `CLOSED` |
 | `RAW_RESPONSE_RETAINED` | `NO` |
+
+---
+
+## 5. First Real East Coasters Batch Persistence, Replay, and Dashboard Verification (`PART H` – `PART O`)
+
+Following independent review of `src/fc27_community_provider.py`, `src/fc27_pandas_view.py`, `scripts/fc27_community_eval.py`, `Dockerfile.community-eval`, and `docker-compose.community-eval.yml`:
+
+- **Pre-Persistence Preview (`PART I`)**:
+  - `PROVIDER_ID = fc-clubs-api-community-v1` (`SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT`, unofficial MIT-licensed community client `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` `v0.3.1`, not an official EA SDK).
+  - `MATCH_COUNT = 10`, `PLAYER_STAT_ROW_COUNT = 60`, `EARLIEST_MATCH = 2026-10-27T02:18:44Z`, `LATEST_MATCH = 2026-10-31T03:38:20Z`, `MATCH_TYPES = LEAGUE`, `PAYLOAD_HASH = e8a7ede9ed3d3c54b491779b75298ff4bc88888db646b70ce9cb0af8347caaa6`, `DUPLICATE_PLAN = 0`, `CONFLICT_PLAN = 0`.
+- **Single-Transaction PostgreSQL Persistence (`PART J`)**:
+  - `LIVE_DATA_PERSISTED = YES`, `MATCH_ROWS_INSERTED = 10`, `TEAM_STAT_ROWS_INSERTED = 10`, `PLAYER_STAT_ROWS_INSERTED = 60`, `DUPLICATES_IGNORED = 0`, `REPLAY_CONFLICTS = 0`.
+  - `RAW_RESPONSE_PERSISTED = NO`, `PLAYER_NAMES_PERSISTED = NO`, `CHECKPOINT_TABLES_MODIFIED = NO`, `APPROVAL_TABLES_MODIFIED = NO`, `DISPATCH_TABLES_MODIFIED = NO`.
+- **Idempotency & Conflict Rollback (`PART K` & `PART L`)**:
+  - Replaying the identical 10-match batch (`ADDITIONAL_PROVIDER_REQUESTS = 0`) results in `IDEMPOTENT_REPLAY = PASS`, `NEW_MATCH_ROWS = 0`, `NEW_TEAM_STAT_ROWS = 0`, `NEW_PLAYER_STAT_ROWS = 0`, `DUPLICATES_IGNORED = 10`, `REPLAY_CONFLICTS = 0`.
+  - Modifying `goals_for` for an existing `external_match_id` against disposable storage triggers `FC27ReplayConflictError` (`REPLAY_CONFLICT_DETECTED = YES`, `TRANSACTION_ROLLBACK = YES`, `DATABASE_STATE_UNCHANGED = YES`).
+- **Persisted Read-Only Analytics & Local Dashboard (`PART M` – `PART O`)**:
+  - Reading back from PostgreSQL via `PostgresFC27AnalyticsReader` (`run_analytics_from_persisted_community_records`) produces `SEARCH_HASH = fcece2013e27da3134822978ccd5f19a32f7cc6bc59a6ef9d3c2d87a715fc193`, `SCOUT_HASH = 139be9c73de16766cf2f6417bb6ee730604d7b26d2e7d86effcea7029f44f42f`, `ANALYST_HASH = cf4bc66b5cd4181716c4b5a686fa5639702bbe2c6021807742d6556d66fc972f`, `ANALYSIS_CONFIDENCE = MODERATE_CONFIDENCE` (`20` observational findings).
+  - Served on `127.0.0.1:8001` via `src.fc27_demo_api:create_demo_app` with `SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT` (`"Live EA Clubs Data via pinned community client"`), while `FC27_COMMUNITY_PROVIDER_ENABLED=false` by default, `pandas` remains optional downstream (`src/fc27_pandas_view.py`), the browser-observed provider remains local experimental research excluded from `main`, and polling, Coach, Tactics, Director, recommendations, and dispatch remain disabled.

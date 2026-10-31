@@ -34,11 +34,15 @@ from src.fc27_community_provider import (
     FC27CommunityProviderDeclaration,
     FC27CommunityProviderEnvelope,
     apply_community_event_policy,
+    build_community_persistence_preview,
     build_demo_session_artifacts_from_community_envelope,
+    build_demo_session_artifacts_from_persisted_records,
     classify_community_event_id,
     ingest_community_provider_envelope,
     normalize_community_identity_records,
     normalize_community_match_records,
+    persist_community_provider_batch,
+    run_analytics_from_persisted_community_records,
     validate_community_player_match_records,
 )
 from src.fc27_demo import FC27DemoStateStore
@@ -54,6 +58,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _block_external_network_and_ea_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     """Blocks external network sockets and EA DNS resolution during pytest."""
     orig_getaddrinfo = socket.getaddrinfo
+    orig_create_connection = socket.create_connection
 
     def _guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
         h_str = str(host or "").strip().lower()
@@ -65,7 +70,7 @@ def _block_external_network_and_ea_dns(monkeypatch: pytest.MonkeyPatch) -> None:
         host = address[0] if isinstance(address, tuple) and address else ""
         if str(host).strip().lower() not in ("127.0.0.1", "localhost", "::1"):
             raise AssertionError(f"Blocked external socket connection in pytest: {address!r}")
-        raise AssertionError("No socket connections expected in community provider unit tests")
+        return orig_create_connection(address, *args, **kwargs)
 
     monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
     monkeypatch.setattr(socket, "create_connection", _guarded_create_connection)
@@ -850,3 +855,132 @@ def test_comm_58_pytest_zero_live_calls_and_zero_ea_dns() -> None:
             normalization_status="PASS",
             privacy_status="PASS",
         )
+
+
+# 59. Pre-persistence preview and PostgreSQL persistence, idempotency, conflict rollback, and persisted-read analytics
+def test_comm_59_postgres_persistence_idempotency_conflict_and_persisted_read(
+    pg_db_migrated,
+) -> None:
+    import psycopg
+
+    env, match_envs = normalize_community_match_records(
+        _sample_community_match_records(3),
+        observed_at="2026-10-31T12:00:00Z",
+    )
+    gen_at = datetime(2026, 10, 31, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Preview before persistence
+    preview = build_community_persistence_preview(
+        env,
+        match_envelopes=match_envs,
+        postgres_conn_or_uri=pg_db_migrated.app,
+        generated_at=gen_at,
+    )
+    assert preview.match_count == 3
+    assert preview.player_stat_row_count == 6
+    assert preview.duplicate_plan == 0
+    assert preview.conflict_plan == 0
+
+    # First transactional persistence
+    apply_1 = persist_community_provider_batch(
+        env,
+        match_envelopes=match_envs,
+        postgres_conn_or_uri=pg_db_migrated.app,
+        persist_requested=True,
+        persistence_enabled=True,
+        enforce_posture=False,
+        generated_at=gen_at,
+    )
+    assert apply_1.live_data_persisted == "YES"
+    assert apply_1.match_rows_inserted == 3
+    assert apply_1.team_stat_rows_inserted == 3
+    assert apply_1.player_stat_rows_inserted == 6
+    assert apply_1.duplicates_ignored == 0
+    assert apply_1.replay_conflicts == 0
+
+    # Idempotent replay (0 new rows, 3 duplicates ignored, 0 conflicts)
+    apply_2 = persist_community_provider_batch(
+        env,
+        match_envelopes=match_envs,
+        postgres_conn_or_uri=pg_db_migrated.app,
+        persist_requested=True,
+        persistence_enabled=True,
+        enforce_posture=False,
+        export_id="comm_eval_replay_test",
+        generated_at=gen_at,
+    )
+    assert apply_2.match_rows_inserted == 0
+    assert apply_2.team_stat_rows_inserted == 0
+    assert apply_2.player_stat_rows_inserted == 0
+    assert apply_2.duplicates_ignored == 3
+    assert apply_2.replay_conflicts == 0
+    assert apply_2.idempotent_duplicate is True
+
+    # Conflict rollback test (same external_match_id with changed goals_for)
+    bad_raw = _sample_community_match_records(3)
+    bad_raw[0]["clubs"][0]["goals"] = 7
+    bad_raw[0]["clubs"][1]["goals_against"] = 7
+    conflict_env, conflict_match_envs = normalize_community_match_records(
+        bad_raw,
+        observed_at="2026-10-31T12:00:00Z",
+    )
+    with pytest.raises(FC27ReplayConflictError):
+        persist_community_provider_batch(
+            conflict_env,
+            match_envelopes=conflict_match_envs,
+            postgres_conn_or_uri=pg_db_migrated.app,
+            persist_requested=True,
+            persistence_enabled=True,
+            enforce_posture=False,
+            quarantine_conflicts=False,
+            export_id="comm_eval_conflict_test",
+            generated_at=gen_at,
+        )
+
+    # Verify DB state unchanged and non-FC27 tables untouched
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches WHERE club_id = '330323'")
+            assert cur.fetchone()[0] == 3
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats WHERE club_id = '330323'")
+            assert cur.fetchone()[0] == 6
+            cur.execute("SELECT goals_for FROM public.fc27_matches WHERE external_match_id = '990001'")
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT COUNT(*) FROM public.checkpoints")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.approval_requests")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.dispatches")
+            assert cur.fetchone()[0] == 0
+
+    # Read back persisted records and run Search -> Scout -> Analyst and Demo API
+    s_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
+        pg_db_migrated.app,
+        payload_sha256=env.payload_hash,
+        analysis_generated_at=gen_at,
+    )
+    assert s_ctx.eligible_match_count == 3
+    assert len(s_ctx.context_hash) == 64
+    assert len(scout_rep.report_hash) == 64
+    assert len(analyst_rep.report_hash) == 64
+
+    artifacts = build_demo_session_artifacts_from_persisted_records(
+        pg_db_migrated.app,
+        payload_sha256=env.payload_hash,
+        analysis_generated_at=gen_at,
+    )
+    store = FC27DemoStateStore()
+    store.set_artifacts(artifacts)
+    app = create_demo_app(state_store=store, demo_mode_override=True)
+    client = TestClient(app)
+    html_resp = client.get("/demo")
+    assert html_resp.status_code == 200
+    assert "Live EA Clubs Data via pinned community client" in html_resp.text
+    assert "POLLING_DISABLED" in html_resp.text
+    assert "RECOMMENDATIONS_DISABLED" in html_resp.text
+    assert "DISPATCH_DISABLED" in html_resp.text
+    status_resp = client.get("/demo/status").json()
+    assert status_resp["source_classification"] == LIVE_EA_CLUBS_COMMUNITY_CLIENT
+    assert status_resp["polling_enabled"] is False
+    assert status_resp["recommendations_enabled"] is False
+    assert status_resp["dispatch_enabled"] is False
