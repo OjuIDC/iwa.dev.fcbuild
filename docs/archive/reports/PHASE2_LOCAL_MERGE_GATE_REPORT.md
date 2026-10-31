@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `TEST_RESULTS.md`.
+> Archive reason: Point-in-time Phase 2 gate report superseded by current test results report
 > Operational status: DO NOT USE
 > Original path: PHASE2_LOCAL_MERGE_GATE_REPORT.md
 > Archived on: 2026-10-29

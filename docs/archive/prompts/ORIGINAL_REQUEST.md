@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `README.md`.
+> Archive reason: Point-in-time initial user request superseded by current reconciled platform docs
 > Operational status: DO NOT USE
 > Original path: ORIGINAL_REQUEST.md
 > Archived on: 2026-10-29

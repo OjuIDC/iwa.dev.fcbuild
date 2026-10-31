@@ -1,3 +1,16 @@
+> Archived document
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/FC27_COMPONENT_STATUS.md`.
+> Archive reason: Historical v2.0.0 watcher/OCR/rundown phase note; non-primary legacy subsystem outside the current FC27 community-provider path.
+> Operational status: DO NOT USE
+> Original path: docs/notes/watcher_ocr_rundown.md
+> Archived on: 2026-10-31
+> Superseded by: docs/FC27_COMPONENT_STATUS.md
+> Reason: Historical v2.0.0 watcher/OCR/rundown phase note; non-primary legacy subsystem outside the current FC27 community-provider path.
+> Warning: Do not execute commands in this archived document.
+
 # Watcher, OCR and post-match rundown: reliability notes
 
 ## Live match watcher (`src/live_match_watcher.py`)

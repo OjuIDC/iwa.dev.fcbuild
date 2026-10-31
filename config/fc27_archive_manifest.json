@@ -1,0 +1,599 @@
+{
+  "manifest_version": "fc27-archive-manifest-v1",
+  "generated_on": "2026-10-31",
+  "current_operational_provider": {
+    "provider_id": "fc-clubs-api-community-v1",
+    "source_classification": "LIVE_EA_CLUBS_COMMUNITY_CLIENT",
+    "club_id": "330323",
+    "club_name": "East Coasters",
+    "platform": "common-gen5",
+    "game_version": "FC27"
+  },
+  "allowed_operational_statuses": [
+    "DO_NOT_USE",
+    "HISTORICAL_REFERENCE",
+    "SUPERSEDED",
+    "EXPERIMENTAL_NOT_ACTIVATABLE"
+  ],
+  "archived_items": [
+    {
+      "archive_id": "ARCH-001",
+      "original_path": "PHASE2_EVIDENCE_BINDING.md",
+      "archived_path": "docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Consolidated into current approval flow and security boundary documentation.",
+      "replacement": "docs/FC27_APPROVAL_FLOW.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Contains historical SQL/schema notes; marked DO NOT USE to prevent stale operational execution.",
+      "rollback_notes": "git mv docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md PHASE2_EVIDENCE_BINDING.md"
+    },
+    {
+      "archive_id": "ARCH-002",
+      "original_path": "PHASE2_RUNBOOKS.md",
+      "archived_path": "docs/archive/architecture/PHASE2_RUNBOOKS.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Consolidated into current operations and troubleshooting guide.",
+      "replacement": "docs/OPERATIONS.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Historical runbook superseded by docs/OPERATIONS.md; marked DO NOT USE.",
+      "rollback_notes": "git mv docs/archive/architecture/PHASE2_RUNBOOKS.md PHASE2_RUNBOOKS.md"
+    },
+    {
+      "archive_id": "ARCH-003",
+      "original_path": "PHASE2_SECURITY_INVARIANTS.md",
+      "archived_path": "docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Consolidated into current security boundary documentation.",
+      "replacement": "docs/SECURITY_BOUNDARIES.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Active security invariants remain enforced in docs/SECURITY_BOUNDARIES.md and tests.",
+      "rollback_notes": "git mv docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md PHASE2_SECURITY_INVARIANTS.md"
+    },
+    {
+      "archive_id": "ARCH-004",
+      "original_path": "PHASE2_TRANSACTION_MODEL.md",
+      "archived_path": "docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Consolidated into current database schema and transaction reference.",
+      "replacement": "docs/FC27_APPROVAL_FLOW.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Single-transaction persistence invariants remain enforced in src/fc27_repository.py.",
+      "rollback_notes": "git mv docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md PHASE2_TRANSACTION_MODEL.md"
+    },
+    {
+      "archive_id": "ARCH-005",
+      "original_path": "PHASE2_WEBAUTHN_POLICY.md",
+      "archived_path": "docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Consolidated into current WebAuthn approval flow specification.",
+      "replacement": "docs/FC27_APPROVAL_FLOW.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "WebAuthn challenge binding remains enforced in src/approval_gate.py and src/identity/.",
+      "rollback_notes": "git mv docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md PHASE2_WEBAUTHN_POLICY.md"
+    },
+    {
+      "archive_id": "ARCH-006",
+      "original_path": "docs/plans/2026-10-02-player-dispatch-design.md",
+      "archived_path": "docs/archive/plans/2026-10-02-player-dispatch-design.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical design plan superseded by current dispatch activation gate specification.",
+      "replacement": "docs/DISPATCH_ACTIVATION.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Dispatch remains disabled by default (ENABLE_PLAYER_DISPATCH=false).",
+      "rollback_notes": "git mv docs/archive/plans/2026-10-02-player-dispatch-design.md docs/plans/2026-10-02-player-dispatch-design.md"
+    },
+    {
+      "archive_id": "ARCH-007",
+      "original_path": "ORIGINAL_REQUEST.md",
+      "archived_path": "docs/archive/prompts/ORIGINAL_REQUEST.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical initial specification prompt artifact.",
+      "replacement": "docs/ARCHITECTURE.md",
+      "operational_status": "DO_NOT_USE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Historical prompt only; non-operational.",
+      "rollback_notes": "git mv docs/archive/prompts/ORIGINAL_REQUEST.md ORIGINAL_REQUEST.md"
+    },
+    {
+      "archive_id": "ARCH-008",
+      "original_path": "PHASE2_VICTORY_AUDIT_REQUEST.md",
+      "archived_path": "docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical Phase 2 audit prompt artifact.",
+      "replacement": "docs/TESTING.md",
+      "operational_status": "DO_NOT_USE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Historical prompt only; non-operational.",
+      "rollback_notes": "git mv docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md PHASE2_VICTORY_AUDIT_REQUEST.md"
+    },
+    {
+      "archive_id": "ARCH-009",
+      "original_path": "BUNDLE_AUDIT.md",
+      "archived_path": "docs/archive/reports/BUNDLE_AUDIT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time bundle audit report retained for historical provenance.",
+      "replacement": "docs/TESTING.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical audit report.",
+      "rollback_notes": "git mv docs/archive/reports/BUNDLE_AUDIT.md BUNDLE_AUDIT.md"
+    },
+    {
+      "archive_id": "ARCH-010",
+      "original_path": "FINAL_ARCHIVE_AUDIT.md",
+      "archived_path": "docs/archive/reports/FINAL_ARCHIVE_AUDIT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time archive audit report retained for historical provenance.",
+      "replacement": "docs/ARCHITECTURE.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical audit report.",
+      "rollback_notes": "git mv docs/archive/reports/FINAL_ARCHIVE_AUDIT.md FINAL_ARCHIVE_AUDIT.md"
+    },
+    {
+      "archive_id": "ARCH-011",
+      "original_path": "HACKATHON_ALIGNMENT.md",
+      "archived_path": "docs/archive/reports/HACKATHON_ALIGNMENT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time event alignment memo superseded by current architecture guide.",
+      "replacement": "docs/ARCHITECTURE.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical memo.",
+      "rollback_notes": "git mv docs/archive/reports/HACKATHON_ALIGNMENT.md HACKATHON_ALIGNMENT.md"
+    },
+    {
+      "archive_id": "ARCH-012",
+      "original_path": "IMPLEMENTATION_REPORT.md",
+      "archived_path": "docs/archive/reports/IMPLEMENTATION_REPORT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time implementation completion report retained for provenance.",
+      "replacement": "docs/ARCHITECTURE.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical implementation report.",
+      "rollback_notes": "git mv docs/archive/reports/IMPLEMENTATION_REPORT.md IMPLEMENTATION_REPORT.md"
+    },
+    {
+      "archive_id": "ARCH-013",
+      "original_path": "PHASE2_LOCAL_MERGE_GATE_REPORT.md",
+      "archived_path": "docs/archive/reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time merge gate verification report.",
+      "replacement": "docs/TESTING.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical merge gate report.",
+      "rollback_notes": "git mv docs/archive/reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md PHASE2_LOCAL_MERGE_GATE_REPORT.md"
+    },
+    {
+      "archive_id": "ARCH-014",
+      "original_path": "PHASE2_REMEDIATION_REPORT.md",
+      "archived_path": "docs/archive/reports/PHASE2_REMEDIATION_REPORT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time remediation report superseded by current security boundary reference.",
+      "replacement": "docs/SECURITY_BOUNDARIES.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical remediation report.",
+      "rollback_notes": "git mv docs/archive/reports/PHASE2_REMEDIATION_REPORT.md PHASE2_REMEDIATION_REPORT.md"
+    },
+    {
+      "archive_id": "ARCH-015",
+      "original_path": "SECURITY_CHANGES.md",
+      "archived_path": "docs/archive/reports/SECURITY_CHANGES.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical security change log superseded by SECURITY.md and docs/SECURITY_BOUNDARIES.md.",
+      "replacement": "docs/SECURITY_BOUNDARIES.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Active security policy lives in SECURITY.md and docs/SECURITY_BOUNDARIES.md.",
+      "rollback_notes": "git mv docs/archive/reports/SECURITY_CHANGES.md SECURITY_CHANGES.md"
+    },
+    {
+      "archive_id": "ARCH-016",
+      "original_path": "TYPED_GRAPH_VOICE_AUDIT.md",
+      "archived_path": "docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time voice/graph audit report superseded by docs/VOICE_CAPABILITIES.md.",
+      "replacement": "docs/VOICE_CAPABILITIES.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Voice subsystem remains optional and non-primary.",
+      "rollback_notes": "git mv docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md TYPED_GRAPH_VOICE_AUDIT.md"
+    },
+    {
+      "archive_id": "ARCH-017",
+      "original_path": "PHASE2_TEST_TRACEABILITY.md",
+      "archived_path": "docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md",
+      "original_last_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "archived_by_commit": "92c540ab19d538e9a5783e096357b6783e2701da",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical Phase 2 test traceability matrix superseded by docs/TESTING.md.",
+      "replacement": "docs/TESTING.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_archive_integrity.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical traceability record.",
+      "rollback_notes": "git mv docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md PHASE2_TEST_TRACEABILITY.md"
+    },
+    {
+      "archive_id": "ARCH-018",
+      "original_path": "TEST_RESULTS_2026-10-03_PHASE1.md",
+      "archived_path": "docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md",
+      "original_last_commit": "0825dc83482246005921eb79ff29431230262b10",
+      "archived_by_commit": "0825dc83482246005921eb79ff29431230262b10",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Point-in-time Phase 1 test execution snapshot superseded by current TEST_RESULTS.md.",
+      "replacement": "TEST_RESULTS.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_documentation_consistency.py"
+      ],
+      "documentation_updates": [
+        "TEST_RESULTS.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Non-operational historical test snapshot.",
+      "rollback_notes": "git mv docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md TEST_RESULTS_2026-10-03_PHASE1.md"
+    },
+    {
+      "archive_id": "ARCH-019",
+      "original_path": "docs/WINDHOVER_INTEGRATION_GAP.md",
+      "archived_path": "docs/archive/experiments/WINDHOVER_INTEGRATION_GAP.md",
+      "original_last_commit": "c50121f1e85778b87d3b25be54de901ff3988688",
+      "archived_by_commit": "chore/fc27-current-path-cleanup",
+      "classification": "EXPERIMENTAL_NOT_ACTIVATABLE",
+      "archive_reason": "Historical 2026-10-01 unimplemented Windhover contract gap note; not part of the supported FC27 community-provider architecture.",
+      "replacement": "docs/FC27_COMPONENT_STATUS.md",
+      "operational_status": "EXPERIMENTAL_NOT_ACTIVATABLE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md",
+        "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md"
+      ],
+      "security_notes": "Windhover integration was never implemented or enabled; zero runtime surface.",
+      "rollback_notes": "git mv docs/archive/experiments/WINDHOVER_INTEGRATION_GAP.md docs/WINDHOVER_INTEGRATION_GAP.md"
+    },
+    {
+      "archive_id": "ARCH-020",
+      "original_path": "docs/notes/installer.md",
+      "archived_path": "docs/archive/phases/installer.md",
+      "original_last_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81",
+      "archived_by_commit": "chore/fc27-current-path-cleanup",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical v2.0.0 Windows host-agent installer phase note; retained in archive for historical context.",
+      "replacement": "docs/DEVELOPMENT.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md",
+        "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md"
+      ],
+      "security_notes": "Host-agent installer remains optional and non-primary.",
+      "rollback_notes": "git mv docs/archive/phases/installer.md docs/notes/installer.md"
+    },
+    {
+      "archive_id": "ARCH-021",
+      "original_path": "docs/notes/watcher_ocr_rundown.md",
+      "archived_path": "docs/archive/phases/watcher_ocr_rundown.md",
+      "original_last_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81",
+      "archived_by_commit": "chore/fc27-current-path-cleanup",
+      "classification": "HISTORICAL_ARCHIVE",
+      "archive_reason": "Historical v2.0.0 watcher/OCR/rundown phase note; non-primary legacy subsystem outside the current FC27 community-provider path.",
+      "replacement": "docs/FC27_COMPONENT_STATUS.md",
+      "operational_status": "HISTORICAL_REFERENCE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "documentation_updates": [
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md",
+        "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md"
+      ],
+      "security_notes": "RTSP/OCR watcher is not part of the supported FC27 community-provider pipeline.",
+      "rollback_notes": "git mv docs/archive/phases/watcher_ocr_rundown.md docs/notes/watcher_ocr_rundown.md"
+    },
+    {
+      "archive_id": "ARCH-022",
+      "original_path": "docs/notes/mcp_ws.md",
+      "archived_path": "docs/archive/providers/mcp_ws.md",
+      "original_last_commit": "8c2792fc1409b57593d3f3d42bb6bf9a014d9f81",
+      "archived_by_commit": "chore/fc27-current-path-cleanup",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Historical v2.0.0 PR implementation note for early MCP proxy and EA retry wiring; superseded by current security and provider documentation.",
+      "replacement": "docs/FC27_PROVIDER_INTEGRATION.md",
+      "operational_status": "SUPERSEDED",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "documentation_updates": [
+        "src/live_ws_server.py",
+        "src/mcp_retry.py",
+        "docs/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md"
+      ],
+      "security_notes": "Current provider path uses bounded one-shot community evaluation with retries=0.",
+      "rollback_notes": "git mv docs/archive/providers/mcp_ws.md docs/notes/mcp_ws.md"
+    },
+    {
+      "archive_id": "ARCH-023",
+      "original_path": "scripts/matchpulse_conformance.py",
+      "archived_path": "scripts/archive/experiments/matchpulse_conformance.py",
+      "original_last_commit": "c50121f1e85778b87d3b25be54de901ff3988688",
+      "archived_by_commit": "chore/fc27-current-path-cleanup",
+      "classification": "SUPERSEDED_BY_CURRENT_PATH",
+      "archive_reason": "Superseded placeholder MatchPulse conformance script; active repository isolation is enforced by scripts/check_matchpulse_boundary.py.",
+      "replacement": "scripts/check_matchpulse_boundary.py",
+      "operational_status": "DO_NOT_USE",
+      "runtime_reachable_before": false,
+      "runtime_reachable_after": false,
+      "tests_affected": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "documentation_updates": [
+        "scripts/README.md",
+        "docs/archive/README.md",
+        "docs/archive/ARCHIVE_MANIFEST.md",
+        "docs/repository_inventory.json"
+      ],
+      "security_notes": "MatchPulse repository isolation remains strictly enforced by scripts/check_matchpulse_boundary.py.",
+      "rollback_notes": "git mv scripts/archive/experiments/matchpulse_conformance.py scripts/matchpulse_conformance.py"
+    }
+  ],
+  "branch_only_research_records": [
+    {
+      "record_id": "BRANCH-RESEARCH-001",
+      "branch": "feature/fc27-real-east-coasters-ingestion",
+      "head_commit": "76d20c4ef6c04be61f869e016a3f079b6f0f0745",
+      "classification": "HISTORICAL_ARCHIVE",
+      "operational_status": "DO_NOT_USE",
+      "summary": "Standards-compliant Python urllib HTTPS one-shot live probe against proclubs.ea.com/api/fc/clubs/info confirmed deterministic HTTP 403 Forbidden (Akamai edge block of non-browser/default TLS-header profiles) without WAF/header spoofing.",
+      "documented_in_main": "docs/FC27_PROVIDER_INTEGRATION.md",
+      "replacement": "src/fc27_community_provider.py"
+    },
+    {
+      "record_id": "BRANCH-RESEARCH-002",
+      "branch": "feature/fc27-browser-observed-provider",
+      "head_commit": "414b4f3d673eb0e88e64f570d7e32fd35284c756",
+      "classification": "EXPERIMENTAL_NOT_ACTIVATABLE",
+      "operational_status": "EXPERIMENTAL_NOT_ACTIVATABLE",
+      "summary": "Bounded headless Chromium browser-observed provider and official EA FC27 Clubs public page reconciliation proved HTTP/2 ERR_HTTP2_PROTOCOL_ERROR across both host and container headless Chromium while confirming official public page URL and common-gen5 platform.",
+      "documented_in_main": "docs/FC27_PROVIDER_INTEGRATION.md",
+      "replacement": "src/fc27_community_provider.py"
+    }
+  ]
+}

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# ARCHIVED: HISTORICAL REFERENCE ONLY
+# NON-OPERATIONAL
+# DO NOT RUN
+# REPLACED BY: scripts/check_matchpulse_boundary.py
+# ARCHIVED ON: 2026-10-31
+# ARCHIVE REASON: Superseded placeholder MatchPulse conformance script; active repository isolation is enforced by scripts/check_matchpulse_boundary.py.
 """Deterministic synthetic-data conformance harness for MatchPulse (external service)."""
 import argparse
 import json

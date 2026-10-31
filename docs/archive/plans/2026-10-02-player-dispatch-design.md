@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/DISPATCH_ACTIVATION.md`.
+> Archive reason: Historical multi-phase design spec superseded by current architecture and dispatch activation docs
 > Operational status: DO NOT USE
 > Original path: docs/superpowers/specs/2026-10-02-player-dispatch-design.md
 > Archived on: 2026-10-29

@@ -1,3 +1,16 @@
+> Archived document
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/DEVELOPMENT.md`.
+> Archive reason: Historical v2.0.0 Windows host-agent installer phase note; retained in archive for historical context.
+> Operational status: DO NOT USE
+> Original path: docs/notes/installer.md
+> Archived on: 2026-10-31
+> Superseded by: docs/DEVELOPMENT.md
+> Reason: Historical v2.0.0 Windows host-agent installer phase note; retained in archive for historical context.
+> Warning: Do not execute commands in this archived document.
+
 # Windows installer notes (host_agent/install.ps1)
 
 ## Behaviour

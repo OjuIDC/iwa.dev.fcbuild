@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/ARCHITECTURE.md`.
+> Archive reason: Point-in-time Phase 2 audit request prompt superseded by current architecture docs
 > Operational status: DO NOT USE
 > Original path: PHASE2_VICTORY_AUDIT_REQUEST.md
 > Archived on: 2026-10-29

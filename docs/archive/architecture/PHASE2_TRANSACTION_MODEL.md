@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/FC27_APPROVAL_FLOW.md`.
+> Archive reason: Consolidated into current approval flow and security boundaries documentation
 > Operational status: DO NOT USE
 > Original path: PHASE2_TRANSACTION_MODEL.md
 > Archived on: 2026-10-29

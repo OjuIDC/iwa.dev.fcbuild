@@ -1,3 +1,16 @@
+> Archived document
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/FC27_COMPONENT_STATUS.md`.
+> Archive reason: Historical 2026-10-01 unimplemented Windhover contract gap note; not part of the supported FC27 community-provider architecture.
+> Operational status: DO NOT USE
+> Original path: docs/WINDHOVER_INTEGRATION_GAP.md
+> Archived on: 2026-10-31
+> Superseded by: docs/FC27_COMPONENT_STATUS.md
+> Reason: Historical 2026-10-01 unimplemented Windhover contract gap note; not part of the supported FC27 community-provider architecture.
+> Warning: Do not execute commands in this archived document.
+
 # Windhover integration: unresolved contract
 
 **Status: UNRESOLVED. Nothing is implemented for Windhover.** The integration needs an interface the
