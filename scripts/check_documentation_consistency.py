@@ -2062,9 +2062,10 @@ def validate_repository(
                             "src/",
                         )
 
-                # Check uvicorn src.<module>:<factory>
+                # Check uvicorn / uvicorn.exe src.<module>:<factory>
                 for m_uvi in re.finditer(
-                    r"uvicorn\s+(src\.[A-Za-z0-9_.]+):([A-Za-z0-9_]+)", line
+                    r"uvicorn(?:\.exe)?\s+(?:--[A-Za-z0-9_-]+(?:\s+[^\s`\\]+)?\s+)*(src\.[A-Za-z0-9_.]+):([A-Za-z0-9_]+)",
+                    line,
                 ):
                     u_mod, u_attr = m_uvi.group(1), m_uvi.group(2)
                     u_path = resolved_root / (u_mod.replace(".", "/") + ".py")

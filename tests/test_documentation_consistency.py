@@ -1069,3 +1069,20 @@ def test_safe_adapter_bundle_documentation_consistency_checks(tmp_path: Path) ->
     assert "SAFE_BUNDLE_LOCAL_ARTIFACTS_MISSTATED" in codes
     assert "SAFE_BUNDLE_ZIP_RUNTIME_MISSTATED" in codes
     assert "SAFE_BUNDLE_CI_DEPENDENCY_MISSTATED" in codes
+
+
+def test_uvicorn_exe_stale_demo_factory_rejected(tmp_path: Path) -> None:
+    repo, policy = _make_minimal_repo(tmp_path)
+    (repo / "src" / "fc27_demo_api.py").write_text(
+        "def create_demo_app():\n    return None\n",
+        encoding="utf-8",
+    )
+    (repo / "SECURITY.md").write_text(
+        "```powershell\n"
+        ".\\.venv\\Scripts\\uvicorn.exe src.fc27_demo_api:create_app --factory --host 127.0.0.1 --port 8001\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    report = dc.validate_repository(repo, policy_path=policy)
+    codes = {r.reason_code for r in report.results}
+    assert "APP_FACTORY_NOT_FOUND" in codes

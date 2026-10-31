@@ -1396,3 +1396,71 @@ def test_80_fixture_banner_on_html_page() -> None:
         assert "localstorage" not in html_text.lower()
         assert "document.cookie" not in html_text.lower()
         assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}
+
+
+def test_81_canonical_demo_asgi_factory_and_documentation_alignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """81. Verifies `src.fc27_demo_api:create_demo_app` is the canonical ASGI factory and no current doc uses `src.fc27_demo_api:create_app`."""
+    import importlib
+    from pathlib import Path
+    import re
+    from fastapi import FastAPI
+    import src.fc27_demo_api as demo_api_mod
+
+    # 1. Canonical factory exists, is callable, and returns a FastAPI application
+    assert hasattr(demo_api_mod, "create_demo_app")
+    assert callable(demo_api_mod.create_demo_app)
+    assert not hasattr(demo_api_mod, "create_app")
+
+    app_instance = demo_api_mod.create_demo_app()
+    assert isinstance(app_instance, FastAPI)
+
+    # 2. Documented Uvicorn module:factory in docs/FC27_DEMO.md resolves cleanly
+    demo_doc_path = Path(__file__).resolve().parent.parent / "docs" / "FC27_DEMO.md"
+    demo_doc_text = demo_doc_path.read_text(encoding="utf-8")
+    matches = re.findall(
+        r"uvicorn(?:\.exe)?\s+(src\.[A-Za-z0-9_.]+):([A-Za-z0-9_]+)",
+        demo_doc_text,
+    )
+    assert matches, "Expected at least one uvicorn module:factory command in docs/FC27_DEMO.md"
+    for mod_name, factory_name in matches:
+        assert mod_name == "src.fc27_demo_api"
+        assert factory_name == "create_demo_app"
+        resolved_mod = importlib.import_module(mod_name)
+        resolved_factory = getattr(resolved_mod, factory_name)
+        assert callable(resolved_factory)
+        assert isinstance(resolved_factory(), FastAPI)
+
+    # 3. No current document references stale `src.fc27_demo_api:create_app`
+    repo_root = Path(__file__).resolve().parent.parent
+    current_docs = [
+        repo_root / "README.md",
+        repo_root / "MIGRATION_GUIDE.md",
+        repo_root / "TEST_RESULTS.md",
+        repo_root / "SECURITY.md",
+        repo_root / "THIRD_PARTY_NOTICES.md",
+        *sorted((repo_root / "docs").rglob("*.md")),
+    ]
+    for doc_file in current_docs:
+        rel_posix = doc_file.relative_to(repo_root).as_posix()
+        if rel_posix.startswith("docs/archive/"):
+            continue
+        doc_content = doc_file.read_text(encoding="utf-8", errors="ignore")
+        assert "src.fc27_demo_api:create_app" not in doc_content, (
+            f"Stale factory reference found in {rel_posix}"
+        )
+
+    # 4. Demo remains disabled when FC27_DEMO_MODE=false and starts when FC27_DEMO_MODE=true
+    monkeypatch.setenv("FC27_DEMO_MODE", "false")
+    with TestClient(demo_api_mod.create_demo_app()) as disabled_client:
+        assert disabled_client.get("/demo").status_code == 403
+        assert disabled_client.get("/demo/status").status_code == 403
+
+    monkeypatch.setenv("FC27_DEMO_MODE", "true")
+    store = FC27DemoStateStore()
+    with TestClient(demo_api_mod.create_demo_app(state_store=store)) as enabled_client:
+        assert enabled_client.get("/demo").status_code == 200
+        assert enabled_client.get("/demo/status").status_code == 200
+        assert enabled_client.get("/demo/matches").status_code == 200
+        assert enabled_client.get("/demo/analysis").status_code == 200

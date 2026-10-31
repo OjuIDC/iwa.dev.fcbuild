@@ -79,11 +79,25 @@ The FC 27 Ingestion and Analytics Demo proves the complete repository-native ver
 .\.venv\Scripts\python.exe scripts/fc27_demo_ingest.py --source fixture --operation full-demo
 ```
 
-### Start the Local Demo API & Browser View (`127.0.0.1:8097`)
+### Start the Local Demo API & Browser View (`127.0.0.1:8001`)
+
+The canonical ASGI application factory in `src/fc27_demo_api.py` is `src.fc27_demo_api:create_demo_app`:
+
 ```powershell
 $env:FC27_DEMO_MODE = "true"
-.\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app --factory --host 127.0.0.1 --port 8097
+
+.\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app `
+  --factory `
+  --host 127.0.0.1 `
+  --port 8001
 ```
+
+Then open:
+
+- `http://127.0.0.1:8001/demo`
+- `http://127.0.0.1:8001/demo/status`
+- `http://127.0.0.1:8001/demo/matches`
+- `http://127.0.0.1:8001/demo/analysis`
 
 ---
 
@@ -186,7 +200,25 @@ PostgreSQL persistence is **disabled by default** in the demo:
 
 - Requires `--source live`, `--live-confirm`, `FC27_PROVIDER_ENABLED=true`, `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=true`, `FC27_LIVE_INGESTION_ENABLED=true`, `FC27_PROVIDER_DRY_RUN=false`, a non-empty `FC27_PROVIDER_AUTH_REFERENCE`, and an HTTPS allowlisted provider host.
 - Enforces `max_requests=1`, `max_retries=0`, `allow_redirects=False`, `allow_cookies=False`, and `allow_browser_impersonation=False`.
-- Even when all configuration gates are validated in unit tests, `execute_live_probe()` raises `FC27ProviderAuthorizationError("LIVE_PROBE_EXECUTION_DISABLED_IN_THIS_PHASE")`.
+- Even when `--source live` and `--live-confirm` are passed on the CLI, execution fails closed with `FC27LiveAccessBlockedError` before any network or DNS call:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/fc27_demo_ingest.py `
+  --source live `
+  --operation club-identity `
+  --live-confirm
+```
+
+Expected fail-closed output (exit code `1`):
+
+```text
+VALIDATION_STATUS=BLOCKED
+ERROR_TYPE=FC27LiveAccessBlockedError
+RAW_RESPONSE_RETAINED=NO
+RECOMMENDATIONS_ENABLED=NO
+DISPATCH_ENABLED=NO
+LIVE_PROBE_EXECUTED=NO
+```
 
 ---
 
@@ -261,7 +293,7 @@ PostgreSQL persistence is **disabled by default** in the demo:
 ## 18. Screenshots Checklist
 
 When capturing local demo artifacts for review:
-- Verify the `"Synthetic Fixture Data"` and `"Recommendations Disabled"` banners are visible at the top of `http://127.0.0.1:8097/demo`.
+- Verify the `"Synthetic Fixture Data"` and `"Recommendations Disabled"` banners are visible at the top of `http://127.0.0.1:8001/demo`.
 - Confirm club identity displays `East Coasters` (`330323`, `common-gen5`, `FC27`).
 - Confirm all player identifiers appear strictly as `plr_ecf_<12-hex>` pseudonyms with zero gamer tags or personal names.
 - Do not commit screenshots or browser exports into tracked repository paths (keep any local captures inside git-ignored `.local-artifacts/`).

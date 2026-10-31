@@ -73,6 +73,13 @@ docker rm -f fc27-test-postgres
   tests/test_fc27_analyst_graph.py `
   tests/test_fc27_demo.py -q
 
+# Start the local loopback Demo API (requires FC27_DEMO_MODE=true; canonical factory create_demo_app)
+$env:FC27_DEMO_MODE = "true"
+.\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app `
+  --factory `
+  --host 127.0.0.1 `
+  --port 8001
+
 # Pre-approval validator, operator capture, and user export
 .\.venv\Scripts\pytest.exe tests/test_fc27_preapproval_validator.py `
   tests/test_fc27_operator_capture.py `
