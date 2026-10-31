@@ -548,7 +548,13 @@ class FC27DemoResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     demo_mode: bool
-    source_mode: Literal["DEMO_FIXTURE_LOOPBACK", "LIVE_PROBE_BOUNDARY"]
+    source_mode: Literal[
+        "DEMO_FIXTURE_LOOPBACK",
+        "LIVE_PROBE_BOUNDARY",
+        "LIVE_EA_CLUBS_READ_ONLY",
+        "LIVE_EA_CLUBS_BROWSER_OBSERVED",
+        "LIVE_EA_CLUBS_COMMUNITY_CLIENT",
+    ]
     identity: Dict[str, Any]
     request_count: int = Field(ge=0, le=4)
     cache_hits: int = Field(ge=0)

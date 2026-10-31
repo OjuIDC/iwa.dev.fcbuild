@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4",
-  "total_files": 320,
+  "total_files": 328,
   "files": [
     {
       "path": ".gitattributes",
@@ -53,6 +53,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "Dockerfile.community-eval",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.community-eval)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
       "path": "Dockerfile.graph",
@@ -215,6 +225,16 @@
       "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
     },
     {
+      "path": "docker-compose.community-eval.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.community-eval.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active repository configuration and build specification",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
       "path": "docker-compose.cpu.yml",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -353,6 +373,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Current reconciled documentation aligned with implemented code",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
       "path": "docs/FC27_COMPONENT_STATUS.md",
@@ -1025,6 +1055,16 @@
       "last_relevant_commit": "a19aa20115f69928d285e70e178858751a9f9347"
     },
     {
+      "path": "scripts/fc27_community_eval.py",
+      "category": "scripts_and_tooling",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative CLI script or developer/operational tool (scripts/fc27_community_eval.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active CLI or verification script",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
       "path": "scripts/fc27_demo_fixture_server.py",
       "category": "scripts_and_tools",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1375,6 +1415,16 @@
       "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
     },
     {
+      "path": "src/fc27_community_provider.py",
+      "category": "application_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative runtime or library module (src/fc27_community_provider.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active application source module",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
       "path": "src/fc27_dashboard_queries.py",
       "category": "runtime_source",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1413,6 +1463,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "d4224cdaf6ad1a5271bc5d1eb388ea9d3ef6b18e"
+    },
+    {
+      "path": "src/fc27_pandas_view.py",
+      "category": "application_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative runtime or library module (src/fc27_pandas_view.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active application source module",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
       "path": "src/fc27_provider.py",
@@ -2795,6 +2855,16 @@
       "last_relevant_commit": "e32291afbb3cc58673e96787200ff0021da3d179"
     },
     {
+      "path": "tests/test_fc27_community_provider.py",
+      "category": "test_suite",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative automated test module (tests/test_fc27_community_provider.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active automated test suite",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
       "path": "tests/test_fc27_dashboard_queries.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -2823,6 +2893,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "tests/test_fc27_pandas_view.py",
+      "category": "test_suite",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative automated test module (tests/test_fc27_pandas_view.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active automated test suite",
+      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
       "path": "tests/test_fc27_persistence_and_queries.py",

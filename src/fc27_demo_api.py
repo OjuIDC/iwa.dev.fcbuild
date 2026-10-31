@@ -144,18 +144,41 @@ def _ensure_artifacts(
     )
 
 
+def _resolve_source_classification(source_mode: str) -> str:
+    if source_mode in (
+        "LIVE_EA_CLUBS_COMMUNITY_CLIENT",
+        "LIVE_EA_CLUBS_READ_ONLY",
+        "LIVE_EA_CLUBS_BROWSER_OBSERVED",
+    ):
+        return source_mode
+    return "SYNTHETIC_FIXTURE"
+
+
 def _build_status_dict(
     artifacts: FC27DemoSessionArtifacts,
     store: FC27DemoStateStore,
 ) -> Dict[str, Any]:
     res = artifacts.result
     cache_metrics = store.cache.metrics()
+    source_cls = _resolve_source_classification(res.source_mode)
+    last_ingested_at = artifacts.search_context.analysis_generated_at
+    provider_health = (
+        "HEALTHY" if res.circuit_state == "CLOSED" and res.validation_status == "PASS" else "DEGRADED"
+    )
     return {
         "demo_enabled": res.demo_mode,
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": res.source_mode,
+        "source_classification": source_cls,
+        "synthetic_data_classification": source_cls,
+        "source_label": (
+            "Live EA Clubs Data via pinned community client"
+            if source_cls == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
+            else "Synthetic Fixture Data"
+        ),
         "club_identity": dict(res.identity),
         "last_operation": artifacts.last_operation,
+        "last_ingestion_time": last_ingested_at,
+        "provider_health": provider_health,
         "scenario": artifacts.scenario,
         "request_count": res.request_count,
         "cache_status": {
@@ -176,6 +199,7 @@ def _build_status_dict(
         "conflict_count": res.conflict_count,
         "execution_hash": res.execution_hash,
         "raw_response_retained": False,
+        "polling_enabled": False,
         "recommendations_enabled": False,
         "dispatch_enabled": False,
         "live_probe_executed": LIVE_PROBE_EXECUTED,
@@ -183,9 +207,11 @@ def _build_status_dict(
 
 
 def _build_matches_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
+    source_cls = _resolve_source_classification(artifacts.result.source_mode)
     return {
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": artifacts.result.source_mode,
+        "source_classification": source_cls,
+        "synthetic_data_classification": source_cls,
         "club_identity": {
             "club_id": TARGET_CLUB_ID,
             "club_name": TARGET_CLUB_NAME,
@@ -212,7 +238,9 @@ def _build_matches_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
         ],
         "raw_provider_ids_exposed": False,
         "player_aliases_exposed": False,
+        "polling_enabled": False,
         "recommendations_enabled": False,
+        "dispatch_enabled": False,
     }
 
 
@@ -229,9 +257,11 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
             ce_dump["cluster_id"] = f.cluster_id
             counter_evidence_items.append(ce_dump)
 
+    source_cls = _resolve_source_classification(artifacts.result.source_mode)
     return {
-        "source_mode": DEMO_FIXTURE_LOOPBACK,
-        "synthetic_data_classification": "SYNTHETIC_FIXTURE",
+        "source_mode": artifacts.result.source_mode,
+        "source_classification": source_cls,
+        "synthetic_data_classification": source_cls,
         "formula_version": FORMULA_VERSION,
         "ranking_policy_version": RANKING_POLICY_VERSION,
         "analyst_synthesis_version": ANALYST_SYNTHESIS_VERSION,
@@ -267,6 +297,7 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
             q.model_dump(mode="json") for q in analyst.unresolved_questions
         ],
         "limitations": list(analyst.limitations),
+        "polling_enabled": False,
         "recommendations_enabled": False,
         "dispatch_enabled": False,
     }
@@ -325,6 +356,11 @@ def _render_demo_html(
         )
     gaps_html = "\n".join(gap_items) if gap_items else "<li>No data gaps recorded.</li>"
 
+    banner_label = (
+        f"Live EA Clubs Data via pinned community client ({artifacts.result.source_mode})"
+        if artifacts.result.source_mode == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
+        else "Synthetic Fixture Data"
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -350,9 +386,9 @@ def _render_demo_html(
 </head>
 <body>
   <div class="banner-bar">
-    <div class="banner banner-fixture" id="banner-synthetic-fixture">Synthetic Fixture Data</div>
-    <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled</div>
-    <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(DEMO_FIXTURE_LOOPBACK)} (East Coasters 330323 / common-gen5 / FC27)</div>
+    <div class="banner banner-fixture" id="banner-synthetic-fixture">{esc(banner_label)}</div>
+    <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled (RECOMMENDATIONS_DISABLED | POLLING_DISABLED | DISPATCH_DISABLED)</div>
+    <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(artifacts.result.source_mode)} (East Coasters 330323 / common-gen5 / FC27)</div>
   </div>
 
   <h1>East Coasters FC 27 Local Ingestion &amp; Analytics Demo</h1>
@@ -379,6 +415,8 @@ def _render_demo_html(
       <div><strong>Validation:</strong> {esc(status['validation_status'])}</div>
       <div><strong>Confidence:</strong> {esc(artifacts.analyst_report.overall_confidence)}</div>
       <div><strong>Circuit State:</strong> {esc(status['circuit_state'])}</div>
+      <div><strong>Provider Health:</strong> {esc(status['provider_health'])}</div>
+      <div><strong>Last Ingestion:</strong> {esc(status['last_ingestion_time'])}</div>
       <div><strong>Requests / Budget:</strong> {esc(status['request_count'])} ({esc(status['request_budget_status'])})</div>
       <div><strong>Cache (Hits/Misses):</strong> {esc(status['cache_status']['hits'])} / {esc(status['cache_status']['misses'])}</div>
       <div><strong>Persistence:</strong> {esc(status['persistence_status'])}</div>

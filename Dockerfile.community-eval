@@ -1,0 +1,21 @@
+FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp
+
+WORKDIR /app
+
+RUN useradd -r -u 10001 -g nogroup app \
+ && pip install --no-cache-dir \
+    "pydantic>=2.7,<3" \
+    "psycopg[binary]>=3.1,<4" \
+    "https://github.com/1erkandogan/fc27-clubs-api/archive/26a5ff12ea793042bd776a858c74f3f44dd427f5.tar.gz"
+
+COPY src /app/src
+COPY scripts/fc27_demo_fixture_server.py scripts/fc27_demo_ingest.py scripts/fc27_community_eval.py /app/scripts/
+COPY migrations /app/migrations
+
+USER 10001:65534
+
+ENTRYPOINT ["python", "scripts/fc27_community_eval.py"]

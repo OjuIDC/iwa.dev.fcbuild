@@ -100,6 +100,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
   .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
   ```
 - `scripts/check_matchpulse_boundary.py` — Enforces sibling-repository isolation from `..\matchpulse-live-public`.
+- `tests/test_fc27_community_provider.py` & `tests/test_fc27_pandas_view.py` — Offline unit and integration tests for the bounded community provider wrapper (`src/fc27_community_provider.py`, `scripts/fc27_community_eval.py`) and optional downstream analytical view (`src/fc27_pandas_view.py`).
 
 ---
 

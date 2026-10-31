@@ -129,3 +129,9 @@ The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-veri
    - Tracked source and test modules (`src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_authorized_api.py`, and `tests/test_fc27_*.py`).
    - Tracked provenance manifest `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`) recording exact SHA-256 digests, adaptation summaries, feature flags, and rejected unsafe/non-applicable components.
    - Tracked upstream MIT license attribution in `THIRD_PARTY_NOTICES.md`.
+
+---
+
+## 7. Bounded Community Client Evaluation (`src/fc27_community_provider.py`)
+
+For isolated one-shot evaluation and persistence of the pinned MIT-licensed `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (`v0.3.1`) unofficial community client (`fc-clubs-api-community-v1`, not an official EA SDK), `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` provide a strictly gated wrapper (`FC27_COMMUNITY_PROVIDER_ENABLED=false` by default, `--confirm` required) under `SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT`, with optional downstream tabular helpers in `src/fc27_pandas_view.py`. See [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).
