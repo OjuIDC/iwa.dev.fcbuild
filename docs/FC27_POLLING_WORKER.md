@@ -5,7 +5,7 @@
 - **Last verified commit**: `bbb28b44774a89dbb40c252f53c500e51d7a0acc`
 - **Source of truth**: `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `src/settings.py`, `src/fc27_demo_api.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `tests/test_fc27_polling_worker.py`
 
-> **Default Runtime Posture**: **DISABLED BY DEFAULT** (`FC27_COMMUNITY_POLLING_ENABLED=false`)
+> **Default Runtime Posture**: **DISABLED BY DEFAULT** (`FC27_COMMUNITY_POLLING_ENABLED=false`, `IMPLEMENTED_AND_TESTED_DISABLED_BY_DEFAULT`, continuous polling `NOT_ACTIVATED`, recommendations `DISABLED`, dispatch `DISABLED`, Discord `NOT_IMPLEMENTED`)
 >
 > Continuous polling never starts during `pytest`, `uvicorn src.fc27_demo_api:create_demo_app`, module imports, or default `docker compose up`. Live polling requires explicit operator activation across four independent fail-closed gates (`FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`).
 

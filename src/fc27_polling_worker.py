@@ -197,11 +197,52 @@ FORBIDDEN_WORKER_SQL_TABLES: frozenset[str] = frozenset(
         "dispatch_assessments",
         "dispatch_transition_rules",
         "dispatch_worker_claims",
+        "domain_events",
+        "outbox",
+        "fc27_users",
+        "fc27_user_roles",
+        "fc27_invitations",
+        "fc27_sessions",
+        "fc27_webauthn_credentials",
+        "fc27_totp_credentials",
+        "fc27_recovery_codes",
+        "fc27_action_tokens",
+        "fc27_challenges",
+        "fc27_bootstrap_locks",
+        "fc27_credentials",
+        "fc27_delegations",
+        "authority_policies",
+        "authority_delegations",
+        "authority_conflicts",
+        "player_assignments",
+        "player_decision_requests",
+        "player_decisions",
+        "recommendation_packages",
+        "graph_threads",
+        "run_sequences",
+        "activation_gates",
+        "activation_gate_log",
+        "service_heartbeats",
+    }
+)
+
+ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
+    {
+        "fc27_clubs",
+        "fc27_export_batches",
+        "fc27_matches",
+        "fc27_player_match_stats",
+        "fc27_quarantine_records",
     }
 )
 
 _FORBIDDEN_SQL_TABLE_REGEX = re.compile(
     r"\b(" + "|".join(re.escape(tbl) for tbl in sorted(FORBIDDEN_WORKER_SQL_TABLES)) + r")\b",
+    re.IGNORECASE,
+)
+
+_PUBLIC_TABLE_CLAUSE_REGEX = re.compile(
+    r"\b(?:FROM|INTO|JOIN)\s+(?:ONLY\s+)?public\.([a-zA-Z_][a-zA-Z0-9_]*)\b",
     re.IGNORECASE,
 )
 
@@ -505,6 +546,14 @@ def assert_polling_sql_allowed(sql: Any) -> None:
         raise FC27PollingTableAccessDeniedError(
             f"FC27 polling worker role is forbidden from accessing table '{table_name}'"
         )
+    for tbl_match in _PUBLIC_TABLE_CLAUSE_REGEX.finditer(sql_text):
+        candidate = tbl_match.group(1).lower()
+        if candidate in ("pg_roles", "unnest", "jsonb_array_elements", "jsonb_each"):
+            continue
+        if candidate not in ALLOWED_WORKER_PUBLIC_TABLES:
+            raise FC27PollingTableAccessDeniedError(
+                f"FC27 polling worker role is restricted to FC27 domain tables; denied '{candidate}'"
+            )
 
 
 class GuardedPollingCursor:
@@ -911,6 +960,23 @@ def _supplied_matches_from_normalized_records(
     return supplied
 
 
+_REPO_EVENT_PATCH_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _suppress_domain_event_outbox_writes() -> Iterator[None]:
+    """Ensure polling persistence writes only to FC27 domain tables and never touches domain_events or outbox."""
+    import src.fc27_repository as repo_mod
+
+    with _REPO_EVENT_PATCH_LOCK:
+        orig_record_event = repo_mod.record_event
+        repo_mod.record_event = lambda *args, **kwargs: 0
+        try:
+            yield
+        finally:
+            repo_mod.record_event = orig_record_event
+
+
 def persist_polled_match_envelope(
     postgres_conn_or_uri: Any,
     *,
@@ -927,69 +993,70 @@ def persist_polled_match_envelope(
         (m.played_at for m in supplied_matches),
         default=datetime(2026, 10, 31, 0, 0, 0, tzinfo=timezone.utc),
     ) + timedelta(minutes=5)
-    if match_envelopes:
-        summary = persist_community_provider_batch(
-            match_envelope,
-            match_envelopes=match_envelopes,
-            postgres_conn_or_uri=postgres_conn_or_uri,
-            persist_requested=True,
-            persistence_enabled=True,
-            enforce_posture=enforce_posture,
-            quarantine_conflicts=False,
+    with _suppress_domain_event_outbox_writes():
+        if match_envelopes:
+            summary = persist_community_provider_batch(
+                match_envelope,
+                match_envelopes=match_envelopes,
+                postgres_conn_or_uri=postgres_conn_or_uri,
+                persist_requested=True,
+                persistence_enabled=True,
+                enforce_posture=enforce_posture,
+                quarantine_conflicts=False,
+                generated_at=deterministic_gen_dt,
+            )
+            if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                postgres_conn_or_uri.commit()
+            return summary
+
+        from src.fc27_demo import _build_export_envelope_for_persistence
+
+        eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
+        export_env = _build_export_envelope_for_persistence(
+            supplied_matches,
+            export_id=eff_export_id,
             generated_at=deterministic_gen_dt,
+        )
+        existing_state = load_import_state(
+            postgres_conn_or_uri,
+            club_id=FIXED_CLUB_ID,
+            platform=FIXED_PLATFORM,
+            game_version=FIXED_GAME_VERSION,
         )
         if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
             postgres_conn_or_uri.commit()
-        return summary
-
-    from src.fc27_demo import _build_export_envelope_for_persistence
-
-    eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
-    export_env = _build_export_envelope_for_persistence(
-        supplied_matches,
-        export_id=eff_export_id,
-        generated_at=deterministic_gen_dt,
-    )
-    existing_state = load_import_state(
-        postgres_conn_or_uri,
-        club_id=FIXED_CLUB_ID,
-        platform=FIXED_PLATFORM,
-        game_version=FIXED_GAME_VERSION,
-    )
-    if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
-        postgres_conn_or_uri.commit()
-    plan = plan_fc27_user_export_import(
-        export_env,
-        existing_state=existing_state,
-        evaluation_time=deterministic_gen_dt,
-    )
-    apply_res = apply_export_plan(
-        postgres_conn_or_uri,
-        envelope=export_env,
-        plan=plan,
-        actor="fc27_community_polling_worker",
-        enforce_posture=enforce_posture,
-        quarantine_conflicts=False,
-    )
-    if apply_res.status == "REJECTED" or apply_res.replay_conflict:
-        if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
-            postgres_conn_or_uri.rollback()
-        raise FC27ReplayConflictError(
-            f"Replay conflict rejected during community poll persistence: {apply_res.detail}"
+        plan = plan_fc27_user_export_import(
+            export_env,
+            existing_state=existing_state,
+            evaluation_time=deterministic_gen_dt,
         )
-    if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
-        postgres_conn_or_uri.commit()
+        apply_res = apply_export_plan(
+            postgres_conn_or_uri,
+            envelope=export_env,
+            plan=plan,
+            actor="fc27_community_polling_worker",
+            enforce_posture=enforce_posture,
+            quarantine_conflicts=False,
+        )
+        if apply_res.status == "REJECTED" or apply_res.replay_conflict:
+            if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
+                postgres_conn_or_uri.rollback()
+            raise FC27ReplayConflictError(
+                f"Replay conflict rejected during community poll persistence: {apply_res.detail}"
+            )
+        if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+            postgres_conn_or_uri.commit()
 
-    return FC27CommunityPersistenceApplySummary(
-        live_data_persisted="YES",
-        match_rows_inserted=apply_res.accepted_records,
-        team_stat_rows_inserted=apply_res.accepted_records,
-        player_stat_rows_inserted=apply_res.player_stat_records,
-        duplicates_ignored=apply_res.duplicate_records,
-        replay_conflicts=1 if apply_res.replay_conflict else 0,
-        idempotent_duplicate=apply_res.idempotent_duplicate,
-        export_id=eff_export_id,
-    )
+        return FC27CommunityPersistenceApplySummary(
+            live_data_persisted="YES",
+            match_rows_inserted=apply_res.accepted_records,
+            team_stat_rows_inserted=apply_res.accepted_records,
+            player_stat_rows_inserted=apply_res.player_stat_records,
+            duplicates_ignored=apply_res.duplicate_records,
+            replay_conflicts=1 if apply_res.replay_conflict else 0,
+            idempotent_duplicate=apply_res.idempotent_duplicate,
+            export_id=eff_export_id,
+        )
 
 
 @dataclass

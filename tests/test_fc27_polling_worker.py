@@ -2014,17 +2014,36 @@ def test_095_worker_database_role_cannot_access_checkpoints_tables(pg_db_migrate
 
 
 def test_096_worker_database_role_cannot_access_approval_tables(pg_db_migrated) -> None:
-    """96. Worker database role cannot access approval_requests, approval_audit, or approval_nonces."""
+    """96. Worker database role cannot access approval, decision-evidence, or identity/WebAuthn tables."""
     with open_guarded_polling_connection(pg_db_migrated.app) as conn:
-        for table in ("approval_requests", "approval_audit", "approval_nonces"):
+        for table in (
+            "approval_requests",
+            "approval_audit",
+            "approval_nonces",
+            "fc27_decision_evidence",
+            "fc27_users",
+            "fc27_sessions",
+            "fc27_webauthn_credentials",
+            "fc27_challenges",
+            "fc27_recovery_codes",
+            "fc27_totp_credentials",
+            "fc27_credentials",
+        ):
             with pytest.raises(FC27PollingTableAccessDeniedError):
                 conn.execute(f"SELECT COUNT(*) FROM public.{table}")
 
 
 def test_097_worker_database_role_cannot_access_dispatch_tables(pg_db_migrated) -> None:
-    """97. Worker database role cannot access dispatches or dispatch_delivery_attempts."""
+    """97. Worker database role cannot access dispatches, dispatch_delivery_attempts, domain_events, or outbox."""
     with open_guarded_polling_connection(pg_db_migrated.app) as conn:
-        for table in ("dispatches", "dispatch_delivery_attempts"):
+        for table in (
+            "dispatches",
+            "dispatch_delivery_attempts",
+            "dispatch_plans",
+            "dispatch_worker_claims",
+            "domain_events",
+            "outbox",
+        ):
             with pytest.raises(FC27PollingTableAccessDeniedError):
                 conn.execute(f"SELECT COUNT(*) FROM public.{table}")
 
