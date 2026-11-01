@@ -213,6 +213,10 @@ class FC27DirectorExperimentSequenceItem(BaseModel):
     dispatchable: Literal[False] = False
     causal_claim: Literal[False] = False
 
+    @property
+    def sequence_rank(self) -> int:
+        return self.sequence_order
+
     @model_validator(mode="after")
     def _validate_item(self) -> FC27DirectorExperimentSequenceItem:
         validate_director_output_type(self.output_type, "sequence_item.output_type")
@@ -431,6 +435,14 @@ class FC27DirectorReport(BaseModel):
     approvable: Literal[False] = False
     dispatchable: Literal[False] = False
     causal_claim: Literal[False] = False
+
+    @property
+    def overall_confidence(self) -> ConfidenceTierLiteral:
+        return self.confidence_tier
+
+    @property
+    def sequenced_candidates(self) -> tuple[FC27DirectorExperimentSequenceItem, ...]:
+        return self.experiment_sequence
 
     @model_validator(mode="before")
     @classmethod

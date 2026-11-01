@@ -36,6 +36,17 @@ from src.fc27_analyst import (
     ANALYST_POLICY_VERSION,
     ANALYST_SYNTHESIS_VERSION,
 )
+from src.fc27_coach import COACH_POLICY_VERSION, COACH_VERSION
+from src.fc27_director import (
+    DIRECTOR_POLICY_VERSION,
+    DIRECTOR_REVIEW_STATUS,
+    DIRECTOR_VERSION,
+)
+from src.fc27_tactics import (
+    EXPERIMENTAL_ONLY_STATUS,
+    TACTICS_POLICY_VERSION,
+    TACTICS_VERSION,
+)
 from src.fc27_analytics import FORMULA_VERSION
 from src.fc27_clubs_api_contracts import (
     TARGET_CLUB_ID,
@@ -229,16 +240,73 @@ def _build_status_dict(
         "raw_response_retained": False,
         "polling_enabled": poll_health.worker_enabled,
         "worker_running": poll_health.worker_running,
+        "poll_interval_seconds": poll_health.poll_interval_seconds,
+        "polling_frequency": poll_health.polling_frequency,
+        "max_provider_requests_per_24_hours": poll_health.max_provider_requests_per_24_hours,
+        "catch_up_bursts_allowed": poll_health.catch_up_bursts_allowed,
         "last_attempt_at": last_attempt_iso,
         "last_success_at": last_success_iso,
         "last_new_match_at": last_new_match_iso,
         "last_status": poll_health.last_status,
         "consecutive_failures": poll_health.consecutive_failures,
         "next_eligible_at": next_eligible_iso,
+        "schedule_lag_seconds": poll_health.schedule_lag_seconds,
+        "missed_intervals": poll_health.missed_intervals,
+        "catch_up_cycles_suppressed": poll_health.catch_up_cycles_suppressed,
+        "provider_window_count": poll_health.provider_window_count,
+        "elapsed_since_last_success": poll_health.elapsed_since_last_success,
+        "possible_history_gap": poll_health.possible_history_gap,
+        "history_gap_reason": poll_health.history_gap_reason,
+        "review_required": poll_health.review_required,
+        "persistence_before_analytics": poll_health.persistence_before_analytics,
         "total_matches_inserted": poll_health.total_matches_inserted,
         "total_duplicates_ignored": poll_health.total_duplicates_ignored,
         "total_replay_conflicts": poll_health.total_replay_conflicts,
+        "match_count": len(artifacts.matches),
+        "polling": {
+            "polling_enabled": poll_health.worker_enabled,
+            "worker_running": poll_health.worker_running,
+            "poll_interval_seconds": poll_health.poll_interval_seconds,
+            "polling_frequency": poll_health.polling_frequency,
+            "max_provider_requests_per_24_hours": poll_health.max_provider_requests_per_24_hours,
+            "catch_up_bursts_allowed": poll_health.catch_up_bursts_allowed,
+            "possible_history_gap": poll_health.possible_history_gap,
+            "history_gap_reason": poll_health.history_gap_reason,
+            "circuit_state": poll_health.circuit_state,
+        },
+        "advisory_pipeline": {
+            "pipeline_order": [
+                "Search",
+                "Scout",
+                "Analyst",
+                "Coach",
+                "Tactics",
+                "Director",
+            ],
+            "coach_active": artifacts.coach_report is not None,
+            "tactics_active": artifacts.tactics_report is not None,
+            "director_active": artifacts.director_report is not None,
+            "coach_hypotheses_count": (
+                len(artifacts.coach_report.hypotheses)
+                if artifacts.coach_report is not None
+                else 0
+            ),
+            "tactics_candidates_count": (
+                len(artifacts.tactics_report.candidates)
+                if artifacts.tactics_report is not None
+                else 0
+            ),
+            "director_sequenced_count": (
+                len(artifacts.director_report.experiment_sequence)
+                if artifacts.director_report is not None
+                else 0
+            ),
+            "recommendations_enabled": False,
+            "approval_enabled": False,
+            "dispatch_enabled": False,
+        },
         "recommendations_enabled": False,
+        "approval_enabled": False,
         "dispatch_enabled": False,
         "live_probe_executed": LIVE_PROBE_EXECUTED,
     }
@@ -286,6 +354,9 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
     s_ctx = artifacts.search_context
     scout = artifacts.scout_report
     analyst = artifacts.analyst_report
+    coach = artifacts.coach_report
+    tactics = artifacts.tactics_report
+    director = artifacts.director_report
 
     counter_evidence_items = []
     for f in analyst.findings:
@@ -304,10 +375,19 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
         "ranking_policy_version": RANKING_POLICY_VERSION,
         "analyst_synthesis_version": ANALYST_SYNTHESIS_VERSION,
         "analyst_policy_version": ANALYST_POLICY_VERSION,
+        "coach_version": COACH_VERSION,
+        "coach_policy_version": COACH_POLICY_VERSION,
+        "tactics_version": TACTICS_VERSION,
+        "tactics_policy_version": TACTICS_POLICY_VERSION,
+        "director_version": DIRECTOR_VERSION,
+        "director_policy_version": DIRECTOR_POLICY_VERSION,
         "confidence": analyst.overall_confidence,
         "search_hash": s_ctx.context_hash,
         "scout_hash": scout.report_hash,
         "analyst_hash": analyst.report_hash,
+        "coach_hash": coach.report_hash if coach is not None else None,
+        "tactics_hash": tactics.report_hash if tactics is not None else None,
+        "director_hash": director.report_hash if director is not None else None,
         "execution_hash": artifacts.result.execution_hash,
         "search_team_summary": s_ctx.baseline_team_aggregates.model_dump(mode="json"),
         "recent_versus_baseline_summary": {
@@ -325,6 +405,43 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
             "role_evidence": [r.model_dump(mode="json") for r in scout.role_evidence],
         },
         "analyst_findings": [f.model_dump(mode="json") for f in analyst.findings],
+        "coach_hypotheses": (
+            [h.model_dump(mode="json") for h in coach.hypotheses]
+            if coach is not None
+            else []
+        ),
+        "tactics_candidates": (
+            [c.model_dump(mode="json") for c in tactics.candidates]
+            if tactics is not None
+            else []
+        ),
+        "director_reconciliation": (
+            {
+                "review_status": director.review_status,
+                "reconciliation_summary": director.reconciliation_summary,
+                "experiment_sequence": [
+                    s.model_dump(mode="json") for s in director.experiment_sequence
+                ],
+                "deferred_candidates": [
+                    d.model_dump(mode="json") for d in director.deferred_candidates
+                ],
+                "rejected_candidates": [
+                    r.model_dump(mode="json") for r in director.rejected_candidates
+                ],
+                "measurement_priorities": [
+                    m.model_dump(mode="json") for m in director.measurement_priorities
+                ],
+            }
+            if director is not None
+            else {
+                "review_status": DIRECTOR_REVIEW_STATUS,
+                "reconciliation_summary": "",
+                "experiment_sequence": [],
+                "deferred_candidates": [],
+                "rejected_candidates": [],
+                "measurement_priorities": [],
+            }
+        ),
         "counter_evidence_summary": {
             "total_items": len(counter_evidence_items),
             "items": counter_evidence_items,
@@ -335,8 +452,63 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
             q.model_dump(mode="json") for q in analyst.unresolved_questions
         ],
         "limitations": list(analyst.limitations),
+        "search": {
+            "context_hash": s_ctx.context_hash,
+            "eligible_match_count": s_ctx.eligible_match_count,
+            "excluded_match_count": s_ctx.excluded_match_count,
+        },
+        "scout": {
+            "report_hash": scout.report_hash,
+            "team_evidence": scout.team_evidence.model_dump(mode="json"),
+        },
+        "analyst": {
+            "report_hash": analyst.report_hash,
+            "overall_confidence": analyst.overall_confidence,
+            "findings": [f.model_dump(mode="json") for f in analyst.findings],
+        },
+        "coach": (
+            {
+                "report_hash": coach.report_hash,
+                "overall_confidence": coach.overall_confidence,
+                "hypotheses": [h.model_dump(mode="json") for h in coach.hypotheses],
+            }
+            if coach is not None
+            else None
+        ),
+        "tactics": (
+            {
+                "report_hash": tactics.report_hash,
+                "overall_confidence": tactics.overall_confidence,
+                "candidates": [c.model_dump(mode="json") for c in tactics.candidates],
+            }
+            if tactics is not None
+            else None
+        ),
+        "director": (
+            {
+                "report_hash": director.report_hash,
+                "overall_confidence": director.overall_confidence,
+                "experiment_sequence": [
+                    s.model_dump(mode="json") for s in director.experiment_sequence
+                ],
+                "deferred_candidates": [
+                    d.model_dump(mode="json") for d in director.deferred_candidates
+                ],
+                "rejected_candidates": [
+                    r.model_dump(mode="json") for r in director.rejected_candidates
+                ],
+            }
+            if director is not None
+            else None
+        ),
+        "governance": {
+            "recommendations_enabled": False,
+            "approval_enabled": False,
+            "dispatch_enabled": False,
+        },
         "polling_enabled": False,
         "recommendations_enabled": False,
+        "approval_enabled": False,
         "dispatch_enabled": False,
     }
 
@@ -400,6 +572,81 @@ def _render_demo_html(
         )
     gaps_html = "\n".join(gap_items) if gap_items else "<li>No data gaps recorded.</li>"
 
+    question_items = []
+    for q in artifacts.analyst_report.unresolved_questions:
+        question_items.append(
+            f"<li><strong>[{esc(q.category)}]</strong> {esc(q.question)} "
+            f"(Required: {esc(q.required_evidence_to_resolve)})</li>"
+        )
+    questions_html = (
+        "\n".join(question_items)
+        if question_items
+        else "<li>No unresolved questions recorded.</li>"
+    )
+
+    coach_items = []
+    if artifacts.coach_report is not None:
+        for h in artifacts.coach_report.hypotheses:
+            coach_items.append(
+                "<li>"
+                f"<strong>[{esc(h.artifact_type)} | {esc(h.confidence_tier)}]</strong> "
+                f"{esc(h.statement)}<br>"
+                f"<small>Falsification: {esc(h.falsification_condition)} | "
+                f"Min Sample: {esc(h.minimum_sample_requirement)}</small>"
+                "</li>"
+            )
+    coach_html = (
+        "\n".join(coach_items)
+        if coach_items
+        else "<li>No Coach hypotheses generated.</li>"
+    )
+
+    tactics_items = []
+    if artifacts.tactics_report is not None:
+        for c in artifacts.tactics_report.candidates:
+            tactics_items.append(
+                "<li>"
+                f"<strong>[{esc(c.candidate_type)} | {esc(c.experimental_status)} | {esc(c.confidence_tier)}]</strong> "
+                f"{esc(c.expected_observation)}<br>"
+                f"<small>Success Metric: {esc(c.success_metric)} | "
+                f"Stop Condition: {esc(c.stop_condition)}</small>"
+                "</li>"
+            )
+    tactics_html = (
+        "\n".join(tactics_items)
+        if tactics_items
+        else "<li>No experimental Tactics candidates generated.</li>"
+    )
+
+    director_seq_items = []
+    if artifacts.director_report is not None:
+        for s in artifacts.director_report.experiment_sequence:
+            director_seq_items.append(
+                "<li>"
+                f"<strong>[Slot {esc(s.sequence_order)} | {esc(s.category)} | {esc(s.confidence_tier)}]</strong> "
+                f"{esc(s.rationale)} (Sample Budget: {esc(s.sample_budget_matches)} matches)"
+                "</li>"
+            )
+    director_seq_html = (
+        "\n".join(director_seq_items)
+        if director_seq_items
+        else "<li>No active sequenced experiments.</li>"
+    )
+    director_summary_text = (
+        artifacts.director_report.reconciliation_summary
+        if artifacts.director_report is not None
+        else "Reconciliation not available."
+    )
+    coach_hash_str = (
+        artifacts.coach_report.report_hash if artifacts.coach_report is not None else "NONE"
+    )
+    tactics_hash_str = (
+        artifacts.tactics_report.report_hash if artifacts.tactics_report is not None else "NONE"
+    )
+    director_hash_str = (
+        artifacts.director_report.report_hash if artifacts.director_report is not None else "NONE"
+    )
+
     banner_label = resolve_dashboard_source_label(
         artifacts.result.source_mode,
         include_mode_suffix=True,
@@ -430,7 +677,8 @@ def _render_demo_html(
 <body>
   <div class="banner-bar">
     <div class="banner banner-fixture" id="banner-synthetic-fixture">{esc(banner_label)}</div>
-    <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled (RECOMMENDATIONS_DISABLED | POLLING_DISABLED | DISPATCH_DISABLED)</div>
+    <div class="banner banner-rec" id="banner-polling-12h">Polling Every 12 Hours (43200s | Max 2 Requests/24h | Catch-Up Bursts Disabled)</div>
+    <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled | Approval Disabled | Dispatch Disabled (RECOMMENDATIONS_DISABLED | POLLING_DISABLED | DISPATCH_DISABLED)</div>
     <div class="banner banner-rec" id="banner-polling-status">{esc(polling_banner_text)}</div>
     <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(artifacts.result.source_mode)} (East Coasters 330323 / common-gen5 / FC27)</div>
   </div>
@@ -452,8 +700,8 @@ def _render_demo_html(
     </div>
   </div>
 
-  <div class="card">
-    <h2>Ingestion Status &amp; Deterministic Hashes</h2>
+  <div class="card" id="card-provider-health">
+    <h2>Provider Health &amp; Deterministic Hashes</h2>
     <div class="grid">
       <div><strong>Scenario:</strong> {esc(status['scenario'])}</div>
       <div><strong>Validation:</strong> {esc(status['validation_status'])}</div>
@@ -470,29 +718,35 @@ def _render_demo_html(
       <strong>Search Hash:</strong> <code>{esc(artifacts.search_context.context_hash)}</code><br>
       <strong>Scout Hash:</strong> <code>{esc(artifacts.scout_report.report_hash)}</code><br>
       <strong>Analyst Hash:</strong> <code>{esc(artifacts.analyst_report.report_hash)}</code><br>
+      <strong>Coach Hash:</strong> <code>{esc(coach_hash_str)}</code><br>
+      <strong>Tactics Hash:</strong> <code>{esc(tactics_hash_str)}</code><br>
+      <strong>Director Hash:</strong> <code>{esc(director_hash_str)}</code><br>
       <strong>Execution Hash:</strong> <code>{esc(status['execution_hash'])}</code>
     </p>
   </div>
 
   <div class="card" id="card-polling-health">
-    <h2>Polling Worker Health (Read-Only)</h2>
+    <h2>Polling Worker Health (Read-Only) — 12-Hour Schedule &amp; Possible History Gap</h2>
     <div class="grid">
       <div><strong>Polling Enabled:</strong> {esc(status['polling_enabled'])}</div>
       <div><strong>Worker Running:</strong> {esc(status['worker_running'])}</div>
+      <div><strong>Poll Interval:</strong> {esc(status['poll_interval_seconds'])}s ({esc(status['polling_frequency'])})</div>
+      <div><strong>Max Requests / 24h:</strong> {esc(status['max_provider_requests_per_24_hours'])}</div>
       <div><strong>Last Poll Status:</strong> {esc(status['last_status'])}</div>
       <div><strong>Consecutive Failures:</strong> {esc(status['consecutive_failures'])}</div>
       <div><strong>Last Attempt At:</strong> {esc(status['last_attempt_at'])}</div>
       <div><strong>Last Success At:</strong> {esc(status['last_success_at'])}</div>
       <div><strong>Last New Match At:</strong> {esc(status['last_new_match_at'])}</div>
       <div><strong>Next Eligible At:</strong> {esc(status['next_eligible_at'])}</div>
+      <div><strong>Possible History Gap:</strong> {esc(status['possible_history_gap'])} ({esc(status['history_gap_reason'])})</div>
       <div><strong>Matches Inserted:</strong> {esc(status['total_matches_inserted'])}</div>
       <div><strong>Duplicates Ignored:</strong> {esc(status['total_duplicates_ignored'])}</div>
       <div><strong>Replay Conflicts:</strong> {esc(status['total_replay_conflicts'])}</div>
     </div>
   </div>
 
-  <div class="card">
-    <h2>Recent Normalized Matches (Pseudonymous References Only)</h2>
+  <div class="card" id="card-latest-matches">
+    <h2>Latest Matches (Pseudonymous References Only)</h2>
     <table>
       <thead>
         <tr>
@@ -512,17 +766,56 @@ def _render_demo_html(
     </table>
   </div>
 
-  <div class="card">
+  <div class="card" id="card-search-scout">
+    <h2>Search &amp; Scout Evidence Summary</h2>
+    <div class="grid">
+      <div><strong>Eligible Matches:</strong> {esc(artifacts.search_context.eligible_match_count)}</div>
+      <div><strong>Excluded Matches:</strong> {esc(artifacts.search_context.excluded_match_count)}</div>
+      <div><strong>Wins / Draws / Losses:</strong> {esc(artifacts.scout_report.team_evidence.wins)} / {esc(artifacts.scout_report.team_evidence.draws)} / {esc(artifacts.scout_report.team_evidence.losses)}</div>
+      <div><strong>Goals For / Against (GD):</strong> {esc(artifacts.scout_report.team_evidence.goals_for)} / {esc(artifacts.scout_report.team_evidence.goals_against)} ({esc(artifacts.scout_report.team_evidence.goal_differential)})</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-analyst">
     <h2>Analyst Observational Findings ({esc(len(artifacts.analyst_report.findings))})</h2>
     <ul>
       {findings_html}
     </ul>
   </div>
 
-  <div class="card">
+  <div class="card" id="card-coach">
+    <h2>Coach Hypotheses &amp; Practice Experiments</h2>
+    <ul>
+      {coach_html}
+    </ul>
+  </div>
+
+  <div class="card" id="card-tactics">
+    <h2>Tactics Experimental Candidates ({esc(EXPERIMENTAL_ONLY_STATUS)})</h2>
+    <ul>
+      {tactics_html}
+    </ul>
+  </div>
+
+  <div class="card" id="card-director">
+    <h2>Director Evidence Reconciliation ({esc(DIRECTOR_REVIEW_STATUS)})</h2>
+    <p>{esc(director_summary_text)}</p>
+    <ul>
+      {director_seq_html}
+    </ul>
+  </div>
+
+  <div class="card" id="card-data-gaps">
     <h2>Data Gaps &amp; Unmeasured Context ({esc(len(artifacts.analyst_report.data_gaps))})</h2>
     <ul>
       {gaps_html}
+    </ul>
+  </div>
+
+  <div class="card" id="card-unresolved-questions">
+    <h2>Unresolved Questions ({esc(len(artifacts.analyst_report.unresolved_questions))})</h2>
+    <ul>
+      {questions_html}
     </ul>
   </div>
 

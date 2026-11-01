@@ -72,10 +72,12 @@ The local East Coasters FC 27 one-shot ingestion and analytics demo (`src/fc27_d
 The East Coasters FC 27 community polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `docker-compose.community-worker.yml`) is governed by fail-closed settings in `src/settings.py` and `config.example.env`:
 
 - **`FC27_COMMUNITY_POLLING_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for polling cycle execution (`is_fc27_community_polling_enabled()`). Returns `POLLING_DISABLED` with `requests_executed=0` when `false`.
-- **`FC27_COMMUNITY_POLL_MIN_SECONDS`** (default `300`; accepted `300..3600`): Minimum sleep interval in seconds (`get_fc27_community_poll_min_seconds()`). Fails closed on `< 300` or `> 3600`.
-- **`FC27_COMMUNITY_POLL_MAX_SECONDS`** (default `600`; accepted `min_seconds..3600`): Maximum sleep interval in seconds (`get_fc27_community_poll_max_seconds()`). Fails closed on `< min_seconds` or `> 3600`.
+- **`FC27_COMMUNITY_POLL_INTERVAL_SECONDS`** (default `43200`; accepted `43200` only): Fixed 12-hour polling interval in seconds (`get_fc27_community_poll_interval_seconds()`).
+- **`FC27_COMMUNITY_POLL_MIN_SECONDS`** (default `43200`; accepted `43200` only): Minimum sleep interval in seconds (`get_fc27_community_poll_min_seconds()`). Fails closed on `!= 43200`.
+- **`FC27_COMMUNITY_POLL_MAX_SECONDS`** (default `43200`; accepted `43200` only): Maximum sleep interval in seconds (`get_fc27_community_poll_max_seconds()`). Fails closed on `!= 43200`.
 - **`FC27_COMMUNITY_POLL_MAX_REQUESTS`** (default `1`; accepted `1` only): Caps provider HTTP requests per poll cycle (`get_fc27_community_poll_max_requests()`). Fails closed on any value `!= 1`.
 - **`FC27_COMMUNITY_POLL_MAX_RETRIES`** (default `0`; accepted `0` only): Prohibits automatic retries during polling (`get_fc27_community_poll_max_retries()`). Fails closed on any value `!= 0`.
-- **`FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY`** (default `true`; accepted `true` only): Ensures `Search -> Scout -> Analyst` executes only when `inserted_match_count > 0` (`is_fc27_community_poll_analytics_on_new_only()`).
+- **`FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY`** (default `true`; accepted `true` only): Ensures `Search -> Scout -> Analyst -> Coach -> Tactics -> Director` executes only when `inserted_match_count > 0` (`is_fc27_community_poll_analytics_on_new_only()`).
 - **`FC27_COMMUNITY_POLL_SINGLE_FLIGHT`** (default `true`; accepted `true` only): Enforces in-process and PostgreSQL advisory single-flight lock per poll cycle (`is_fc27_community_poll_single_flight()`).
 - **`FC27_COMMUNITY_POLL_ONCE`** (default `false`; accepted `true`, `false`): Causes the polling worker loop to exit after at most 1 bounded poll cycle (`is_fc27_community_poll_once()`).
+- **`FC27_DISCORD_BOT_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for the read-only East Coasters Discord analytics bot (`is_fc27_discord_bot_enabled()`). Requires non-empty `FC27_DISCORD_ALLOWED_GUILD_IDS`, `FC27_DISCORD_ALLOWED_CHANNEL_IDS`, and `DISCORD_BOT_TOKEN_FILE`; see [`FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md).

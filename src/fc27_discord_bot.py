@@ -44,11 +44,13 @@ from src.fc27_clubs_api_contracts import (
     TARGET_GAME_VERSION,
     TARGET_PLATFORM,
 )
+from src.fc27_coach import FC27CoachInput, build_fc27_coach_report
 from src.fc27_community_provider import (
     COMMUNITY_PROVIDER_ID,
     LIVE_EA_CLUBS_COMMUNITY_CLIENT,
     run_analytics_from_persisted_community_records,
 )
+from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_pandas_view import (
     FC27PandasView,
     RECENT_MATCHES_COLUMNS,
@@ -62,7 +64,59 @@ from src.fc27_polling_worker import (
     recover_polling_state_from_postgres,
 )
 from src.fc27_search_scout import FC27ScoutReport, FC27SearchContext
+from src.fc27_tactics import FC27TacticsInput, build_fc27_tactics_report
 from src.settings import ConfigError, read_secret
+
+
+def _default_coach_provider(
+    search_ctx: FC27SearchContext,
+    scout_rep: FC27ScoutReport,
+    analyst_rep: FC27AnalystReport,
+) -> Any:
+    return build_fc27_coach_report(
+        FC27CoachInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_generated_at=analyst_rep.analysis_generated_at,
+        )
+    )
+
+
+def _default_tactics_provider(
+    search_ctx: FC27SearchContext,
+    scout_rep: FC27ScoutReport,
+    analyst_rep: FC27AnalystReport,
+    coach_rep: Any,
+) -> Any:
+    return build_fc27_tactics_report(
+        FC27TacticsInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_generated_at=analyst_rep.analysis_generated_at,
+        )
+    )
+
+
+def _default_director_provider(
+    search_ctx: FC27SearchContext,
+    scout_rep: FC27ScoutReport,
+    analyst_rep: FC27AnalystReport,
+    coach_rep: Any,
+    tactics_rep: Any,
+) -> Any:
+    return build_fc27_director_report(
+        FC27DirectorInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_report=tactics_rep,
+            director_generated_at=analyst_rep.analysis_generated_at,
+        )
+    )
 
 DISCORD_BOT_VERSION: Final[str] = "1.0.0"
 DISCORD_PROVIDER_REQUESTS: Final[int] = 0
@@ -533,12 +587,12 @@ class FC27DiscordBotService:
         db_conn_or_uri: str | psycopg.Connection[Any] | None = None,
         polling_runtime: FC27PollingRuntime | None = None,
         coach_report_provider: Callable[[FC27SearchContext, FC27ScoutReport, FC27AnalystReport], Any]
-        | None = None,
+        | None = _default_coach_provider,
         tactics_report_provider: Callable[
             [FC27SearchContext, FC27ScoutReport, FC27AnalystReport, Any], Any
         ]
-        | None = None,
-        director_report_provider: Callable[[FC27AnalystReport, Any, Any], Any] | None = None,
+        | None = _default_tactics_provider,
+        director_report_provider: Callable[..., Any] | None = _default_director_provider,
         clock_fn: Callable[[], float] = time.monotonic,
         now_utc_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         secret_tokens_to_scrub: Sequence[str] = (),
@@ -1237,15 +1291,34 @@ class FC27DiscordBotService:
                 )
             coach_rep = self._coach_provider(search_ctx, scout_rep, analyst_rep)
             tactics_rep = self._tactics_provider(search_ctx, scout_rep, analyst_rep, coach_rep)
-            director_rep = self._director_provider(analyst_rep, coach_rep, tactics_rep)
-            seq = getattr(director_rep, "experiment_sequence", ())
+            try:
+                director_rep = self._director_provider(
+                    search_ctx, scout_rep, analyst_rep, coach_rep, tactics_rep
+                )
+            except TypeError:
+                director_rep = self._director_provider(analyst_rep, coach_rep, tactics_rep)
+            seq = getattr(director_rep, "sequenced_candidates", None) or getattr(
+                director_rep, "experiment_sequence", ()
+            )
             deferred = getattr(director_rep, "deferred_candidates", ())
+            rejected = getattr(director_rep, "rejected_candidates", ())
+            desc_lines = [
+                f"- `{s.candidate_id}` (rank #{s.sequence_order}, `{s.confidence_tier}`): {s.rationale[:140]}"
+                for s in seq[:4]
+                if hasattr(s, "candidate_id")
+            ]
+            desc_text = (
+                "\n".join(desc_lines)
+                if desc_lines
+                else str(getattr(director_rep, "review_summary", "Director reconciliation complete."))
+            )
             embed = FC27DiscordEmbed(
                 title=f"East Coasters Director Reconciliation ({director_rep.overall_confidence})",
-                description=str(getattr(director_rep, "review_summary", "Director reconciliation complete."))[:1750],
+                description=desc_text[:1750],
                 fields={
                     "sequenced_experiments": str(len(seq)),
                     "deferred_candidates": str(len(deferred)),
+                    "rejected_candidates": str(len(rejected)),
                     "governance": "recommendation=false | approvable=false | dispatchable=false",
                 },
             )

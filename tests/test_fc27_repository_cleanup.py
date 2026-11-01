@@ -249,11 +249,33 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "tests/test_fc27_archive_manifest.py",
         "tests/test_fc27_repository_cleanup.py",
         "Dockerfile.community-worker",
+        "Dockerfile.discord",
         "docker-compose.community-worker.yml",
+        "docker-compose.discord.yml",
+        "docs/FC27_BACKUP_AND_RECOVERY.md",
+        "docs/FC27_COACH_HYPOTHESIS_ENGINE.md",
+        "docs/FC27_DAILY_POLLING_OPERATIONS.md",
+        "docs/FC27_DIRECTOR_RECONCILIATION.md",
+        "docs/FC27_DISCORD_BOT.md",
         "docs/FC27_POLLING_WORKER.md",
+        "docs/FC27_TACTICS_CANDIDATE_ENGINE.md",
+        "scripts/fc27_backup.py",
+        "scripts/fc27_discord_bot.py",
         "scripts/fc27_polling_worker.py",
+        "scripts/fc27_restore_verify.py",
+        "src/fc27_backup_restore.py",
+        "src/fc27_coach.py",
+        "src/fc27_director.py",
+        "src/fc27_discord_bot.py",
         "src/fc27_polling_worker.py",
+        "src/fc27_tactics.py",
+        "tests/test_fc27_advisory_pipeline_e2e.py",
+        "tests/test_fc27_backup_restore.py",
+        "tests/test_fc27_coach.py",
+        "tests/test_fc27_director.py",
+        "tests/test_fc27_discord_bot.py",
         "tests/test_fc27_polling_worker.py",
+        "tests/test_fc27_tactics.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
@@ -276,7 +298,7 @@ def test_48_current_startup_commands_resolve() -> None:
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 11
+    assert len(py_scripts) == 14
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))
@@ -291,6 +313,7 @@ def test_50_current_docker_entrypoints_import() -> None:
         "voice/tts_service.py",
         "scripts/fc27_community_eval.py",
         "scripts/fc27_polling_worker.py",
+        "scripts/fc27_discord_bot.py",
     ]
     for rel in docker_targets:
         path = REPO_ROOT / rel

@@ -64,6 +64,7 @@ from src.fc27_community_provider import (
     FC27LiveProbeBlockedError,
     normalize_community_identity_records,
     persist_community_provider_batch,
+    run_advisory_pipeline_from_persisted_community_records,
     run_analytics_from_persisted_community_records,
 )
 from src.fc27_provider import (
@@ -2206,19 +2207,30 @@ def run_fc27_poll_cycle(
                 db_conn_or_uri,
                 enforce_posture=enforce_db_posture,
             ) as guarded_conn:
-                search_ctx, scout_rep, analyst_rep = (
-                    run_analytics_from_persisted_community_records(
-                        guarded_conn,
-                        payload_sha256=match_envelope.payload_hash,
-                        analysis_generated_at=_normalize_utc(clock_utc()),
-                    )
+                (
+                    search_ctx,
+                    scout_rep,
+                    analyst_rep,
+                    coach_rep,
+                    tactics_rep,
+                    director_rep,
+                ) = run_advisory_pipeline_from_persisted_community_records(
+                    guarded_conn,
+                    payload_sha256=match_envelope.payload_hash,
+                    analysis_generated_at=_normalize_utc(clock_utc()),
                 )
             analytics_bundle = {
                 "search_context_hash": search_ctx.context_hash,
                 "scout_report_hash": scout_rep.report_hash,
                 "analyst_report_hash": analyst_rep.report_hash,
+                "coach_report_hash": coach_rep.report_hash,
+                "tactics_report_hash": tactics_rep.report_hash,
+                "director_report_hash": director_rep.report_hash,
                 "confidence_tier": analyst_rep.overall_confidence,
                 "finding_count": len(analyst_rep.findings),
+                "coach_hypothesis_count": len(coach_rep.hypotheses),
+                "tactics_candidate_count": len(tactics_rep.candidates),
+                "director_sequence_count": len(director_rep.experiment_sequence),
             }
             confidence_tier = str(analyst_rep.overall_confidence)
 

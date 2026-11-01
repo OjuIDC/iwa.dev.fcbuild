@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0",
-  "total_files": 339,
+  "total_files": 361,
   "files": [
     {
       "path": ".gitattributes",
@@ -63,6 +63,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
+      "path": "Dockerfile.community-worker",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Digest-pinned container image definition for fc27-community-worker (Dockerfile.community-worker)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Isolated container build for the disabled-by-default FC27 community polling worker",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "Dockerfile.discord",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (Dockerfile.discord)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "Dockerfile.graph",
@@ -255,6 +275,16 @@
       "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
+      "path": "docker-compose.community-worker.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Opt-in Docker Compose profile overlay for fc27-community-worker (docker-compose.community-worker.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Opt-in fc27-polling profile overlay with read-only rootfs and dropped capabilities",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
       "path": "docker-compose.cpu.yml",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -263,6 +293,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "docker-compose.discord.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docker-compose.discord.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "docker-compose.gpu.yml",
@@ -395,6 +435,26 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
+      "path": "docs/FC27_BACKUP_AND_RECOVERY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_BACKUP_AND_RECOVERY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "docs/FC27_COACH_HYPOTHESIS_ENGINE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_COACH_HYPOTHESIS_ENGINE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -413,6 +473,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_DAILY_POLLING_OPERATIONS.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_DAILY_POLLING_OPERATIONS.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "docs/FC27_DATA_MODEL.md",
@@ -435,6 +505,26 @@
       "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
     },
     {
+      "path": "docs/FC27_DIRECTOR_RECONCILIATION.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_DIRECTOR_RECONCILIATION.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "docs/FC27_DISCORD_BOT.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_DISCORD_BOT.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -455,6 +545,16 @@
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
+      "path": "docs/FC27_POLLING_WORKER.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative architecture and operator guide for fc27-community-worker (docs/FC27_POLLING_WORKER.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Documents disabled-by-default polling worker gates, single-flight advisory locks, and conditional analytics",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
       "path": "docs/FC27_PROVIDER_INTEGRATION.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -473,6 +573,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_TACTICS_CANDIDATE_ENGINE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (docs/FC27_TACTICS_CANDIDATE_ENGINE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "docs/FEATURE_FLAGS.md",
@@ -1075,6 +1185,16 @@
       "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
     },
     {
+      "path": "scripts/fc27_backup.py",
+      "category": "scripts",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (scripts/fc27_backup.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "scripts/fc27_capture_preflight.py",
       "category": "operational_script",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1123,6 +1243,36 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "One-shot FC 27 ingestion and Search/Scout/Analyst demo CLI",
       "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
+      "path": "scripts/fc27_discord_bot.py",
+      "category": "scripts",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (scripts/fc27_discord_bot.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "scripts/fc27_polling_worker.py",
+      "category": "operator_script",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Operator CLI entrypoint for the disabled-by-default FC27 polling worker (scripts/fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Supports --status, --once, and --worker modes with fail-closed gates",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "scripts/fc27_restore_verify.py",
+      "category": "scripts",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (scripts/fc27_restore_verify.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "scripts/fc27_user_export_import.py",
@@ -1405,6 +1555,16 @@
       "last_relevant_commit": "3377226cbdd11ce95580c2020d8bc6b457351fbb"
     },
     {
+      "path": "src/fc27_backup_restore.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (src/fc27_backup_restore.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "src/fc27_capture.py",
       "category": "runtime_source",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1433,6 +1593,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "src/fc27_coach.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (src/fc27_coach.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "src/fc27_coaching.py",
@@ -1485,6 +1655,26 @@
       "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
     },
     {
+      "path": "src/fc27_director.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (src/fc27_director.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "src/fc27_discord_bot.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (src/fc27_discord_bot.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "src/fc27_mcp_server.py",
       "category": "runtime_source",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1503,6 +1693,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active application source module",
       "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
+      "path": "src/fc27_polling_worker.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Disabled-by-default East Coasters FC27 community polling worker implementation (src/fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Implements single-flight advisory lock, bounded polling policy, transactional persistence, and conditional analytics",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
     },
     {
       "path": "src/fc27_provider.py",
@@ -1543,6 +1743,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active pure deterministic Search context and Scout evidence/hypothesis module",
       "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "src/fc27_tactics.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (src/fc27_tactics.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "src/fc27_user_export.py",
@@ -2795,6 +3005,16 @@
       "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
     },
     {
+      "path": "tests/test_fc27_advisory_pipeline_e2e.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_advisory_pipeline_e2e.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "tests/test_fc27_analyst.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -2875,6 +3095,16 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
+      "path": "tests/test_fc27_backup_restore.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_backup_restore.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
       "path": "tests/test_fc27_clubs_api_contracts.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -2893,6 +3123,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "e32291afbb3cc58673e96787200ff0021da3d179"
+    },
+    {
+      "path": "tests/test_fc27_coach.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_coach.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "tests/test_fc27_community_provider.py",
@@ -2923,6 +3163,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "80 end-to-end and adversarial tests for the FC 27 one-shot ingestion and analytics demo",
       "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
+    },
+    {
+      "path": "tests/test_fc27_director.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_director.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "tests/test_fc27_discord_bot.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_discord_bot.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "tests/test_fc27_operator_capture.py",
@@ -2963,6 +3223,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "098f919084c0527d0d9e53cfae2cbe3bb8f75c5a"
+    },
+    {
+      "path": "tests/test_fc27_polling_worker.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "101-test verification suite for the FC27 community polling worker (tests/test_fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Verifies all 101 polling worker unit, PostgreSQL integration, security, and Compose hardening scenarios",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
     },
     {
       "path": "tests/test_fc27_preapproval_validator.py",
@@ -3023,6 +3293,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
+    },
+    {
+      "path": "tests/test_fc27_tactics.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative platform file (tests/test_fc27_tactics.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 local analytics platform file",
+      "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
       "path": "tests/test_fc27_user_export.py",
@@ -3333,66 +3613,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
-    },
-    {
-      "path": "Dockerfile.community-worker",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Digest-pinned container image definition for fc27-community-worker (Dockerfile.community-worker)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Isolated container build for the disabled-by-default FC27 community polling worker",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
-    },
-    {
-      "path": "docker-compose.community-worker.yml",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Opt-in Docker Compose profile overlay for fc27-community-worker (docker-compose.community-worker.yml)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Opt-in fc27-polling profile overlay with read-only rootfs and dropped capabilities",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
-    },
-    {
-      "path": "docs/FC27_POLLING_WORKER.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative architecture and operator guide for fc27-community-worker (docs/FC27_POLLING_WORKER.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Documents disabled-by-default polling worker gates, single-flight advisory locks, and conditional analytics",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
-    },
-    {
-      "path": "scripts/fc27_polling_worker.py",
-      "category": "operator_script",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Operator CLI entrypoint for the disabled-by-default FC27 polling worker (scripts/fc27_polling_worker.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Supports --status, --once, and --worker modes with fail-closed gates",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
-    },
-    {
-      "path": "src/fc27_polling_worker.py",
-      "category": "runtime_source",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Disabled-by-default East Coasters FC27 community polling worker implementation (src/fc27_polling_worker.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Implements single-flight advisory lock, bounded polling policy, transactional persistence, and conditional analytics",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
-    },
-    {
-      "path": "tests/test_fc27_polling_worker.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "101-test verification suite for the FC27 community polling worker (tests/test_fc27_polling_worker.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Verifies all 101 polling worker unit, PostgreSQL integration, security, and Compose hardening scenarios",
-      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
     }
   ]
 }

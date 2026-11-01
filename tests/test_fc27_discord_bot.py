@@ -317,14 +317,17 @@ def test_33_data_gaps_command_and_unimplemented_advisory_commands(
     monkeypatch: pytest.MonkeyPatch,
     pg_db_migrated,
 ) -> None:
-    """33. `/fc27 data-gaps` reports gaps and `/fc27 coach|tactics|director` return NOT_AVAILABLE_NOT_IMPLEMENTED before wiring."""
+    """33. `/fc27 data-gaps` reports gaps; `/fc27 coach|tactics|director` return NOT_AVAILABLE_NOT_IMPLEMENTED when unwired and deterministic advisory outputs when wired."""
     runtime = _seed_persisted_matches(monkeypatch, pg_db_migrated.app, count=10)
-    svc = FC27DiscordBotService(
+    unwired_svc = FC27DiscordBotService(
         _build_enabled_config(),
         db_conn_or_uri=pg_db_migrated.app,
         polling_runtime=runtime,
+        coach_report_provider=None,
+        tactics_report_provider=None,
+        director_report_provider=None,
     )
-    gaps_resp = svc.handle_slash_command(
+    gaps_resp = unwired_svc.handle_slash_command(
         "data-gaps",
         guild_id=APPROVED_GUILD_ID,
         channel_id=APPROVED_CHANNEL_ID,
@@ -333,7 +336,7 @@ def test_33_data_gaps_command_and_unimplemented_advisory_commands(
     assert gaps_resp.row_count > 0
 
     for pending_cmd in ("coach", "tactics", "director"):
-        pending_resp = svc.handle_slash_command(
+        pending_resp = unwired_svc.handle_slash_command(
             pending_cmd,
             guild_id=APPROVED_GUILD_ID,
             channel_id=APPROVED_CHANNEL_ID,
@@ -341,6 +344,22 @@ def test_33_data_gaps_command_and_unimplemented_advisory_commands(
         )
         assert pending_resp.status == NOT_AVAILABLE_NOT_IMPLEMENTED
         assert pending_resp.content == NOT_AVAILABLE_NOT_IMPLEMENTED
+
+    wired_svc = FC27DiscordBotService(
+        _build_enabled_config(),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    for advisory_cmd in ("coach", "tactics", "director"):
+        adv_resp = wired_svc.handle_slash_command(
+            advisory_cmd,
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=APPROVED_CHANNEL_ID,
+            user_id=f"30000000000000000{len(advisory_cmd)}",
+        )
+        assert adv_resp.status == "OK"
+        assert adv_resp.row_count > 0
+        assert "recommendation=false" in adv_resp.embeds[0].fields["governance"]
 
 
 def test_34_polling_command_reports_12_hour_schedule_and_gap_metadata(

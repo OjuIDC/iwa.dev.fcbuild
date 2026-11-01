@@ -45,6 +45,21 @@ from src.fc27_analyst import (
     FC27AnalystReport,
     build_fc27_analyst_report,
 )
+from src.fc27_coach import (
+    FC27CoachInput,
+    FC27CoachReport,
+    build_fc27_coach_report,
+)
+from src.fc27_director import (
+    FC27DirectorInput,
+    FC27DirectorReport,
+    build_fc27_director_report,
+)
+from src.fc27_tactics import (
+    FC27TacticsInput,
+    FC27TacticsReport,
+    build_fc27_tactics_report,
+)
 from src.fc27_api_rate_limit import (
     FC27AdapterCircuitBreaker,
     FC27RequestBudget,
@@ -1773,14 +1788,17 @@ class FC27CommunityPipelineResult(BaseModel):
     search_context_hash: Optional[str] = None
     scout_report_hash: Optional[str] = None
     analyst_report_hash: Optional[str] = None
+    coach_report_hash: Optional[str] = None
+    tactics_report_hash: Optional[str] = None
+    director_report_hash: Optional[str] = None
     confidence_tier: Optional[str] = None
     finding_count: int = Field(ge=0)
     counter_evidence_count: int = Field(ge=0)
     confounder_count: int = Field(ge=0)
     data_gap_count: int = Field(ge=0)
-    coach_executed: Literal["NO"] = "NO"
-    tactics_executed: Literal["NO"] = "NO"
-    director_executed: Literal["NO"] = "NO"
+    coach_executed: Literal["YES", "NO"] = "NO"
+    tactics_executed: Literal["YES", "NO"] = "NO"
+    director_executed: Literal["YES", "NO"] = "NO"
     recommendations_enabled: Literal["NO"] = "NO"
     dispatch_enabled: Literal["NO"] = "NO"
 
@@ -2064,6 +2082,64 @@ def run_analytics_from_persisted_community_records(
     return search_ctx, scout_rep, analyst_rep
 
 
+def run_advisory_pipeline_from_persisted_community_records(
+    postgres_conn_or_uri: Any,
+    *,
+    payload_sha256: Optional[str] = None,
+    analysis_generated_at: Optional[datetime] = None,
+    analytics_enabled_override: bool = True,
+) -> Tuple[
+    FC27SearchContext,
+    FC27ScoutReport,
+    FC27AnalystReport,
+    FC27CoachReport,
+    FC27TacticsReport,
+    FC27DirectorReport,
+]:
+    """Reads persisted East Coasters records from PostgreSQL and executes the complete
+    advisory pipeline `Search -> Scout -> Analyst -> Coach -> Tactics -> Director`.
+    """
+    gen_dt = analysis_generated_at or datetime.now(timezone.utc)
+    if isinstance(gen_dt, str):
+        gen_dt = datetime.fromisoformat(gen_dt.replace("Z", "+00:00")).astimezone(timezone.utc)
+    gen_iso = gen_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    search_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
+        postgres_conn_or_uri,
+        payload_sha256=payload_sha256,
+        analysis_generated_at=gen_dt,
+        analytics_enabled_override=analytics_enabled_override,
+    )
+    coach_rep = build_fc27_coach_report(
+        FC27CoachInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_generated_at=gen_iso,
+        )
+    )
+    tactics_rep = build_fc27_tactics_report(
+        FC27TacticsInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_generated_at=gen_iso,
+        )
+    )
+    director_rep = build_fc27_director_report(
+        FC27DirectorInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_report=tactics_rep,
+            director_generated_at=gen_iso,
+        )
+    )
+    return search_ctx, scout_rep, analyst_rep, coach_rep, tactics_rep, director_rep
+
+
 def ingest_community_provider_envelope(
     match_envelope: FC27CommunityProviderEnvelope,
     *,
@@ -2255,6 +2331,34 @@ def build_demo_session_artifacts_from_community_envelope(
         persist=False,
         analysis_generated_at=analysis_generated_at,
     )
+    gen_iso = search_ctx.analysis_generated_at
+    coach_rep = build_fc27_coach_report(
+        FC27CoachInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_generated_at=gen_iso,
+        )
+    )
+    tactics_rep = build_fc27_tactics_report(
+        FC27TacticsInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_generated_at=gen_iso,
+        )
+    )
+    director_rep = build_fc27_director_report(
+        FC27DirectorInput(
+            search_context=search_ctx,
+            scout_report=scout_rep,
+            analyst_report=analyst_rep,
+            coach_report=coach_rep,
+            tactics_report=tactics_rep,
+            director_generated_at=gen_iso,
+        )
+    )
     match_summaries: List[FC27DemoMatchSummary] = []
     player_stat_total = 0
     for rec in match_envelope.normalized_records:
@@ -2285,6 +2389,9 @@ def build_demo_session_artifacts_from_community_envelope(
             "search": search_ctx.context_hash,
             "scout": scout_rep.report_hash,
             "analyst": analyst_rep.report_hash,
+            "coach": coach_rep.report_hash,
+            "tactics": tactics_rep.report_hash,
+            "director": director_rep.report_hash,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -2314,6 +2421,9 @@ def build_demo_session_artifacts_from_community_envelope(
         search_context_hash=search_ctx.context_hash,
         scout_report_hash=scout_rep.report_hash,
         analyst_report_hash=analyst_rep.report_hash,
+        coach_report_hash=coach_rep.report_hash,
+        tactics_report_hash=tactics_rep.report_hash,
+        director_report_hash=director_rep.report_hash,
         confidence=analyst_rep.overall_confidence,
         finding_count=summary.finding_count,
         data_gap_count=summary.data_gap_count,
@@ -2328,6 +2438,9 @@ def build_demo_session_artifacts_from_community_envelope(
         search_context=search_ctx,
         scout_report=scout_rep,
         analyst_report=analyst_rep,
+        coach_report=coach_rep,
+        tactics_report=tactics_rep,
+        director_report=director_rep,
     )
 
 
@@ -2350,7 +2463,14 @@ def build_demo_session_artifacts_from_persisted_records(
         _pseudonymize_match_ref,
     )
 
-    search_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
+    (
+        search_ctx,
+        scout_rep,
+        analyst_rep,
+        coach_rep,
+        tactics_rep,
+        director_rep,
+    ) = run_advisory_pipeline_from_persisted_community_records(
         postgres_conn_or_uri,
         payload_sha256=payload_sha256,
         analysis_generated_at=analysis_generated_at,
@@ -2388,6 +2508,9 @@ def build_demo_session_artifacts_from_persisted_records(
             "search": search_ctx.context_hash,
             "scout": scout_rep.report_hash,
             "analyst": analyst_rep.report_hash,
+            "coach": coach_rep.report_hash,
+            "tactics": tactics_rep.report_hash,
+            "director": director_rep.report_hash,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -2422,6 +2545,9 @@ def build_demo_session_artifacts_from_persisted_records(
         search_context_hash=search_ctx.context_hash,
         scout_report_hash=scout_rep.report_hash,
         analyst_report_hash=analyst_rep.report_hash,
+        coach_report_hash=coach_rep.report_hash,
+        tactics_report_hash=tactics_rep.report_hash,
+        director_report_hash=director_rep.report_hash,
         confidence=analyst_rep.overall_confidence,
         finding_count=len(analyst_rep.findings),
         data_gap_count=len(analyst_rep.data_gaps),
@@ -2436,4 +2562,7 @@ def build_demo_session_artifacts_from_persisted_records(
         search_context=search_ctx,
         scout_report=scout_rep,
         analyst_report=analyst_rep,
+        coach_report=coach_rep,
+        tactics_report=tactics_rep,
+        director_report=director_rep,
     )

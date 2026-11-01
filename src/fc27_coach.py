@@ -334,6 +334,10 @@ class FC27CoachHypothesis(BaseModel):
     dispatchable: Literal[False] = False
     causal_claim: Literal[False] = False
 
+    @property
+    def summary(self) -> str:
+        return self.statement
+
     @model_validator(mode="before")
     @classmethod
     def _validate_raw(cls, data: Any) -> Any:
