@@ -248,6 +248,12 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "scripts/README.md",
         "tests/test_fc27_archive_manifest.py",
         "tests/test_fc27_repository_cleanup.py",
+        "Dockerfile.community-worker",
+        "docker-compose.community-worker.yml",
+        "docs/FC27_POLLING_WORKER.md",
+        "scripts/fc27_polling_worker.py",
+        "src/fc27_polling_worker.py",
+        "tests/test_fc27_polling_worker.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
@@ -270,7 +276,7 @@ def test_48_current_startup_commands_resolve() -> None:
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 10
+    assert len(py_scripts) == 11
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))
@@ -284,6 +290,7 @@ def test_50_current_docker_entrypoints_import() -> None:
         "voice/stt_service.py",
         "voice/tts_service.py",
         "scripts/fc27_community_eval.py",
+        "scripts/fc27_polling_worker.py",
     ]
     for rel in docker_targets:
         path = REPO_ROOT / rel

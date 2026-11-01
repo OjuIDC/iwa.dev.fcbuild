@@ -47,6 +47,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 ## 3. Provider and Ingestion
 
 - **[`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md)** — Current operational community-client provider (`fc-clubs-api-community-v1`, `LIVE_EA_CLUBS_COMMUNITY_CLIENT`, `src/fc27_community_provider.py`, `scripts/fc27_community_eval.py`, `Dockerfile.community-eval`, `docker-compose.community-eval.yml`) and optional sanitized pandas view (`src/fc27_pandas_view.py`)
+- **[`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md)** — Disabled-by-default single-flight polling worker (`fc27-community-worker`, `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `FC27_COMMUNITY_POLLING_ENABLED=false`)
 - **[`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)** — Provider contract governance, historical transport findings (standards-client HTTP `403` and headless Chromium HTTP/2 diagnostic records), and rate/cache controls
 - **[`FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)** — Secondary offline user-export and operator-capture ingestion specification (`scripts/fc27_user_export_import.py`)
 - **[`EA_PLAYER_IDENTITY_VERIFICATION.md`](EA_PLAYER_IDENTITY_VERIFICATION.md)** — Pseudonymization (`plr_ecf_<12-hex>`) and strict prohibition on raw EA persona/blaze IDs and player handles

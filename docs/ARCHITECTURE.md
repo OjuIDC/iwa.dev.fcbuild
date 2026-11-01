@@ -3,10 +3,10 @@
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `tests/`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`), and automated test suites (`tests/`).
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`), and automated test suites (`tests/`).
 
 ## 0. Current Supported Real-Data Operational Path
 
@@ -14,6 +14,7 @@ For **East Coasters (`club_id="330323"`, `platform="common-gen5"`, `game_version
 
 ```text
 pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUNITY_CLIENT)
+  -> one-shot CLI (`scripts/fc27_community_eval.py`) OR disabled-by-default polling worker (`src/fc27_polling_worker.py` / `fc27-community-worker`)
   -> repository endpoint contracts & response schema validation (src/fc27_clubs_api_contracts.py)
   -> normalization, recursive sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
   -> optional single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
@@ -23,7 +24,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
   -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app)
 ```
 
-See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) and [`docs/FC27_DEMO.md`](FC27_DEMO.md) for exact execution commands.
+See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md), [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), and [`docs/FC27_DEMO.md`](FC27_DEMO.md) for exact execution commands.
 
 ## 1. Architectural Status Classifications
 

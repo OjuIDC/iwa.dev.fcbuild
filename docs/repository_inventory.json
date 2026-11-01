@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0",
-  "total_files": 333,
+  "total_files": 339,
   "files": [
     {
       "path": ".gitattributes",
@@ -3333,6 +3333,66 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "Dockerfile.community-worker",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Digest-pinned container image definition for fc27-community-worker (Dockerfile.community-worker)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Isolated container build for the disabled-by-default FC27 community polling worker",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "docker-compose.community-worker.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Opt-in Docker Compose profile overlay for fc27-community-worker (docker-compose.community-worker.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Opt-in fc27-polling profile overlay with read-only rootfs and dropped capabilities",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "docs/FC27_POLLING_WORKER.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative architecture and operator guide for fc27-community-worker (docs/FC27_POLLING_WORKER.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Documents disabled-by-default polling worker gates, single-flight advisory locks, and conditional analytics",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "scripts/fc27_polling_worker.py",
+      "category": "operator_script",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Operator CLI entrypoint for the disabled-by-default FC27 polling worker (scripts/fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Supports --status, --once, and --worker modes with fail-closed gates",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "src/fc27_polling_worker.py",
+      "category": "runtime_source",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Disabled-by-default East Coasters FC27 community polling worker implementation (src/fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Implements single-flight advisory lock, bounded polling policy, transactional persistence, and conditional analytics",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "tests/test_fc27_polling_worker.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "101-test verification suite for the FC27 community polling worker (tests/test_fc27_polling_worker.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Verifies all 101 polling worker unit, PostgreSQL integration, security, and Compose hardening scenarios",
+      "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
     }
   ]
 }

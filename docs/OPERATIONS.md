@@ -113,6 +113,15 @@ All external provider, persistence, analytics, recommendation, and dispatch capa
 - `FC27_UPSTREAM_COMPATIBILITY_ENABLED=false`
 - `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false`
 - `FC27_LIVE_INGESTION_ENABLED=false`
+- `FC27_COMMUNITY_PROVIDER_ENABLED=false`
+- `FC27_COMMUNITY_POLLING_ENABLED=false`
+- `FC27_COMMUNITY_POLL_MIN_SECONDS=300`
+- `FC27_COMMUNITY_POLL_MAX_SECONDS=600`
+- `FC27_COMMUNITY_POLL_MAX_REQUESTS=1`
+- `FC27_COMMUNITY_POLL_MAX_RETRIES=0`
+- `FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY=true`
+- `FC27_COMMUNITY_POLL_SINGLE_FLIGHT=true`
+- `FC27_COMMUNITY_POLL_ONCE=false`
 - `FC27_API_CACHE_ENABLED=false`
 - `FC27_API_RATE_LIMIT_ENABLED=false`
 - `FC27_API_CIRCUIT_BREAKER_ENABLED=true`
@@ -124,7 +133,7 @@ All external provider, persistence, analytics, recommendation, and dispatch capa
 - `DISPATCH_WORKER_ENABLED=false`
 - `APPROVAL_CLI_HMAC_ENABLED=false` (Python default in `src/graph_api.py`)
 
-See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md) for the complete dependency matrix and fail-closed rules.
+See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md) and [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md) for the complete dependency matrix, CLI (`scripts/fc27_polling_worker.py --status | --once | --worker`), Docker Compose overlay (`docker-compose.community-worker.yml`, profile `fc27-polling`), and fail-closed rules.
 
 ---
 
