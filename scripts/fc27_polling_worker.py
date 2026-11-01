@@ -53,14 +53,20 @@ def _print_status_report(policy: FC27PollingPolicy, health: FC27PollingHealth) -
         f"GAME_VERSION={policy.game_version}",
         f"MATCH_TYPE={policy.match_type}",
         f"MAX_RESULTS={policy.maximum_results}",
+        f"POLL_INTERVAL_SECONDS={policy.poll_interval_seconds}",
+        f"POLLING_FREQUENCY={policy.polling_frequency}",
+        f"MAX_PROVIDER_REQUESTS_PER_24_HOURS={policy.max_provider_requests_per_24_hours}",
         f"MIN_INTERVAL_SECONDS={policy.minimum_interval_seconds}",
         f"MAX_INTERVAL_SECONDS={policy.maximum_interval_seconds}",
         f"MAX_REQUESTS_PER_CYCLE={policy.maximum_requests_per_cycle}",
         f"MAX_RETRIES={policy.maximum_retries}",
+        f"CATCH_UP_BURSTS_ALLOWED={_format_bool(policy.catch_up_bursts_allowed)}",
         f"SINGLE_FLIGHT_ENABLED={_format_bool(policy.single_flight_enabled)}",
         f"ANALYTICS_ON_NEW_RECORDS_ONLY={_format_bool(policy.analytics_on_new_records_only)}",
+        f"PERSISTENCE_BEFORE_ANALYTICS={_format_bool(health.persistence_before_analytics)}",
         f"RAW_RESPONSE_RETENTION={_format_bool(policy.raw_response_retention)}",
         f"RECOMMENDATIONS_ENABLED={_format_bool(policy.recommendations_enabled)}",
+        f"APPROVAL_ENABLED={_format_bool(policy.approval_enabled)}",
         f"DISPATCH_ENABLED={_format_bool(policy.dispatch_enabled)}",
         f"WORKER_ENABLED={_format_bool(health.worker_enabled)}",
         f"WORKER_RUNNING={_format_bool(health.worker_running)}",
@@ -72,6 +78,12 @@ def _print_status_report(policy: FC27PollingPolicy, health: FC27PollingHealth) -
         f"TOTAL_MATCHES_INSERTED={health.total_matches_inserted}",
         f"TOTAL_DUPLICATES_IGNORED={health.total_duplicates_ignored}",
         f"TOTAL_REPLAY_CONFLICTS={health.total_replay_conflicts}",
+        f"SCHEDULE_LAG_SECONDS={health.schedule_lag_seconds}",
+        f"MISSED_INTERVALS={health.missed_intervals}",
+        f"CATCH_UP_CYCLES_SUPPRESSED={_format_bool(health.catch_up_cycles_suppressed)}",
+        f"PROVIDER_WINDOW_COUNT={health.provider_window_count}",
+        f"POSSIBLE_HISTORY_GAP={_format_bool(health.possible_history_gap)}",
+        f"CONTINUITY_LAST_VERIFIED={health.continuity_last_verified_at.isoformat() if health.continuity_last_verified_at else 'NONE'}",
     ]
     print("\n".join(lines))
 
@@ -86,6 +98,9 @@ def _print_cycle_result(result: FC27PollResult) -> None:
         f"PLATFORM={result.platform}",
         f"GAME_VERSION={result.game_version}",
         f"MATCH_TYPE={result.match_type}",
+        f"POLL_INTERVAL_SECONDS={result.poll_interval_seconds}",
+        f"POLLING_FREQUENCY={result.polling_frequency}",
+        f"MAX_PROVIDER_REQUESTS_PER_24_HOURS={result.max_provider_requests_per_24_hours}",
         f"POLL_STATUS={result.poll_status}",
         f"SINGLE_FLIGHT_ACQUIRED={_format_bool(result.single_flight_acquired)}",
         f"CACHE_STATUS={result.cache_status}",
@@ -97,12 +112,22 @@ def _print_cycle_result(result: FC27PollResult) -> None:
         f"DUPLICATE_IGNORED_COUNT={result.duplicate_ignored_count}",
         f"REPLAY_CONFLICT_COUNT={result.replay_conflict_count}",
         f"ANALYTICS_EXECUTED={_format_bool(result.analytics_executed)}",
+        f"PERSISTENCE_BEFORE_ANALYTICS={_format_bool(result.persistence_before_analytics)}",
         f"CONFIDENCE_TIER={result.confidence_tier}",
         f"CIRCUIT_STATE={result.circuit_state}",
+        f"SCHEDULE_LAG_SECONDS={result.schedule_lag_seconds}",
+        f"MISSED_INTERVALS={result.missed_intervals}",
+        f"CATCH_UP_CYCLES_SUPPRESSED={_format_bool(result.catch_up_cycles_suppressed)}",
+        f"PROVIDER_WINDOW_COUNT={result.provider_window_count}",
+        f"POSSIBLE_HISTORY_GAP={_format_bool(result.possible_history_gap)}",
+        f"CONTINUITY_LAST_VERIFIED={result.continuity_last_verified_at.isoformat() if result.continuity_last_verified_at else 'NONE'}",
         f"RAW_RESPONSE_RETAINED=NO",
         f"RECOMMENDATIONS_ENABLED=NO",
+        f"APPROVAL_ENABLED=NO",
         f"DISPATCH_ENABLED=NO",
     ]
+    if result.history_gap_reason:
+        lines.append(f"HISTORY_GAP_REASON={result.history_gap_reason}")
     if result.error_category:
         lines.append(f"ERROR_CATEGORY={result.error_category}")
     print("\n".join(lines))

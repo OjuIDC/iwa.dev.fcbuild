@@ -83,6 +83,7 @@ from src.fc27_user_export import (
 )
 from src.settings import (
     ConfigError,
+    get_fc27_community_poll_interval_seconds,
     get_fc27_community_poll_max_requests,
     get_fc27_community_poll_max_retries,
     get_fc27_community_poll_max_seconds,
@@ -105,6 +106,11 @@ FIXED_GAME_VERSION = TARGET_GAME_VERSION
 FIXED_MATCH_TYPE = "leagueMatch"
 FIXED_MATCH_COUNT = 10
 COMMUNITY_SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT
+
+POLL_INTERVAL_SECONDS = 43200
+POLL_FREQUENCY_LITERAL: Literal["ONCE_EVERY_12_HOURS"] = "ONCE_EVERY_12_HOURS"
+MAX_PROVIDER_REQUESTS_PER_24_HOURS = 2
+PROVIDER_WINDOW_MAX_MATCHES = 10
 
 POLL_OPERATION_NAME: Literal["RECENT_LEAGUE_MATCHES"] = "RECENT_LEAGUE_MATCHES"
 POLL_RESPONSE_SCHEMA_VERSION = "community-envelope-v1"
@@ -292,8 +298,15 @@ def _assert_runtime_posture(conn: psycopg.Connection[Any]) -> None:
 # ==============================================================================
 
 
+def _normalize_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC so DST transitions have zero interval effect."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class FC27PollingPolicy(BaseModel):
-    """Immutable polling policy enforcing East Coasters FC27 bounds."""
+    """Immutable polling policy enforcing East Coasters FC27 12-hour bounds."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -305,9 +318,29 @@ class FC27PollingPolicy(BaseModel):
     game_version: str = FIXED_GAME_VERSION
     match_type: str = FIXED_MATCH_TYPE
     maximum_results: int = FIXED_MATCH_COUNT
-    minimum_interval_seconds: int = Field(default=300, ge=300, le=3600)
-    maximum_interval_seconds: int = Field(default=600, ge=300, le=3600)
-    cache_ttl_seconds: int = Field(default=300, ge=300, le=3600)
+    poll_interval_seconds: int = Field(
+        default=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_SECONDS,
+        le=POLL_INTERVAL_SECONDS,
+    )
+    minimum_interval_seconds: int = Field(
+        default=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_SECONDS,
+        le=POLL_INTERVAL_SECONDS,
+    )
+    maximum_interval_seconds: int = Field(
+        default=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_SECONDS,
+        le=POLL_INTERVAL_SECONDS,
+    )
+    polling_frequency: Literal["ONCE_EVERY_12_HOURS"] = POLL_FREQUENCY_LITERAL
+    max_provider_requests_per_24_hours: int = Field(
+        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+    )
+    catch_up_bursts_allowed: bool = False
+    cache_ttl_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=300, le=86400)
     maximum_requests_per_cycle: int = Field(default=1, ge=1, le=1)
     maximum_retries: int = Field(default=0, ge=0, le=0)
     request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=15.0)
@@ -317,6 +350,7 @@ class FC27PollingPolicy(BaseModel):
     analytics_on_new_records_only: bool = True
     raw_response_retention: bool = False
     recommendations_enabled: bool = False
+    approval_enabled: bool = False
     dispatch_enabled: bool = False
 
     @model_validator(mode="after")
@@ -339,10 +373,24 @@ class FC27PollingPolicy(BaseModel):
             raise ValueError(f"match_type is fixed to '{FIXED_MATCH_TYPE}'")
         if self.maximum_results != FIXED_MATCH_COUNT:
             raise ValueError(f"maximum_results is fixed to {FIXED_MATCH_COUNT}")
-        if self.maximum_interval_seconds < self.minimum_interval_seconds:
+        if (
+            self.poll_interval_seconds != POLL_INTERVAL_SECONDS
+            or self.minimum_interval_seconds != POLL_INTERVAL_SECONDS
+            or self.maximum_interval_seconds != POLL_INTERVAL_SECONDS
+        ):
             raise ValueError(
-                "maximum_interval_seconds must be >= minimum_interval_seconds"
+                f"polling interval is fixed to {POLL_INTERVAL_SECONDS} seconds (12 hours)"
             )
+        if self.polling_frequency != POLL_FREQUENCY_LITERAL:
+            raise ValueError(
+                f"polling_frequency must be '{POLL_FREQUENCY_LITERAL}'"
+            )
+        if self.max_provider_requests_per_24_hours != MAX_PROVIDER_REQUESTS_PER_24_HOURS:
+            raise ValueError(
+                f"max_provider_requests_per_24_hours must be {MAX_PROVIDER_REQUESTS_PER_24_HOURS}"
+            )
+        if self.catch_up_bursts_allowed:
+            raise ValueError("catch_up_bursts_allowed must be False")
         if self.maximum_requests_per_cycle != 1:
             raise ValueError("maximum_requests_per_cycle must be 1")
         if self.maximum_retries != 0:
@@ -355,6 +403,8 @@ class FC27PollingPolicy(BaseModel):
             raise ValueError("raw_response_retention must be False")
         if self.recommendations_enabled:
             raise ValueError("recommendations_enabled must be False")
+        if self.approval_enabled:
+            raise ValueError("approval_enabled must be False")
         if self.dispatch_enabled:
             raise ValueError("dispatch_enabled must be False")
         return self
@@ -417,6 +467,19 @@ class FC27PollResult(BaseModel):
     platform: str = FIXED_PLATFORM
     game_version: str = FIXED_GAME_VERSION
     match_type: str = FIXED_MATCH_TYPE
+    poll_interval_seconds: int = Field(
+        default=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_SECONDS,
+        le=POLL_INTERVAL_SECONDS,
+    )
+    polling_frequency: str = Field(
+        default=POLL_FREQUENCY_LITERAL, min_length=1, max_length=64
+    )
+    max_provider_requests_per_24_hours: int = Field(
+        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+    )
     poll_status: FC27PollStatusLiteral
     single_flight_acquired: bool
     cache_status: str = Field(..., min_length=1, max_length=64)
@@ -428,9 +491,20 @@ class FC27PollResult(BaseModel):
     duplicate_ignored_count: int = Field(..., ge=0, le=10)
     replay_conflict_count: int = Field(..., ge=0, le=10)
     analytics_executed: bool
+    persistence_before_analytics: bool = True
     confidence_tier: str = Field(..., min_length=1, max_length=64)
     circuit_state: str = Field(..., min_length=1, max_length=32)
     next_eligible_at: datetime | None = None
+    schedule_lag_seconds: int = Field(default=0, ge=0)
+    missed_intervals: int = Field(default=0, ge=0)
+    catch_up_cycles_suppressed: bool = True
+    provider_window_count: int = Field(default=0, ge=0, le=10)
+    elapsed_since_last_success: int | None = Field(default=None, ge=0)
+    possible_history_gap: bool = False
+    history_gap_reason: str | None = None
+    review_required: bool = False
+    continuity_last_verified_at: datetime | None = None
+    continuity_anchor_match_id: str | None = None
     error_category: str | None = None
 
     @model_validator(mode="before")
@@ -447,6 +521,10 @@ class FC27PollResult(BaseModel):
             raise ValueError(
                 "analytics_executed cannot be True when inserted_match_count == 0"
             )
+        if not self.persistence_before_analytics:
+            raise ValueError("persistence_before_analytics must be True")
+        if not self.catch_up_cycles_suppressed:
+            raise ValueError("catch_up_cycles_suppressed must be True")
         return self
 
 
@@ -458,6 +536,20 @@ class FC27PollingHealth(BaseModel):
     worker_enabled: bool
     worker_running: bool
     current_owner: str | None = None
+    poll_interval_seconds: int = Field(
+        default=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_SECONDS,
+        le=POLL_INTERVAL_SECONDS,
+    )
+    polling_frequency: str = Field(
+        default=POLL_FREQUENCY_LITERAL, min_length=1, max_length=64
+    )
+    max_provider_requests_per_24_hours: int = Field(
+        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+    )
+    catch_up_bursts_allowed: bool = False
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     last_new_match_at: datetime | None = None
@@ -470,6 +562,17 @@ class FC27PollingHealth(BaseModel):
     total_replay_conflicts: int = Field(default=0, ge=0)
     circuit_state: str = "CLOSED"
     next_eligible_at: datetime | None = None
+    schedule_lag_seconds: int = Field(default=0, ge=0)
+    missed_intervals: int = Field(default=0, ge=0)
+    catch_up_cycles_suppressed: bool = True
+    provider_window_count: int = Field(default=0, ge=0, le=10)
+    elapsed_since_last_success: int | None = Field(default=None, ge=0)
+    possible_history_gap: bool = False
+    history_gap_reason: str | None = None
+    review_required: bool = False
+    continuity_last_verified_at: datetime | None = None
+    continuity_anchor_match_id: str | None = None
+    persistence_before_analytics: bool = True
     shutdown_requested: bool = False
 
     @model_validator(mode="before")
@@ -494,6 +597,7 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     is_fc27_community_polling_enabled(strict=strict)
     is_fc27_community_provider_enabled(strict=strict)
     is_fc27_community_poll_once(strict=strict)
+    interval_sec = get_fc27_community_poll_interval_seconds(strict=strict)
     min_sec = get_fc27_community_poll_min_seconds(strict=strict)
     max_sec = get_fc27_community_poll_max_seconds(strict=strict)
     max_req = get_fc27_community_poll_max_requests(strict=strict)
@@ -519,15 +623,17 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     return FC27PollingPolicy(
         club_id=club_id,
         platform=platform,
+        poll_interval_seconds=interval_sec,
         minimum_interval_seconds=min_sec,
         maximum_interval_seconds=max_sec,
-        cache_ttl_seconds=min_sec,
+        cache_ttl_seconds=interval_sec,
         maximum_requests_per_cycle=max_req,
         maximum_retries=max_ret,
         single_flight_enabled=single_flight,
         analytics_on_new_records_only=analytics_new_only,
         raw_response_retention=False,
         recommendations_enabled=is_fc27_recommendations_enabled(),
+        approval_enabled=False,
         dispatch_enabled=is_dispatch_enabled(),
     )
 
@@ -977,6 +1083,39 @@ def _suppress_domain_event_outbox_writes() -> Iterator[None]:
             repo_mod.record_event = orig_record_event
 
 
+def _touch_persisted_polling_timestamps(
+    conn: Any,
+    *,
+    poll_timestamp_utc: datetime,
+    export_id: str | None = None,
+    inserted_matches: int = 0,
+) -> None:
+    """Record the latest poll timestamp in FC27 domain tables within the active transaction."""
+    if not hasattr(conn, "cursor") or not callable(conn.cursor):
+        return
+    ts_utc = _normalize_utc(poll_timestamp_utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE public.fc27_clubs
+               SET updated_at = %s
+             WHERE club_id = %s
+               AND platform = %s
+               AND game_version = %s
+            """,
+            (ts_utc, FIXED_CLUB_ID, FIXED_PLATFORM, FIXED_GAME_VERSION),
+        )
+        if inserted_matches > 0 and export_id:
+            cur.execute(
+                """
+                UPDATE public.fc27_export_batches
+                   SET applied_at = %s
+                 WHERE export_id = %s
+                """,
+                (ts_utc, export_id),
+            )
+
+
 def persist_polled_match_envelope(
     postgres_conn_or_uri: Any,
     *,
@@ -993,70 +1132,240 @@ def persist_polled_match_envelope(
         (m.played_at for m in supplied_matches),
         default=datetime(2026, 10, 31, 0, 0, 0, tzinfo=timezone.utc),
     ) + timedelta(minutes=5)
+    poll_ts_utc = _normalize_utc(generated_at) if generated_at is not None else deterministic_gen_dt
+
     with _suppress_domain_event_outbox_writes():
-        if match_envelopes:
-            summary = persist_community_provider_batch(
-                match_envelope,
-                match_envelopes=match_envelopes,
-                postgres_conn_or_uri=postgres_conn_or_uri,
-                persist_requested=True,
-                persistence_enabled=True,
-                enforce_posture=enforce_posture,
-                quarantine_conflicts=False,
+        try:
+            if match_envelopes:
+                summary = persist_community_provider_batch(
+                    match_envelope,
+                    match_envelopes=match_envelopes,
+                    postgres_conn_or_uri=postgres_conn_or_uri,
+                    persist_requested=True,
+                    persistence_enabled=True,
+                    enforce_posture=enforce_posture,
+                    quarantine_conflicts=False,
+                    generated_at=deterministic_gen_dt,
+                )
+                _touch_persisted_polling_timestamps(
+                    postgres_conn_or_uri,
+                    poll_timestamp_utc=poll_ts_utc,
+                    export_id=summary.export_id,
+                    inserted_matches=summary.match_rows_inserted,
+                )
+                if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                    postgres_conn_or_uri.commit()
+                return summary
+
+            from src.fc27_demo import _build_export_envelope_for_persistence
+
+            eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
+            export_env = _build_export_envelope_for_persistence(
+                supplied_matches,
+                export_id=eff_export_id,
                 generated_at=deterministic_gen_dt,
+            )
+            existing_state = load_import_state(
+                postgres_conn_or_uri,
+                club_id=FIXED_CLUB_ID,
+                platform=FIXED_PLATFORM,
+                game_version=FIXED_GAME_VERSION,
             )
             if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                 postgres_conn_or_uri.commit()
-            return summary
-
-        from src.fc27_demo import _build_export_envelope_for_persistence
-
-        eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
-        export_env = _build_export_envelope_for_persistence(
-            supplied_matches,
-            export_id=eff_export_id,
-            generated_at=deterministic_gen_dt,
-        )
-        existing_state = load_import_state(
-            postgres_conn_or_uri,
-            club_id=FIXED_CLUB_ID,
-            platform=FIXED_PLATFORM,
-            game_version=FIXED_GAME_VERSION,
-        )
-        if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
-            postgres_conn_or_uri.commit()
-        plan = plan_fc27_user_export_import(
-            export_env,
-            existing_state=existing_state,
-            evaluation_time=deterministic_gen_dt,
-        )
-        apply_res = apply_export_plan(
-            postgres_conn_or_uri,
-            envelope=export_env,
-            plan=plan,
-            actor="fc27_community_polling_worker",
-            enforce_posture=enforce_posture,
-            quarantine_conflicts=False,
-        )
-        if apply_res.status == "REJECTED" or apply_res.replay_conflict:
-            if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
-                postgres_conn_or_uri.rollback()
-            raise FC27ReplayConflictError(
-                f"Replay conflict rejected during community poll persistence: {apply_res.detail}"
+            plan = plan_fc27_user_export_import(
+                export_env,
+                existing_state=existing_state,
+                evaluation_time=deterministic_gen_dt,
             )
-        if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
-            postgres_conn_or_uri.commit()
+            tx_ctx = (
+                postgres_conn_or_uri.transaction()
+                if hasattr(postgres_conn_or_uri, "transaction")
+                and callable(postgres_conn_or_uri.transaction)
+                else contextlib.nullcontext()
+            )
+            with tx_ctx:
+                apply_res = apply_export_plan(
+                    postgres_conn_or_uri,
+                    envelope=export_env,
+                    plan=plan,
+                    actor="fc27_community_polling_worker",
+                    enforce_posture=enforce_posture,
+                    quarantine_conflicts=False,
+                )
+                if apply_res.status == "REJECTED" or apply_res.replay_conflict:
+                    raise FC27ReplayConflictError(
+                        f"Replay conflict rejected during community poll persistence: {apply_res.detail}"
+                    )
+                _touch_persisted_polling_timestamps(
+                    postgres_conn_or_uri,
+                    poll_timestamp_utc=poll_ts_utc,
+                    export_id=eff_export_id,
+                    inserted_matches=apply_res.accepted_records,
+                )
+            if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                postgres_conn_or_uri.commit()
 
-        return FC27CommunityPersistenceApplySummary(
-            live_data_persisted="YES",
-            match_rows_inserted=apply_res.accepted_records,
-            team_stat_rows_inserted=apply_res.accepted_records,
-            player_stat_rows_inserted=apply_res.player_stat_records,
-            duplicates_ignored=apply_res.duplicate_records,
-            replay_conflicts=1 if apply_res.replay_conflict else 0,
-            idempotent_duplicate=apply_res.idempotent_duplicate,
-            export_id=eff_export_id,
+            return FC27CommunityPersistenceApplySummary(
+                live_data_persisted="YES",
+                match_rows_inserted=apply_res.accepted_records,
+                team_stat_rows_inserted=apply_res.accepted_records,
+                player_stat_rows_inserted=apply_res.player_stat_records,
+                duplicates_ignored=apply_res.duplicate_records,
+                replay_conflicts=1 if apply_res.replay_conflict else 0,
+                idempotent_duplicate=apply_res.idempotent_duplicate,
+                export_id=eff_export_id,
+            )
+        except Exception:
+            if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
+                try:
+                    postgres_conn_or_uri.rollback()
+                except Exception:
+                    pass
+            raise
+
+
+def evaluate_provider_window_continuity(
+    *,
+    incoming_match_ids: Sequence[str],
+    known_match_ids: set[str] | frozenset[str],
+    inserted_match_count: int,
+    duplicate_ignored_count: int,
+    source_match_count: int,
+    elapsed_since_last_success_seconds: int | None = None,
+    poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
+) -> tuple[bool, str | None, bool, str | None]:
+    """Evaluate 10-match provider window continuity and detect possible history gaps.
+
+    Returns ``(possible_history_gap, history_gap_reason, review_required, anchor_match_id)``.
+    """
+    ordered_ids = [str(mid) for mid in incoming_match_ids if str(mid)]
+    anchor_match_id = ordered_ids[0] if ordered_ids else None
+    overlap_count = sum(1 for mid in ordered_ids if mid in known_match_ids)
+
+    # First-ever poll into an empty database has no prior baseline to gap against
+    if not known_match_ids:
+        return (False, None, False, anchor_match_id)
+
+    # Case 1: Full 10-match window replaced with zero overlap against known persisted matches
+    if (
+        inserted_match_count >= PROVIDER_WINDOW_MAX_MATCHES
+        and duplicate_ignored_count == 0
+    ) or (inserted_match_count > 0 and overlap_count == 0 and source_match_count >= PROVIDER_WINDOW_MAX_MATCHES):
+        return (
+            True,
+            "FULL_WINDOW_TURNOVER_NO_OVERLAP",
+            True,
+            anchor_match_id,
         )
+
+    # Case 2: Multi-interval outage / delayed poll combined with zero overlap or full turnover
+    if (
+        elapsed_since_last_success_seconds is not None
+        and elapsed_since_last_success_seconds >= (2 * poll_interval_seconds)
+        and inserted_match_count > 0
+        and (overlap_count == 0 or inserted_match_count >= PROVIDER_WINDOW_MAX_MATCHES)
+    ):
+        return (
+            True,
+            "OUTAGE_WINDOW_HIGH_TURNOVER",
+            True,
+            anchor_match_id,
+        )
+
+    return (False, None, False, anchor_match_id)
+
+
+def recover_polling_state_from_postgres(
+    db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
+    *,
+    runtime: FC27PollingRuntime | None = None,
+    policy: FC27PollingPolicy | None = None,
+    enforce_posture: bool = False,
+    restore_schedule_window: bool = True,
+) -> FC27PollingRuntime:
+    """Recover persisted polling timestamps, next_eligible_at, and known match IDs from PostgreSQL."""
+    rt = runtime or get_default_polling_runtime()
+    pol = policy or rt.policy
+
+    with open_guarded_polling_connection(
+        db_conn_or_uri,
+        enforce_posture=enforce_posture,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT updated_at
+                  FROM public.fc27_clubs
+                 WHERE club_id = %s
+                   AND platform = %s
+                   AND game_version = %s
+                """,
+                (pol.club_id, pol.platform, pol.game_version),
+            )
+            club_row = cur.fetchone()
+            club_updated_at: datetime | None = (
+                _normalize_utc(club_row[0]) if club_row and club_row[0] is not None else None
+            )
+
+            cur.execute(
+                """
+                SELECT MAX(applied_at)
+                  FROM public.fc27_export_batches
+                 WHERE club_id = %s
+                   AND platform = %s
+                   AND game_version = %s
+                   AND accepted_matches > 0
+                """,
+                (pol.club_id, pol.platform, pol.game_version),
+            )
+            batch_row = cur.fetchone()
+            last_new_batch_at: datetime | None = (
+                _normalize_utc(batch_row[0]) if batch_row and batch_row[0] is not None else None
+            )
+
+            cur.execute(
+                """
+                SELECT external_match_id
+                  FROM public.fc27_matches
+                 WHERE club_id = %s
+                   AND platform = %s
+                   AND game_version = %s
+                 ORDER BY played_at DESC, external_match_id DESC
+                """,
+                (pol.club_id, pol.platform, pol.game_version),
+            )
+            match_rows = cur.fetchall()
+            persisted_ids = [str(r[0]) for r in match_rows if r and r[0] is not None]
+
+    with rt._lock:
+        if persisted_ids:
+            rt.known_match_ids.update(persisted_ids)
+            if rt.continuity_anchor_match_id is None:
+                rt.continuity_anchor_match_id = persisted_ids[0]
+            rt.provider_window_count = min(PROVIDER_WINDOW_MAX_MATCHES, len(persisted_ids))
+
+        if restore_schedule_window:
+            if last_new_batch_at is not None and (
+                rt.last_new_match_at is None or last_new_batch_at > rt.last_new_match_at
+            ):
+                rt.last_new_match_at = last_new_batch_at
+
+            eff_last_success = club_updated_at or last_new_batch_at
+            if eff_last_success is not None:
+                if rt.last_success_at is None or eff_last_success > rt.last_success_at:
+                    rt.last_success_at = eff_last_success
+                if rt.last_attempt_at is None or eff_last_success > rt.last_attempt_at:
+                    rt.last_attempt_at = eff_last_success
+                recovered_next = eff_last_success + timedelta(seconds=pol.poll_interval_seconds)
+                if rt.next_eligible_at is None or recovered_next > rt.next_eligible_at:
+                    rt.next_eligible_at = recovered_next
+                if rt.continuity_last_verified_at is None:
+                    rt.continuity_last_verified_at = eff_last_success
+
+            rt.state_recovered_from_db = True
+
+    return rt
 
 
 @dataclass
@@ -1082,6 +1391,19 @@ class FC27PollingRuntime:
     total_duplicates_ignored: int = 0
     total_replay_conflicts: int = 0
     next_eligible_at: datetime | None = None
+    schedule_lag_seconds: int = 0
+    missed_intervals: int = 0
+    catch_up_cycles_suppressed: bool = True
+    provider_window_count: int = 0
+    elapsed_since_last_success: int | None = None
+    possible_history_gap: bool = False
+    history_gap_reason: str | None = None
+    review_required: bool = False
+    continuity_last_verified_at: datetime | None = None
+    continuity_anchor_match_id: str | None = None
+    persistence_before_analytics: bool = True
+    known_match_ids: set[str] = field(default_factory=set)
+    state_recovered_from_db: bool = False
     shutdown_requested: bool = False
     last_result: FC27PollResult | None = None
     last_analytics_bundle: dict[str, Any] | None = None
@@ -1127,6 +1449,10 @@ class FC27PollingRuntime:
                 worker_enabled=bool(enabled),
                 worker_running=self.worker_running,
                 current_owner=self.current_owner,
+                poll_interval_seconds=self.policy.poll_interval_seconds,
+                polling_frequency=self.policy.polling_frequency,
+                max_provider_requests_per_24_hours=self.policy.max_provider_requests_per_24_hours,
+                catch_up_bursts_allowed=self.policy.catch_up_bursts_allowed,
                 last_attempt_at=self.last_attempt_at,
                 last_success_at=self.last_success_at,
                 last_new_match_at=self.last_new_match_at,
@@ -1139,6 +1465,17 @@ class FC27PollingRuntime:
                 total_replay_conflicts=self.total_replay_conflicts,
                 circuit_state=c_state,
                 next_eligible_at=self.next_eligible_at,
+                schedule_lag_seconds=self.schedule_lag_seconds,
+                missed_intervals=self.missed_intervals,
+                catch_up_cycles_suppressed=self.catch_up_cycles_suppressed,
+                provider_window_count=self.provider_window_count,
+                elapsed_since_last_success=self.elapsed_since_last_success,
+                possible_history_gap=self.possible_history_gap,
+                history_gap_reason=self.history_gap_reason,
+                review_required=self.review_required,
+                continuity_last_verified_at=self.continuity_last_verified_at,
+                continuity_anchor_match_id=self.continuity_anchor_match_id,
+                persistence_before_analytics=self.persistence_before_analytics,
                 shutdown_requested=self.shutdown_requested,
             )
 
@@ -1308,6 +1645,7 @@ def run_fc27_poll_cycle(
     use_cache: bool = True,
     use_rate_limiter: bool = True,
     enforce_db_posture: bool = False,
+    recover_state_from_db: bool = False,
 ) -> FC27PollResult:
     """Execute at most one bounded East Coasters FC27 poll cycle."""
     rt = runtime or get_default_polling_runtime()
@@ -1315,7 +1653,7 @@ def run_fc27_poll_cycle(
     clock_utc = now_utc_fn or (lambda: datetime.now(timezone.utc))
     clock_epoch = now_epoch_fn or rt.clock
 
-    started_at = clock_utc()
+    started_at = _normalize_utc(clock_utc())
     start_epoch = clock_epoch()
     attempt_id = f"poll-{uuid.uuid4().hex[:12]}"
     attempt = FC27PollAttempt(
@@ -1346,20 +1684,57 @@ def run_fc27_poll_cycle(
         error_category: str | None = None,
         is_failure: bool = False,
         is_success: bool = False,
+        schedule_lag_seconds: int = 0,
+        missed_intervals: int = 0,
+        provider_window_count: int | None = None,
+        elapsed_since_last_success: int | None = None,
+        possible_history_gap: bool | None = None,
+        history_gap_reason: str | None = None,
+        review_required: bool | None = None,
+        continuity_last_verified_at: datetime | None = None,
+        continuity_anchor_match_id: str | None = None,
     ) -> FC27PollResult:
-        finished_at = clock_utc()
+        finished_at = _normalize_utc(clock_utc())
         end_epoch = clock_epoch()
         duration_ms = max(0, int((end_epoch - start_epoch) * 1000))
         c_state = rt.circuit_breaker.state.value
 
         with rt._lock:
-            rt.last_attempt_at = started_at
+            is_skipped_without_attempt = poll_status in (
+                "SKIPPED_MIN_INTERVAL",
+                "SKIPPED_CACHE_FRESH",
+                "SKIPPED_SINGLE_FLIGHT_BUSY",
+                "DISABLED",
+                "BLOCKED_FEATURE_GATE",
+                "SHUTDOWN_REQUESTED",
+            )
+            if not is_skipped_without_attempt or rt.last_attempt_at is None:
+                rt.last_attempt_at = started_at
             rt.last_status = poll_status
             rt.total_cycles += 1
             rt.total_provider_requests += provider_requests
             rt.total_matches_inserted += inserted_match_count
             rt.total_duplicates_ignored += duplicate_ignored_count
             rt.total_replay_conflicts += replay_conflict_count
+            rt.schedule_lag_seconds = max(0, schedule_lag_seconds)
+            rt.missed_intervals = max(0, missed_intervals)
+            rt.catch_up_cycles_suppressed = True
+
+            if provider_window_count is not None:
+                rt.provider_window_count = min(10, max(0, provider_window_count))
+            if elapsed_since_last_success is not None:
+                rt.elapsed_since_last_success = max(0, elapsed_since_last_success)
+            if possible_history_gap is not None:
+                rt.possible_history_gap = possible_history_gap
+            if history_gap_reason is not None or possible_history_gap is False:
+                rt.history_gap_reason = history_gap_reason
+            if review_required is not None:
+                rt.review_required = review_required
+            if continuity_last_verified_at is not None:
+                rt.continuity_last_verified_at = _normalize_utc(continuity_last_verified_at)
+            if continuity_anchor_match_id is not None:
+                rt.continuity_anchor_match_id = continuity_anchor_match_id
+
             if is_failure:
                 rt.consecutive_failures += 1
             elif is_success:
@@ -1380,6 +1755,9 @@ def run_fc27_poll_cycle(
                 platform=pol.platform,
                 game_version=pol.game_version,
                 match_type=pol.match_type,
+                poll_interval_seconds=pol.poll_interval_seconds,
+                polling_frequency=pol.polling_frequency,
+                max_provider_requests_per_24_hours=pol.max_provider_requests_per_24_hours,
                 poll_status=poll_status,
                 single_flight_acquired=single_flight_acquired,
                 cache_status=cache_status,
@@ -1391,9 +1769,20 @@ def run_fc27_poll_cycle(
                 duplicate_ignored_count=min(10, max(0, duplicate_ignored_count)),
                 replay_conflict_count=min(10, max(0, replay_conflict_count)),
                 analytics_executed=analytics_executed,
+                persistence_before_analytics=True,
                 confidence_tier=confidence_tier,
                 circuit_state=c_state,
                 next_eligible_at=rt.next_eligible_at,
+                schedule_lag_seconds=rt.schedule_lag_seconds,
+                missed_intervals=rt.missed_intervals,
+                catch_up_cycles_suppressed=True,
+                provider_window_count=rt.provider_window_count,
+                elapsed_since_last_success=rt.elapsed_since_last_success,
+                possible_history_gap=rt.possible_history_gap,
+                history_gap_reason=rt.history_gap_reason,
+                review_required=rt.review_required,
+                continuity_last_verified_at=rt.continuity_last_verified_at,
+                continuity_anchor_match_id=rt.continuity_anchor_match_id,
                 error_category=error_category,
             )
             rt.last_result = result
@@ -1441,12 +1830,55 @@ def run_fc27_poll_cycle(
             is_failure=True,
         )
 
-    # 5. Check minimum interval window
-    if rt.next_eligible_at is not None and started_at < rt.next_eligible_at:
-        return _finalize(
-            poll_status="SKIPPED_MIN_INTERVAL",
-            single_flight_acquired=False,
-            cache_status="BYPASSED_MIN_INTERVAL",
+    # 4b. Recover persisted state from PostgreSQL when configured
+    if db_conn_or_uri is not None and (recover_state_from_db or not rt.known_match_ids):
+        try:
+            recover_polling_state_from_postgres(
+                db_conn_or_uri,
+                runtime=rt,
+                policy=pol,
+                enforce_posture=enforce_db_posture,
+                restore_schedule_window=bool(recover_state_from_db and not rt.state_recovered_from_db),
+            )
+        except FC27PollingPostureError:
+            rt.circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
+            return _finalize(
+                poll_status="PROVIDER_BLOCKED",
+                single_flight_acquired=False,
+                cache_status="BYPASSED_POSTURE_ERROR",
+                error_category="DATABASE_POSTURE_ERROR",
+                is_failure=True,
+            )
+        except Exception:
+            pass
+
+    # 5. Check minimum interval window (43200s / 12 hours)
+    if rt.next_eligible_at is not None:
+        norm_next_eligible = _normalize_utc(rt.next_eligible_at)
+        rt.next_eligible_at = norm_next_eligible
+        if started_at < norm_next_eligible:
+            return _finalize(
+                poll_status="SKIPPED_MIN_INTERVAL",
+                single_flight_acquired=False,
+                cache_status="BYPASSED_MIN_INTERVAL",
+            )
+
+    # Compute schedule lag and missed 12-hour intervals after outage/sleep/hibernate
+    schedule_lag_sec = 0
+    missed_interval_count = 0
+    if rt.next_eligible_at is not None and started_at > rt.next_eligible_at:
+        schedule_lag_sec = max(
+            0, int((started_at - _normalize_utc(rt.next_eligible_at)).total_seconds())
+        )
+        missed_interval_count = schedule_lag_sec // pol.poll_interval_seconds
+
+    prior_last_success_at = (
+        _normalize_utc(rt.last_success_at) if rt.last_success_at is not None else None
+    )
+    elapsed_since_prev_success: int | None = None
+    if prior_last_success_at is not None:
+        elapsed_since_prev_success = max(
+            0, int((started_at - prior_last_success_at).total_seconds())
         )
 
     # 6. Check bounded normalized cache (complete key)
@@ -1532,7 +1964,7 @@ def run_fc27_poll_cycle(
                         confirm=True,
                     )
                 fixed_identity = _build_fixed_verified_identity_envelope(
-                    pol, clock_utc()
+                    pol, _normalize_utc(clock_utc())
                 )
                 match_envelope = active_adapter.get_east_coasters_recent_matches_once(
                     match_type=pol.match_type,
@@ -1541,7 +1973,7 @@ def run_fc27_poll_cycle(
                     platform=pol.platform,
                     output="records",
                     identity_envelope=fixed_identity,
-                    observed_at=clock_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    observed_at=_normalize_utc(clock_utc()).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 )
         except Exception as exc:
             status_code, err_cat = _classify_provider_exception(
@@ -1554,6 +1986,9 @@ def run_fc27_poll_cycle(
                 provider_requests=provider_requests,
                 error_category=err_cat,
                 is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
             )
 
         # Revalidate identity, provenance, schema, and privacy on returned envelope
@@ -1572,9 +2007,19 @@ def run_fc27_poll_cycle(
                 accepted_match_count=match_envelope.accepted_record_count,
                 error_category=err_cat,
                 is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
             )
 
-        # Persist batch transactionally in PostgreSQL
+        incoming_match_ids = [
+            str(r.get("match_id", ""))
+            for r in match_envelope.normalized_records
+            if r.get("match_id")
+        ]
+        prior_known_ids = frozenset(rt.known_match_ids)
+
+        # Persist batch transactionally in PostgreSQL BEFORE any analytics execution
         try:
             if persist_fn is not None:
                 persistence_summary = persist_fn(match_envelope)
@@ -1597,7 +2042,7 @@ def run_fc27_poll_cycle(
                         match_envelope=match_envelope,
                         match_envelopes=adapter_envelopes,
                         enforce_posture=enforce_db_posture,
-                        generated_at=clock_utc(),
+                        generated_at=_normalize_utc(clock_utc()),
                     )
         except FC27ReplayConflictError:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
@@ -1614,6 +2059,9 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 error_category="REPLAY_CONFLICT",
                 is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
             )
         except FC27PollingPostureError:
             rt.circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
@@ -1626,6 +2074,28 @@ def run_fc27_poll_cycle(
                 accepted_match_count=match_envelope.accepted_record_count,
                 error_category="DATABASE_POSTURE_ERROR",
                 is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
+            )
+        except Exception:
+            rt.circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
+            return _finalize(
+                poll_status="TRANSIENT_FAILURE",
+                single_flight_acquired=True,
+                cache_status="MISS",
+                provider_requests=provider_requests,
+                source_match_count=match_envelope.source_record_count,
+                accepted_match_count=match_envelope.accepted_record_count,
+                inserted_match_count=0,
+                duplicate_ignored_count=0,
+                replay_conflict_count=0,
+                analytics_executed=False,
+                error_category="PERSISTENCE_FAILURE",
+                is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
             )
 
         if persistence_summary.replay_conflicts > 0:
@@ -1643,7 +2113,29 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 error_category="REPLAY_CONFLICT",
                 is_failure=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
             )
+
+        inserted_matches = persistence_summary.match_rows_inserted
+        duplicate_matches = persistence_summary.duplicates_ignored
+
+        # Evaluate 10-match provider window continuity and possible history gaps
+        effective_prior_known = set(prior_known_ids)
+        if not effective_prior_known and duplicate_matches > 0:
+            effective_prior_known.update(incoming_match_ids[:duplicate_matches])
+        has_gap, gap_reason, gap_review_req, anchor_mid = evaluate_provider_window_continuity(
+            incoming_match_ids=incoming_match_ids,
+            known_match_ids=effective_prior_known,
+            inserted_match_count=inserted_matches,
+            duplicate_ignored_count=duplicate_matches,
+            source_match_count=match_envelope.source_record_count,
+            elapsed_since_last_success_seconds=elapsed_since_prev_success,
+            poll_interval_seconds=pol.poll_interval_seconds,
+        )
+        with rt._lock:
+            rt.known_match_ids.update(incoming_match_ids)
 
         # Store validated normalized envelope in bounded cache only after conflict-free persistence
         if use_cache:
@@ -1661,14 +2153,13 @@ def run_fc27_poll_cycle(
             except FC27CacheError:
                 pass
 
-        # Schedule next eligible poll time and reset circuit breaker failures
+        # Schedule next eligible poll time (anchored to completion time, suppressing catch-up bursts)
         rt.circuit_breaker.record_success()
         select_fn = interval_selector or select_bounded_poll_interval_seconds
         next_interval_sec = select_fn(pol)
-        rt.next_eligible_at = clock_utc() + timedelta(seconds=next_interval_sec)
-
-        inserted_matches = persistence_summary.match_rows_inserted
-        duplicate_matches = persistence_summary.duplicates_ignored
+        cycle_done_utc = _normalize_utc(clock_utc())
+        rt.next_eligible_at = cycle_done_utc + timedelta(seconds=next_interval_sec)
+        verified_at = cycle_done_utc if not has_gap else rt.continuity_last_verified_at
 
         # PART L — Execute Search -> Scout -> Analyst ONLY when new matches were inserted
         if inserted_matches <= 0:
@@ -1685,6 +2176,15 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 confidence_tier="UNCHANGED_NO_NEW_MATCHES",
                 is_success=True,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                provider_window_count=match_envelope.accepted_record_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
+                possible_history_gap=has_gap,
+                history_gap_reason=gap_reason,
+                review_required=gap_review_req,
+                continuity_last_verified_at=verified_at,
+                continuity_anchor_match_id=anchor_mid,
             )
 
         if analytics_fn is not None:
@@ -1710,7 +2210,7 @@ def run_fc27_poll_cycle(
                     run_analytics_from_persisted_community_records(
                         guarded_conn,
                         payload_sha256=match_envelope.payload_hash,
-                        analysis_generated_at=clock_utc(),
+                        analysis_generated_at=_normalize_utc(clock_utc()),
                     )
                 )
             analytics_bundle = {
@@ -1737,6 +2237,15 @@ def run_fc27_poll_cycle(
             analytics_executed=True,
             confidence_tier=confidence_tier,
             is_success=True,
+            schedule_lag_seconds=schedule_lag_sec,
+            missed_intervals=missed_interval_count,
+            provider_window_count=match_envelope.accepted_record_count,
+            elapsed_since_last_success=elapsed_since_prev_success,
+            possible_history_gap=has_gap,
+            history_gap_reason=gap_reason,
+            review_required=gap_review_req,
+            continuity_last_verified_at=verified_at,
+            continuity_anchor_match_id=anchor_mid,
         )
     finally:
         rt.current_owner = None
@@ -1771,6 +2280,9 @@ def run_fc27_polling_worker(
     use_cache: bool = True,
     use_rate_limiter: bool = True,
     enforce_db_posture: bool = False,
+    recover_state_from_db: bool = True,
+    now_utc_fn: Callable[[], datetime] | None = None,
+    now_epoch_fn: Callable[[], float] | None = None,
 ) -> list[FC27PollResult]:
     """Run the bounded FC27 polling loop until shutdown or ``max_cycles``."""
     rt = runtime or get_default_polling_runtime()
@@ -1813,10 +2325,13 @@ def run_fc27_polling_worker(
                 persist_fn=persist_fn,
                 analytics_fn=analytics_fn,
                 shutdown_event=stop_event,
+                now_utc_fn=now_utc_fn,
+                now_epoch_fn=now_epoch_fn,
                 interval_selector=interval_selector,
                 use_cache=use_cache,
                 use_rate_limiter=use_rate_limiter,
                 enforce_db_posture=enforce_db_posture,
+                recover_state_from_db=recover_state_from_db,
             )
             results.append(result)
             cycles_run += 1
@@ -1904,16 +2419,22 @@ __all__ = [
     "FORBIDDEN_WORKER_SQL_TABLES",
     "GuardedPollingConnection",
     "GuardedPollingCursor",
+    "MAX_PROVIDER_REQUESTS_PER_24_HOURS",
+    "POLL_FREQUENCY_LITERAL",
+    "POLL_INTERVAL_SECONDS",
     "POLL_NORMALIZATION_VERSION",
     "POLL_OPERATION_NAME",
     "POLL_RESPONSE_SCHEMA_VERSION",
+    "PROVIDER_WINDOW_MAX_MATCHES",
     "assert_polling_sql_allowed",
     "build_fc27_polling_policy_from_env",
     "build_poll_cache_key",
     "build_single_flight_lock_key",
+    "evaluate_provider_window_continuity",
     "get_default_polling_runtime",
     "open_guarded_polling_connection",
     "persist_polled_match_envelope",
+    "recover_polling_state_from_postgres",
     "reset_default_polling_runtime",
     "resolve_polling_database_uri",
     "run_fc27_poll_cycle",

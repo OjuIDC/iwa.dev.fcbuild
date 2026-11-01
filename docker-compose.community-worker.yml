@@ -24,15 +24,16 @@ services:
     mem_limit: 256m
     pids_limit: 64
     stop_grace_period: 30s
-    command: ["--worker"]
+    command: ["--worker", "--confirm-live-polling"]
     environment:
       FC27_CLUB_ID: "330323"
       FC_PLATFORM: "common-gen5"
       FC27_COMMUNITY_POLLING_ENABLED: ${FC27_COMMUNITY_POLLING_ENABLED:-false}
       FC27_COMMUNITY_PROVIDER_ENABLED: ${FC27_COMMUNITY_PROVIDER_ENABLED:-false}
       FC27_PERSISTENCE_ENABLED: ${FC27_PERSISTENCE_ENABLED:-false}
-      FC27_COMMUNITY_POLL_MIN_SECONDS: ${FC27_COMMUNITY_POLL_MIN_SECONDS:-300}
-      FC27_COMMUNITY_POLL_MAX_SECONDS: ${FC27_COMMUNITY_POLL_MAX_SECONDS:-600}
+      FC27_COMMUNITY_POLL_INTERVAL_SECONDS: ${FC27_COMMUNITY_POLL_INTERVAL_SECONDS:-43200}
+      FC27_COMMUNITY_POLL_MIN_SECONDS: ${FC27_COMMUNITY_POLL_MIN_SECONDS:-43200}
+      FC27_COMMUNITY_POLL_MAX_SECONDS: ${FC27_COMMUNITY_POLL_MAX_SECONDS:-43200}
       FC27_COMMUNITY_POLL_MAX_REQUESTS: "1"
       FC27_COMMUNITY_POLL_MAX_RETRIES: "0"
       FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY: "true"
@@ -51,7 +52,7 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-    restart: "no"
+    restart: unless-stopped
 
 secrets:
   fc27_app_uri:
