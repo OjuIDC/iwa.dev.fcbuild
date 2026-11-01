@@ -2,13 +2,18 @@
 
 - **Status**: Current
 - **Audience**: Developers, Architects, Security Reviewers
-- **Last verified commit**: `db77a6f74540079b91ab03657642bbe30e3b9b18`
-- **Source of truth**: `src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`, `THIRD_PARTY_NOTICES.md`
-- **Supersedes**: `NONE`
+- **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
+- **Source of truth**: `src/fc27_community_provider.py`, `src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`, `THIRD_PARTY_NOTICES.md`
+- **Supersedes**: `docs/archive/providers/mcp_ws.md`
 
-> **Current Authorization Status**: `EA_APPROVED_ACCESS_REQUEST_DRAFT` (`SELECTED_PROVIDER=NONE`, `LIVE_PROVIDER_TRAFFIC=BLOCKED_SAFE`)
+> **Current Working Real-Data Provider (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`)**:
 >
-> The FC 27 provider boundary (`src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`) is implemented and mock-validated (`217 passed` focused tests). Live external requests remain disabled (`FC27_PROVIDER_ENABLED=false`, `FC27_LIVE_INGESTION_ENABLED=false`) until formal written authorization is recorded.
+> The current supported real-data acquisition path for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) is the bounded one-shot community client wrapper in `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` (`Dockerfile.community-eval`, `docker-compose.community-eval.yml`), which successfully retrieved, validated, normalized, pseudonymized (`plr_ecf_<12-hex>`), persisted (`10` matches, `60` player rows), and analyzed (`Search -> Scout -> Analyst`) real East Coasters match data with `raw_response_retained=False`. See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) for full details.
+>
+> **Historical Transport Findings Recorded (`PART D`)**:
+> - **Standards-Compliant Python `urllib` Live Probe (`feature/fc27-real-east-coasters-ingestion` @ `76d20c4ef6`)**: Confirmed deterministic HTTP `403 Forbidden` at the Akamai edge when calling `https://proclubs.ea.com/api/fc/clubs/info` with standard Python `urllib` headers and TLS profile (`STANDARD_LIVE_PROBE_ACTIVE=NO`).
+> - **Bounded Headless Chromium Browser-Observed Provider (`feature/fc27-browser-observed-provider` @ `414b4f3d67`)**: Confirmed official public page URL (`https://www.ea.com/games/ea-sports-fc/clubs/overview?clubId=330323&platform=common-gen5`) and `common-gen5` platform, while headless Chromium navigation encountered `ERR_HTTP2_PROTOCOL_ERROR` across both Windows host and Linux container environments (`BROWSER_PROVIDER_ACTIVE=NO`).
+> - **Direct Partner/EA Written Authorization Boundary (`EA_APPROVED_ACCESS_REQUEST_DRAFT`)**: The provider-neutral `FC27AuthorizedProviderAdapter` (`src/fc27_authorized_provider.py`) remains retained as a supporting contract/adapter layer (`FC27_PROVIDER_ENABLED=false` by default).
 
 ---
 

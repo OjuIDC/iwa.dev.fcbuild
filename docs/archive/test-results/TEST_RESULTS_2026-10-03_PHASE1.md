@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `TEST_RESULTS.md`.
+> Archive reason: Point-in-time 2026-10-03 test execution report superseded by current TEST_RESULTS.md
 > Operational status: DO NOT USE
 > Original path: TEST_RESULTS.md
 > Archived on: 2026-10-29

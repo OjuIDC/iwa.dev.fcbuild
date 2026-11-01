@@ -2,11 +2,28 @@
 
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
-- **Last verified commit**: `6dc09452371570a1f00c77c7f1b930059a8ab938`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `tests/`
+- **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`), and automated test suites (`tests/`).
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`), and automated test suites (`tests/`).
+
+## 0. Current Supported Real-Data Operational Path
+
+For **East Coasters (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`)**, the current working end-to-end architecture is:
+
+```text
+pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUNITY_CLIENT)
+  -> repository endpoint contracts & response schema validation (src/fc27_clubs_api_contracts.py)
+  -> normalization, recursive sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
+  -> optional single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
+  -> Search context assembly (src/fc27_search_scout.py)
+  -> Scout evidence synthesis (src/fc27_search_scout.py)
+  -> Analyst evidence synthesis (src/fc27_analyst.py)
+  -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app)
+```
+
+See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) and [`docs/FC27_DEMO.md`](FC27_DEMO.md) for exact execution commands.
 
 ## 1. Architectural Status Classifications
 
@@ -153,7 +170,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 - **Dispatch Boundary**: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are enforced at startup and in `/health/ready`.
 
 ### 5.4 Observability & Sibling-Repo Boundaries
-- **Observability (`src/tracing.py`, `src/correlation.py`)**: Every request carries a validated UUID `X-Correlation-Id`. Optional Langfuse tracing (`docker-compose.langfuse.yml`) redacts secrets before export and omits prompt/candidate content unless `LANGFUSE_CAPTURE_CONTENT=true`. Windhover mobile integration remains `DEFERRED`/`UNVERIFIED` ([`docs/WINDHOVER_INTEGRATION_GAP.md`](WINDHOVER_INTEGRATION_GAP.md)).
+- **Observability (`src/tracing.py`, `src/correlation.py`)**: Every request carries a validated UUID `X-Correlation-Id`. Optional Langfuse tracing (`docker-compose.langfuse.yml`) redacts secrets before export and omits prompt/candidate content unless `LANGFUSE_CAPTURE_CONTENT=true`. Windhover mobile integration remains `DEFERRED`/`UNVERIFIED` ([`docs/FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)).
 - **MatchPulse Live Isolation (`docs/MATCHPULSE_INTEGRATION_BOUNDARY.md`)**: Product development for MatchPulse belongs exclusively in `..\matchpulse-live-public`. `iwa.dev.fcbuild` never imports MatchPulse Python code, shares datastores, or treats MatchPulse output as authorization.
 
 ---

@@ -900,6 +900,181 @@ def validate_repository(
                         manifest_rel,
                     )
 
+    # DC14b (PART O): Extended archive index, archived scripts, JSON manifests, and current script/Docker existence
+    arch_readme_rel = "docs/archive/README.md"
+    if policy.get("archive_manifest_json") and arch_readme_rel in all_repo_files_set:
+        arch_readme_text = (resolved_root / arch_readme_rel).read_text(encoding="utf-8", errors="ignore")
+        for arch_doc in archive_md_docs:
+            if arch_doc in archive_index_files:
+                continue
+            rel_from_arch_readme = arch_doc[len("docs/archive/"):] if arch_doc.startswith("docs/archive/") else arch_doc
+            if rel_from_arch_readme not in arch_readme_text and arch_doc not in arch_readme_text:
+                add_finding(
+                    "ARCHIVE_INTEGRITY",
+                    "ARCHIVE_MANIFEST_ENTRY_MISSING",
+                    "ERROR",
+                    arch_readme_rel,
+                    1,
+                    arch_doc,
+                    f"Archived document '{arch_doc}' is not reachable from {arch_readme_rel}",
+                    f"Add a link to '{rel_from_arch_readme}' in {arch_readme_rel}",
+                    arch_readme_rel,
+                )
+
+    for req_scr in policy.get("required_current_scripts", []):
+        if not (resolved_root / req_scr).is_file():
+            add_finding(
+                "SCRIPT_REFERENCE",
+                "SCRIPT_NOT_FOUND",
+                "ERROR",
+                "config/documentation_consistency_policy.json",
+                1,
+                req_scr,
+                f"Required current script '{req_scr}' does not exist",
+                "Restore missing script or update required_current_scripts in policy",
+                "scripts/README.md",
+            )
+
+    for req_dc in policy.get("required_docker_compose_files", []):
+        if not (resolved_root / req_dc).is_file():
+            add_finding(
+                "COMPOSE_REFERENCE",
+                "COMPOSE_FILE_NOT_FOUND",
+                "ERROR",
+                "config/documentation_consistency_policy.json",
+                1,
+                req_dc,
+                f"Required Docker/Compose file '{req_dc}' does not exist",
+                "Restore missing Docker/Compose file or update required_docker_compose_files in policy",
+                "docker-compose.yml",
+            )
+
+    scripts_arch_prefix = policy.get("scripts_archive_prefix", "scripts/archive/")
+    archived_scripts = sorted(
+        f for f in all_repo_files if f.startswith(scripts_arch_prefix) and f.endswith(".py")
+    )
+    if archived_scripts:
+        active_py_files = [
+            f for f in all_repo_files
+            if f.endswith(".py")
+            and (f.startswith("src/") or (f.startswith("scripts/") and not f.startswith(scripts_arch_prefix)))
+            and f != "scripts/check_documentation_consistency.py"
+        ]
+        workflow_cfg_files = [f for f in all_repo_files if f.startswith(".github/workflows/")]
+        docker_cfg_files = [f for f in all_repo_files if f.startswith("Dockerfile") or f.endswith("/Dockerfile")]
+        compose_cfg_files = [f for f in all_repo_files if f.startswith("docker-compose")]
+        for arch_scr in archived_scripts:
+            scr_text = (resolved_root / arch_scr).read_text(encoding="utf-8", errors="ignore")
+            scr_head = "\n".join(scr_text.splitlines()[:15])
+            for req_hdr in ("ARCHIVED: HISTORICAL REFERENCE ONLY", "NON-OPERATIONAL", "DO NOT RUN", "REPLACED BY:"):
+                if req_hdr not in scr_head:
+                    add_finding(
+                        "ARCHIVE_INTEGRITY",
+                        "ARCHIVE_NOTICE_MISSING",
+                        "ERROR",
+                        arch_scr,
+                        1,
+                        req_hdr,
+                        f"Archived script '{arch_scr}' is missing '{req_hdr}' header notice",
+                        "Add standard archived script notice header",
+                        "docs/archive/ARCHIVE_MANIFEST.md",
+                    )
+            scr_stem = Path(arch_scr).stem
+            for act_py in active_py_files:
+                act_text = (resolved_root / act_py).read_text(encoding="utf-8", errors="ignore")
+                if arch_scr in act_text or f"import {scr_stem}" in act_text or f"from scripts.archive" in act_text:
+                    add_finding(
+                        "ARCHIVE_INTEGRITY",
+                        "ARCHIVE_REFERENCED_AS_CURRENT",
+                        "ERROR",
+                        act_py,
+                        1,
+                        arch_scr,
+                        f"Archived script '{arch_scr}' is imported or referenced by active runtime file '{act_py}'",
+                        "Remove runtime references to archived scripts",
+                        "scripts/README.md",
+                    )
+            for wf_f in workflow_cfg_files + docker_cfg_files + compose_cfg_files:
+                wf_text = (resolved_root / wf_f).read_text(encoding="utf-8", errors="ignore")
+                if arch_scr in wf_text or Path(arch_scr).name in wf_text:
+                    add_finding(
+                        "ARCHIVE_INTEGRITY",
+                        "ARCHIVE_REFERENCED_AS_CURRENT",
+                        "ERROR",
+                        wf_f,
+                        1,
+                        arch_scr,
+                        f"Archived script '{arch_scr}' is referenced in workflow/Docker/Compose file '{wf_f}'",
+                        "Remove archived script execution from workflows, Dockerfiles, and Compose files",
+                        "scripts/README.md",
+                    )
+
+    arch_json_rel = policy.get("archive_manifest_json")
+    if arch_json_rel and (resolved_root / arch_json_rel).is_file():
+        arch_json_data = json.loads((resolved_root / arch_json_rel).read_text(encoding="utf-8"))
+        for item in arch_json_data.get("archived_items", []):
+            ap = item.get("archived_path", "")
+            op = item.get("original_path", "")
+            rp = item.get("replacement", "NONE")
+            if ap and not (resolved_root / ap).is_file():
+                add_finding(
+                    "ARCHIVE_INTEGRITY",
+                    "ARCHIVE_FILE_MISSING",
+                    "ERROR",
+                    arch_json_rel,
+                    1,
+                    ap,
+                    f"Archive manifest JSON entry '{ap}' does not exist on disk",
+                    "Restore archived file or update config/fc27_archive_manifest.json",
+                    arch_json_rel,
+                )
+            else:
+                if ap:
+                    previous_to_archived[op] = ap
+            if rp and rp != "NONE" and not (resolved_root / rp).exists():
+                add_finding(
+                    "ARCHIVE_INTEGRITY",
+                    "ARCHIVE_REPLACEMENT_MISSING",
+                    "ERROR",
+                    arch_json_rel,
+                    1,
+                    rp,
+                    f"Archive manifest JSON replacement '{rp}' does not exist on disk",
+                    "Point replacement to an existing file or NONE",
+                    arch_json_rel,
+                )
+
+    rem_json_rel = policy.get("removed_items_manifest_json")
+    if rem_json_rel and (resolved_root / rem_json_rel).is_file():
+        rem_json_data = json.loads((resolved_root / rem_json_rel).read_text(encoding="utf-8"))
+        for ritem in rem_json_data.get("removed_items", []):
+            rpath = ritem.get("path", "")
+            rrepl = ritem.get("replacement", "NONE")
+            if rpath and (resolved_root / rpath).exists():
+                add_finding(
+                    "ARCHIVE_INTEGRITY",
+                    "ARCHIVE_DUPLICATE_CURRENT_FILE",
+                    "ERROR",
+                    rem_json_rel,
+                    1,
+                    rpath,
+                    f"Removed-items manifest path '{rpath}' still exists on disk",
+                    "Remove the file or update config/fc27_removed_items_manifest.json",
+                    rem_json_rel,
+                )
+            if rrepl and rrepl != "NONE" and not (resolved_root / rrepl).exists():
+                add_finding(
+                    "ARCHIVE_INTEGRITY",
+                    "ARCHIVE_REPLACEMENT_MISSING",
+                    "ERROR",
+                    rem_json_rel,
+                    1,
+                    rrepl,
+                    f"Removed-items manifest replacement '{rrepl}' does not exist on disk",
+                    "Point replacement to an existing file or NONE",
+                    rem_json_rel,
+                )
+
     # DC15: Authority metadata validation across required major docs
     seen_authority_scopes: dict[str, str] = {}
     for req_doc in policy["required_authority_metadata_docs"]:

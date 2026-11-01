@@ -1,8 +1,9 @@
 > Archived document
->
-> This file is retained for historical context and is not an authoritative
-> operational guide for the current repository state.
-> Status: Non-authoritative historical record.
+> **Archived: historical reference only.**
+> This document is non-authoritative and must not be used as current operational
+> guidance.
+> Replacement: `docs/VOICE_CAPABILITIES.md`.
+> Archive reason: Historical voice audit snapshot superseded by current voice capabilities doc
 > Operational status: DO NOT USE
 > Original path: audit/historical/TYPED_GRAPH_VOICE_AUDIT.md
 > Archived on: 2026-10-29

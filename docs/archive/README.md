@@ -1,34 +1,66 @@
-# Documentation Archive Policy
+# Historical Documentation & Script Archive
 
-## Purpose & Scope
+> **Operational status: DO NOT USE**
+>
+> All files under `docs/archive/` and `scripts/archive/` are **non-authoritative** historical records retained solely for audit provenance and architectural history. Do not execute commands, SQL snippets, or deployment steps found in archived files.
 
-`docs/archive/` stores historical documentation, superseded architectural specifications, completed phase implementation reports, historical test snapshots, and replaced execution prompts for the `iwa.dev.fcbuild` repository.
+For current operational, architectural, provider, security, and testing documentation, start at [`docs/README.md`](../README.md) and root [`README.md`](../../README.md).
 
-## Non-Negotiable Archive Rules
+---
 
-1. **Historical Documentation Only**: This archive is exclusively for historical documentation, superseded plans, and replaced reports.
-2. **No Active Code or Tests**:
-   - The archive is **not** for active source code (`src/`, `scripts/`, `host_agent/`, `voice/`).
-   - The archive is **not** for active tests (`tests/`).
-   - The archive is **not** for database migrations (`migrations/`).
-3. **No Secrets or Real Data**: The archive is **not** for secrets, credentials, `.local-artifacts/`, `.local-data/`, or real East Coasters club/player data.
-4. **Non-Authoritative Status**:
-   - All archived documents are **non-authoritative** (`OPERATIONAL_STATUS: DO NOT USE`).
-   - Archived instructions, commands, feature-flag settings, and schema snippets must **never** be followed operationally.
-   - Current authoritative documentation must not cite archived files as active operational authority.
-5. **Required Provenance & Replacement Metadata**:
-   - Every archived Markdown file must carry a top-of-file notice stating its archived status, archive date, original path, and current authoritative replacement path (plus a command-execution warning when historical shell commands appear).
-   - Every archived file must be registered in [`docs/archive/ARCHIVE_MANIFEST.md`](ARCHIVE_MANIFEST.md).
-6. **Git History Preservation**:
-   - Archival moves use `git mv <previous_path> <archive_path>` so full Git blame and commit history remain intact.
-   - Archive filenames remain human-understandable and preserve original dates or milestone identifiers where known.
+## Archive Manifests
 
-## Archive Directory Categories
+- **Human-Readable Manifest**: [`docs/archive/ARCHIVE_MANIFEST.md`](ARCHIVE_MANIFEST.md)
+- **Machine-Readable Manifest**: [`config/fc27_archive_manifest.json`](../../config/fc27_archive_manifest.json) (`fc27-archive-manifest-v1`)
+- **Removed-Items Manifest**: [`config/fc27_removed_items_manifest.json`](../../config/fc27_removed_items_manifest.json)
 
-Only populated categories are created:
+---
 
-- `docs/archive/architecture/` — Superseded phase-specific security, evidence-binding, runbook, transaction, and WebAuthn specifications whose active rules have been consolidated into current authoritative guides (`docs/SECURITY_BOUNDARIES.md`, `docs/OPERATIONS.md`, `docs/FC27_APPROVAL_FLOW.md`).
-- `docs/archive/plans/` — Superseded or draft architectural design specifications (`2026-10-02-player-dispatch-design.md`).
-- `docs/archive/prompts/` — Historical execution prompts and audit request rubrics (`ORIGINAL_REQUEST.md`, `PHASE2_VICTORY_AUDIT_REQUEST.md`).
-- `docs/archive/reports/` — Completed milestone implementation reports, merge-gate reports, and pre-2.0.0 bundle/archive audits.
-- `docs/archive/test-results/` — Historical dated test-result and traceability snapshots superseded by current commit-bound verification in [`TEST_RESULTS.md`](../../TEST_RESULTS.md) and [`docs/TESTING.md`](../TESTING.md).
+## Archived Categories & Complete Index
+
+### 1. Providers (`docs/archive/providers/`)
+Historical provider notes and superseded early transport wiring:
+- [`docs/archive/providers/mcp_ws.md`](providers/mcp_ws.md) — Historical v2.0.0 MCP proxy and EA retry note (superseded by [`docs/FC27_PROVIDER_INTEGRATION.md`](../FC27_PROVIDER_INTEGRATION.md) and [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md)).
+
+### 2. Phases (`docs/archive/phases/`)
+Historical implementation phase notes for non-primary subsystems:
+- [`docs/archive/phases/installer.md`](phases/installer.md) — Historical v2.0.0 Windows host-agent installer phase note (superseded by [`docs/DEVELOPMENT.md`](../DEVELOPMENT.md)).
+- [`docs/archive/phases/watcher_ocr_rundown.md`](phases/watcher_ocr_rundown.md) — Historical v2.0.0 watcher, OCR, and post-match rundown phase note (superseded by [`docs/FC27_COMPONENT_STATUS.md`](../FC27_COMPONENT_STATUS.md)).
+
+### 3. Experiments (`docs/archive/experiments/` & `scripts/archive/experiments/`)
+Unimplemented or superseded experimental integration documents and scripts:
+- [`docs/archive/experiments/WINDHOVER_INTEGRATION_GAP.md`](experiments/WINDHOVER_INTEGRATION_GAP.md) — Historical 2026-10-01 unimplemented Windhover contract gap note (superseded by [`docs/FC27_COMPONENT_STATUS.md`](../FC27_COMPONENT_STATUS.md)).
+- [`scripts/archive/experiments/matchpulse_conformance.py`](../../scripts/archive/experiments/matchpulse_conformance.py) — Superseded placeholder MatchPulse conformance script (replaced by [`scripts/check_matchpulse_boundary.py`](../../scripts/check_matchpulse_boundary.py)).
+
+### 4. Architecture (`docs/archive/architecture/`)
+Superseded Phase 2 root specifications consolidated into current `docs/`:
+- [`docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md`](architecture/PHASE2_EVIDENCE_BINDING.md) — Superseded by [`docs/FC27_APPROVAL_FLOW.md`](../FC27_APPROVAL_FLOW.md).
+- [`docs/archive/architecture/PHASE2_RUNBOOKS.md`](architecture/PHASE2_RUNBOOKS.md) — Superseded by [`docs/OPERATIONS.md`](../OPERATIONS.md).
+- [`docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md`](architecture/PHASE2_SECURITY_INVARIANTS.md) — Superseded by [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md).
+- [`docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md`](architecture/PHASE2_TRANSACTION_MODEL.md) — Superseded by [`docs/DATABASE_SCHEMA.md`](../DATABASE_SCHEMA.md).
+- [`docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md`](architecture/PHASE2_WEBAUTHN_POLICY.md) — Superseded by [`docs/FC27_APPROVAL_FLOW.md`](../FC27_APPROVAL_FLOW.md).
+
+### 5. Plans (`docs/archive/plans/`)
+Historical point-in-time design plans:
+- [`docs/archive/plans/2026-10-02-player-dispatch-design.md`](plans/2026-10-02-player-dispatch-design.md) — Superseded by [`docs/DISPATCH_ACTIVATION.md`](../DISPATCH_ACTIVATION.md).
+
+### 6. Prompts (`docs/archive/prompts/`)
+Historical audit and task prompt artifacts:
+- [`docs/archive/prompts/ORIGINAL_REQUEST.md`](prompts/ORIGINAL_REQUEST.md) — Superseded by [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+- [`docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`](prompts/PHASE2_VICTORY_AUDIT_REQUEST.md) — Superseded by [`docs/TESTING.md`](../TESTING.md).
+
+### 7. Reports (`docs/archive/reports/`)
+Point-in-time audit and release gate reports:
+- [`docs/archive/reports/BUNDLE_AUDIT.md`](reports/BUNDLE_AUDIT.md) — Superseded by [`docs/TESTING.md`](../TESTING.md).
+- [`docs/archive/reports/FINAL_ARCHIVE_AUDIT.md`](reports/FINAL_ARCHIVE_AUDIT.md) — Superseded by [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+- [`docs/archive/reports/HACKATHON_ALIGNMENT.md`](reports/HACKATHON_ALIGNMENT.md) — Superseded by [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+- [`docs/archive/reports/IMPLEMENTATION_REPORT.md`](reports/IMPLEMENTATION_REPORT.md) — Superseded by [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+- [`docs/archive/reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md`](reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md) — Superseded by [`docs/TESTING.md`](../TESTING.md).
+- [`docs/archive/reports/PHASE2_REMEDIATION_REPORT.md`](reports/PHASE2_REMEDIATION_REPORT.md) — Superseded by [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md).
+- [`docs/archive/reports/SECURITY_CHANGES.md`](reports/SECURITY_CHANGES.md) — Superseded by [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md).
+- [`docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md`](reports/TYPED_GRAPH_VOICE_AUDIT.md) — Superseded by [`docs/VOICE_CAPABILITIES.md`](../VOICE_CAPABILITIES.md).
+
+### 8. Test Results (`docs/archive/test-results/`)
+Historical test-execution snapshots and traceability matrices:
+- [`docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`](test-results/PHASE2_TEST_TRACEABILITY.md) — Superseded by [`docs/TESTING.md`](../TESTING.md).
+- [`docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md`](test-results/TEST_RESULTS_2026-10-03_PHASE1.md) — Superseded by [`TEST_RESULTS.md`](../../TEST_RESULTS.md).

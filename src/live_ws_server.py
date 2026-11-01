@@ -17,7 +17,7 @@ Channels subscribed:
   fc27:tilt:alert        — Tilt detected (3+ consecutive losses)
   fc27:fairplay:flag     — Fair Play violation flagged
 
-Security (see docs/notes/mcp_ws.md):
+Security (see docs/SECURITY_BOUNDARIES.md and docs/OPERATIONS.md):
   * WS_AUTH_TOKEN (>= 32 chars) is required; the server refuses to start without it.
   * Handshake auth, either:
       - header  ``Authorization: Bearer <token>``            (non-browser clients), or

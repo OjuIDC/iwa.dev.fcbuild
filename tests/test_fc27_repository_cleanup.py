@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import ast
+import json
+import subprocess
+from pathlib import Path
+
+from scripts import check_documentation_consistency as dc
+from src import (
+    fc27_clubs_api_contracts,
+    fc27_community_provider,
+    fc27_demo_api,
+    fc27_pandas_view,
+    graph_api,
+    settings,
+)
+from src.fc27_pandas_view import _PROHIBITED_VIEW_KEYS
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_26_fixture_tests_retained() -> None:
+    required_fixture_tests = [
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_pandas_view.py",
+        "tests/test_fc27_clubs_api_contracts.py",
+        "tests/test_fc27_persistence_and_queries.py",
+        "tests/test_fc27_search.py",
+        "tests/test_fc27_scout.py",
+        "tests/test_fc27_analyst.py",
+        "tests/test_fc27_dashboard_queries.py",
+        "tests/test_fc27_demo.py",
+    ]
+    for rel in required_fixture_tests:
+        assert (REPO_ROOT / rel).is_file(), f"Missing fixture test suite: {rel}"
+
+
+def test_27_browser_diagnostic_history_recorded() -> None:
+    provider_doc = (REPO_ROOT / "docs" / "FC27_PROVIDER_INTEGRATION.md").read_text(encoding="utf-8")
+    assert "ERR_HTTP2_PROTOCOL_ERROR" in provider_doc
+    assert "https://www.ea.com/games/ea-sports-fc/clubs/overview" in provider_doc
+    assert "common-gen5" in provider_doc
+
+    manifest = json.loads(
+        (REPO_ROOT / "config" / "fc27_archive_manifest.json").read_text(encoding="utf-8")
+    )
+    records = {r["record_id"]: r for r in manifest.get("branch_only_research_records", [])}
+    assert "BRANCH-RESEARCH-002" in records
+    assert "ERR_HTTP2_PROTOCOL_ERROR" in records["BRANCH-RESEARCH-002"]["summary"]
+
+
+def test_28_browser_provider_not_active() -> None:
+    assert not (REPO_ROOT / "src" / "fc27_browser_provider.py").exists()
+    assert not (REPO_ROOT / "Dockerfile.browser-probe").exists()
+
+
+def test_29_standards_client_403_history_recorded() -> None:
+    provider_doc = (REPO_ROOT / "docs" / "FC27_PROVIDER_INTEGRATION.md").read_text(encoding="utf-8")
+    assert "403 Forbidden" in provider_doc or "HTTP 403" in provider_doc
+    assert "proclubs.ea.com/api/fc/clubs/info" in provider_doc
+
+    manifest = json.loads(
+        (REPO_ROOT / "config" / "fc27_archive_manifest.json").read_text(encoding="utf-8")
+    )
+    records = {r["record_id"]: r for r in manifest.get("branch_only_research_records", [])}
+    assert "BRANCH-RESEARCH-001" in records
+    assert "403" in records["BRANCH-RESEARCH-001"]["summary"]
+
+
+def test_30_polling_disabled() -> None:
+    assert settings.is_fc27_provider_enabled() is False
+    decl = fc27_community_provider.FC27CommunityProviderDeclaration()
+    assert decl.polling_enabled is False
+    assert decl.maximum_retries == 0
+
+
+def test_31_recommendations_disabled() -> None:
+    decl = fc27_community_provider.FC27CommunityProviderDeclaration()
+    assert decl.recommendations_enabled is False
+    comp_doc = (REPO_ROOT / "docs" / "FC27_COMPONENT_STATUS.md").read_text(encoding="utf-8")
+    assert "DISABLED" in comp_doc
+
+
+def test_32_dispatch_disabled() -> None:
+    assert settings.is_dispatch_enabled() is False
+    decl = fc27_community_provider.FC27CommunityProviderDeclaration()
+    assert decl.dispatch_enabled is False
+
+
+def test_33_no_raw_response_storage() -> None:
+    decl = fc27_community_provider.FC27CommunityProviderDeclaration()
+    assert decl.raw_response_retention is False
+    migration_sql = (
+        REPO_ROOT / "migrations" / "0012_fc27_performance_and_quarantine.sql"
+    ).read_text(encoding="utf-8")
+    assert "raw_payload" not in migration_sql.lower()
+    assert "raw_response" not in migration_sql.lower()
+
+
+def test_34_no_source_player_ids_in_current_path() -> None:
+    assert "player_id" in _PROHIBITED_VIEW_KEYS
+    assert "persona_id" in _PROHIBITED_VIEW_KEYS
+    assert "nucleus_id" in _PROHIBITED_VIEW_KEYS
+    assert "ea_id" in _PROHIBITED_VIEW_KEYS
+
+
+def test_35_no_aliases_in_current_path() -> None:
+    assert "player_name" in _PROHIBITED_VIEW_KEYS
+    assert "pro_name" in _PROHIBITED_VIEW_KEYS
+    assert "gamertag" in _PROHIBITED_VIEW_KEYS
+    assert "psn_id" in _PROHIBITED_VIEW_KEYS
+
+
+def test_36_no_duplicate_provider_owner() -> None:
+    owners = []
+    for py_file in (REPO_ROOT / "src").rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        if "class FC27CommunityProviderAdapter" in text:
+            owners.append(py_file.relative_to(REPO_ROOT).as_posix())
+    assert owners == ["src/fc27_community_provider.py"]
+
+
+def test_37_no_duplicate_normalization_owner() -> None:
+    contracts_owners = []
+    pandas_owners = []
+    for py_file in (REPO_ROOT / "src").rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        if "def normalize_matches_payload" in text:
+            contracts_owners.append(py_file.relative_to(REPO_ROOT).as_posix())
+        if "class FC27PandasView" in text:
+            pandas_owners.append(py_file.relative_to(REPO_ROOT).as_posix())
+    assert contracts_owners == ["src/fc27_clubs_api_contracts.py"]
+    assert pandas_owners == ["src/fc27_pandas_view.py"]
+    assert hasattr(fc27_clubs_api_contracts, "normalize_matches_payload")
+    assert hasattr(fc27_pandas_view, "FC27PandasView")
+
+
+def test_38_no_duplicate_source_classification_definition() -> None:
+    assert (
+        fc27_demo_api.LIVE_EA_CLUBS_COMMUNITY_CLIENT
+        is fc27_community_provider.LIVE_EA_CLUBS_COMMUNITY_CLIENT
+    )
+    assert callable(fc27_demo_api.resolve_dashboard_source_label)
+    assert (
+        fc27_demo_api.resolve_dashboard_source_label("LIVE_EA_CLUBS_COMMUNITY_CLIENT")
+        == "Live EA Clubs Data via pinned community client"
+    )
+    assert (
+        fc27_demo_api.resolve_dashboard_source_label("DEMO_FIXTURE_LOOPBACK")
+        == "Synthetic Fixture Data"
+    )
+
+
+def test_39_no_orphan_current_document() -> None:
+    docs_readme = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    for md in (REPO_ROOT / "docs").glob("*.md"):
+        if md.name == "README.md":
+            continue
+        assert md.name in docs_readme, f"Orphan current doc: {md.name}"
+
+
+def test_40_no_orphan_current_script() -> None:
+    scripts_readme = (REPO_ROOT / "scripts" / "README.md").read_text(encoding="utf-8")
+    for script_path in (REPO_ROOT / "scripts").iterdir():
+        if script_path.is_dir() or script_path.name == "README.md":
+            continue
+        assert script_path.name in scripts_readme, f"Orphan script: {script_path.name}"
+
+
+def test_41_no_orphan_current_docker_service() -> None:
+    arch_doc = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    dev_doc = (REPO_ROOT / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
+    voice_doc = (REPO_ROOT / "docs" / "VOICE_CAPABILITIES.md").read_text(encoding="utf-8")
+    prov_doc = (REPO_ROOT / "docs" / "FC27_PROVIDER_INTEGRATION.md").read_text(encoding="utf-8")
+    eval_doc = (REPO_ROOT / "docs" / "FC27_COMMUNITY_PROVIDER_EVALUATION.md").read_text(encoding="utf-8")
+    combined = arch_doc + "\n" + dev_doc + "\n" + voice_doc + "\n" + prov_doc + "\n" + eval_doc
+    for service_name in [
+        "postgres",
+        "redis",
+        "fc27-mcp",
+        "graph-api",
+        "ollama",
+        "ollama-init",
+        "stt",
+        "tts",
+        "fc27-community-client-evaluation",
+    ]:
+        assert service_name in combined, f"Service {service_name} not documented"
+
+
+def test_42_no_stale_root_level_phase_report() -> None:
+    root_mds = {p.name for p in REPO_ROOT.glob("*.md")}
+    allowed_root_mds = {
+        "README.md",
+        "SECURITY.md",
+        "MIGRATION_GUIDE.md",
+        "TEST_RESULTS.md",
+        "THIRD_PARTY_NOTICES.md",
+    }
+    assert root_mds == allowed_root_mds
+
+
+def test_43_no_active_reference_to_archived_commands() -> None:
+    active_docs = [REPO_ROOT / "README.md"] + list((REPO_ROOT / "docs").glob("*.md"))
+    for doc in active_docs:
+        if doc.name == "FC27_DOCUMENTATION_TRUTH_TABLE.md":
+            continue
+        text = doc.read_text(encoding="utf-8")
+        assert "python scripts/matchpulse_conformance.py" not in text
+        assert "python scripts/archive/" not in text
+
+
+def test_44_no_current_reference_to_deleted_files() -> None:
+    for py_file in (REPO_ROOT / "src").rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        assert "agency_org" not in text
+        assert ".env.models.example" not in text
+        assert "requirements-test.txt" not in text
+
+
+def test_45_no_ignored_local_artifact_tracked() -> None:
+    proc = subprocess.run(
+        ["git", "ls-files", ".local-artifacts", ".local-data"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == ""
+
+
+def test_46_repository_inventory_matches_tracked_files() -> None:
+    inv_path = REPO_ROOT / "docs" / "repository_inventory.json"
+    inv_data = json.loads(inv_path.read_text(encoding="utf-8"))
+    inv_paths = {entry["path"] for entry in inv_data["files"]}
+
+    proc = subprocess.run(
+        ["git", "ls-files"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tracked_paths = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    new_cleanup_files = {
+        "config/fc27_archive_manifest.json",
+        "config/fc27_removed_items_manifest.json",
+        "scripts/README.md",
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+    }
+    for rel in new_cleanup_files:
+        if (REPO_ROOT / rel).exists():
+            tracked_paths.add(rel)
+
+    assert inv_paths == tracked_paths
+    assert inv_data.get("total_files") == len(inv_paths)
+
+
+def test_47_documentation_strict_validation_passes() -> None:
+    report = dc.validate_repository(REPO_ROOT, include_archive=True)
+    assert report.errors == 0
+    assert report.warnings == 0
+
+
+def test_48_current_startup_commands_resolve() -> None:
+    assert callable(fc27_demo_api.create_demo_app)
+    assert callable(graph_api.create_app)
+
+
+def test_49_current_cli_entrypoints_import() -> None:
+    py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
+    assert len(py_scripts) == 10
+    for script_path in py_scripts:
+        source = script_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(script_path))
+        assert isinstance(tree, ast.Module)
+
+
+def test_50_current_docker_entrypoints_import() -> None:
+    docker_targets = [
+        "src/fc27_mcp_server.py",
+        "src/graph_api.py",
+        "voice/stt_service.py",
+        "voice/tts_service.py",
+        "scripts/fc27_community_eval.py",
+    ]
+    for rel in docker_targets:
+        path = REPO_ROOT / rel
+        assert path.is_file(), f"Missing Docker entrypoint target: {rel}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        assert isinstance(tree, ast.Module)
