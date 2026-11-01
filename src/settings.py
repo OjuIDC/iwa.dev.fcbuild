@@ -333,55 +333,84 @@ def is_fc27_community_polling_enabled(*, strict: bool = False) -> bool:
     return False
 
 
-def get_fc27_community_poll_min_seconds(*, strict: bool = False) -> int:
-    """Return configured FC 27 community polling minimum interval in seconds (default: 300).
-
-    Must be between 300 and 3600 seconds.
-    """
-    raw = os.getenv("FC27_COMMUNITY_POLL_MIN_SECONDS")
+def get_fc27_community_poll_interval_seconds(*, strict: bool = False) -> int:
+    """Return configured FC 27 community polling interval in seconds (default: 43200 = 12 hours)."""
+    raw = os.getenv("FC27_COMMUNITY_POLL_INTERVAL_SECONDS")
     if raw is None or not raw.strip():
-        return 300
+        return get_fc27_community_poll_min_seconds(strict=strict)
     val = raw.strip()
     if not (val.lstrip("-").isdecimal()):
         if strict:
             raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MIN_SECONDS must be an integer between 300 and 3600, got '{raw}'"
+                f"FC27_COMMUNITY_POLL_INTERVAL_SECONDS must be 43200 (12 hours), got '{raw}'"
             )
-        return 300
+        return 43200
     num = int(val)
-    if num < 300 or num > 3600:
+    if num != 43200:
         if strict:
             raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MIN_SECONDS must be between 300 and 3600, got {num}"
+                f"FC27_COMMUNITY_POLL_INTERVAL_SECONDS must be 43200 (12 hours), got {num}"
             )
-        return 300
+        return 43200
+    return 43200
+
+
+def get_fc27_community_poll_min_seconds(*, strict: bool = False) -> int:
+    """Return configured FC 27 community polling minimum interval in seconds (default: 43200).
+
+    Supported local polling interval is fixed to 43200 seconds (once every 12 hours).
+    """
+    raw = os.getenv("FC27_COMMUNITY_POLL_MIN_SECONDS")
+    if raw is None or not raw.strip():
+        raw_interval = os.getenv("FC27_COMMUNITY_POLL_INTERVAL_SECONDS")
+        if raw_interval is not None and raw_interval.strip():
+            raw = raw_interval
+        else:
+            return 43200
+    val = raw.strip()
+    if not (val.lstrip("-").isdecimal()):
+        if strict:
+            raise ConfigError(
+                f"FC27_COMMUNITY_POLL_MIN_SECONDS must be 43200 (12 hours), got '{raw}'"
+            )
+        return 43200
+    num = int(val)
+    if num != 43200:
+        if strict:
+            raise ConfigError(
+                f"FC27_COMMUNITY_POLL_MIN_SECONDS must be 43200 (12 hours), got {num}"
+            )
+        return 43200
     return num
 
 
 def get_fc27_community_poll_max_seconds(*, strict: bool = False) -> int:
-    """Return configured FC 27 community polling maximum interval in seconds (default: 600).
+    """Return configured FC 27 community polling maximum interval in seconds (default: 43200).
 
-    Must be >= min_seconds and <= 3600 seconds.
+    Must equal 43200 seconds (once every 12 hours) and be >= min_seconds.
     """
     min_sec = get_fc27_community_poll_min_seconds(strict=strict)
     raw = os.getenv("FC27_COMMUNITY_POLL_MAX_SECONDS")
     if raw is None or not raw.strip():
-        default_max = max(600, min_sec)
-        return min(default_max, 3600)
+        raw_interval = os.getenv("FC27_COMMUNITY_POLL_INTERVAL_SECONDS")
+        if raw_interval is not None and raw_interval.strip():
+            raw = raw_interval
+        else:
+            return max(43200, min_sec)
     val = raw.strip()
     if not (val.lstrip("-").isdecimal()):
         if strict:
             raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MAX_SECONDS must be an integer between {min_sec} and 3600, got '{raw}'"
+                f"FC27_COMMUNITY_POLL_MAX_SECONDS must be 43200 (12 hours), got '{raw}'"
             )
-        return max(600, min_sec)
+        return 43200
     num = int(val)
-    if num < min_sec or num > 3600:
+    if num < min_sec or num != 43200:
         if strict:
             raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MAX_SECONDS must be between {min_sec} and 3600, got {num}"
+                f"FC27_COMMUNITY_POLL_MAX_SECONDS must be {min_sec} (43200 seconds), got {num}"
             )
-        return min(max(600, min_sec), 3600)
+        return 43200
     return num
 
 
@@ -458,3 +487,49 @@ def is_fc27_community_poll_once(*, strict: bool = False) -> bool:
     if strict:
         raise ConfigError(f"FC27_COMMUNITY_POLL_ONCE must be a valid boolean, got '{raw}'")
     return False
+
+
+def is_fc27_discord_bot_enabled(*, strict: bool = False) -> bool:
+    """Check if the read-only FC 27 Discord bot is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_DISCORD_BOT_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(f"FC27_DISCORD_BOT_ENABLED must be a valid boolean, got '{raw}'")
+    return False
+
+
+def _parse_discord_snowflake_allowlist(env_name: str, *, strict: bool = False) -> frozenset[str]:
+    """Parse a comma-separated allowlist of positive numeric Discord snowflake IDs."""
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        return frozenset()
+    items: list[str] = []
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if not token.isdecimal() or int(token) <= 0:
+            if strict:
+                raise ConfigError(
+                    f"{env_name} must contain only positive numeric Discord snowflake IDs, got '{token}'"
+                )
+            return frozenset()
+        items.append(token)
+    return frozenset(items)
+
+
+def get_fc27_discord_allowed_guild_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlisted Discord guild IDs (empty frozenset by default; fail-closed)."""
+    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_GUILD_IDS", strict=strict)
+
+
+def get_fc27_discord_allowed_channel_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlisted Discord channel IDs (empty frozenset by default; fail-closed)."""
+    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_CHANNEL_IDS", strict=strict)
+

@@ -118,6 +118,7 @@ def _block_external_network_and_reset_polling_state(
         "FC27_COMMUNITY_POLLING_ENABLED",
         "FC27_COMMUNITY_PROVIDER_ENABLED",
         "FC27_PERSISTENCE_ENABLED",
+        "FC27_COMMUNITY_POLL_INTERVAL_SECONDS",
         "FC27_COMMUNITY_POLL_MIN_SECONDS",
         "FC27_COMMUNITY_POLL_MAX_SECONDS",
         "FC27_COMMUNITY_POLL_MAX_REQUESTS",
@@ -281,24 +282,30 @@ def test_002_malformed_polling_enabled_fails_closed(
         settings.is_fc27_community_polling_enabled(strict=True)
 
 
-def test_003_default_minimum_interval_is_300_seconds() -> None:
-    """3. Default minimum interval is 300 seconds."""
-    assert settings.get_fc27_community_poll_min_seconds(strict=True) == 300
-    assert FC27PollingPolicy().minimum_interval_seconds == 300
+def test_003_default_minimum_interval_is_43200_seconds() -> None:
+    """3. Default minimum interval is 43200 seconds (12 hours)."""
+    assert settings.get_fc27_community_poll_min_seconds(strict=True) == 43200
+    assert settings.get_fc27_community_poll_interval_seconds(strict=True) == 43200
+    assert FC27PollingPolicy().minimum_interval_seconds == 43200
+    assert FC27PollingPolicy().poll_interval_seconds == 43200
 
 
-def test_004_default_maximum_interval_is_600_seconds() -> None:
-    """4. Default maximum interval is 600 seconds."""
-    assert settings.get_fc27_community_poll_max_seconds(strict=True) == 600
-    assert FC27PollingPolicy().maximum_interval_seconds == 600
+def test_004_default_maximum_interval_is_43200_seconds() -> None:
+    """4. Default maximum interval is 43200 seconds (12 hours)."""
+    assert settings.get_fc27_community_poll_max_seconds(strict=True) == 43200
+    assert FC27PollingPolicy().maximum_interval_seconds == 43200
+    assert FC27PollingPolicy().polling_frequency == "ONCE_EVERY_12_HOURS"
+    assert FC27PollingPolicy().max_provider_requests_per_24_hours == 2
 
 
-def test_005_minimum_interval_below_300_seconds_is_rejected(
+def test_005_minimum_interval_below_43200_seconds_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """5. Minimum interval below 300 seconds is rejected."""
+    """5. Minimum interval below 43200 seconds is rejected."""
     with pytest.raises(ValidationError):
         FC27PollingPolicy(minimum_interval_seconds=299)
+    with pytest.raises(ValidationError):
+        FC27PollingPolicy(minimum_interval_seconds=3600)
     monkeypatch.setenv("FC27_COMMUNITY_POLL_MIN_SECONDS", "120")
     with pytest.raises(ConfigError):
         settings.get_fc27_community_poll_min_seconds(strict=True)
@@ -309,20 +316,20 @@ def test_006_maximum_interval_below_minimum_interval_is_rejected(
 ) -> None:
     """6. Maximum interval below minimum interval is rejected."""
     with pytest.raises(ValidationError):
-        FC27PollingPolicy(minimum_interval_seconds=500, maximum_interval_seconds=400)
-    monkeypatch.setenv("FC27_COMMUNITY_POLL_MIN_SECONDS", "500")
+        FC27PollingPolicy(minimum_interval_seconds=43200, maximum_interval_seconds=400)
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MIN_SECONDS", "43200")
     monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_SECONDS", "400")
     with pytest.raises(ConfigError):
         settings.get_fc27_community_poll_max_seconds(strict=True)
 
 
-def test_007_maximum_interval_above_3600_seconds_is_rejected(
+def test_007_maximum_interval_above_43200_seconds_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """7. Maximum interval above 3600 seconds is rejected."""
+    """7. Maximum interval above 43200 seconds is rejected."""
     with pytest.raises(ValidationError):
-        FC27PollingPolicy(maximum_interval_seconds=3601)
-    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_SECONDS", "7200")
+        FC27PollingPolicy(maximum_interval_seconds=86400)
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_SECONDS", "86400")
     with pytest.raises(ConfigError):
         settings.get_fc27_community_poll_max_seconds(strict=True)
 
@@ -684,13 +691,13 @@ def test_032_postgres_advisory_lock_key_is_deterministic(pg_db_migrated) -> None
 # ==============================================================================
 
 
-def test_033_poll_interval_selector_returns_values_within_300_600() -> None:
-    """33. Poll interval selector returns values within [300, 600]."""
-    policy = FC27PollingPolicy(minimum_interval_seconds=300, maximum_interval_seconds=600)
+def test_033_poll_interval_selector_returns_43200_seconds() -> None:
+    """33. Poll interval selector returns 43200 seconds (12 hours)."""
+    policy = FC27PollingPolicy(minimum_interval_seconds=43200, maximum_interval_seconds=43200)
     rng = random.Random(42)
     for _ in range(50):
         val = select_bounded_poll_interval_seconds(policy, rng=rng)
-        assert 300 <= val <= 600
+        assert val == 43200
 
 
 def test_034_poll_cycle_before_next_eligible_at_returns_skipped_min_interval(
@@ -2095,3 +2102,606 @@ def test_100_dashboard_renders_polling_disabled_and_has_no_button_to_enable_live
 def test_101_zero_external_network_calls_occur_during_entire_offline_test_suite() -> None:
     """101. Zero external network calls occur during the entire offline test suite."""
     assert _EXTERNAL_NETWORK_CALLS == []
+
+
+# ==============================================================================
+# PHASE 1A, 1B, 1D, 2A, 2B: 12-Hour Schedule, Recovery, Continuity & Durability
+# ==============================================================================
+
+
+def test_102_default_poll_interval_is_43200_and_frequency_is_once_every_12_hours() -> None:
+    """102. Default poll interval is 43200 seconds and frequency is ONCE_EVERY_12_HOURS."""
+    policy = FC27PollingPolicy()
+    assert policy.poll_interval_seconds == 43200
+    assert policy.minimum_interval_seconds == 43200
+    assert policy.maximum_interval_seconds == 43200
+    assert policy.polling_frequency == "ONCE_EVERY_12_HOURS"
+    assert policy.max_provider_requests_per_24_hours == 2
+    assert policy.catch_up_bursts_allowed is False
+    assert policy.approval_enabled is False
+
+
+def test_103_poll_interval_below_or_above_43200_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """103. Poll interval below or above 43200 seconds is rejected."""
+    for invalid in (300, 600, 3600, 43199, 43201, 86400):
+        with pytest.raises(ValidationError):
+            FC27PollingPolicy(poll_interval_seconds=invalid)
+        monkeypatch.setenv("FC27_COMMUNITY_POLL_INTERVAL_SECONDS", str(invalid))
+        with pytest.raises(ConfigError):
+            settings.get_fc27_community_poll_interval_seconds(strict=True)
+
+
+def test_104_normal_12_hour_cycle_schedules_next_eligible_at_43200s(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """104. Normal 12-hour cycle schedules next_eligible_at = finished_at + 43200s."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(10)
+    res = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=10),
+        analytics_fn=lambda: {"confidence_tier": "MODERATE_CONFIDENCE"},
+        now_utc_fn=lambda: t0,
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.poll_interval_seconds == 43200
+    assert res.polling_frequency == "ONCE_EVERY_12_HOURS"
+    assert res.max_provider_requests_per_24_hours == 2
+    assert res.next_eligible_at == t0 + timedelta(seconds=43200)
+    assert res.schedule_lag_seconds == 0
+    assert res.missed_intervals == 0
+    assert res.catch_up_cycles_suppressed is True
+
+
+def test_105_worker_container_restart_with_elapsed_under_43200_skips_poll(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """105. Worker container restart with elapsed < 43200s skips poll and preserves last_attempt_at."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    env, _ = _build_validated_envelope(10, players_per_match=6)
+
+    # First worker instance runs and persists at t0
+    rt1 = FC27PollingRuntime()
+    res1 = run_fc27_poll_cycle(
+        runtime=rt1,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res1.poll_status == "NEW_MATCHES_PERSISTED"
+
+    # Simulate container restart 2 hours later (7200s < 43200s) with fresh in-memory runtime
+    t_restart = t0 + timedelta(hours=2)
+    rt2 = FC27PollingRuntime()
+    provider_calls = 0
+
+    def _should_not_call() -> FC27CommunityProviderEnvelope:
+        nonlocal provider_calls
+        provider_calls += 1
+        return env
+
+    res2 = run_fc27_poll_cycle(
+        runtime=rt2,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=_should_not_call,
+        now_utc_fn=lambda: t_restart,
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert res2.poll_status == "SKIPPED_MIN_INTERVAL"
+    assert res2.provider_requests == 0
+    assert provider_calls == 0
+    assert rt2.last_attempt_at == t0
+    assert rt2.last_success_at == t0
+    assert rt2.next_eligible_at == t0 + timedelta(seconds=43200)
+
+
+def test_106_docker_daemon_restart_recovers_persisted_state_and_skips_when_under_12h(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """106. Docker daemon restart recovers persisted state in worker loop and skips when < 12h."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 6, 0, 0, tzinfo=timezone.utc)
+    env, _ = _build_validated_envelope(10, players_per_match=6)
+
+    run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    # Fresh runtime on Docker daemon restart at t0 + 6 hours (21600s < 43200s)
+    rt_daemon_restart = FC27PollingRuntime()
+    results = run_fc27_polling_worker(
+        runtime=rt_daemon_restart,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: (_ for _ in ()).throw(AssertionError("Must not poll")),
+        now_utc_fn=lambda: t0 + timedelta(hours=6),
+        max_cycles=1,
+        register_signals=False,
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert len(results) == 1
+    assert results[0].poll_status == "SKIPPED_MIN_INTERVAL"
+    assert results[0].provider_requests == 0
+
+
+def test_107_host_reboot_simulation_with_persisted_postgres_state_preserves_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """107. Host reboot simulation recovers known_match_ids, anchor, and schedule from PostgreSQL."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 8, 0, 0, tzinfo=timezone.utc)
+    env, _ = _build_validated_envelope(10, start_id=995001, players_per_match=6)
+
+    run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    # Host reboot at t0 + 11 hours (39600s < 43200s): skipped
+    rt_reboot = FC27PollingRuntime()
+    early = run_fc27_poll_cycle(
+        runtime=rt_reboot,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0 + timedelta(hours=11),
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert early.poll_status == "SKIPPED_MIN_INTERVAL"
+    assert len(rt_reboot.known_match_ids) == 10
+
+    # At t0 + 12 hours (43200s): executes 1 cycle cleanly
+    due = run_fc27_poll_cycle(
+        runtime=rt_reboot,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0 + timedelta(hours=12),
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert due.poll_status == "NO_NEW_MATCHES"
+    assert due.provider_requests == 1
+    assert due.possible_history_gap is False
+
+
+def test_108_host_sleep_hibernate_over_43200_executes_single_cycle_no_catch_up_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """108. Host sleep/hibernate with elapsed > 43200s executes 1 cycle only and suppresses catch-up bursts."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(10)
+
+    run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=10),
+        analytics_fn=lambda: {"confidence_tier": "MODERATE_CONFIDENCE"},
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    # Host sleeps for 30 hours (108000s > 43200s; lag = 64800s, 1 missed interval)
+    t_wake = t0 + timedelta(hours=30)
+    wake_res = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=0, duplicates=10),
+        now_utc_fn=lambda: t_wake,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert wake_res.poll_status == "NO_NEW_MATCHES"
+    assert wake_res.provider_requests == 1
+    assert wake_res.schedule_lag_seconds == 64800
+    assert wake_res.missed_intervals == 1
+    assert wake_res.catch_up_cycles_suppressed is True
+    assert wake_res.next_eligible_at == t_wake + timedelta(seconds=43200)
+
+    # Immediate follow-up poll 1 minute after wake is skipped (no catch-up burst)
+    follow_up = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=0, duplicates=10),
+        now_utc_fn=lambda: t_wake + timedelta(minutes=1),
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert follow_up.poll_status == "SKIPPED_MIN_INTERVAL"
+    assert follow_up.provider_requests == 0
+
+
+def test_109_dst_spring_forward_and_fall_back_have_zero_interval_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """109. Daylight Saving Time transitions have zero effect on UTC 12-hour interval calculations."""
+    _enable_all_polling_gates(monkeypatch)
+    # Simulate non-UTC timezone offsets across a DST change (-04:00 vs -05:00)
+    edt = timezone(timedelta(hours=-4))
+    est = timezone(timedelta(hours=-5))
+    # 2026-11-01 00:30:00 EDT == 2026-11-01 04:30:00 UTC
+    t_before_fallback = datetime(2026, 11, 1, 0, 30, 0, tzinfo=edt)
+    # 12 real UTC hours later is 2026-11-01 16:30:00 UTC == 2026-11-01 11:30:00 EST
+    t_after_11h_real = datetime(2026, 11, 1, 10, 30, 0, tzinfo=est)
+    t_after_12h_real = datetime(2026, 11, 1, 11, 30, 0, tzinfo=est)
+
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(5)
+
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=5),
+        analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+        now_utc_fn=lambda: t_before_fallback,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.started_at.tzinfo == timezone.utc
+    assert r1.next_eligible_at == t_before_fallback.astimezone(timezone.utc) + timedelta(seconds=43200)
+
+    # 11 real hours later -> still skipped
+    r_early = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=0, duplicates=5),
+        now_utc_fn=lambda: t_after_11h_real,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r_early.poll_status == "SKIPPED_MIN_INTERVAL"
+
+    # Exactly 12 real UTC hours later -> allowed
+    r_due = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=0, duplicates=5),
+        now_utc_fn=lambda: t_after_12h_real,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r_due.poll_status == "NO_NEW_MATCHES"
+    assert r_due.provider_requests == 1
+
+
+def test_110_three_day_outage_executes_1_cycle_only_and_suppresses_catch_up_bursts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """110. 3-day outage executes 1 cycle only, records missed intervals, and resets next_eligible_at."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    env_initial, _ = _build_validated_envelope(10, start_id=991001)
+
+    run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env_initial,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=10),
+        analytics_fn=lambda: {"confidence_tier": "MODERATE_CONFIDENCE"},
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    # 3 days (72 hours = 259200s) later -> lag beyond next_eligible_at (12h) is 60h = 216000s (5 missed 12h intervals)
+    t_outage_end = t0 + timedelta(days=3)
+    env_overlap, _ = _build_validated_envelope(10, start_id=991003)  # 8 overlap, 2 new
+    r_outage = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env_overlap,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=2, duplicates=8),
+        analytics_fn=lambda: {"confidence_tier": "MODERATE_CONFIDENCE"},
+        now_utc_fn=lambda: t_outage_end,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r_outage.poll_status == "NEW_MATCHES_PERSISTED"
+    assert r_outage.provider_requests == 1
+    assert r_outage.schedule_lag_seconds == 216000
+    assert r_outage.missed_intervals == 5
+    assert r_outage.catch_up_cycles_suppressed is True
+    assert r_outage.next_eligible_at == t_outage_end + timedelta(seconds=43200)
+    assert r_outage.possible_history_gap is False
+
+
+def test_111_postgresql_unavailable_at_poll_time_records_failure_without_analytics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """111. PostgreSQL unavailable at poll time records failure, does not advance last_success_at, and blocks analytics."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(10)
+    analytics_called = False
+
+    def _analytics() -> dict[str, Any]:
+        nonlocal analytics_called
+        analytics_called = True
+        return {}
+
+    res = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda: env,
+        persist_fn=lambda _e: (_ for _ in ()).throw(
+            psycopg.OperationalError("connection to PostgreSQL failed")
+        ),
+        analytics_fn=_analytics,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "TRANSIENT_FAILURE"
+    assert res.error_category == "PERSISTENCE_FAILURE"
+    assert res.inserted_match_count == 0
+    assert res.analytics_executed is False
+    assert analytics_called is False
+    assert rt.last_success_at is None
+    assert rt.consecutive_failures == 1
+
+
+def test_112_partial_or_mid_transaction_persistence_failure_rolls_back_and_blocks_analytics(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """112. Mid-transaction persistence failure rolls back atomically and prevents analytics from running."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(10, players_per_match=6)
+    analytics_called = False
+
+    import src.fc27_polling_worker as pw_mod
+
+    def _fail_touch(*args: Any, **kwargs: Any) -> None:
+        raise psycopg.DatabaseError("simulated mid-transaction failure before commit")
+
+    monkeypatch.setattr(pw_mod, "_touch_persisted_polling_timestamps", _fail_touch)
+
+    res = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        analytics_fn=lambda: (analytics_called := True) or {},
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "TRANSIENT_FAILURE"
+    assert res.error_category == "PERSISTENCE_FAILURE"
+    assert res.analytics_executed is False
+    assert analytics_called is False
+
+    # Verify transaction rolled back completely (0 matches, 0 player stats in DB)
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches WHERE club_id = '330323'")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats WHERE club_id = '330323'")
+            assert cur.fetchone()[0] == 0
+
+
+def test_113_overlapping_manual_and_scheduled_poll_skips_second_via_single_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """113. Overlapping manual and scheduled poll skips the second via PostgreSQL advisory single-flight lock."""
+    _enable_all_polling_gates(monkeypatch)
+    policy = FC27PollingPolicy()
+    with FC27SingleFlightLeaseContext(
+        policy=policy,
+        owner_id="scheduled-worker",
+        db_uri_or_conn_factory=pg_db_migrated.app,
+    ) as lease:
+        assert lease.acquired is True
+        manual_res = run_fc27_poll_cycle(
+            policy=policy,
+            confirm_live_polling=True,
+            db_conn_or_uri=pg_db_migrated.app,
+            use_cache=False,
+            use_rate_limiter=False,
+        )
+        assert manual_res.poll_status == "SKIPPED_SINGLE_FLIGHT_BUSY"
+        assert manual_res.provider_requests == 0
+
+
+def test_114_ten_new_matches_after_existing_matches_flags_possible_history_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """114. 10 new matches with 0 overlap against existing persisted matches sets possible_history_gap=True and review_required=True without extra provider calls."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    env_batch_1, _ = _build_validated_envelope(10, start_id=991001, players_per_match=6)
+
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env_batch_1,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.poll_status == "NEW_MATCHES_PERSISTED"
+    assert r1.possible_history_gap is False
+    assert r1.review_required is False
+
+    # 12 hours later: 10 completely new matches (992001..992010), 0 overlap with 991001..991010
+    t1 = t0 + timedelta(seconds=43200)
+    env_batch_2, _ = _build_validated_envelope(10, start_id=992001, players_per_match=6)
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env_batch_2,
+        now_utc_fn=lambda: t1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "NEW_MATCHES_PERSISTED"
+    assert r2.inserted_match_count == 10
+    assert r2.duplicate_ignored_count == 0
+    assert r2.possible_history_gap is True
+    assert r2.review_required is True
+    assert r2.history_gap_reason == "FULL_WINDOW_TURNOVER_NO_OVERLAP"
+    assert r2.provider_requests == 1
+
+
+def test_115_eight_existing_and_two_new_matches_verifies_continuity_without_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """115. 8 existing + 2 new matches verifies continuity with possible_history_gap=False."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    all_12_raw = _build_synthetic_community_match_records(12, start_id=991001, players_per_match=6)
+    env_batch_1, _ = normalize_community_match_records(
+        all_12_raw[:10],
+        observed_at="2026-10-31T12:00:00Z",
+    )
+
+    run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env_batch_1,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    t1 = t0 + timedelta(seconds=43200)
+    env_batch_2, _ = normalize_community_match_records(
+        all_12_raw[2:12],
+        observed_at="2026-11-01T12:00:00Z",
+    )
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env_batch_2,
+        now_utc_fn=lambda: t1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "NEW_MATCHES_PERSISTED"
+    assert r2.inserted_match_count == 2
+    assert r2.duplicate_ignored_count == 8
+    assert r2.possible_history_gap is False
+    assert r2.review_required is False
+    assert r2.history_gap_reason is None
+    assert r2.continuity_last_verified_at == t1
+
+
+def test_116_ten_identical_matches_verifies_continuity_without_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """116. 10 identical matches returns NO_NEW_MATCHES, possible_history_gap=False, analytics_executed=False."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(10, start_id=991001, players_per_match=6)
+
+    run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    t1 = t0 + timedelta(seconds=43200)
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        now_utc_fn=lambda: t1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "NO_NEW_MATCHES"
+    assert r2.inserted_match_count == 0
+    assert r2.duplicate_ignored_count == 10
+    assert r2.analytics_executed is False
+    assert r2.possible_history_gap is False
+    assert r2.continuity_last_verified_at == t1
+
+
+def test_117_persistence_before_analytics_verified_by_execution_order(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """117. Every accepted normalized match is durably committed in PostgreSQL before analytics executes."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(10, start_id=998001, players_per_match=6)
+    persisted_count_during_analytics = 0
+
+    def _verify_committed_before_analytics() -> dict[str, Any]:
+        nonlocal persisted_count_during_analytics
+        # Open an independent PostgreSQL connection to prove rows are already committed
+        with psycopg.connect(pg_db_migrated.admin) as verify_conn:
+            with verify_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM public.fc27_matches WHERE club_id = '330323'"
+                )
+                persisted_count_during_analytics = int(cur.fetchone()[0])
+        return {"confidence_tier": "MODERATE_CONFIDENCE"}
+
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.app,
+        fetch_matches_fn=lambda: env,
+        analytics_fn=_verify_committed_before_analytics,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.persistence_before_analytics is True
+    assert persisted_count_during_analytics == 10

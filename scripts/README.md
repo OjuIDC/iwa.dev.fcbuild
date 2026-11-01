@@ -26,7 +26,10 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | Script | Classification | Status | Replacement |
 |---|---|---|---|
 | [`fc27_community_eval.py`](fc27_community_eval.py) | `CURRENT_PROVIDER_COMMAND` | Active (Primary Real-Data Path) | `NONE` |
-| [`fc27_polling_worker.py`](fc27_polling_worker.py) | `CURRENT_PROVIDER_COMMAND` | Active (Disabled-by-Default Polling Worker) | `NONE` |
+| [`fc27_polling_worker.py`](fc27_polling_worker.py) | `CURRENT_PROVIDER_COMMAND` | Active (Disabled-by-Default 12h Polling Worker) | `NONE` |
+| [`fc27_backup.py`](fc27_backup.py) | `CURRENT_OPERATOR_COMMAND` | Active (Local PostgreSQL Domain Backup CLI) | `NONE` |
+| [`fc27_restore_verify.py`](fc27_restore_verify.py) | `CURRENT_OPERATOR_COMMAND` | Active (Disposable Restore Verification CLI) | `NONE` |
+| [`fc27_discord_bot.py`](fc27_discord_bot.py) | `CURRENT_OPERATOR_COMMAND` | Active (Disabled-by-Default Read-Only Discord Bot CLI) | `NONE` |
 | [`fc27_demo_ingest.py`](fc27_demo_ingest.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Demo) | `NONE` |
 | [`fc27_demo_fixture_server.py`](fc27_demo_fixture_server.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Fixture Server) | `NONE` |
 | [`check_documentation_consistency.py`](check_documentation_consistency.py) | `CURRENT_CI_COMMAND` | Active (CI & Security Gate) | `NONE` |
@@ -229,6 +232,33 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Expected Output**: Sanitized JSON polling health (`--status`) or `FC27PollResult` / `FC27PollingHealth` JSON summary.
 - **Teardown**: Releases PostgreSQL advisory lock in `finally` before inter-cycle sleep or process exit; handles `SIGINT`/`SIGTERM` cleanly.
 - **Replacement Status**: Current authoritative polling worker CLI (`NONE`).
+
+### 14. `scripts/fc27_backup.py`
+- **Classification**: `CURRENT_OPERATOR_COMMAND`
+- **Purpose**: Creates a local custom-format PostgreSQL backup (`pg_dump -Fc`) of the 6 FC27 domain tables and writes a SHA-256 manifest under `.local-data/backups/` while retaining the 7 most recent backups (`BACKUP_RETENTION_COUNT=7`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/fc27_backup.py --help
+  ```
+- **Replacement Status**: Current authoritative backup CLI (`NONE`).
+
+### 15. `scripts/fc27_restore_verify.py`
+- **Classification**: `CURRENT_OPERATOR_COMMAND`
+- **Purpose**: Verifies a `.local-data/backups/` archive SHA-256 against its manifest, restores into an ephemeral temporary database, verifies all 6 table counts and record hashes, and runs `Search -> Scout -> Analyst` readback before dropping the temporary database.
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/fc27_restore_verify.py --help
+  ```
+- **Replacement Status**: Current authoritative restore verification CLI (`NONE`).
+
+### 16. `scripts/fc27_discord_bot.py`
+- **Classification**: `CURRENT_OPERATOR_COMMAND`
+- **Purpose**: Runs the disabled-by-default read-only East Coasters FC27 Discord bot (`--status`, `--command`, `--serve`) with zero provider authority (`DISCORD_PROVIDER_REQUESTS=0`) and zero database write authority (`DISCORD_DATABASE_WRITE_ACCESS=false`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
+  ```
+- **Replacement Status**: Current authoritative read-only Discord bot CLI (`NONE`).
 
 ---
 

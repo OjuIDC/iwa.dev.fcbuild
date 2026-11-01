@@ -48,6 +48,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 - **[`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md)** — Current operational community-client provider (`fc-clubs-api-community-v1`, `LIVE_EA_CLUBS_COMMUNITY_CLIENT`, `src/fc27_community_provider.py`, `scripts/fc27_community_eval.py`, `Dockerfile.community-eval`, `docker-compose.community-eval.yml`) and optional sanitized pandas view (`src/fc27_pandas_view.py`)
 - **[`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md)** — Disabled-by-default single-flight polling worker (`fc27-community-worker`, `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `FC27_COMMUNITY_POLLING_ENABLED=false`)
+- **[`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md)** — 12-hour polling operations (`ONCE_EVERY_12_HOURS`, `43200s`), provider window continuity (`MAX_RESULTS=10`), and container recovery
+- **[`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)** — Local PostgreSQL backup creation (`scripts/fc27_backup.py`), 7-backup retention, and disposable restore verification (`scripts/fc27_restore_verify.py`)
+- **[`FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md)** — Read-only East Coasters Discord analytics bot (`src/fc27_discord_bot.py`, `scripts/fc27_discord_bot.py`, `Dockerfile.discord`, `docker-compose.discord.yml`, `FC27_DISCORD_BOT_ENABLED=false`)
 - **[`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)** — Provider contract governance, historical transport findings (standards-client HTTP `403` and headless Chromium HTTP/2 diagnostic records), and rate/cache controls
 - **[`FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)** — Secondary offline user-export and operator-capture ingestion specification (`scripts/fc27_user_export_import.py`)
 - **[`EA_PLAYER_IDENTITY_VERIFICATION.md`](EA_PLAYER_IDENTITY_VERIFICATION.md)** — Pseudonymization (`plr_ecf_<12-hex>`) and strict prohibition on raw EA persona/blaze IDs and player handles
@@ -64,6 +67,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 ## 5. Analytics
 
 - **[`FC27_ANALYTICS.md`](FC27_ANALYTICS.md)** — Deterministic `Search -> Scout -> Analyst` pipeline (`src/fc27_search_scout.py`, `src/fc27_analyst.py`, `src/fc27_analytics.py`), metric formulas, sample-size gates, and confidence tiers
+- **[`FC27_COACH_HYPOTHESIS_ENGINE.md`](FC27_COACH_HYPOTHESIS_ENGINE.md)** — Observational Coach hypothesis engine (`src/fc27_coach.py`)
+- **[`FC27_TACTICS_CANDIDATE_ENGINE.md`](FC27_TACTICS_CANDIDATE_ENGINE.md)** — Experimental Tactics candidate engine (`src/fc27_tactics.py`)
+- **[`FC27_DIRECTOR_RECONCILIATION.md`](FC27_DIRECTOR_RECONCILIATION.md)** — Director evidence reconciliation engine (`src/fc27_director.py`)
 - **[`FC27_TACTICAL_HYPOTHESES.md`](FC27_TACTICAL_HYPOTHESES.md)** — Registry of 10 external community/meta tactical hypothesis families (`TH-FC27-001` through `TH-FC27-010`), all classified as `EXTERNAL_TACTICAL_HYPOTHESIS` (`UNVERIFIED`, `NOT_APPROVABLE`)
 - **[`MODEL_SELECTION.md`](MODEL_SELECTION.md)** — Local LLM model catalog and configuration for the optional LangGraph runtime
 - **[`ROLE_MODEL_BENCHMARK_MATRIX.md`](ROLE_MODEL_BENCHMARK_MATRIX.md)** — Role model evaluation and benchmark matrix

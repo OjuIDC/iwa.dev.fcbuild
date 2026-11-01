@@ -57,6 +57,21 @@ from src.fc27_analyst import (
     FC27AnalystReport,
     build_fc27_analyst_report,
 )
+from src.fc27_coach import (
+    FC27CoachInput,
+    FC27CoachReport,
+    build_fc27_coach_report,
+)
+from src.fc27_director import (
+    FC27DirectorInput,
+    FC27DirectorReport,
+    build_fc27_director_report,
+)
+from src.fc27_tactics import (
+    FC27TacticsInput,
+    FC27TacticsReport,
+    build_fc27_tactics_report,
+)
 from src.fc27_analytics import FORMULA_VERSION
 from src.fc27_api_cache import (
     FC27BoundedNormalizedCache,
@@ -571,6 +586,9 @@ class FC27DemoResult(BaseModel):
     search_context_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     scout_report_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     analyst_report_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coach_report_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    tactics_report_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    director_report_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     confidence: str
     finding_count: int = Field(ge=0)
     data_gap_count: int = Field(ge=0)
@@ -609,6 +627,9 @@ class FC27DemoSessionArtifacts(BaseModel):
     search_context: FC27SearchContext
     scout_report: FC27ScoutReport
     analyst_report: FC27AnalystReport
+    coach_report: Optional[FC27CoachReport] = None
+    tactics_report: Optional[FC27TacticsReport] = None
+    director_report: Optional[FC27DirectorReport] = None
 
 
 class _CachedNormalizedDemoPayload(BaseModel):
@@ -1393,6 +1414,33 @@ def run_fc27_demo_ingestion_with_artifacts(
             analysis_generated_at=analysis_generated_at,
         )
     )
+    coach_report = build_fc27_coach_report(
+        FC27CoachInput(
+            search_context=search_context,
+            scout_report=scout_report,
+            analyst_report=analyst_report,
+            coach_generated_at=analysis_generated_at,
+        )
+    )
+    tactics_report = build_fc27_tactics_report(
+        FC27TacticsInput(
+            search_context=search_context,
+            scout_report=scout_report,
+            analyst_report=analyst_report,
+            coach_report=coach_report,
+            tactics_generated_at=analysis_generated_at,
+        )
+    )
+    director_report = build_fc27_director_report(
+        FC27DirectorInput(
+            search_context=search_context,
+            scout_report=scout_report,
+            analyst_report=analyst_report,
+            coach_report=coach_report,
+            tactics_report=tactics_report,
+            director_generated_at=analysis_generated_at,
+        )
+    )
 
     player_perf_count = sum(len(m.player_statistics) for m in normalized_bundle.match_envelopes)
     unique_players = len(
@@ -1453,6 +1501,9 @@ def run_fc27_demo_ingestion_with_artifacts(
         search_context_hash=search_context.context_hash,
         scout_report_hash=scout_report.report_hash,
         analyst_report_hash=analyst_report.report_hash,
+        coach_report_hash=coach_report.report_hash,
+        tactics_report_hash=tactics_report.report_hash,
+        director_report_hash=director_report.report_hash,
         confidence=analyst_report.overall_confidence,
         finding_count=len(analyst_report.findings),
         data_gap_count=len(analyst_report.data_gaps),
@@ -1495,6 +1546,9 @@ def run_fc27_demo_ingestion_with_artifacts(
         search_context=search_context,
         scout_report=scout_report,
         analyst_report=analyst_report,
+        coach_report=coach_report,
+        tactics_report=tactics_report,
+        director_report=director_report,
     )
     target_store = state_store if state_store is not None else DEFAULT_DEMO_STATE_STORE
     target_store.set_artifacts(artifacts)

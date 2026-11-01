@@ -5,26 +5,26 @@
 - **Last verified commit**: `bbb28b44774a89dbb40c252f53c500e51d7a0acc`
 - **Source of truth**: `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `src/settings.py`, `src/fc27_demo_api.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `tests/test_fc27_polling_worker.py`
 
-> **Default Runtime Posture**: **DISABLED BY DEFAULT** (`FC27_COMMUNITY_POLLING_ENABLED=false`, `IMPLEMENTED_AND_TESTED_DISABLED_BY_DEFAULT`, continuous polling `NOT_ACTIVATED`, recommendations `DISABLED`, dispatch `DISABLED`, Discord `NOT_IMPLEMENTED`)
+> **Default Runtime Posture**: **DISABLED BY DEFAULT** (`FC27_COMMUNITY_POLLING_ENABLED=false`, `IMPLEMENTED_AND_TESTED_DISABLED_BY_DEFAULT`, schedule `ONCE_EVERY_12_HOURS` / `43200s`, max `2` requests per 24 hours, recommendations `DISABLED`, dispatch `DISABLED`)
 >
-> Continuous polling never starts during `pytest`, `uvicorn src.fc27_demo_api:create_demo_app`, module imports, or default `docker compose up`. Live polling requires explicit operator activation across four independent fail-closed gates (`FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`).
+> Continuous polling never starts during `pytest`, `uvicorn src.fc27_demo_api:create_demo_app`, module imports, or default `docker compose up`. Live polling requires explicit operator activation across four independent fail-closed gates (`FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`). See also [`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md).
 
 ---
 
 ## 1. Architecture & Supported Operational Path
 
-For **East Coasters (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`, `match_type="leagueMatch"`, `max_results=10`)**, the polling worker extends the validated community-provider path into a bounded, single-flight background worker:
+For **East Coasters (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`, `match_type="leagueMatch"`, `max_results=10`)**, the polling worker extends the validated community-provider path into a bounded, single-flight 12-hour background worker:
 
 ```text
 fc-clubs-api-community-v1 (LIVE_EA_CLUBS_COMMUNITY_CLIENT)
-  -> FC27PollingPolicy + 4 fail-closed activation gates
+  -> FC27PollingPolicy (POLL_INTERVAL_SECONDS=43200, ONCE_EVERY_12_HOURS, max 2 req/24h) + 4 fail-closed activation gates
   -> FC27SingleFlightLeaseContext (in-process lock + PostgreSQL pg_try_advisory_lock)
-  -> FC27BoundedNormalizedCache (TTL = 300s; normalized objects only)
+  -> FC27BoundedNormalizedCache (TTL = 43200s; normalized objects only)
   -> FC27AdapterCircuitBreaker + FC27ProviderTokenBucketLimiter + FC27RequestBudget (max_requests=1, max_retries=0)
   -> FC27CommunityProviderAdapter (clubs/matches, leagueMatch, maxResultCount=10, raw_response_retained=False)
   -> Repository validation, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
-  -> Transactional PostgreSQL 16 persistence via fc27_app (persist_polled_match_envelope)
-  -> Conditional read-only analytics ONLY when inserted_match_count > 0 (Search -> Scout -> Analyst)
+  -> Transactional PostgreSQL 16 persistence via fc27_app BEFORE analytics (persist_polled_match_envelope)
+  -> Conditional read-only advisory pipeline ONLY when inserted_match_count > 0 (Search -> Scout -> Analyst -> Coach -> Tactics -> Director)
   -> Read-only dashboard status card (GET /demo/status, GET /demo)
 ```
 
@@ -39,11 +39,12 @@ All polling settings in `src/settings.py` and `config.example.env` fail closed o
 | `FC27_COMMUNITY_POLLING_ENABLED` | `false` | `false` / `true` | Master gate for polling cycle execution |
 | `FC27_COMMUNITY_PROVIDER_ENABLED` | `false` | `false` / `true` | Required community provider gate (`fc-clubs-api-community-v1`) |
 | `FC27_PERSISTENCE_ENABLED` | `false` | `false` / `true` | Required PostgreSQL persistence gate |
-| `FC27_COMMUNITY_POLL_MIN_SECONDS` | `300` | `300..3600` (`>= 300`) | Minimum inter-cycle sleep interval (5 minutes) |
-| `FC27_COMMUNITY_POLL_MAX_SECONDS` | `600` | `min_seconds..3600` (`<= 3600`) | Maximum inter-cycle sleep interval (10 minutes) |
+| `FC27_COMMUNITY_POLL_INTERVAL_SECONDS` | `43200` | `43200` (strictly `43200`) | Fixed 12-hour inter-cycle interval (`ONCE_EVERY_12_HOURS`) |
+| `FC27_COMMUNITY_POLL_MIN_SECONDS` | `43200` | `43200` (strictly `43200`) | Minimum inter-cycle sleep interval (12 hours) |
+| `FC27_COMMUNITY_POLL_MAX_SECONDS` | `43200` | `43200` (strictly `43200`) | Maximum inter-cycle sleep interval (12 hours) |
 | `FC27_COMMUNITY_POLL_MAX_REQUESTS` | `1` | `1` (strictly `1`) | Maximum provider HTTP requests per poll cycle |
 | `FC27_COMMUNITY_POLL_MAX_RETRIES` | `0` | `0` (strictly `0`) | Automatic retry count (retries prohibited) |
-| `FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY` | `true` | `true` (strictly `true`) | Run `Search -> Scout -> Analyst` only when `inserted_match_count > 0` |
+| `FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY` | `true` | `true` (strictly `true`) | Run `Search -> Scout -> Analyst -> Coach -> Tactics -> Director` only when `inserted_match_count > 0` |
 | `FC27_COMMUNITY_POLL_SINGLE_FLIGHT` | `true` | `true` (strictly `true`) | Require both in-process and PostgreSQL advisory single-flight lease |
 | `FC27_COMMUNITY_POLL_ONCE` | `false` | `false` / `true` | Execute at most one bounded poll cycle and exit |
 
