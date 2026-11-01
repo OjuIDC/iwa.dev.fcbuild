@@ -487,3 +487,49 @@ def is_fc27_community_poll_once(*, strict: bool = False) -> bool:
     if strict:
         raise ConfigError(f"FC27_COMMUNITY_POLL_ONCE must be a valid boolean, got '{raw}'")
     return False
+
+
+def is_fc27_discord_bot_enabled(*, strict: bool = False) -> bool:
+    """Check if the read-only FC 27 Discord bot is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_DISCORD_BOT_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(f"FC27_DISCORD_BOT_ENABLED must be a valid boolean, got '{raw}'")
+    return False
+
+
+def _parse_discord_snowflake_allowlist(env_name: str, *, strict: bool = False) -> frozenset[str]:
+    """Parse a comma-separated allowlist of positive numeric Discord snowflake IDs."""
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        return frozenset()
+    items: list[str] = []
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if not token.isdecimal() or int(token) <= 0:
+            if strict:
+                raise ConfigError(
+                    f"{env_name} must contain only positive numeric Discord snowflake IDs, got '{token}'"
+                )
+            return frozenset()
+        items.append(token)
+    return frozenset(items)
+
+
+def get_fc27_discord_allowed_guild_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlisted Discord guild IDs (empty frozenset by default; fail-closed)."""
+    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_GUILD_IDS", strict=strict)
+
+
+def get_fc27_discord_allowed_channel_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlisted Discord channel IDs (empty frozenset by default; fail-closed)."""
+    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_CHANNEL_IDS", strict=strict)
+

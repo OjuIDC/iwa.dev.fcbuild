@@ -1,0 +1,57 @@
+# Optional Docker Compose overlay for the disabled-by-default, read-only
+# East Coasters FC27 Discord analytics bot (`PHASE 3E`).
+#
+# Not started by default `docker compose up` (requires explicit profile `fc27-discord`
+# and `-f docker-compose.discord.yml`).
+
+services:
+  fc27-discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.discord
+    profiles:
+      - fc27-discord
+    user: "10001:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cpus: 0.50
+    mem_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 30s
+    command: ["--status"]
+    environment:
+      FC27_CLUB_ID: "330323"
+      FC_PLATFORM: "common-gen5"
+      FC27_DISCORD_BOT_ENABLED: ${FC27_DISCORD_BOT_ENABLED:-false}
+      FC27_DISCORD_ALLOWED_GUILD_IDS: ${FC27_DISCORD_ALLOWED_GUILD_IDS:-}
+      FC27_DISCORD_ALLOWED_CHANNEL_IDS: ${FC27_DISCORD_ALLOWED_CHANNEL_IDS:-}
+      FC27_COMMUNITY_POLLING_ENABLED: "false"
+      FC27_COMMUNITY_PROVIDER_ENABLED: "false"
+      FC27_RECOMMENDATIONS_ENABLED: "false"
+      DISPATCH_ENABLED: "false"
+      DISCORD_BOT_TOKEN_FILE: /run/secrets/discord_bot_token
+      POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+    secrets:
+      - discord_bot_token
+      - fc27_app_uri
+    networks:
+      - fc27_net
+      - fc27_data
+    healthcheck:
+      test: ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+secrets:
+  discord_bot_token:
+    file: ./secrets/discord_bot_token
+  fc27_app_uri:
+    file: ./secrets/fc27_app_uri
