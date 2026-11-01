@@ -64,3 +64,18 @@ The local East Coasters FC 27 one-shot ingestion and analytics demo (`src/fc27_d
 - **`FC27_DEMO_RAW_RESPONSE_RETENTION`** (default `false`; accepted `false` only): Prohibits raw HTTP response retention (`is_fc27_demo_raw_response_retention_enabled()`); setting `true` fails closed with `RAW_RESPONSE_RETENTION_FORBIDDEN`.
 - **`FC27_DEMO_PORT`** (default `8097`; accepted `0` or `1024..65535`): Local port for `src/fc27_demo_api.py` (`get_fc27_demo_port()`).
 - **`FC27_COMMUNITY_PROVIDER_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for the bounded one-shot community client wrapper in `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` (`is_fc27_community_provider_enabled()`). Requires explicit `--confirm` on the CLI; see [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).
+
+---
+
+## 4. Disabled-by-Default Community Polling Worker Flags (`docs/FC27_POLLING_WORKER.md`)
+
+The East Coasters FC 27 community polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `docker-compose.community-worker.yml`) is governed by fail-closed settings in `src/settings.py` and `config.example.env`:
+
+- **`FC27_COMMUNITY_POLLING_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for polling cycle execution (`is_fc27_community_polling_enabled()`). Returns `POLLING_DISABLED` with `requests_executed=0` when `false`.
+- **`FC27_COMMUNITY_POLL_MIN_SECONDS`** (default `300`; accepted `300..3600`): Minimum sleep interval in seconds (`get_fc27_community_poll_min_seconds()`). Fails closed on `< 300` or `> 3600`.
+- **`FC27_COMMUNITY_POLL_MAX_SECONDS`** (default `600`; accepted `min_seconds..3600`): Maximum sleep interval in seconds (`get_fc27_community_poll_max_seconds()`). Fails closed on `< min_seconds` or `> 3600`.
+- **`FC27_COMMUNITY_POLL_MAX_REQUESTS`** (default `1`; accepted `1` only): Caps provider HTTP requests per poll cycle (`get_fc27_community_poll_max_requests()`). Fails closed on any value `!= 1`.
+- **`FC27_COMMUNITY_POLL_MAX_RETRIES`** (default `0`; accepted `0` only): Prohibits automatic retries during polling (`get_fc27_community_poll_max_retries()`). Fails closed on any value `!= 0`.
+- **`FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY`** (default `true`; accepted `true` only): Ensures `Search -> Scout -> Analyst` executes only when `inserted_match_count > 0` (`is_fc27_community_poll_analytics_on_new_only()`).
+- **`FC27_COMMUNITY_POLL_SINGLE_FLIGHT`** (default `true`; accepted `true` only): Enforces in-process and PostgreSQL advisory single-flight lock per poll cycle (`is_fc27_community_poll_single_flight()`).
+- **`FC27_COMMUNITY_POLL_ONCE`** (default `false`; accepted `true`, `false`): Causes the polling worker loop to exit after at most 1 bounded poll cycle (`is_fc27_community_poll_once()`).

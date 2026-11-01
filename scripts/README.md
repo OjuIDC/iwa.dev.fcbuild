@@ -26,6 +26,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | Script | Classification | Status | Replacement |
 |---|---|---|---|
 | [`fc27_community_eval.py`](fc27_community_eval.py) | `CURRENT_PROVIDER_COMMAND` | Active (Primary Real-Data Path) | `NONE` |
+| [`fc27_polling_worker.py`](fc27_polling_worker.py) | `CURRENT_PROVIDER_COMMAND` | Active (Disabled-by-Default Polling Worker) | `NONE` |
 | [`fc27_demo_ingest.py`](fc27_demo_ingest.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Demo) | `NONE` |
 | [`fc27_demo_fixture_server.py`](fc27_demo_fixture_server.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Fixture Server) | `NONE` |
 | [`check_documentation_consistency.py`](check_documentation_consistency.py) | `CURRENT_CI_COMMAND` | Active (CI & Security Gate) | `NONE` |
@@ -212,6 +213,22 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Expected Output**: Migration logs and `pytest` summary.
 - **Teardown**: Trap handler (`trap cleanup EXIT`) automatically removes the test container.
 - **Replacement Status**: Current POSIX test helper (`NONE`).
+
+### 13. `scripts/fc27_polling_worker.py`
+- **Classification**: `CURRENT_PROVIDER_COMMAND`
+- **Purpose**: Runs the disabled-by-default East Coasters (`330323`, `common-gen5`, `FC27`, `leagueMatch`, `max_results=10`) community polling worker in status (`--status`), single-cycle (`--once`), or bounded continuous (`--worker`) mode with single-flight PostgreSQL advisory locking (`pg_try_advisory_lock`) and conditional analytics (`Search -> Scout -> Analyst` only when `inserted_match_count > 0`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
+  ```
+- **Required Feature Flags**:
+  - `--status`: None (`0` network calls, `0` provider calls).
+  - `--once` / `--worker`: Requires `FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`.
+- **Network Behavior**: Zero network calls in `--status` mode or when any gate is disabled. When enabled with `--confirm-live-polling`, issues at most `1` provider request per cycle (`clubs/matches`, `retries=0`).
+- **Database Behavior**: Connects as least-privilege `fc27_app`, acquires session-level `pg_try_advisory_lock`, persists new normalized matches transactionally (`persist_polled_match_envelope`), and runs read-only analytics only when `inserted_match_count > 0`.
+- **Expected Output**: Sanitized JSON polling health (`--status`) or `FC27PollResult` / `FC27PollingHealth` JSON summary.
+- **Teardown**: Releases PostgreSQL advisory lock in `finally` before inter-cycle sleep or process exit; handles `SIGINT`/`SIGTERM` cleanly.
+- **Replacement Status**: Current authoritative polling worker CLI (`NONE`).
 
 ---
 

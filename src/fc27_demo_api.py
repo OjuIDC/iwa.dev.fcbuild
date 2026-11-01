@@ -54,6 +54,7 @@ from src.fc27_demo import (
     run_fc27_demo_ingestion_with_artifacts,
     validate_demo_host_strict,
 )
+from src.fc27_polling_worker import FC27PollingRuntime, get_default_polling_runtime
 from src.fc27_search_scout import RANKING_POLICY_VERSION
 
 PROHIBITED_QUERY_PARAMS: Final[frozenset[str]] = frozenset(
@@ -173,6 +174,7 @@ def resolve_dashboard_source_label(source_cls: str, *, include_mode_suffix: bool
 def _build_status_dict(
     artifacts: FC27DemoSessionArtifacts,
     store: FC27DemoStateStore,
+    polling_runtime: Optional[FC27PollingRuntime] = None,
 ) -> Dict[str, Any]:
     res = artifacts.result
     cache_metrics = store.cache.metrics()
@@ -180,6 +182,20 @@ def _build_status_dict(
     last_ingested_at = artifacts.search_context.analysis_generated_at
     provider_health = (
         "HEALTHY" if res.circuit_state == "CLOSED" and res.validation_status == "PASS" else "DEGRADED"
+    )
+    poll_rt = polling_runtime or getattr(store, "polling_runtime", None) or get_default_polling_runtime()
+    poll_health = poll_rt.snapshot_health()
+    last_attempt_iso = (
+        poll_health.last_attempt_at.isoformat() if poll_health.last_attempt_at else None
+    )
+    last_success_iso = (
+        poll_health.last_success_at.isoformat() if poll_health.last_success_at else None
+    )
+    last_new_match_iso = (
+        poll_health.last_new_match_at.isoformat() if poll_health.last_new_match_at else None
+    )
+    next_eligible_iso = (
+        poll_health.next_eligible_at.isoformat() if poll_health.next_eligible_at else None
     )
     return {
         "demo_enabled": res.demo_mode,
@@ -211,7 +227,17 @@ def _build_status_dict(
         "conflict_count": res.conflict_count,
         "execution_hash": res.execution_hash,
         "raw_response_retained": False,
-        "polling_enabled": False,
+        "polling_enabled": poll_health.worker_enabled,
+        "worker_running": poll_health.worker_running,
+        "last_attempt_at": last_attempt_iso,
+        "last_success_at": last_success_iso,
+        "last_new_match_at": last_new_match_iso,
+        "last_status": poll_health.last_status,
+        "consecutive_failures": poll_health.consecutive_failures,
+        "next_eligible_at": next_eligible_iso,
+        "total_matches_inserted": poll_health.total_matches_inserted,
+        "total_duplicates_ignored": poll_health.total_duplicates_ignored,
+        "total_replay_conflicts": poll_health.total_replay_conflicts,
         "recommendations_enabled": False,
         "dispatch_enabled": False,
         "live_probe_executed": LIVE_PROBE_EXECUTED,
@@ -318,10 +344,16 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
 def _render_demo_html(
     artifacts: FC27DemoSessionArtifacts,
     store: FC27DemoStateStore,
+    polling_runtime: Optional[FC27PollingRuntime] = None,
 ) -> str:
     """Renders a self-contained local HTML page (`PART L`) with strict HTML escaping."""
-    status = _build_status_dict(artifacts, store)
+    status = _build_status_dict(artifacts, store, polling_runtime=polling_runtime)
     esc = lambda val: html.escape(str(val), quote=True)
+    polling_banner_text = (
+        "Polling Enabled (Read-Only Status)"
+        if status["polling_enabled"]
+        else "Polling Disabled (FC27_COMMUNITY_POLLING_ENABLED=false)"
+    )
 
     match_rows = []
     for m in artifacts.matches:
@@ -399,6 +431,7 @@ def _render_demo_html(
   <div class="banner-bar">
     <div class="banner banner-fixture" id="banner-synthetic-fixture">{esc(banner_label)}</div>
     <div class="banner banner-rec" id="banner-recommendations-disabled">Recommendations Disabled (RECOMMENDATIONS_DISABLED | POLLING_DISABLED | DISPATCH_DISABLED)</div>
+    <div class="banner banner-rec" id="banner-polling-status">{esc(polling_banner_text)}</div>
     <div class="banner banner-mode" id="banner-source-mode">Mode: {esc(artifacts.result.source_mode)} (East Coasters 330323 / common-gen5 / FC27)</div>
   </div>
 
@@ -439,6 +472,23 @@ def _render_demo_html(
       <strong>Analyst Hash:</strong> <code>{esc(artifacts.analyst_report.report_hash)}</code><br>
       <strong>Execution Hash:</strong> <code>{esc(status['execution_hash'])}</code>
     </p>
+  </div>
+
+  <div class="card" id="card-polling-health">
+    <h2>Polling Worker Health (Read-Only)</h2>
+    <div class="grid">
+      <div><strong>Polling Enabled:</strong> {esc(status['polling_enabled'])}</div>
+      <div><strong>Worker Running:</strong> {esc(status['worker_running'])}</div>
+      <div><strong>Last Poll Status:</strong> {esc(status['last_status'])}</div>
+      <div><strong>Consecutive Failures:</strong> {esc(status['consecutive_failures'])}</div>
+      <div><strong>Last Attempt At:</strong> {esc(status['last_attempt_at'])}</div>
+      <div><strong>Last Success At:</strong> {esc(status['last_success_at'])}</div>
+      <div><strong>Last New Match At:</strong> {esc(status['last_new_match_at'])}</div>
+      <div><strong>Next Eligible At:</strong> {esc(status['next_eligible_at'])}</div>
+      <div><strong>Matches Inserted:</strong> {esc(status['total_matches_inserted'])}</div>
+      <div><strong>Duplicates Ignored:</strong> {esc(status['total_duplicates_ignored'])}</div>
+      <div><strong>Replay Conflicts:</strong> {esc(status['total_replay_conflicts'])}</div>
+    </div>
   </div>
 
   <div class="card">
@@ -507,6 +557,7 @@ def build_demo_router(
     state_store: Optional[FC27DemoStateStore] = None,
     demo_mode_override: Optional[bool] = None,
     fixture_port: Optional[int] = None,
+    polling_runtime: Optional[FC27PollingRuntime] = None,
 ) -> APIRouter:
     """Builds the local read-only FC 27 demo APIRouter (`PART K` & `PART L`)."""
     router = APIRouter()
@@ -521,7 +572,9 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        return JSONResponse(content=_build_status_dict(artifacts, store))
+        return JSONResponse(
+            content=_build_status_dict(artifacts, store, polling_runtime=polling_runtime)
+        )
 
     @router.get("/demo/matches")
     def get_demo_matches(request: Request) -> JSONResponse:
@@ -573,7 +626,9 @@ def build_demo_router(
             circuit_breaker=store.breaker,
             state_store=store,
         )
-        return JSONResponse(content=_build_status_dict(artifacts, store))
+        return JSONResponse(
+            content=_build_status_dict(artifacts, store, polling_runtime=polling_runtime)
+        )
 
     @router.get("/demo", response_class=HTMLResponse)
     def get_demo_html_page(request: Request) -> HTMLResponse:
@@ -584,7 +639,9 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        return HTMLResponse(content=_render_demo_html(artifacts, store))
+        return HTMLResponse(
+            content=_render_demo_html(artifacts, store, polling_runtime=polling_runtime)
+        )
 
     return router
 
@@ -595,6 +652,7 @@ def create_demo_app(
     state_store: Optional[FC27DemoStateStore] = None,
     demo_mode_override: Optional[bool] = None,
     fixture_port: Optional[int] = None,
+    polling_runtime: Optional[FC27PollingRuntime] = None,
 ) -> FastAPI:
     """Creates a standalone local-only FastAPI application for the FC 27 demo (`PART C` & `PART K`).
 
@@ -614,6 +672,7 @@ def create_demo_app(
             state_store=state_store,
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
+            polling_runtime=polling_runtime,
         )
     )
     return app

@@ -137,6 +137,8 @@ The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-veri
 
 ---
 
-## 7. Bounded Community Client Evaluation (`src/fc27_community_provider.py`)
+## 7. Bounded Community Client Evaluation (`src/fc27_community_provider.py`) & Disabled-by-Default Polling Worker (`src/fc27_polling_worker.py`)
 
 For isolated one-shot evaluation and persistence of the pinned MIT-licensed `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (`v0.3.1`) unofficial community client (`fc-clubs-api-community-v1`, not an official EA SDK), `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` provide a strictly gated wrapper (`FC27_COMMUNITY_PROVIDER_ENABLED=false` by default, `--confirm` required) under `SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT`, with optional downstream tabular helpers in `src/fc27_pandas_view.py`. See [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).
+
+In addition, `src/fc27_polling_worker.py` and `scripts/fc27_polling_worker.py` (`Dockerfile.community-worker`, `docker-compose.community-worker.yml`, service `fc27-community-worker` under opt-in profile `fc27-polling`) wrap `FC27CommunityProviderAdapter` in a disabled-by-default single-flight polling worker (`FC27_COMMUNITY_POLLING_ENABLED=false` by default, `300..600s` interval, `1` request per cycle, `0` retries, conditional `Search -> Scout -> Analyst` only when new matches are inserted). See [`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md).

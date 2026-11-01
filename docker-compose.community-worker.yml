@@ -1,0 +1,58 @@
+# Optional Docker Compose overlay for the disabled-by-default East Coasters FC27
+# community polling worker.
+#
+# Not started by default `docker compose up` (requires explicit profile `fc27-polling`
+# and `-f docker-compose.community-worker.yml`).
+
+services:
+  fc27-community-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.community-worker
+    profiles:
+      - fc27-polling
+    user: "10001:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cpus: 0.50
+    mem_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 30s
+    command: ["--worker"]
+    environment:
+      FC27_CLUB_ID: "330323"
+      FC_PLATFORM: "common-gen5"
+      FC27_COMMUNITY_POLLING_ENABLED: ${FC27_COMMUNITY_POLLING_ENABLED:-false}
+      FC27_COMMUNITY_PROVIDER_ENABLED: ${FC27_COMMUNITY_PROVIDER_ENABLED:-false}
+      FC27_PERSISTENCE_ENABLED: ${FC27_PERSISTENCE_ENABLED:-false}
+      FC27_COMMUNITY_POLL_MIN_SECONDS: ${FC27_COMMUNITY_POLL_MIN_SECONDS:-300}
+      FC27_COMMUNITY_POLL_MAX_SECONDS: ${FC27_COMMUNITY_POLL_MAX_SECONDS:-600}
+      FC27_COMMUNITY_POLL_MAX_REQUESTS: "1"
+      FC27_COMMUNITY_POLL_MAX_RETRIES: "0"
+      FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY: "true"
+      FC27_COMMUNITY_POLL_SINGLE_FLIGHT: "true"
+      FC27_COMMUNITY_POLL_ONCE: ${FC27_COMMUNITY_POLL_ONCE:-false}
+      FC27_RECOMMENDATIONS_ENABLED: "false"
+      DISPATCH_ENABLED: "false"
+      POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+    secrets:
+      - fc27_app_uri
+    networks:
+      - fc27_net
+      - fc27_data
+    healthcheck:
+      test: ["CMD", "python", "scripts/fc27_polling_worker.py", "--status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    restart: "no"
+
+secrets:
+  fc27_app_uri:
+    file: ./secrets/fc27_app_uri
