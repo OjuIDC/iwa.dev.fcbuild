@@ -8,6 +8,6 @@ opencv-python>=4.10,<5
 numpy>=1.26,<3
 pytesseract>=0.3.13,<0.4
 Pillow>=13,<14
-redis>=5,<7
+redis>=5,<9
 websockets>=13,<16
 python-dotenv>=1,<2
