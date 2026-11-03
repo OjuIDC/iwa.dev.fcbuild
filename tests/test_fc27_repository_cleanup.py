@@ -276,6 +276,11 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "tests/test_fc27_discord_bot.py",
         "tests/test_fc27_polling_worker.py",
         "tests/test_fc27_tactics.py",
+        "docs/FC27_PERFORMANCE_BASELINE.md",
+        "docs/FC27_LANGUAGE_DECISION_MATRIX.md",
+        "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
+        "src/fc27_performance.py",
+        "tests/test_fc27_performance.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():

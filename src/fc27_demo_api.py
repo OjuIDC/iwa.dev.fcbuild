@@ -891,6 +891,87 @@ def build_demo_router(
         )
         return JSONResponse(content=_build_analysis_dict(artifacts))
 
+    @router.get("/api/fc27/demo/coach")
+    def get_demo_coach(request: Request) -> JSONResponse:
+        _require_demo_mode_enabled(demo_mode_override)
+        _reject_prohibited_query_params(request)
+        artifacts = _ensure_artifacts(
+            store,
+            demo_mode_override=demo_mode_override,
+            fixture_port=fixture_port,
+        )
+        analysis = _build_analysis_dict(artifacts)
+        return JSONResponse(
+            content={
+                "club_id": TARGET_CLUB_ID,
+                "club_name": TARGET_CLUB_NAME,
+                "platform": TARGET_PLATFORM,
+                "game_version": TARGET_GAME_VERSION,
+                "coach_version": analysis["coach_version"],
+                "coach_policy_version": analysis["coach_policy_version"],
+                "coach_hash": analysis["coach_hash"],
+                "coach": analysis["coach"],
+                "coach_hypotheses": analysis["coach_hypotheses"],
+                "recommendations_enabled": False,
+                "approval_enabled": False,
+                "dispatch_enabled": False,
+            }
+        )
+
+    @router.get("/api/fc27/demo/tactics")
+    def get_demo_tactics(request: Request) -> JSONResponse:
+        _require_demo_mode_enabled(demo_mode_override)
+        _reject_prohibited_query_params(request)
+        artifacts = _ensure_artifacts(
+            store,
+            demo_mode_override=demo_mode_override,
+            fixture_port=fixture_port,
+        )
+        analysis = _build_analysis_dict(artifacts)
+        return JSONResponse(
+            content={
+                "club_id": TARGET_CLUB_ID,
+                "club_name": TARGET_CLUB_NAME,
+                "platform": TARGET_PLATFORM,
+                "game_version": TARGET_GAME_VERSION,
+                "tactics_version": analysis["tactics_version"],
+                "tactics_policy_version": analysis["tactics_policy_version"],
+                "tactics_hash": analysis["tactics_hash"],
+                "tactics": analysis["tactics"],
+                "tactics_candidates": analysis["tactics_candidates"],
+                "recommendations_enabled": False,
+                "approval_enabled": False,
+                "dispatch_enabled": False,
+            }
+        )
+
+    @router.get("/api/fc27/demo/director")
+    def get_demo_director(request: Request) -> JSONResponse:
+        _require_demo_mode_enabled(demo_mode_override)
+        _reject_prohibited_query_params(request)
+        artifacts = _ensure_artifacts(
+            store,
+            demo_mode_override=demo_mode_override,
+            fixture_port=fixture_port,
+        )
+        analysis = _build_analysis_dict(artifacts)
+        return JSONResponse(
+            content={
+                "club_id": TARGET_CLUB_ID,
+                "club_name": TARGET_CLUB_NAME,
+                "platform": TARGET_PLATFORM,
+                "game_version": TARGET_GAME_VERSION,
+                "director_version": analysis["director_version"],
+                "director_policy_version": analysis["director_policy_version"],
+                "director_hash": analysis["director_hash"],
+                "director": analysis["director"],
+                "director_reconciliation": analysis["director_reconciliation"],
+                "recommendations_enabled": False,
+                "approval_enabled": False,
+                "dispatch_enabled": False,
+            }
+        )
+
     @router.post("/demo/ingest-fixture")
     def post_demo_ingest_fixture(
         request: Request,

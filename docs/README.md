@@ -71,6 +71,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **[`FC27_TACTICS_CANDIDATE_ENGINE.md`](FC27_TACTICS_CANDIDATE_ENGINE.md)** — Experimental Tactics candidate engine (`src/fc27_tactics.py`)
 - **[`FC27_DIRECTOR_RECONCILIATION.md`](FC27_DIRECTOR_RECONCILIATION.md)** — Director evidence reconciliation engine (`src/fc27_director.py`)
 - **[`FC27_TACTICAL_HYPOTHESES.md`](FC27_TACTICAL_HYPOTHESES.md)** — Registry of 10 external community/meta tactical hypothesis families (`TH-FC27-001` through `TH-FC27-010`), all classified as `EXTERNAL_TACTICAL_HYPOTHESIS` (`UNVERIFIED`, `NOT_APPROVABLE`)
+- **[`FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md)** — Performance telemetry contract (`src/fc27_performance.py`, `FC27_PERFORMANCE_TELEMETRY_ENABLED=false`), multi-scale offline benchmarks, PostgreSQL `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` metrics, Python profiling, and prioritized optimization recommendations
+- **[`FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md)** — Evidence-based multi-language decision matrix (`KEEP_PYTHON` default) evaluating SQL, Python, Polars, ONNX Runtime, CTranslate2, `llama.cpp`/Ollama, Go, Rust, C#/.NET, and C/C++
+- **[`FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md)** — Design-only read-only local inference sidecar boundary (`FC27_LOCAL_INFERENCE_ENABLED=false`, `NON_AUTHORITATIVE_SIDECAR_SUMMARY`)
 - **[`MODEL_SELECTION.md`](MODEL_SELECTION.md)** — Local LLM model catalog and configuration for the optional LangGraph runtime
 - **[`ROLE_MODEL_BENCHMARK_MATRIX.md`](ROLE_MODEL_BENCHMARK_MATRIX.md)** — Role model evaluation and benchmark matrix
 

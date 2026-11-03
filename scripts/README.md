@@ -43,7 +43,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`test_postgres.sh`](test_postgres.sh) | `TEST_HELPER` | Active (Disposable PostgreSQL Test Runner) | `NONE` |
 | [`archive/experiments/matchpulse_conformance.py`](archive/experiments/matchpulse_conformance.py) | `SUPERSEDED` | Archived (`DO_NOT_USE`) | `scripts/check_matchpulse_boundary.py` |
 
-> **Note on Database Migrations (`CURRENT_MIGRATION_COMMAND`)**: PostgreSQL 16 schema migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql`) and role grants (`migrations/post/grants.sql`) are executed via the module entrypoints `python -m src.db_roles` (`src/db_roles.py`) and `python -m src.db_migrate` (`src/db_migrate.py`), or via `scripts/test_postgres.sh`.
+> **Note on Database Migrations (`CURRENT_MIGRATION_COMMAND`) & Performance Baseline (`python -m src.fc27_performance`)**: PostgreSQL 16 schema migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql`) and role grants (`migrations/post/grants.sql`) are executed via the module entrypoints `python -m src.db_roles` (`src/db_roles.py`) and `python -m src.db_migrate` (`src/db_migrate.py`), or via `scripts/test_postgres.sh`. Repeatable offline performance benchmarks and baseline generation are executed via the module entrypoint `python -m src.fc27_performance` (`src/fc27_performance.py`, documented in `docs/FC27_PERFORMANCE_BASELINE.md`).
 
 ---
 

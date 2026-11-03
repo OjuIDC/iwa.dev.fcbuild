@@ -533,3 +533,20 @@ def get_fc27_discord_allowed_channel_ids(*, strict: bool = False) -> frozenset[s
     """Return allowlisted Discord channel IDs (empty frozenset by default; fail-closed)."""
     return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_CHANNEL_IDS", strict=strict)
 
+
+def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
+    """Check if FC 27 bounded performance telemetry is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_PERFORMANCE_TELEMETRY_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_PERFORMANCE_TELEMETRY_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+

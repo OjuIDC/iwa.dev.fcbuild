@@ -102,6 +102,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `scripts/check_matchpulse_boundary.py` — Enforces sibling-repository isolation from `..\matchpulse-live-public`.
 - `tests/test_fc27_community_provider.py` & `tests/test_fc27_pandas_view.py` — Offline unit and integration tests for the bounded community provider wrapper (`src/fc27_community_provider.py`, `scripts/fc27_community_eval.py`) and optional downstream analytical view (`src/fc27_pandas_view.py`).
 - `tests/test_fc27_polling_worker.py` — `101` deterministic unit, PostgreSQL 16 integration, single-flight advisory lock, least-privilege role/table boundary, cache/rate-limit/budget/circuit-breaker, conditional analytics (`Search -> Scout -> Analyst` on new matches only), dashboard status, and Docker Compose hardening tests for the disabled-by-default polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`).
+- `tests/test_fc27_performance.py` — `40` offline tests verifying `src/fc27_performance.py` (`FC27_PERFORMANCE_TELEMETRY_ENABLED=false` default, `extra="forbid"`, `frozen=True`, privacy scrubbing, 20-run retention, 2 MiB file size cap, `SMALL`/`MEDIUM`/`LARGE`/`STRESS` benchmark scenarios, disposable PostgreSQL `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, analytics layers, loopback dashboard endpoints, offline Discord commands, Polars evaluation `NOT_JUSTIFIED`, threshold evaluation, and `KEEP_PYTHON` default decisions).
 
 ---
 
