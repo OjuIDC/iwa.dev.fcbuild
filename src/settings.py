@@ -493,6 +493,8 @@ def is_fc27_discord_bot_enabled(*, strict: bool = False) -> bool:
     """Check if the read-only FC 27 Discord bot is enabled (default: False, fail-closed)."""
     raw = os.getenv("FC27_DISCORD_BOT_ENABLED")
     if raw is None or not raw.strip():
+        raw = os.getenv("DISCORD_ENABLED")
+    if raw is None or not raw.strip():
         return False
     val = raw.strip().lower()
     if val in _TRUE:
@@ -500,8 +502,27 @@ def is_fc27_discord_bot_enabled(*, strict: bool = False) -> bool:
     if val in _FALSE:
         return False
     if strict:
-        raise ConfigError(f"FC27_DISCORD_BOT_ENABLED must be a valid boolean, got '{raw}'")
+        raise ConfigError(f"FC27_DISCORD_BOT_ENABLED / DISCORD_ENABLED must be a valid boolean, got '{raw}'")
     return False
+
+
+def get_fc27_discord_application_id(*, strict: bool = False) -> str | None:
+    """Return configured Discord Application ID if set, validating positive numeric snowflake."""
+    raw = os.getenv("FC27_DISCORD_APPLICATION_ID")
+    if raw is None or not raw.strip():
+        raw = os.getenv("DISCORD_APPLICATION_ID")
+    if raw is None or not raw.strip():
+        return None
+    token = raw.strip()
+    if token.startswith("replace_with_"):
+        return None
+    if not token.isdecimal() or int(token) <= 0:
+        if strict:
+            raise ConfigError(
+                f"DISCORD_APPLICATION_ID must be a positive numeric Discord snowflake ID, got '{token}'"
+            )
+        return None
+    return token
 
 
 def _parse_discord_snowflake_allowlist(env_name: str, *, strict: bool = False) -> frozenset[str]:
@@ -526,12 +547,26 @@ def _parse_discord_snowflake_allowlist(env_name: str, *, strict: bool = False) -
 
 def get_fc27_discord_allowed_guild_ids(*, strict: bool = False) -> frozenset[str]:
     """Return allowlisted Discord guild IDs (empty frozenset by default; fail-closed)."""
-    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_GUILD_IDS", strict=strict)
+    guilds = _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_GUILD_IDS", strict=strict)
+    if guilds:
+        return guilds
+    return _parse_discord_snowflake_allowlist("DISCORD_GUILD_IDS", strict=strict)
 
 
 def get_fc27_discord_allowed_channel_ids(*, strict: bool = False) -> frozenset[str]:
     """Return allowlisted Discord channel IDs (empty frozenset by default; fail-closed)."""
-    return _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_CHANNEL_IDS", strict=strict)
+    channels = _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_CHANNEL_IDS", strict=strict)
+    if channels:
+        return channels
+    return _parse_discord_snowflake_allowlist("DISCORD_CHANNEL_IDS", strict=strict)
+
+
+def get_fc27_discord_allowed_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return optional allowlisted Discord role IDs (empty frozenset by default)."""
+    roles = _parse_discord_snowflake_allowlist("FC27_DISCORD_ALLOWED_ROLE_IDS", strict=strict)
+    if roles:
+        return roles
+    return _parse_discord_snowflake_allowlist("DISCORD_ROLE_IDS", strict=strict)
 
 
 def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:

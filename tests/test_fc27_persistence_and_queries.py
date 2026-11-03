@@ -1115,6 +1115,7 @@ def test_42_unexpired_quarantine_retained(pg_uri) -> None:
         quarantine_id=q_res.quarantine_id,
         review_status="RESOLVED",
         reviewed_by="steward-reviewer-01",
+        reviewed_at=eval_now,
         review_notes="Reviewed synthetic observation.",
     )
     assert rev_event_id > 0

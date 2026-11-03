@@ -183,6 +183,21 @@ FORBIDDEN_SQL_TABLE_SUBSTRINGS: Final[tuple[str, ...]] = (
     "dispatch",
     "outbox",
     "domain_event",
+    "fc27_users",
+    "fc27_credentials",
+    "fc27_user_roles",
+    "fc27_delegations",
+    "fc27_sessions",
+    "fc27_webauthn",
+    "fc27_webauthn_credentials",
+    "fc27_totp",
+    "fc27_totp_credentials",
+    "fc27_recovery_codes",
+    "fc27_challenges",
+    "fc27_action_tokens",
+    "fc27_invitations",
+    "fc27_bootstrap_locks",
+    "authority_",
 )
 
 FORBIDDEN_SQL_WRITE_KEYWORDS: Final[re.Pattern[str]] = re.compile(
@@ -261,8 +276,11 @@ class FC27DiscordBotConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
+    application_id: str | None = None
+    require_application_id: bool = False
     allowed_guild_ids: frozenset[str] = Field(default_factory=frozenset)
     allowed_channel_ids: frozenset[str] = Field(default_factory=frozenset)
+    allowed_role_ids: frozenset[str] = Field(default_factory=frozenset)
     allow_direct_messages: bool = False
     slash_commands_only: bool = True
     administrator_permission_required: bool = False
@@ -291,13 +309,26 @@ class FC27DiscordBotConfig(BaseModel):
             raise FC27DiscordAuthzError(
                 "Discord bot must not enable privileged message_content intent"
             )
+        if self.application_id is not None:
+            app_id_clean = str(self.application_id).strip()
+            if not app_id_clean.isdecimal() or int(app_id_clean) <= 0:
+                raise FC27DiscordAuthzError(
+                    f"Invalid Discord application_id: '{self.application_id}'"
+                )
         for gid in self.allowed_guild_ids:
             if not str(gid).isdecimal() or int(gid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid guild ID in allowlist: '{gid}'")
         for cid in self.allowed_channel_ids:
             if not str(cid).isdecimal() or int(cid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid channel ID in allowlist: '{cid}'")
+        for rid in self.allowed_role_ids:
+            if not str(rid).isdecimal() or int(rid) <= 0:
+                raise FC27DiscordAuthzError(f"Invalid role ID in allowlist: '{rid}'")
         if self.enabled:
+            if self.require_application_id and not self.application_id:
+                raise FC27DiscordDisabledError(
+                    "DISCORD_APPLICATION_ID must be non-empty when Discord bot gateway startup is enabled"
+                )
             if not self.allowed_guild_ids:
                 raise FC27DiscordDisabledError(
                     "FC27_DISCORD_ALLOWED_GUILD_IDS must be non-empty when Discord bot is enabled"
@@ -309,18 +340,28 @@ class FC27DiscordBotConfig(BaseModel):
         return self
 
     @classmethod
-    def from_env(cls, *, strict: bool = True) -> FC27DiscordBotConfig:
+    def from_env(
+        cls,
+        *,
+        strict: bool = True,
+        require_application_id: bool = False,
+    ) -> FC27DiscordBotConfig:
         """Build configuration from environment variables with fail-closed defaults."""
         try:
             enabled = settings.is_fc27_discord_bot_enabled(strict=strict)
+            app_id = settings.get_fc27_discord_application_id(strict=strict)
             guilds = settings.get_fc27_discord_allowed_guild_ids(strict=strict)
             channels = settings.get_fc27_discord_allowed_channel_ids(strict=strict)
+            roles = settings.get_fc27_discord_allowed_role_ids(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         return cls(
             enabled=enabled,
+            application_id=app_id,
+            require_application_id=require_application_id,
             allowed_guild_ids=guilds,
             allowed_channel_ids=channels,
+            allowed_role_ids=roles,
         )
 
 
@@ -735,6 +776,7 @@ class FC27DiscordBotService:
         guild_id: str | int | None,
         channel_id: str | int | None,
         user_id: str | int = "100000000000000001",
+        user_role_ids: Sequence[str | int] | None = None,
         is_slash_interaction: bool = True,
         page: int = 1,
         page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
@@ -822,6 +864,24 @@ class FC27DiscordBotService:
                 ephemeral=True,
                 content="This Discord channel is not allowlisted for East Coasters FC27 analytics.",
             )
+
+        if self._config.allowed_role_ids:
+            caller_roles = {str(r).strip() for r in (user_role_ids or ())}
+            if not (caller_roles & self._config.allowed_role_ids):
+                self._record_audit(
+                    guild_id=gid_str,
+                    channel_id=cid_str,
+                    user_id=uid_str,
+                    command=cmd_clean,
+                    outcome_category="REJECTED_UNAPPROVED_ROLE",
+                    started_mono=started,
+                )
+                return FC27DiscordResponse(
+                    command=cmd_clean,
+                    status="REJECTED_UNAUTHORIZED",
+                    ephemeral=True,
+                    content="Your Discord role is not allowlisted for East Coasters FC27 analytics.",
+                )
 
         if raw_argument:
             arg_lower = raw_argument.lower()
@@ -1672,6 +1732,161 @@ class FC27DiscordBotService:
             return ("\n".join(xml_lines).encode("utf-8"), len(rows))
 
 
+def run_discord_gateway_bot(
+    config: FC27DiscordBotConfig,
+    *,
+    token: str | None = None,
+    service: FC27DiscordBotService | None = None,
+    gateway_runner: Callable[[FC27DiscordBotService, str], int] | None = None,
+) -> int:
+    """Validate all activation gates and run the read-only Discord Gateway bot (`--run`)."""
+    resolved_token = (token or load_discord_bot_token(required=True) or "").strip()
+    if not resolved_token or resolved_token.startswith("replace_with_"):
+        raise FC27DiscordDisabledError("Discord bot token is missing or placeholder")
+    if not config.enabled:
+        raise FC27DiscordDisabledError("Discord bot is disabled")
+    if not config.application_id or not str(config.application_id).isdecimal() or int(config.application_id) <= 0:
+        raise FC27DiscordDisabledError("Valid DISCORD_APPLICATION_ID is required for Gateway mode")
+    if not config.allowed_guild_ids or not config.allowed_channel_ids or not config.allowed_role_ids:
+        raise FC27DiscordDisabledError(
+            "Guild, channel, and role allowlists must all be non-empty for Gateway mode"
+        )
+
+    bot_service = service or FC27DiscordBotService(
+        config,
+        secret_tokens_to_scrub=(resolved_token,),
+    )
+
+    if gateway_runner is not None:
+        return int(gateway_runner(bot_service, resolved_token))
+
+    import asyncio
+    import signal
+    import discord
+    from discord import app_commands
+
+    intents = discord.Intents.none()
+    intents.guilds = True
+
+    guild_objects = [discord.Object(id=int(gid)) for gid in sorted(config.allowed_guild_ids)]
+
+    class _FC27ReadOnlyGatewayClient(discord.Client):
+        def __init__(self) -> None:
+            super().__init__(
+                intents=intents,
+                application_id=int(config.application_id),
+            )
+            self.tree = app_commands.CommandTree(self)
+
+        async def setup_hook(self) -> None:
+            for guild_obj in guild_objects:
+                synced = await self.tree.sync(guild=guild_obj)
+                print(
+                    f"DISCORD_GATEWAY_GUILD_SYNCED={guild_obj.id} COMMAND_COUNT={len(synced)}",
+                    flush=True,
+                )
+
+        async def on_ready(self) -> None:
+            print("DISCORD_BOT_READY=YES", flush=True)
+            print("DISCORD_GATEWAY_CONNECTED=YES", flush=True)
+            print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}", flush=True)
+            print(
+                f"DISCORD_DATABASE_WRITE_ACCESS={'YES' if DISCORD_DATABASE_WRITE_ACCESS else 'NO'}",
+                flush=True,
+            )
+
+    client = _FC27ReadOnlyGatewayClient()
+    fc27_group = app_commands.Group(
+        name="fc27",
+        description="Read-only East Coasters FC27 analytics commands",
+        guild_ids=[int(gid) for gid in sorted(config.allowed_guild_ids)],
+    )
+
+    def _register_subcommand(subcmd_name: str) -> None:
+        async def _callback(
+            interaction: discord.Interaction,
+            page: int = 1,
+            page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
+        ) -> None:
+            await interaction.response.defer(ephemeral=False, thinking=True)
+            gid = str(interaction.guild_id) if interaction.guild_id is not None else None
+            cid = str(interaction.channel_id) if interaction.channel_id is not None else None
+            uid = str(interaction.user.id) if interaction.user is not None else "0"
+            roles_raw = getattr(interaction.user, "roles", ()) or ()
+            role_ids = tuple(str(getattr(r, "id", r)) for r in roles_raw)
+            resp = await asyncio.to_thread(
+                bot_service.handle_slash_command,
+                subcmd_name,
+                guild_id=gid,
+                channel_id=cid,
+                user_id=uid,
+                user_role_ids=role_ids,
+                is_slash_interaction=True,
+                page=page,
+                page_size=page_size,
+            )
+            discord_embeds = []
+            for emb in resp.embeds:
+                d_emb = discord.Embed(title=emb.title, description=emb.description)
+                for k, v in emb.fields.items():
+                    d_emb.add_field(name=k[:256], value=v[:1024], inline=False)
+                discord_embeds.append(d_emb)
+            kwargs: dict[str, Any] = {
+                "content": resp.content,
+                "embeds": discord_embeds,
+            }
+            if resp.attachment is not None:
+                kwargs["file"] = discord.File(
+                    io.BytesIO(resp.attachment.data_bytes),
+                    filename=resp.attachment.filename,
+                )
+            await interaction.followup.send(**kwargs)
+
+        _callback.__name__ = f"fc27_{subcmd_name.replace('-', '_')}"
+        fc27_group.command(
+            name=subcmd_name,
+            description=f"East Coasters FC27 read-only {subcmd_name} command",
+        )(_callback)
+
+    for sub in SUPPORTED_DISCORD_SUBCOMMANDS:
+        _register_subcommand(sub)
+
+    client.tree.add_command(fc27_group)
+
+    async def _runner() -> int:
+        loop = asyncio.get_running_loop()
+        stop_future: asyncio.Future[None] = loop.create_future()
+
+        def _on_signal() -> None:
+            bot_service.stop()
+            if not stop_future.done():
+                stop_future.set_result(None)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _on_signal)
+            except (NotImplementedError, RuntimeError, ValueError):
+                signal.signal(sig, lambda *_a: loop.call_soon_threadsafe(_on_signal))
+
+        start_task = asyncio.create_task(client.start(resolved_token, reconnect=True))
+        done, _ = await asyncio.wait(
+            {start_task, stop_future},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if stop_future in done:
+            print("DISCORD_BOT_SHUTDOWN=CLEAN", flush=True)
+            await client.close()
+            try:
+                await asyncio.wait_for(start_task, timeout=10.0)
+            except Exception:
+                pass
+            return 0
+        await start_task
+        return 0
+
+    return asyncio.run(_runner())
+
+
 __all__ = [
     "ALLOWED_READONLY_TABLES",
     "DEFAULT_DISCORD_PAGE_SIZE",
@@ -1707,4 +1922,5 @@ __all__ = [
     "assert_discord_output_sanitized",
     "assert_sql_is_readonly_fc27_select",
     "load_discord_bot_token",
+    "run_discord_gateway_bot",
 ]

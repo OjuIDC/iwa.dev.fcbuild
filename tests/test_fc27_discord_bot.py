@@ -740,6 +740,8 @@ def test_50_discord_container_and_compose_isolation() -> None:
     assert "USER 10001:65534" in dockerfile_text
     assert "discord.py==2.7.1" in dockerfile_text
     assert "fc27-clubs-api" not in dockerfile_text
+    assert "COPY scripts /app/scripts" in dockerfile_text
+    assert 'CMD ["--status"]' in dockerfile_text
 
     compose_data = yaml.safe_load((REPO_ROOT / "docker-compose.discord.yml").read_text(encoding="utf-8"))
     svc = compose_data["services"]["fc27-discord-bot"]
@@ -750,4 +752,111 @@ def test_50_discord_container_and_compose_isolation() -> None:
     assert "no-new-privileges:true" in svc["security_opt"]
     assert "ports" not in svc
     assert "volumes" not in svc
+    assert svc["command"] == ["--run"]
+    assert svc["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
     assert set(svc["secrets"]) == {"discord_bot_token", "fc27_app_uri"}
+
+
+def test_51_identity_and_webauthn_tables_blocked_and_role_allowlist_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """51. Identity/WebAuthn SQL access is blocked, and application_id + role allowlists fail closed."""
+    for identity_sql in (
+        "SELECT * FROM public.fc27_users",
+        "SELECT * FROM public.fc27_credentials",
+        "SELECT * FROM public.fc27_sessions",
+        "SELECT * FROM public.fc27_invitations",
+        "SELECT * FROM public.fc27_recovery_codes",
+        "SELECT * FROM public.fc27_totp_credentials",
+        "SELECT * FROM public.fc27_webauthn_credentials",
+        "SELECT * FROM public.fc27_action_tokens",
+        "SELECT * FROM public.fc27_user_roles",
+        "SELECT * FROM public.fc27_delegations",
+        "SELECT * FROM public.fc27_challenges",
+        "SELECT * FROM public.fc27_bootstrap_locks",
+    ):
+        with pytest.raises(FC27DiscordWriteAccessDeniedError):
+            assert_sql_is_readonly_fc27_select(identity_sql)
+
+    with pytest.raises(FC27DiscordDisabledError):
+        FC27DiscordBotConfig(
+            enabled=True,
+            require_application_id=True,
+            application_id=None,
+            allowed_guild_ids=frozenset({APPROVED_GUILD_ID}),
+            allowed_channel_ids=frozenset({APPROVED_CHANNEL_ID}),
+        )
+
+    with pytest.raises(FC27DiscordAuthzError):
+        FC27DiscordBotConfig(
+            enabled=True,
+            application_id="not_a_snowflake",
+            allowed_guild_ids=frozenset({APPROVED_GUILD_ID}),
+            allowed_channel_ids=frozenset({APPROVED_CHANNEL_ID}),
+        )
+
+    monkeypatch.setenv("DISCORD_ROLE_IDS", "bad_role_id")
+    with pytest.raises(FC27DiscordDisabledError):
+        FC27DiscordBotConfig.from_env(strict=True)
+    monkeypatch.delenv("DISCORD_ROLE_IDS", raising=False)
+
+    cfg_with_roles = FC27DiscordBotConfig(
+        enabled=True,
+        application_id="444444444444444444",
+        require_application_id=True,
+        allowed_guild_ids=frozenset({APPROVED_GUILD_ID}),
+        allowed_channel_ids=frozenset({APPROVED_CHANNEL_ID}),
+        allowed_role_ids=frozenset({"555555555555555555"}),
+    )
+    svc = FC27DiscordBotService(cfg_with_roles)
+    denied = svc.handle_slash_command(
+        "help",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_role_ids=("666666666666666666",),
+    )
+    assert denied.status == "REJECTED_UNAUTHORIZED"
+    assert denied.provider_requests_executed == 0
+
+    allowed = svc.handle_slash_command(
+        "help",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_role_ids=("555555555555555555",),
+    )
+    assert allowed.status == "OK"
+    assert allowed.provider_requests_executed == 0
+
+
+def test_52_gateway_run_mode_gates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """52. `scripts/fc27_discord_bot.py --run` connects only when enabled, token, application ID, and guild/channel/role allowlists are valid."""
+    secret_file = tmp_path / "discord_bot_token"
+    secret_file.write_text("valid_test_discord_bot_token_1234567890", encoding="utf-8")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN_FILE", str(secret_file))
+    monkeypatch.setenv("FC27_DISCORD_BOT_ENABLED", "true")
+    monkeypatch.setenv("DISCORD_APPLICATION_ID", "1567228306099802252")
+    monkeypatch.setenv("FC27_DISCORD_ALLOWED_GUILD_IDS", APPROVED_GUILD_ID)
+    monkeypatch.setenv("FC27_DISCORD_ALLOWED_CHANNEL_IDS", APPROVED_CHANNEL_ID)
+    monkeypatch.delenv("FC27_DISCORD_ALLOWED_ROLE_IDS", raising=False)
+    monkeypatch.delenv("DISCORD_ROLE_IDS", raising=False)
+
+    # Missing role allowlist fails closed in --run mode
+    called: list[str] = []
+    rc_missing_role = discord_cli_main(
+        ["--run"],
+        gateway_runner=lambda _svc, _tok: (called.append("ran"), 0)[1],
+    )
+    assert rc_missing_role == 2
+    assert called == []
+
+    # With role allowlist configured, gateway_runner is invoked cleanly
+    monkeypatch.setenv("FC27_DISCORD_ALLOWED_ROLE_IDS", "1567238698402320595")
+    rc_ok = discord_cli_main(
+        ["--run"],
+        gateway_runner=lambda _svc, _tok: (called.append("ran"), 0)[1],
+    )
+    assert rc_ok == 0
+    assert called == ["ran"]
