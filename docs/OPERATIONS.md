@@ -129,11 +129,12 @@ All external provider, persistence, analytics, recommendation, and dispatch capa
 - `FC27_PERSISTENCE_ENABLED=false`
 - `FC27_ANALYTICS_ENABLED=false`
 - `FC27_RECOMMENDATIONS_ENABLED=false`
+- `FC27_PERFORMANCE_TELEMETRY_ENABLED=false`
 - `DISPATCH_ENABLED=false`
 - `DISPATCH_WORKER_ENABLED=false`
 - `APPROVAL_CLI_HMAC_ENABLED=false` (Python default in `src/graph_api.py`)
 
-See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md) and [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md) for the complete dependency matrix, CLI (`scripts/fc27_polling_worker.py --status | --once | --worker`), Docker Compose overlay (`docker-compose.community-worker.yml`, profile `fc27-polling`), and fail-closed rules.
+See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), and [`docs/FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md) for the complete dependency matrix, CLI (`scripts/fc27_polling_worker.py --status | --once | --worker`, `python -m src.fc27_performance`), Docker Compose overlay (`docker-compose.community-worker.yml`, profile `fc27-polling`), and fail-closed rules.
 
 ---
 
