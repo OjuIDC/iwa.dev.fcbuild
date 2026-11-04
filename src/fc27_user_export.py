@@ -8,6 +8,7 @@ Zero network access, zero external provider transport, zero secret retention.
 from __future__ import annotations
 
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -154,7 +155,10 @@ PROHIBITED_SENSITIVE_TOKENS: set[str] = {
     "clientsecret",
     "accountid",
     "personaid",
+    "personaname",
     "nucleusid",
+    "blazeid",
+    "proname",
     "userid",
     "email",
     "emailaddress",
@@ -187,7 +191,10 @@ PROHIBITED_TOKEN_COMBINATIONS: tuple[tuple[str, ...], ...] = (
     ("client", "secret"),
     ("account", "id"),
     ("persona", "id"),
+    ("persona", "name"),
     ("nucleus", "id"),
+    ("blaze", "id"),
+    ("pro", "name"),
     ("user", "id"),
     ("device", "id"),
     ("gamer", "tag"),
@@ -226,6 +233,26 @@ def normalize_key_for_scanning(key: str) -> list[str]:
     return tokens
 
 
+@functools.lru_cache(maxsize=4096)
+def _is_sensitive_key(key: str) -> bool:
+    """Memoized check for whether a single field key name is privacy/security sensitive."""
+    tokens = normalize_key_for_scanning(key)
+    collapsed = "".join(tokens)
+
+    for t in tokens:
+        if t in PROHIBITED_SENSITIVE_TOKENS or t == "ip":
+            return True
+
+    if collapsed in PROHIBITED_SENSITIVE_TOKENS:
+        return True
+
+    for combo in PROHIBITED_TOKEN_COMBINATIONS:
+        if all(c in tokens for c in combo):
+            return True
+
+    return False
+
+
 def scan_for_sensitive_fields(obj: Any, prefix: str = "") -> list[str]:
     """Recursively scans data structures for prohibited sensitive field names.
 
@@ -236,37 +263,17 @@ def scan_for_sensitive_fields(obj: Any, prefix: str = "") -> list[str]:
 
     if isinstance(obj, dict):
         for k, v in obj.items():
-            current_path = f"{prefix}.{k}" if prefix else str(k)
-            tokens = normalize_key_for_scanning(str(k))
-            collapsed = "".join(tokens)
-
-            is_sensitive = False
-            # Check individual tokens
-            for t in tokens:
-                if t in PROHIBITED_SENSITIVE_TOKENS or t == "ip":
-                    is_sensitive = True
-                    break
-
-            # Check collapsed form (e.g. apikey, accountid, authheader)
-            if not is_sensitive:
-                if collapsed in PROHIBITED_SENSITIVE_TOKENS:
-                    is_sensitive = True
-
-            # Check multi-token combinations (e.g. ['api', 'key'], ['ip', 'address'])
-            if not is_sensitive:
-                for combo in PROHIBITED_TOKEN_COMBINATIONS:
-                    if all(c in tokens for c in combo):
-                        is_sensitive = True
-                        break
-
-            if is_sensitive:
+            key_str = str(k)
+            current_path = f"{prefix}.{key_str}" if prefix else key_str
+            if _is_sensitive_key(key_str):
                 sensitive_paths.append(current_path)
-
-            sensitive_paths.extend(scan_for_sensitive_fields(v, current_path))
+            if isinstance(v, (dict, list)):
+                sensitive_paths.extend(scan_for_sensitive_fields(v, current_path))
     elif isinstance(obj, list):
         for idx, item in enumerate(obj):
-            current_path = f"{prefix}[{idx}]"
-            sensitive_paths.extend(scan_for_sensitive_fields(item, current_path))
+            if isinstance(item, (dict, list)):
+                current_path = f"{prefix}[{idx}]"
+                sensitive_paths.extend(scan_for_sensitive_fields(item, current_path))
 
     return sensitive_paths
 

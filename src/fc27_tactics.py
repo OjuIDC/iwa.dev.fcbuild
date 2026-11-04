@@ -44,6 +44,7 @@ from src.fc27_analyst import (
     FC27DataGap,
     FC27UnresolvedQuestion,
     SourceClassificationLiteral,
+    _copy_and_scan_input_mapping,
     _strip_safe_attestation_flags,
     validate_analyst_evidence_language,
 )
@@ -51,9 +52,13 @@ from src.fc27_analytics import FORMULA_VERSION, determine_sample_size_tier
 from src.fc27_coach import (
     FC27CoachHypothesis,
     FC27CoachReport,
+    _PREVERIFIED_REPORT_HASHES,
+    _VERIFIED_MODEL_HASHES,
+    _model_structural_sig,
     _recompute_analyst_hash,
     _recompute_scout_hash,
     _recompute_search_hash,
+    _remember_verified_model_hash,
     compute_coach_report_hash,
 )
 from src.fc27_search_scout import (
@@ -191,9 +196,7 @@ class FC27TacticalCandidate(BaseModel):
         if isinstance(data, Mapping):
             raw_type = data.get("candidate_type", "TACTICAL_CANDIDATE")
             validate_tactics_candidate_type(str(raw_type), "candidate.candidate_type")
-            _scan_reject_privacy_fields(
-                _strip_safe_attestation_flags(dict(data)), path="tactical_candidate"
-            )
+            _copy_and_scan_input_mapping(data, path="tactical_candidate")
         return data
 
     @model_validator(mode="after")
@@ -282,8 +285,7 @@ class FC27TacticsInput(BaseModel):
     def _validate_raw(cls, data: Any) -> Any:
         if not isinstance(data, Mapping):
             raise FC27TacticsValidationError("FC27TacticsInput must be initialized from a mapping")
-        copied = copy.deepcopy(dict(data))
-        _scan_reject_privacy_fields(_strip_safe_attestation_flags(copied), path="tactics_input")
+        copied = _copy_and_scan_input_mapping(data, path="tactics_input")
         if "tactics_generated_at" in copied:
             dt = _ensure_utc_datetime(copied["tactics_generated_at"], "tactics_generated_at")
             copied["tactics_generated_at"] = _format_utc_iso(dt)
@@ -380,26 +382,36 @@ class FC27TacticsReport(BaseModel):
                 raise FC27TacticsValidationError(
                     f"Candidate '{c.candidate_id}' confidence '{c.confidence_tier}' exceeds report overall_confidence '{self.overall_confidence}'"
                 )
+        if self.report_hash in _PREVERIFIED_REPORT_HASHES:
+            _remember_verified_model_hash(self, self.report_hash)
+            return self
         expected_hash = compute_tactics_report_hash(self)
         if self.report_hash != expected_hash:
             raise FC27TacticsValidationError(
                 f"Tactics report_hash mismatch: expected '{expected_hash}', got '{self.report_hash}'"
             )
+        _remember_verified_model_hash(self, expected_hash)
         return self
 
 
 def compute_tactics_report_hash(report: FC27TacticsReport | Mapping[str, Any]) -> str:
     """Compute canonical SHA-256 hash of a Tactics report excluding `report_hash`."""
-    payload = (
-        report.model_dump(mode="json") if isinstance(report, FC27TacticsReport) else dict(report)
-    )
-    payload = copy.deepcopy(payload)
+    if isinstance(report, FC27TacticsReport):
+        sig = _model_structural_sig(report, "report_hash")
+        cached = _VERIFIED_MODEL_HASHES.get(sig)
+        if cached is not None:
+            return cached
+        payload = report.model_dump(mode="json")
+        payload.pop("report_hash", None)
+        return _remember_verified_model_hash(report, _deterministic_sha256(payload))
+    payload = copy.deepcopy(dict(report))
     payload.pop("report_hash", None)
     return _deterministic_sha256(payload)
 
 
-def validate_tactics_input(tactics_input: FC27TacticsInput) -> None:
-    """Validate cross-layer hashes, scope, and blocking contradictions on Tactics input."""
+def _validate_tactics_input_and_hashes(
+    tactics_input: FC27TacticsInput,
+) -> tuple[str, str, str, str]:
     for name, ident in (
         ("search_context.identity", tactics_input.search_context.identity),
         ("scout_report.identity", tactics_input.scout_report.identity),
@@ -464,6 +476,17 @@ def validate_tactics_input(tactics_input: FC27TacticsInput) -> None:
             f"Cannot synthesize Tactics candidates: {len(blocking_unresolved)} unresolved BLOCKING contradiction(s) present",
             contradictions=blocking_unresolved,
         )
+    return (
+        computed_search_hash,
+        computed_scout_hash,
+        computed_analyst_hash,
+        computed_coach_hash,
+    )
+
+
+def validate_tactics_input(tactics_input: FC27TacticsInput) -> None:
+    """Validate cross-layer hashes, scope, and blocking contradictions on Tactics input."""
+    _validate_tactics_input_and_hashes(tactics_input)
 
 
 def _select_candidate_type_for_category(category: ClusterCategoryLiteral) -> TacticsCandidateTypeLiteral:
@@ -552,13 +575,11 @@ def build_fc27_tactics_report(
         if isinstance(tactics_input, FC27TacticsInput)
         else FC27TacticsInput.model_validate(tactics_input)
     )
-    validate_tactics_input(parsed_input)
+    search_hash, scout_hash, analyst_hash, coach_hash = _validate_tactics_input_and_hashes(
+        parsed_input
+    )
 
     coach_report = parsed_input.coach_report
-    search_hash = _recompute_search_hash(parsed_input.search_context)
-    scout_hash = _recompute_scout_hash(parsed_input.scout_report)
-    analyst_hash = _recompute_analyst_hash(parsed_input.analyst_report)
-    coach_hash = compute_coach_report_hash(coach_report)
 
     candidates: list[FC27TacticalCandidate] = []
     blocked_hypothesis_ids: list[str] = []
@@ -584,6 +605,7 @@ def build_fc27_tactics_report(
         "raw_response_retained": False,
     }
 
+    bounded_gaps = coach_report.data_gaps[:MAX_DATA_GAPS]
     draft_payload: dict[str, Any] = {
         "identity": coach_report.identity.model_dump(mode="json"),
         "formula_version": FORMULA_VERSION,
@@ -603,7 +625,7 @@ def build_fc27_tactics_report(
         "blocked_hypothesis_ids": blocked_hypothesis_ids,
         "contradictions": [c.model_dump(mode="json") for c in coach_report.contradictions],
         "confounders": [c.model_dump(mode="json") for c in coach_report.confounders],
-        "data_gaps": [g.model_dump(mode="json") for g in coach_report.data_gaps[:MAX_DATA_GAPS]],
+        "data_gaps": [g.model_dump(mode="json") for g in bounded_gaps],
         "unresolved_questions": [
             q.model_dump(mode="json") for q in coach_report.unresolved_questions
         ],
@@ -619,8 +641,43 @@ def build_fc27_tactics_report(
         "dispatchable": False,
         "causal_claim": False,
     }
-    draft_payload["report_hash"] = compute_tactics_report_hash(draft_payload)
-    return FC27TacticsReport.model_validate(draft_payload)
+    report_hash = _deterministic_sha256(draft_payload)
+    _PREVERIFIED_REPORT_HASHES.add(report_hash)
+    try:
+        return FC27TacticsReport(
+            identity=coach_report.identity,
+            formula_version=FORMULA_VERSION,
+            tactics_version=TACTICS_VERSION,
+            tactics_generated_at=parsed_input.tactics_generated_at,
+            analysis_window=coach_report.analysis_window,
+            search_context_hash=search_hash,
+            scout_report_hash=scout_hash,
+            analyst_report_hash=analyst_hash,
+            coach_report_hash=coach_hash,
+            report_hash=report_hash,
+            overall_confidence=coach_report.overall_confidence,
+            data_quality_status=coach_report.data_quality_status,
+            source_classifications=coach_report.source_classifications,
+            eligible_match_count=coach_report.eligible_match_count,
+            excluded_match_count=coach_report.excluded_match_count,
+            candidates=tuple(candidates),
+            blocked_hypothesis_ids=tuple(blocked_hypothesis_ids),
+            contradictions=coach_report.contradictions,
+            confounders=coach_report.confounders,
+            data_gaps=bounded_gaps,
+            unresolved_questions=coach_report.unresolved_questions,
+            evidence_references=coach_report.evidence_references,
+            limitations=coach_report.limitations,
+            provenance=provenance,
+            experimental_status=EXPERIMENTAL_ONLY_STATUS,
+            recommendation_status=NOT_A_RECOMMENDATION_STATUS,
+            recommendation=False,
+            approvable=False,
+            dispatchable=False,
+            causal_claim=False,
+        )
+    finally:
+        _PREVERIFIED_REPORT_HASHES.discard(report_hash)
 
 
 __all__ = [

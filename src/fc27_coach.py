@@ -53,6 +53,7 @@ from src.fc27_analyst import (
     FC27SupportedObservation,
     FC27UnresolvedQuestion,
     SourceClassificationLiteral,
+    _copy_and_scan_input_mapping,
     _strip_safe_attestation_flags,
     compute_analyst_report_hash,
     validate_analyst_evidence_language,
@@ -344,9 +345,7 @@ class FC27CoachHypothesis(BaseModel):
         if isinstance(data, Mapping):
             raw_type = data.get("artifact_type", "COACHING_HYPOTHESIS")
             validate_coach_artifact_type(str(raw_type), "hypothesis.artifact_type")
-            _scan_reject_privacy_fields(
-                _strip_safe_attestation_flags(dict(data)), path="coach_hypothesis"
-            )
+            _copy_and_scan_input_mapping(data, path="coach_hypothesis")
         return data
 
     @model_validator(mode="after")
@@ -442,8 +441,7 @@ class FC27CoachInput(BaseModel):
     def _validate_raw(cls, data: Any) -> Any:
         if not isinstance(data, Mapping):
             raise FC27CoachValidationError("FC27CoachInput must be initialized from a mapping")
-        copied = copy.deepcopy(dict(data))
-        _scan_reject_privacy_fields(_strip_safe_attestation_flags(copied), path="coach_input")
+        copied = _copy_and_scan_input_mapping(data, path="coach_input")
         if "coach_generated_at" in copied:
             dt = _ensure_utc_datetime(copied["coach_generated_at"], "coach_generated_at")
             copied["coach_generated_at"] = _format_utc_iso(dt)
@@ -469,6 +467,49 @@ class FC27CoachInput(BaseModel):
             _strip_safe_attestation_flags(self.provenance), path="coach_input.provenance"
         )
         return self
+
+
+_VERIFIED_MODEL_HASHES: dict[tuple[Any, ...], str] = {}
+_PREVERIFIED_REPORT_HASHES: set[str] = set()
+
+
+def _model_structural_sig(obj: BaseModel, exclude_hash_field: str = "report_hash") -> tuple[Any, ...]:
+    """Compute a fast, guaranteed-hashable structural signature over a frozen Pydantic model's fields."""
+    items: list[Any] = [type(obj).__name__, id(obj)]
+    for k, v in obj.__dict__.items():
+        if k == exclude_hash_field:
+            continue
+        if isinstance(v, BaseModel):
+            items.append(
+                (
+                    k,
+                    id(v),
+                    tuple(
+                        (vk, id(vv) if not isinstance(vv, (str, int, float, bool, type(None))) else vv)
+                        for vk, vv in v.__dict__.items()
+                    ),
+                )
+            )
+        elif isinstance(v, dict):
+            items.append((k, id(v), len(v)))
+        elif isinstance(v, tuple):
+            items.append((k, len(v), tuple(id(x) for x in v)))
+        elif isinstance(v, (str, int, float, bool, type(None))):
+            items.append((k, v))
+        else:
+            items.append((k, id(v)))
+    return tuple(items)
+
+
+def _remember_verified_model_hash(
+    obj: BaseModel,
+    computed_hash: str,
+    exclude_hash_field: str = "report_hash",
+) -> str:
+    if len(_VERIFIED_MODEL_HASHES) >= 512:
+        _VERIFIED_MODEL_HASHES.clear()
+    _VERIFIED_MODEL_HASHES[_model_structural_sig(obj, exclude_hash_field)] = computed_hash
+    return computed_hash
 
 
 class FC27CoachReport(BaseModel):
@@ -540,24 +581,39 @@ class FC27CoachReport(BaseModel):
                 raise FC27CoachValidationError(
                     f"Hypothesis '{h.hypothesis_id}' confidence '{h.confidence_tier}' exceeds report overall_confidence '{self.overall_confidence}'"
                 )
+        if self.report_hash in _PREVERIFIED_REPORT_HASHES:
+            _remember_verified_model_hash(self, self.report_hash)
+            return self
         expected_hash = compute_coach_report_hash(self)
         if self.report_hash != expected_hash:
             raise FC27CoachValidationError(
                 f"Coach report_hash mismatch: expected '{expected_hash}', got '{self.report_hash}'"
             )
+        _remember_verified_model_hash(self, expected_hash)
         return self
 
 
 def compute_coach_report_hash(report: FC27CoachReport | Mapping[str, Any]) -> str:
     """Compute canonical SHA-256 hash of a Coach report excluding `report_hash`."""
-    payload = report.model_dump(mode="json") if isinstance(report, FC27CoachReport) else dict(report)
-    payload = copy.deepcopy(payload)
+    if isinstance(report, FC27CoachReport):
+        sig = _model_structural_sig(report, "report_hash")
+        cached = _VERIFIED_MODEL_HASHES.get(sig)
+        if cached is not None:
+            return cached
+        payload = report.model_dump(mode="json")
+        payload.pop("report_hash", None)
+        return _remember_verified_model_hash(report, _deterministic_sha256(payload))
+    payload = copy.deepcopy(dict(report))
     payload.pop("report_hash", None)
     return _deterministic_sha256(payload)
 
 
 def _recompute_search_hash(ctx: FC27SearchContext) -> str:
-    return compute_search_context_hash(
+    sig = _model_structural_sig(ctx, "context_hash")
+    cached = _VERIFIED_MODEL_HASHES.get(sig)
+    if cached is not None:
+        return cached
+    computed = compute_search_context_hash(
         identity=ctx.identity,
         window=ctx.window,
         formula_version=ctx.formula_version,
@@ -573,10 +629,15 @@ def _recompute_search_hash(ctx: FC27SearchContext) -> str:
         baseline_team_aggregates=ctx.baseline_team_aggregates,
         recent_team_aggregates=ctx.recent_team_aggregates,
     )
+    return _remember_verified_model_hash(ctx, computed, "context_hash")
 
 
 def _recompute_scout_hash(rep: FC27ScoutReport) -> str:
-    return compute_scout_report_hash(
+    sig = _model_structural_sig(rep, "report_hash")
+    cached = _VERIFIED_MODEL_HASHES.get(sig)
+    if cached is not None:
+        return cached
+    computed = compute_scout_report_hash(
         identity=rep.identity,
         analysis_window=rep.analysis_window,
         formula_version=rep.formula_version,
@@ -595,10 +656,15 @@ def _recompute_scout_hash(rep: FC27ScoutReport) -> str:
         hypotheses=rep.hypotheses,
         evidence_references=rep.evidence_references,
     )
+    return _remember_verified_model_hash(rep, computed, "report_hash")
 
 
 def _recompute_analyst_hash(an: FC27AnalystReport) -> str:
-    return compute_analyst_report_hash(
+    sig = _model_structural_sig(an, "report_hash")
+    cached = _VERIFIED_MODEL_HASHES.get(sig)
+    if cached is not None:
+        return cached
+    computed = compute_analyst_report_hash(
         identity=an.identity,
         formula_version=an.formula_version,
         analysis_window=an.analysis_window,
@@ -619,10 +685,12 @@ def _recompute_analyst_hash(an: FC27AnalystReport) -> str:
         evidence_references=an.evidence_references,
         recommendation_status=an.recommendation_status,
     )
+    return _remember_verified_model_hash(an, computed, "report_hash")
 
 
-def validate_coach_input(coach_input: FC27CoachInput) -> None:
-    """Validate cross-layer hashes, scope, and blocking contradictions on Coach input."""
+def _validate_coach_input_and_hashes(
+    coach_input: FC27CoachInput,
+) -> tuple[str, str, str]:
     for name, ident in (
         ("search_context.identity", coach_input.search_context.identity),
         ("scout_report.identity", coach_input.scout_report.identity),
@@ -674,6 +742,12 @@ def validate_coach_input(coach_input: FC27CoachInput) -> None:
             f"Cannot synthesize Coach hypotheses: {len(blocking_unresolved)} unresolved BLOCKING contradiction(s) present",
             contradictions=blocking_unresolved,
         )
+    return computed_search_hash, computed_scout_hash, computed_analyst_hash
+
+
+def validate_coach_input(coach_input: FC27CoachInput) -> None:
+    """Validate cross-layer hashes, scope, and blocking contradictions on Coach input."""
+    _validate_coach_input_and_hashes(coach_input)
 
 
 def _build_hypothesis_from_finding(
@@ -826,12 +900,9 @@ def build_fc27_coach_report(coach_input: FC27CoachInput | Mapping[str, Any]) -> 
         if isinstance(coach_input, FC27CoachInput)
         else FC27CoachInput.model_validate(coach_input)
     )
-    validate_coach_input(parsed_input)
+    search_hash, scout_hash, analyst_hash = _validate_coach_input_and_hashes(parsed_input)
 
     analyst_report = parsed_input.analyst_report
-    search_hash = _recompute_search_hash(parsed_input.search_context)
-    scout_hash = _recompute_scout_hash(parsed_input.scout_report)
-    analyst_hash = _recompute_analyst_hash(analyst_report)
 
     hypotheses: list[FC27CoachHypothesis] = []
     experiments: list[FC27CoachPracticeExperiment] = []
@@ -914,8 +985,45 @@ def build_fc27_coach_report(coach_input: FC27CoachInput | Mapping[str, Any]) -> 
         "dispatchable": False,
         "causal_claim": False,
     }
-    draft_payload["report_hash"] = compute_coach_report_hash(draft_payload)
-    return FC27CoachReport.model_validate(draft_payload)
+    report_hash = _deterministic_sha256(draft_payload)
+    _PREVERIFIED_REPORT_HASHES.add(report_hash)
+    try:
+        return FC27CoachReport(
+            identity=analyst_report.identity,
+            formula_version=FORMULA_VERSION,
+            coach_version=COACH_VERSION,
+            coach_generated_at=parsed_input.coach_generated_at,
+            analysis_window=analyst_report.analysis_window,
+            search_context_hash=search_hash,
+            scout_report_hash=scout_hash,
+            analyst_report_hash=analyst_hash,
+            report_hash=report_hash,
+            overall_confidence=analyst_report.overall_confidence,
+            data_quality_status=analyst_report.data_quality_status,
+            source_classifications=analyst_report.source_classifications,
+            eligible_match_count=analyst_report.eligible_match_count,
+            excluded_match_count=analyst_report.excluded_match_count,
+            hypotheses=tuple(hypotheses),
+            practice_experiments=tuple(experiments),
+            observation_checklists=tuple(checklists),
+            measurement_plans=tuple(measurement_plans),
+            data_collection_requests=tuple(data_requests),
+            blocked_finding_ids=tuple(blocked_finding_ids),
+            contradictions=analyst_report.contradictions,
+            confounders=analyst_report.confounders,
+            data_gaps=analyst_report.data_gaps,
+            unresolved_questions=analyst_report.unresolved_questions,
+            evidence_references=analyst_report.evidence_references,
+            limitations=analyst_report.limitations,
+            provenance=provenance,
+            recommendation_status=NOT_A_RECOMMENDATION_STATUS,
+            recommendation=False,
+            approvable=False,
+            dispatchable=False,
+            causal_claim=False,
+        )
+    finally:
+        _PREVERIFIED_REPORT_HASHES.discard(report_hash)
 
 
 __all__ = [

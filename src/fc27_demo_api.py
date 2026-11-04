@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import html
 import sys
-from typing import Any, Dict, Final, Literal, Optional
+from typing import Any, Dict, Final, Literal, Mapping, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -47,6 +47,10 @@ from src.fc27_tactics import (
     TACTICS_POLICY_VERSION,
     TACTICS_VERSION,
 )
+from src.fc27_advisory_cache import (
+    FC27AdvisoryCacheKey,
+    build_advisory_cache_key_from_matches,
+)
 from src.fc27_analytics import FORMULA_VERSION
 from src.fc27_clubs_api_contracts import (
     TARGET_CLUB_ID,
@@ -67,6 +71,7 @@ from src.fc27_demo import (
 )
 from src.fc27_polling_worker import FC27PollingRuntime, get_default_polling_runtime
 from src.fc27_search_scout import RANKING_POLICY_VERSION
+from src.fc27_user_export import scan_for_sensitive_fields
 
 PROHIBITED_QUERY_PARAMS: Final[frozenset[str]] = frozenset(
     {
@@ -227,6 +232,7 @@ def _build_status_dict(
             "total_misses": cache_metrics.misses,
             "entries": cache_metrics.entry_count,
         },
+        "advisory_cache_status": store.advisory_cache.stats().model_dump(mode="json"),
         "rate_limit_status": res.rate_limit_status,
         "request_budget_status": res.request_budget_status,
         "circuit_state": res.circuit_state,
@@ -511,6 +517,80 @@ def _build_analysis_dict(artifacts: FC27DemoSessionArtifacts) -> Dict[str, Any]:
         "approval_enabled": False,
         "dispatch_enabled": False,
     }
+
+
+def _assert_outbound_response_sanitized(payload: Mapping[str, Any]) -> None:
+    """Scan outbound dashboard JSON projection for sensitive fields at serialization boundary."""
+    filtered = {
+        k: v
+        for k, v in payload.items()
+        if k
+        not in {
+            "raw_response_retained",
+            "raw_provider_ids_exposed",
+            "player_aliases_exposed",
+        }
+    }
+    violations = scan_for_sensitive_fields(filtered, prefix="dashboard_response")
+    if violations:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "OUTBOUND_PRIVACY_VIOLATION",
+                "message": "Sensitive field detected in outbound dashboard payload.",
+            },
+        )
+
+
+def _resolve_advisory_cache_key(
+    artifacts: FC27DemoSessionArtifacts,
+    store: FC27DemoStateStore,
+) -> FC27AdvisoryCacheKey:
+    """Resolve or register the immutable `FC27AdvisoryCacheKey` for `artifacts`."""
+    key = artifacts.advisory_cache_key
+    if key is None:
+        key = build_advisory_cache_key_from_matches(
+            artifacts.matches,
+            latest_export_batch_id=f"demo:{artifacts.scenario}:{artifacts.last_operation}",
+            club_id=TARGET_CLUB_ID,
+            platform=TARGET_PLATFORM,
+            game_version=TARGET_GAME_VERSION,
+            normalized_data_hash_override=artifacts.result.execution_hash,
+        )
+    if (
+        not store.advisory_cache.has_valid_entry(key)
+        and artifacts.coach_report is not None
+        and artifacts.tactics_report is not None
+        and artifacts.director_report is not None
+    ):
+        store.advisory_cache.put(
+            key,
+            search_context=artifacts.search_context,
+            scout_report=artifacts.scout_report,
+            analyst_report=artifacts.analyst_report,
+            coach_report=artifacts.coach_report,
+            tactics_report=artifacts.tactics_report,
+            director_report=artifacts.director_report,
+        )
+    return key
+
+
+def _get_or_build_analysis_dict(
+    artifacts: FC27DemoSessionArtifacts,
+    store: FC27DemoStateStore,
+) -> Dict[str, Any]:
+    key = _resolve_advisory_cache_key(artifacts, store)
+
+    def _build_and_scan_analysis() -> Dict[str, Any]:
+        built = _build_analysis_dict(artifacts)
+        _assert_outbound_response_sanitized(built)
+        return built
+
+    return store.advisory_cache.get_or_build_serialized_projection(
+        key,
+        "analysis_dict",
+        _build_and_scan_analysis,
+    )
 
 
 def _render_demo_html(
@@ -889,7 +969,7 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        return JSONResponse(content=_build_analysis_dict(artifacts))
+        return JSONResponse(content=_get_or_build_analysis_dict(artifacts, store))
 
     @router.get("/api/fc27/demo/coach")
     def get_demo_coach(request: Request) -> JSONResponse:
@@ -900,9 +980,11 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        analysis = _build_analysis_dict(artifacts)
-        return JSONResponse(
-            content={
+        key = _resolve_advisory_cache_key(artifacts, store)
+
+        def _build_coach_resp() -> Dict[str, Any]:
+            analysis = _get_or_build_analysis_dict(artifacts, store)
+            built = {
                 "club_id": TARGET_CLUB_ID,
                 "club_name": TARGET_CLUB_NAME,
                 "platform": TARGET_PLATFORM,
@@ -916,7 +998,13 @@ def build_demo_router(
                 "approval_enabled": False,
                 "dispatch_enabled": False,
             }
+            _assert_outbound_response_sanitized(built)
+            return built
+
+        payload = store.advisory_cache.get_or_build_serialized_projection(
+            key, "coach_response", _build_coach_resp
         )
+        return JSONResponse(content=payload)
 
     @router.get("/api/fc27/demo/tactics")
     def get_demo_tactics(request: Request) -> JSONResponse:
@@ -927,9 +1015,11 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        analysis = _build_analysis_dict(artifacts)
-        return JSONResponse(
-            content={
+        key = _resolve_advisory_cache_key(artifacts, store)
+
+        def _build_tactics_resp() -> Dict[str, Any]:
+            analysis = _get_or_build_analysis_dict(artifacts, store)
+            built = {
                 "club_id": TARGET_CLUB_ID,
                 "club_name": TARGET_CLUB_NAME,
                 "platform": TARGET_PLATFORM,
@@ -943,7 +1033,13 @@ def build_demo_router(
                 "approval_enabled": False,
                 "dispatch_enabled": False,
             }
+            _assert_outbound_response_sanitized(built)
+            return built
+
+        payload = store.advisory_cache.get_or_build_serialized_projection(
+            key, "tactics_response", _build_tactics_resp
         )
+        return JSONResponse(content=payload)
 
     @router.get("/api/fc27/demo/director")
     def get_demo_director(request: Request) -> JSONResponse:
@@ -954,9 +1050,11 @@ def build_demo_router(
             demo_mode_override=demo_mode_override,
             fixture_port=fixture_port,
         )
-        analysis = _build_analysis_dict(artifacts)
-        return JSONResponse(
-            content={
+        key = _resolve_advisory_cache_key(artifacts, store)
+
+        def _build_director_resp() -> Dict[str, Any]:
+            analysis = _get_or_build_analysis_dict(artifacts, store)
+            built = {
                 "club_id": TARGET_CLUB_ID,
                 "club_name": TARGET_CLUB_NAME,
                 "platform": TARGET_PLATFORM,
@@ -970,7 +1068,13 @@ def build_demo_router(
                 "approval_enabled": False,
                 "dispatch_enabled": False,
             }
+            _assert_outbound_response_sanitized(built)
+            return built
+
+        payload = store.advisory_cache.get_or_build_serialized_projection(
+            key, "director_response", _build_director_resp
         )
+        return JSONResponse(content=payload)
 
     @router.post("/demo/ingest-fixture")
     def post_demo_ingest_fixture(

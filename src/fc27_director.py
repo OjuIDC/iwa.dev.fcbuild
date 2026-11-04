@@ -44,15 +44,20 @@ from src.fc27_analyst import (
     FC27DataGap,
     FC27UnresolvedQuestion,
     SourceClassificationLiteral,
+    _copy_and_scan_input_mapping,
     _strip_safe_attestation_flags,
     validate_analyst_evidence_language,
 )
 from src.fc27_analytics import FORMULA_VERSION, determine_sample_size_tier
 from src.fc27_coach import (
     FC27CoachReport,
+    _PREVERIFIED_REPORT_HASHES,
+    _VERIFIED_MODEL_HASHES,
+    _model_structural_sig,
     _recompute_analyst_hash,
     _recompute_scout_hash,
     _recompute_search_hash,
+    _remember_verified_model_hash,
     compute_coach_report_hash,
 )
 from src.fc27_search_scout import (
@@ -368,8 +373,7 @@ class FC27DirectorInput(BaseModel):
     def _validate_raw(cls, data: Any) -> Any:
         if not isinstance(data, Mapping):
             raise FC27DirectorValidationError("FC27DirectorInput must be initialized from a mapping")
-        copied = copy.deepcopy(dict(data))
-        _scan_reject_privacy_fields(_strip_safe_attestation_flags(copied), path="director_input")
+        copied = _copy_and_scan_input_mapping(data, path="director_input")
         if "director_generated_at" in copied:
             dt = _ensure_utc_datetime(copied["director_generated_at"], "director_generated_at")
             copied["director_generated_at"] = _format_utc_iso(dt)
@@ -450,9 +454,7 @@ class FC27DirectorReport(BaseModel):
         if isinstance(data, Mapping):
             raw_type = data.get("output_type", "DIRECTOR_REVIEW")
             validate_director_output_type(str(raw_type), "director_report.output_type")
-            _scan_reject_privacy_fields(
-                _strip_safe_attestation_flags(dict(data)), path="director_report"
-            )
+            _copy_and_scan_input_mapping(data, path="director_report")
         return data
 
     @model_validator(mode="after")
@@ -504,20 +506,29 @@ class FC27DirectorReport(BaseModel):
                     f"Sequence item '{item.sequence_id}' confidence '{item.confidence_tier}' exceeds Director confidence_tier '{self.confidence_tier}'"
                 )
 
+        if self.report_hash in _PREVERIFIED_REPORT_HASHES:
+            _remember_verified_model_hash(self, self.report_hash)
+            return self
         expected_hash = compute_director_report_hash(self)
         if self.report_hash != expected_hash:
             raise FC27DirectorValidationError(
                 f"Director report_hash mismatch: expected '{expected_hash}', got '{self.report_hash}'"
             )
+        _remember_verified_model_hash(self, expected_hash)
         return self
 
 
 def compute_director_report_hash(report: FC27DirectorReport | Mapping[str, Any]) -> str:
     """Compute canonical SHA-256 hash of a Director report excluding `report_hash`."""
-    payload = (
-        report.model_dump(mode="json") if isinstance(report, FC27DirectorReport) else dict(report)
-    )
-    payload = copy.deepcopy(payload)
+    if isinstance(report, FC27DirectorReport):
+        sig = _model_structural_sig(report, "report_hash")
+        cached = _VERIFIED_MODEL_HASHES.get(sig)
+        if cached is not None:
+            return cached
+        payload = report.model_dump(mode="json")
+        payload.pop("report_hash", None)
+        return _remember_verified_model_hash(report, _deterministic_sha256(payload))
+    payload = copy.deepcopy(dict(report))
     payload.pop("report_hash", None)
     return _deterministic_sha256(payload)
 
@@ -770,6 +781,7 @@ def build_fc27_director_report(
         "raw_response_retained": False,
     }
 
+    bounded_gaps = analyst_report.data_gaps[:MAX_DATA_GAPS]
     draft_payload: dict[str, Any] = {
         "identity": analyst_report.identity.model_dump(mode="json"),
         "output_type": "DIRECTOR_REVIEW",
@@ -791,7 +803,7 @@ def build_fc27_director_report(
         "counter_evidence": [ce.model_dump(mode="json") for ce in all_counter_evidence],
         "contradictions": [c.model_dump(mode="json") for c in analyst_report.contradictions],
         "confounders": [c.model_dump(mode="json") for c in analyst_report.confounders],
-        "data_gaps": [g.model_dump(mode="json") for g in analyst_report.data_gaps[:MAX_DATA_GAPS]],
+        "data_gaps": [g.model_dump(mode="json") for g in bounded_gaps],
         "unresolved_questions": [
             q.model_dump(mode="json") for q in analyst_report.unresolved_questions
         ],
@@ -807,8 +819,45 @@ def build_fc27_director_report(
         "dispatchable": False,
         "causal_claim": False,
     }
-    draft_payload["report_hash"] = compute_director_report_hash(draft_payload)
-    return FC27DirectorReport.model_validate(draft_payload)
+    report_hash = _deterministic_sha256(draft_payload)
+    _PREVERIFIED_REPORT_HASHES.add(report_hash)
+    try:
+        return FC27DirectorReport(
+            identity=analyst_report.identity,
+            output_type="DIRECTOR_REVIEW",
+            formula_version=FORMULA_VERSION,
+            director_version=DIRECTOR_VERSION,
+            director_generated_at=parsed_input.director_generated_at,
+            analysis_window=analyst_report.analysis_window,
+            evidence_lineage=lineage,
+            report_hash=report_hash,
+            confidence_tier=overall_conf,
+            data_quality_status=analyst_report.data_quality_status,
+            source_classifications=analyst_report.source_classifications,
+            eligible_match_count=analyst_report.eligible_match_count,
+            excluded_match_count=analyst_report.excluded_match_count,
+            reconciliation_summary=reconciliation_summary,
+            experiment_sequence=tuple(experiment_sequence),
+            deferred_candidates=tuple(deferred_candidates),
+            rejected_candidates=tuple(rejected_candidates),
+            measurement_priorities=tuple(measurement_priorities),
+            counter_evidence=tuple(all_counter_evidence),
+            contradictions=analyst_report.contradictions,
+            confounders=analyst_report.confounders,
+            data_gaps=bounded_gaps,
+            unresolved_questions=analyst_report.unresolved_questions,
+            evidence_references=analyst_report.evidence_references,
+            limitations=analyst_report.limitations,
+            provenance=provenance,
+            review_status=DIRECTOR_REVIEW_STATUS,
+            recommendation_status=NOT_A_RECOMMENDATION_STATUS,
+            recommendation=False,
+            approvable=False,
+            dispatchable=False,
+            causal_claim=False,
+        )
+    finally:
+        _PREVERIFIED_REPORT_HASHES.discard(report_hash)
 
 
 __all__ = [

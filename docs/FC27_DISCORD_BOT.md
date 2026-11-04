@@ -13,6 +13,7 @@ The East Coasters FC27 Discord bot (`src/fc27_discord_bot.py`, `scripts/fc27_dis
 - **Least-privilege permissions**: Never requests `Administrator` or `message_content` intent; uses only `View Channels`, `Send Messages`, `Embed Links`, `Attach Files`, and `Use Application Commands`.
 - **Secret-file token loading**: Reads `DISCORD_BOT_TOKEN_FILE` (`/run/secrets/discord_bot_token`) or `DISCORD_BOT_TOKEN` via `read_secret(...)` and scrubs tokens from `repr()` and CLI logs.
 - **Pseudonymous identity only**: Emits only `plr_ecf_<12-lowercase-hex>` references; gamer tags, raw player names, and raw event strings (`1:2871893|2:0|3:8650754`) are blocked by `assert_discord_output_sanitized(...)`.
+- **Immutable advisory-report caching (`src/fc27_advisory_cache.py`)**: Read-only advisory commands (`/fc27 analysis`, `/fc27 data-gaps`, `/fc27 coach`, `/fc27 tactics`, `/fc27 director`) resolve their six-stage `Search -> Scout -> Analyst -> Coach -> Tactics -> Director` bundle through `FC27AdvisoryCache` keyed by the persisted PostgreSQL batch digest (`fetch_persisted_advisory_cache_key`), serving warm responses in `< 100 ms` p95 while preserving outbound `assert_discord_output_sanitized(...)` verification on every response. See [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md).
 
 ## Supported `/fc27` Slash Commands (13 Commands)
 
