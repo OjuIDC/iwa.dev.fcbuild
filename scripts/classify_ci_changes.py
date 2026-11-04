@@ -67,6 +67,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
         or norm in {
             "scripts/classify_ci_changes.py",
             "scripts/build_test_report.py",
+            "scripts/build_container_report.py",
             "scripts/sanitize_test_report.py",
             "scripts/aggregate_test_reports.py",
             "tests/test_github_workflows.py",
@@ -91,7 +92,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
     if (
         norm.startswith("Dockerfile")
         or norm.startswith("docker-compose")
-        or norm in {"tests/test_compose_isolation.py", "scripts/ollama-init.sh"}
+        or norm in {".dockerignore", "tests/test_compose_isolation.py", "scripts/ollama-init.sh"}
     ):
         cats.add("compose")
 

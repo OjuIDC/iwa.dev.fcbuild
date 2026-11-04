@@ -2,8 +2,18 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 381,
+  "total_files": 384,
   "files": [
+    {
+      "path": ".dockerignore",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT",
+      "authoritative_role": "Build-context secret and artifact exclusion policy (.dockerignore)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Excludes .env, secrets, local state, recovery archives, and test artifacts from Docker builds",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
     {
       "path": ".gitattributes",
       "category": "configuration_and_packaging",
@@ -33,6 +43,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "fa0d2663c8b684ffdb62ef34559bca573b6f1d46"
+    },
+    {
+      "path": ".github/workflows/container-images.yml",
+      "category": "workflow",
+      "status": "CURRENT",
+      "authoritative_role": "Trusted container build, scan, SBOM, provenance, and GHCR publication workflow",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Builds and scans FC27 images on PRs without publishing and publishes immutable GHCR images on trusted main/release pushes",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": ".github/workflows/security-scan.yml",
@@ -1253,6 +1273,16 @@
       "archive_decision": "ARCHIVE_TO_SCRIPTS_ARCHIVE",
       "reason": "Superseded placeholder MatchPulse conformance script; active repository isolation is enforced by scripts/check_matchpulse_boundary.py.",
       "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "scripts/build_container_report.py",
+      "category": "script",
+      "status": "CURRENT",
+      "authoritative_role": "Container image validator, Trivy/SBOM gate, and sanitized browser report builder",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Validates built images against R8/R9/R10 contracts and generates sanitized container reports",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "scripts/build_test_report.py",

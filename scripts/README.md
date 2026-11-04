@@ -32,6 +32,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`fc27_discord_bot.py`](fc27_discord_bot.py) | `CURRENT_OPERATOR_COMMAND` | Active (Disabled-by-Default Read-Only Discord Bot CLI) | `NONE` |
 | [`classify_ci_changes.py`](classify_ci_changes.py) | `CURRENT_CI_COMMAND` | Active (CI Changed-File & Trusted-Context Classifier) | `NONE` |
 | [`build_test_report.py`](build_test_report.py) | `CURRENT_CI_COMMAND` | Active (Sanitized Browser Test Report Builder) | `NONE` |
+| [`build_container_report.py`](build_container_report.py) | `CURRENT_CI_COMMAND` | Active (Container Image Validator, Trivy/SBOM Gate & Report Builder) | `NONE` |
 | [`aggregate_test_reports.py`](aggregate_test_reports.py) | `CURRENT_CI_COMMAND` | Active (Shard Report Aggregator & Pages Tree Builder) | `NONE` |
 | [`sanitize_test_report.py`](sanitize_test_report.py) | `CURRENT_SECURITY_COMMAND` | Active (Fail-Closed Report Privacy & HTML Scanner) | `NONE` |
 | [`fc27_demo_ingest.py`](fc27_demo_ingest.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Demo) | `NONE` |
@@ -299,6 +300,15 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
   .\.venv\Scripts\python.exe scripts/sanitize_test_report.py .local-artifacts/ci/report-preview
   ```
 - **Replacement Status**: Current authoritative CI report privacy and security scanner (`NONE`).
+
+### 21. `scripts/build_container_report.py`
+- **Classification**: `CURRENT_CI_COMMAND`
+- **Purpose**: Validates `.dockerignore` build-context exclusions, inspects built container image history and filesystem for secret leaks (`IMAGE_SECRET_SCAN=PASS`), verifies non-root `10001:65534` and `--read-only` rootfs compatibility, parses Trivy JSON vulnerability reports (`TRIVY_HIGH_CRITICAL_GATE=PASS`) and SPDX JSON SBOMs, and generates sanitized GitHub Actions Job Summaries and self-contained HTML reports (`container-browser-report`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/build_container_report.py --help
+  ```
+- **Replacement Status**: Current authoritative container validation and report builder (`NONE`).
 
 ---
 

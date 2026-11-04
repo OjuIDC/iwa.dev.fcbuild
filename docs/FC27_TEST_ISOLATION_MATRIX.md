@@ -2,7 +2,7 @@
 
 ## 1. Overview and Authority
 
-This document is the authoritative test-isolation classification matrix for all `128` test modules (`3,901` collected tests) in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
+This document is the authoritative test-isolation classification matrix for all `128` test modules (`3,906` collected tests) in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
 
 - **Fail-Safe Default**: Any newly added test module not explicitly registered in `TEST_MODULE_MATRIX` defaults automatically to `UNKNOWN_SERIAL` (`serial`, `offline`), ensuring unknown tests are never silently dropped or parallelized unsafely.
 - **Collection Completeness Invariant**:
@@ -58,10 +58,10 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `quality` | `full-quality` | `8` | Static gates + `pytest` quality/manifest/workflow/report-sanitization policy modules |
 | `unit_domain_parallel` | `full-unit-domain` | `48` | `pytest -n auto --dist loadfile` (`PARALLEL_RESULT_EQUIVALENCE=PASS`, `0` flakes across 5 runs) |
 | `unit_domain_serial` | `full-unit-domain` | `6` | Serial `pytest` execution after `unit_domain_parallel` |
-| `postgres_parallel_safe` | `full-postgres` | `54` | `pytest -n 4 --dist loadfile` using worker-isolated `fc27_tmpl_<worker>_<uuid>` template DB cloning |
-| `postgres_serial` | `full-postgres` | `11` | Serial `pytest` execution after `postgres_parallel_safe` (cluster role tests, multi-thread race harnesses, backup/restore, performance) |
+| `postgres_parallel_safe` | `full-postgres` | `50` | `pytest -n 4 --dist loadfile` using worker-isolated `fc27_tmpl_<worker>_<uuid>` template DB cloning |
+| `postgres_serial` | `full-postgres` | `15` | Serial `pytest` execution after `postgres_parallel_safe` (cluster role tests, multi-thread race harnesses, backup/restore, performance) |
 | `compose_serial` | `full-compose` | `1` | Isolated `COMPOSE_PROJECT_NAME` profile validation + `tests/test_compose_isolation.py` |
-| **Total** | **All 4 Shards** | **128** | **100% of repository test collection (`3,901` tests)** |
+| **Total** | **All 4 Shards** | **128** | **100% of repository test collection (`3,906` tests)** |
 
 ---
 
@@ -138,8 +138,8 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/test_swarms_backend.py` | `FILESYSTEM_SERIAL` | `unit, domain, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/adversarial/test_r3_r4_empirical_challenger.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/adversarial/test_r6_empirical_security_boundary_challenges.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
-| `tests/dispatch/test_outbox_relay.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
-| `tests/dispatch/test_worker.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
+| `tests/dispatch/test_outbox_relay.py` | `POSTGRES_SERIAL` | `postgres, domain, serial, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
+| `tests/dispatch/test_worker.py` | `POSTGRES_SERIAL` | `postgres, domain, serial, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
 | `tests/e2e/test_phase2_tier1_features.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, security, slow, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/e2e/test_phase2_tier2_boundaries.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, slow, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/e2e/test_phase2_tier3_combinations.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |

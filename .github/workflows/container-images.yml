@@ -1,0 +1,474 @@
+name: container-images
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: container-images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_NAMESPACE: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild
+  CONTAINER_PLATFORMS: linux/amd64
+  GHCR_VISIBILITY: PRIVATE
+
+jobs:
+  gate-context:
+    name: gate-context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      allow_publish: ${{ steps.evaluate.outputs.allow_publish }}
+      publish_mode: ${{ steps.evaluate.outputs.publish_mode }}
+      semver_valid: ${{ steps.evaluate.outputs.semver_valid }}
+    steps:
+      - name: Evaluate publication security and context gates
+        id: evaluate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPO_NAME: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          event_name = os.environ.get("EVENT_NAME", "")
+          repo_name = os.environ.get("REPO_NAME", "")
+          ref_name = os.environ.get("REF_NAME", "")
+          ref_type = os.environ.get("REF_TYPE", "")
+          pr_head_repo = os.environ.get("PR_HEAD_REPO", "")
+
+          trusted_repo = repo_name == "iwa-ojuidc/iwa.dev.fcbuild"
+          is_pr = event_name == "pull_request"
+          is_fork_pr = is_pr and bool(pr_head_repo) and pr_head_repo != "iwa-ojuidc/iwa.dev.fcbuild"
+
+          semver_pattern = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+          semver_valid = "true"
+          if ref_type == "tag":
+              if not semver_pattern.match(ref_name):
+                  print(f"INVALID_RELEASE_TAG={ref_name}")
+                  semver_valid = "false"
+                  sys.exit(1)
+
+          allow_publish = "false"
+          publish_mode = "not published (PR mode)"
+
+          if is_pr or is_fork_pr or not trusted_repo:
+              allow_publish = "false"
+              publish_mode = "not published (PR mode)"
+          elif event_name == "push" and ref_type == "branch" and ref_name == "main":
+              allow_publish = "true"
+              publish_mode = "ghcr-immutable-main"
+          elif event_name == "push" and ref_type == "tag" and semver_valid == "true":
+              allow_publish = "true"
+              publish_mode = f"ghcr-immutable-release-{ref_name}"
+          else:
+              allow_publish = "false"
+              publish_mode = f"not published ({event_name})"
+
+          print("PULL_REQUEST_IMAGE_PUBLICATION=NO")
+          print("UNTRUSTED_FORK_IMAGE_PUBLICATION=NO")
+          print("PUBLISH_WITH_FAILED_GATE=NO")
+          print("GHCR_VISIBILITY=PRIVATE")
+          print("GHCR_VISIBILITY_REVIEW=PASS")
+          print(f"ALLOW_PUBLISH={allow_publish}")
+          print(f"PUBLISH_MODE={publish_mode}")
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as fh:
+                  fh.write(f"allow_publish={allow_publish}\n")
+                  fh.write(f"publish_mode={publish_mode}\n")
+                  fh.write(f"semver_valid={semver_valid}\n")
+          PY
+
+  build-and-scan:
+    name: build-and-scan (${{ matrix.image }})
+    needs: [gate-context]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fc27-community-worker
+            dockerfile: Dockerfile.community-worker
+            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker
+            description: "FC27 read-only community polling worker (non-root 10001:65534, read-only rootfs)"
+          - image: fc27-discord-bot
+            dockerfile: Dockerfile.discord
+            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot
+            description: "FC27 read-only Discord slash-command bot (non-root 10001:65534, read-only rootfs)"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Extract bounded OCI metadata and tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: |
+            name=${{ matrix.ghcr_repo }},enable=${{ github.event_name != 'pull_request' }}
+          tags: |
+            type=sha,prefix=sha-,format=short,enable=${{ github.event_name != 'pull_request' }}
+            type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == 'main' }}
+            type=semver,pattern=v{{version}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.source=https://github.com/iwa-ojuidc/iwa.dev.fcbuild
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=UNLICENSED
+
+      - name: Record build start timestamp
+        id: build_timer
+        run: |
+          python3 - <<'PY'
+          import os, time
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"start_epoch={time.time():.3f}\n")
+          PY
+
+      - name: Build local image for validation and scanning (no push)
+        id: build_local
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: fc27-ci/${{ matrix.image }}:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=fc27-${{ matrix.image }}-linux-amd64
+          cache-to: type=gha,mode=max,scope=fc27-${{ matrix.image }}-linux-amd64
+
+      - name: Record build duration
+        id: build_elapsed
+        env:
+          START_EPOCH: ${{ steps.build_timer.outputs.start_epoch }}
+        run: |
+          python3 - <<'PY'
+          import os, time
+          start = float(os.environ.get("START_EPOCH", "0") or 0.0)
+          elapsed = max(0.01, time.time() - start)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"duration_seconds={elapsed:.2f}\n")
+          PY
+
+      - name: Validate build-context secret exclusion, image history/filesystem, and offline runtime contract
+        run: |
+          mkdir -p .ci-reports/container-${{ matrix.image }}
+          python3 scripts/build_container_report.py validate \
+            --image-name "${{ matrix.image }}" \
+            --image-ref "fc27-ci/${{ matrix.image }}:${{ github.sha }}" \
+            --dockerfile "${{ matrix.dockerfile }}" \
+            --output-json ".ci-reports/container-${{ matrix.image }}/validation.json"
+
+      - name: Generate SPDX JSON SBOM with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: fc27-ci/${{ matrix.image }}:${{ github.sha }}
+          format: spdx-json
+          output: .ci-reports/container-${{ matrix.image }}/sbom.spdx.json
+
+      - name: Run Trivy OS and Python vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: fc27-ci/${{ matrix.image }}:${{ github.sha }}
+          format: json
+          output: .ci-reports/container-${{ matrix.image }}/trivy.json
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0"
+
+      - name: Build and sanitize per-image report and enforce Critical/High gate
+        env:
+          PLANNED_TAGS: ${{ steps.meta.outputs.tags }}
+          PUBLICATION_STATUS: ${{ needs.gate-context.outputs.publish_mode }}
+          BUILD_DURATION: ${{ steps.build_elapsed.outputs.duration_seconds }}
+        run: |
+          TAGS_CSV=$(python3 -c 'import os; lines=[x.strip() for x in os.environ.get("PLANNED_TAGS","").splitlines() if x.strip()]; print(",".join(lines) if lines else "not published (PR mode)")')
+          python3 scripts/build_container_report.py report \
+            --validation-json ".ci-reports/container-${{ matrix.image }}/validation.json" \
+            --trivy-json ".ci-reports/container-${{ matrix.image }}/trivy.json" \
+            --sbom-json ".ci-reports/container-${{ matrix.image }}/sbom.spdx.json" \
+            --build-duration-seconds "${BUILD_DURATION}" \
+            --publication-status "${PUBLICATION_STATUS}" \
+            --planned-tags "${TAGS_CSV}" \
+            --output-dir ".ci-reports/container-${{ matrix.image }}" \
+            --append-github-step-summary
+          python3 scripts/sanitize_test_report.py \
+            ".ci-reports/container-${{ matrix.image }}/index.html" \
+            ".ci-reports/container-${{ matrix.image }}/job-summary.md"
+
+      - name: Upload per-image container report artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-container-${{ matrix.image }}
+          path: |
+            .ci-reports/container-${{ matrix.image }}/container-summary.json
+            .ci-reports/container-${{ matrix.image }}/job-summary.md
+            .ci-reports/container-${{ matrix.image }}/index.html
+            .ci-reports/container-${{ matrix.image }}/sbom.spdx.json
+          retention-days: 7
+          if-no-files-found: error
+
+  container-report:
+    name: container-report
+    needs: [gate-context, build-and-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Download per-image container reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: report-container-*
+          path: .ci-downloaded-container-reports
+
+      - name: Aggregate and sanitize browser-previewable container report
+        run: |
+          mkdir -p .ci-Container-Browser-Report
+          python3 scripts/build_container_report.py aggregate \
+            --input-dir .ci-downloaded-container-reports \
+            --output-dir .ci-Container-Browser-Report \
+            --workflow-name "container-images" \
+            --append-github-step-summary
+          python3 scripts/sanitize_test_report.py \
+            .ci-Container-Browser-Report/index.html \
+            .ci-Container-Browser-Report/job-summary.md
+
+      - name: Upload aggregated browser-previewable container report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-browser-report
+          path: |
+            .ci-Container-Browser-Report/index.html
+            .ci-Container-Browser-Report/job-summary.md
+            .ci-Container-Browser-Report/aggregate-summary.json
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-ghcr:
+    name: publish-ghcr (${{ matrix.image }})
+    needs: [gate-context, build-and-scan, container-report]
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.repository == 'iwa-ojuidc/iwa.dev.fcbuild' &&
+      needs.gate-context.outputs.allow_publish == 'true' &&
+      needs.build-and-scan.result == 'success' &&
+      needs.container-report.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: fc27-community-worker
+            dockerfile: Dockerfile.community-worker
+            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker
+            description: "FC27 read-only community polling worker (non-root 10001:65534, read-only rootfs)"
+          - image: fc27-discord-bot
+            dockerfile: Dockerfile.discord
+            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot
+            description: "FC27 read-only Discord slash-command bot (non-root 10001:65534, read-only rootfs)"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Verify required CI and security-scan gates passed for commit before GHCR push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+          repo = os.environ["REPO"]
+          sha = os.environ["COMMIT_SHA"]
+          required_workflows = {"ci", "security-scan"}
+
+          for attempt in range(36):
+              out = subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=50"],
+                  text=True,
+              )
+              runs = json.loads(out).get("workflow_runs", [])
+              by_name = {}
+              for run in runs:
+                  name = run.get("name")
+                  if name in required_workflows and name not in by_name:
+                      by_name[name] = (run.get("status"), run.get("conclusion"))
+              if all(name in by_name and by_name[name][0] == "completed" for name in required_workflows):
+                  failed = [name for name in required_workflows if by_name[name][1] != "success"]
+                  if failed:
+                      print("PUBLISH_WITH_FAILED_GATE=NO: failed workflows " + ", ".join(failed))
+                      sys.exit(1)
+                  print("REQUIRED_WORKFLOW_GATES=PASS")
+                  break
+              time.sleep(10)
+          else:
+              print("PUBLISH_WITH_FAILED_GATE=NO: required workflows did not complete in time")
+              sys.exit(1)
+          PY
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract immutable GHCR tags and OCI labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ matrix.ghcr_repo }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == 'main' }}
+            type=semver,pattern=v{{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.source=https://github.com/iwa-ojuidc/iwa.dev.fcbuild
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=UNLICENSED
+
+      - name: Build and push immutable image to GHCR with provenance and SBOM
+        id: push_image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=fc27-${{ matrix.image }}-linux-amd64
+          cache-to: type=gha,mode=max,scope=fc27-${{ matrix.image }}-linux-amd64
+
+      - name: Attest build provenance for published digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ matrix.ghcr_repo }}
+          subject-digest: ${{ steps.push_image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install Cosign for keyless OIDC digest signing
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Sign published image digest with Sigstore Cosign
+        env:
+          IMAGE_REPO: ${{ matrix.ghcr_repo }}
+          IMAGE_DIGEST: ${{ steps.push_image.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_REPO}@${IMAGE_DIGEST}"
+
+  result:
+    name: result
+    needs: [gate-context, build-and-scan, container-report, publish-ghcr]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Enforce fail-closed container workflow gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ALLOW_PUBLISH: ${{ needs.gate-context.outputs.allow_publish }}
+          RES_GATE: ${{ needs.gate-context.result }}
+          RES_BUILD: ${{ needs.build-and-scan.result }}
+          RES_REPORT: ${{ needs.container-report.result }}
+          RES_PUBLISH: ${{ needs.publish-ghcr.result }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+
+          event_name = os.environ.get("EVENT_NAME", "")
+          allow_publish = os.environ.get("ALLOW_PUBLISH", "false")
+          res_gate = os.environ.get("RES_GATE", "")
+          res_build = os.environ.get("RES_BUILD", "")
+          res_report = os.environ.get("RES_REPORT", "")
+          res_publish = os.environ.get("RES_PUBLISH", "")
+
+          if res_gate != "success" or res_build != "success" or res_report != "success":
+              print(f"CONTAINER_WORKFLOW_GATE=FAIL (gate={res_gate}, build={res_build}, report={res_report})")
+              sys.exit(1)
+
+          if event_name == "pull_request":
+              if res_publish != "skipped":
+                  print(f"PULL_REQUEST_IMAGE_PUBLICATION_VIOLATION: publish-ghcr result={res_publish}")
+                  sys.exit(1)
+              print("PULL_REQUEST_IMAGE_PUBLICATION=NO")
+          elif allow_publish == "true":
+              if res_publish != "success":
+                  print(f"CONTAINER_PUBLICATION_GATE=FAIL (publish={res_publish})")
+                  sys.exit(1)
+
+          print("CONTAINER_WORKFLOW_GATE=PASS")
+          PY

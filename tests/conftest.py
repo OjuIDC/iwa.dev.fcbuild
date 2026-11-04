@@ -245,11 +245,9 @@ def pg_db(request, pg_admin_uri, pg_roles):
                 (tmpl_name,),
             )
             conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{tmpl_name}"')
-            conn.execute(f'REVOKE ALL ON DATABASE "{name}" FROM PUBLIC')
             conn.execute(
                 f'GRANT CONNECT ON DATABASE "{name}" TO fc27_migrator, fc27_app, fc27_dispatch, fc27_relay'
             )
-            conn.execute(f'GRANT TEMPORARY ON DATABASE "{name}" TO fc27_migrator, fc27_app')
         uri = _with_db(pg_admin_uri, name)
         pre_migrated = True
     else:

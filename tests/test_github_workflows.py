@@ -21,11 +21,21 @@ from typing import Any
 import pytest
 import yaml
 
+from scripts.build_container_report import (
+    aggregate_container_reports,
+    build_single_image_report,
+    check_dockerignore_excludes,
+    parse_spdx_sbom,
+    parse_trivy_vulnerabilities,
+    scan_history_and_env_for_secrets,
+    scan_image_filesystem_tar_names,
+)
 from scripts.classify_ci_changes import (
     BROAD_COVERAGE_TRIGGER_FILES,
     CHANGE_CATEGORIES,
     classify_changed_files,
 )
+from scripts.sanitize_test_report import sanitize_text_for_report, scan_text_content
 from src.fc27_ci_test_groups import (
     ALL_REGISTERED_MARKERS,
     CANONICAL_PYTEST_MARKERS,
@@ -279,3 +289,281 @@ def test_unknown_test_module_defaults_to_unknown_serial() -> None:
     assert "postgres" in unk_pg.markers
     assert "serial" in unk_pg.markers
     assert unk_pg.full_ci_shard == "full-postgres"
+
+
+def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
+    wf = _load_workflow("container-images.yml")
+    assert wf["name"] == "container-images"
+    assert wf.get("permissions") == {"contents": "read", "packages": "read"}
+
+    triggers = wf.get("on") or wf.get(True)
+    assert isinstance(triggers, dict)
+    assert "pull_request_target" not in triggers
+    assert "pull_request" in triggers
+    assert "push" in triggers
+    assert "workflow_dispatch" in triggers
+
+    jobs = wf.get("jobs", {})
+    assert set(jobs.keys()) == {
+        "gate-context",
+        "build-and-scan",
+        "container-report",
+        "publish-ghcr",
+        "result",
+    }
+
+    for job_name, job in jobs.items():
+        timeout = job.get("timeout-minutes")
+        assert isinstance(timeout, int) and 1 <= timeout <= 30, (
+            f"container-images.yml:{job_name} must define timeout-minutes"
+        )
+        perms = job.get("permissions", {})
+        if job_name != "publish-ghcr":
+            assert perms.get("packages") != "write", (
+                f"PR-reachable job {job_name} must never have packages: write"
+            )
+            assert perms.get("id-token") != "write", (
+                f"PR-reachable job {job_name} must never have id-token: write"
+            )
+        else:
+            assert perms == {
+                "contents": "read",
+                "packages": "write",
+                "id-token": "write",
+                "attestations": "write",
+            }
+            if_cond = str(job.get("if", ""))
+            assert "github.event_name != 'pull_request'" in if_cond
+            assert "github.repository == 'iwa-ojuidc/iwa.dev.fcbuild'" in if_cond
+            assert "needs.gate-context.outputs.allow_publish == 'true'" in if_cond
+            assert "needs.build-and-scan.result == 'success'" in if_cond
+            assert "needs.container-report.result == 'success'" in if_cond
+
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses:
+                assert SHA_PIN_RE.match(uses), (
+                    f"Action {uses!r} in container-images.yml:{job_name} must be pinned to a 40-char commit SHA"
+                )
+            if job_name != "publish-ghcr" and uses:
+                assert not uses.startswith("docker/login-action@"), (
+                    f"PR-reachable job {job_name} must never authenticate to ghcr.io"
+                )
+
+
+def test_container_workflow_build_push_steps_and_metadata_tag_rules() -> None:
+    wf = _load_workflow("container-images.yml")
+    jobs = wf["jobs"]
+
+    for job_name in ("build-and-scan", "publish-ghcr"):
+        matrix_inc = jobs[job_name]["strategy"]["matrix"]["include"]
+        images = {entry["image"]: entry["dockerfile"] for entry in matrix_inc}
+        assert images == {
+            "fc27-community-worker": "Dockerfile.community-worker",
+            "fc27-discord-bot": "Dockerfile.discord",
+        }
+
+        build_steps = [
+            s
+            for s in jobs[job_name]["steps"]
+            if str(s.get("uses", "")).startswith("docker/build-push-action@")
+        ]
+        assert len(build_steps) == 1
+        with_cfg = build_steps[0]["with"]
+        for req_key in (
+            "context",
+            "file",
+            "platforms",
+            "push",
+            "tags",
+            "labels",
+            "cache-from",
+            "cache-to",
+        ):
+            assert req_key in with_cfg, f"{job_name} build-push-action missing {req_key}"
+        for forbidden_key in ("build-args", "secrets", "ssh"):
+            assert forbidden_key not in with_cfg, (
+                f"{job_name} build-push-action must not pass {forbidden_key}"
+            )
+        assert "env" not in build_steps[0], (
+            f"{job_name} build-push-action must not pass operational env secrets"
+        )
+        if job_name == "build-and-scan":
+            assert with_cfg["push"] is False
+            assert with_cfg["load"] is True
+        else:
+            assert with_cfg["push"] is True
+            assert with_cfg["sbom"] is True
+            assert with_cfg["provenance"] == "mode=max"
+
+        meta_steps = [
+            s
+            for s in jobs[job_name]["steps"]
+            if str(s.get("uses", "")).startswith("docker/metadata-action@")
+        ]
+        assert len(meta_steps) == 1
+        tags_raw = str(meta_steps[0]["with"]["tags"])
+        assert "latest" not in tags_raw, "latest tag must not be implicitly published"
+        assert "type=sha,prefix=sha-,format=short" in tags_raw
+        assert "pattern=v{{version}}" in tags_raw
+        assert "pattern={{major}}.{{minor}}" in tags_raw
+        assert "pattern={{major}}" in tags_raw
+
+    # Check attestation and cosign steps on publish-ghcr
+    publish_uses = [str(s.get("uses", "")) for s in jobs["publish-ghcr"]["steps"]]
+    assert any(u.startswith("actions/attest-build-provenance@") for u in publish_uses)
+    assert any(u.startswith("sigstore/cosign-installer@") for u in publish_uses)
+
+
+def test_container_semver_tag_validation_and_gate_simulation() -> None:
+    semver_re = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+    for invalid_tag in ("v1", "release-1", "latest-test", "v1.2.3-secret", "1.2.3", "v01.2.3"):
+        assert not semver_re.match(invalid_tag), f"Invalid tag {invalid_tag} must be rejected"
+    for valid_tag in ("v0.1.0", "v1.2.3", "v2.0.0"):
+        assert semver_re.match(valid_tag), f"Valid semver tag {valid_tag} must be accepted"
+
+
+def test_dockerignore_and_dockerfile_non_root_secret_free_posture() -> None:
+    dockerignore_path = REPO_ROOT / ".dockerignore"
+    passed, missing = check_dockerignore_excludes(dockerignore_path)
+    assert passed is True, f".dockerignore missing required patterns: {missing}"
+
+    text = dockerignore_path.read_text(encoding="utf-8")
+    for pattern in ("*.pem", "*.key", "*.pfx", "*.kdbx", "*.sql", "*.sql.gz", ".git", ".venv"):
+        assert pattern in text, f".dockerignore must exclude {pattern}"
+
+    for df_name, expected_cmd_token in (
+        ("Dockerfile.community-worker", "--status"),
+        ("Dockerfile.discord", "--status"),
+    ):
+        df_text = (REPO_ROOT / df_name).read_text(encoding="utf-8")
+        assert "USER 10001:65534" in df_text
+        assert expected_cmd_token in df_text
+        if df_name == "Dockerfile.community-worker":
+            assert "FC27_COMMUNITY_POLL_INTERVAL_SECONDS=43200" in df_text
+        for line in df_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("ARG ", "ENV ")):
+                assert not any(
+                    sec in stripped.upper()
+                    for sec in ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "BEARER", "PRIVATE_KEY")
+                ), f"{df_name} must not define secret ARG/ENV: {stripped}"
+
+    # Verify compose files preserve local build targets and require no GHCR login
+    worker_compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.community-worker.yml").read_text(encoding="utf-8")
+    )
+    discord_compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.discord.yml").read_text(encoding="utf-8")
+    )
+    w_svc = worker_compose["services"]["fc27-community-worker"]
+    d_svc = discord_compose["services"]["fc27-discord-bot"]
+    assert w_svc["build"]["dockerfile"] == "Dockerfile.community-worker"
+    assert d_svc["build"]["dockerfile"] == "Dockerfile.discord"
+    assert str(w_svc["user"]) == "10001:65534"
+    assert str(d_svc["user"]) == "10001:65534"
+    assert w_svc["read_only"] is True
+    assert d_svc["read_only"] is True
+    assert w_svc["cap_drop"] == ["ALL"]
+    assert d_svc["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in w_svc["security_opt"]
+    assert "no-new-privileges:true" in d_svc["security_opt"]
+
+
+def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: Path) -> None:
+    # 1. Image history & env secret scanner fails closed on leaked secrets
+    clean_ok, clean_hits = scan_history_and_env_for_secrets(
+        ["/bin/sh -c #(nop) USER 10001:65534"],
+        ["PATH=/usr/local/bin:/usr/bin", "FC27_COMMUNITY_POLL_INTERVAL_SECONDS=43200"],
+    )
+    assert clean_ok is True
+    assert clean_hits == []
+
+    bad_ok, bad_hits = scan_history_and_env_for_secrets(
+        ["/bin/sh -c ENV DISCORD_BOT_TOKEN=secret123"],
+        ["POSTGRES_PASSWORD=supersecret"],
+    )
+    assert bad_ok is False
+    assert len(bad_hits) >= 2
+
+    # 2. Image filesystem scanner fails closed on .env, secrets/, .local-data/, .local-artifacts/, *.7z
+    fs_ok, fs_hits = scan_image_filesystem_tar_names(
+        ["app/src/fc27_polling_worker.py", "app/pyproject.toml"]
+    )
+    assert fs_ok is True
+    assert fs_hits == []
+
+    for forbidden_member in (
+        "app/.env",
+        "app/secrets/postgres_password.txt",
+        "app/.local-data/state.db",
+        "app/.local-artifacts/ci/out.json",
+        "app/fc27-secret-recovery.7z",
+    ):
+        ok, hits = scan_image_filesystem_tar_names([forbidden_member])
+        assert ok is False, f"Filesystem scanner must reject {forbidden_member}"
+        assert len(hits) == 1
+
+    # 3. Trivy vulnerability parser and Critical/High fail-closed gate
+    trivy_clean = tmp_path / "trivy-clean.json"
+    trivy_clean.write_text('{"Results": [{"Vulnerabilities": [{"Severity": "LOW"}]}]}', encoding="utf-8")
+    v_clean = parse_trivy_vulnerabilities(trivy_clean)
+    assert v_clean["trivy_high_critical_gate"] == "PASS"
+    assert v_clean["LOW"] == 1
+
+    trivy_crit = tmp_path / "trivy-crit.json"
+    trivy_crit.write_text('{"Results": [{"Vulnerabilities": [{"Severity": "CRITICAL"}]}]}', encoding="utf-8")
+    v_crit = parse_trivy_vulnerabilities(trivy_crit)
+    assert v_crit["trivy_high_critical_gate"] == "FAIL"
+
+    # 4. SPDX SBOM parser and sanitized report generation
+    sbom_file = tmp_path / "sbom.spdx.json"
+    sbom_file.write_text(
+        '{"spdxVersion": "SPDX-2.3", "packages": [{"name": "python"}, {"name": "psycopg"}]}',
+        encoding="utf-8",
+    )
+    sbom_res = parse_spdx_sbom(sbom_file)
+    assert sbom_res["sbom_generation"] == "PASS"
+    assert sbom_res["package_count"] == 2
+
+    validation_data = {
+        "image_name": "fc27-community-worker",
+        "dockerfile": "Dockerfile.community-worker",
+        "base_image": "python:3.11-slim",
+        "target_platform": "linux/amd64",
+        "size_bytes": 185000000,
+        "local_digest": "sha256:" + "a" * 64,
+        "runtime_user": "10001:65534",
+        "user_non_root_pass": True,
+        "dockerignore_pass": True,
+        "image_secret_scan": "PASS",
+        "secrets_in_image_history": 0,
+        "secrets_in_image_filesystem": 0,
+        "smoke_test_result": "PASS",
+        "read_only_rootfs_pass": True,
+        "poll_interval_seconds": "43200",
+        "validation_gate": "PASS",
+    }
+    report_out = tmp_path / "report-worker"
+    summary = build_single_image_report(
+        validation=validation_data,
+        trivy_counts=v_clean,
+        sbom_info=sbom_res,
+        build_duration_seconds=12.4,
+        publication_status="not published (PR mode)",
+        planned_tags=["not published (PR mode)"],
+        output_dir=report_out,
+    )
+    assert summary["overall_gate"] == "PASS"
+    agg_out = tmp_path / "agg"
+    agg = aggregate_container_reports(
+        input_dir=tmp_path,
+        output_dir=agg_out,
+        workflow_name="container-images",
+    )
+    assert agg["overall_status"] == "PASS"
+    html_text = sanitize_text_for_report((agg_out / "index.html").read_text(encoding="utf-8"))
+    scan = scan_text_content(html_text, source_label="index.html", is_html=True)
+    assert scan["status"] == "PASS"
+    assert scan["findings"] == []
+

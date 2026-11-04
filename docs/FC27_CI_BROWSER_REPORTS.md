@@ -2,12 +2,13 @@
 
 ## 1. Overview and Authority
 
-Every FC27 GitHub Actions test execution (`test-fast`, `ci`, and `test-nightly`) generates browser-previewable test reports and sanitized report artifacts:
+Every FC27 GitHub Actions test and container execution (`test-fast`, `ci`, `container-images`, and `test-nightly`) generates browser-previewable reports and sanitized report artifacts:
 
 - **Report Builder**: `scripts/build_test_report.py`
+- **Container Build & Scan Report Builder**: `scripts/build_container_report.py`
 - **Shard Report Aggregator & Pages Tree Builder**: `scripts/aggregate_test_reports.py`
 - **Fail-Closed Privacy & Self-Contained HTML Scanner**: `scripts/sanitize_test_report.py`
-- **Policy Test Suite**: `tests/test_ci_report_sanitization.py`
+- **Policy Test Suites**: `tests/test_ci_report_sanitization.py`, `tests/test_github_workflows.py`
 
 ---
 
@@ -31,6 +32,11 @@ Every test job and every workflow's `aggregate-report` job writes a bounded Mark
 
 ### 2.3 Layer 3 — Unified Sanitized JUnit XML (`test-results/junit.xml`) and Durations (`test-results/durations.json`)
 Every job and aggregate report produces a sanitized JUnit XML file (`test-results/junit.xml`) and a JSON durations report (`test-results/durations.json`).
+
+### 2.4 Layer 4 — Browser-Previewable Container Build, Scan, and Publication Reports (`scripts/build_container_report.py`)
+In `.github/workflows/container-images.yml`, `scripts/build_container_report.py` (`validate`, `report`, `aggregate`) generates a GitHub Actions Job Summary and a self-contained sanitized HTML artifact (`container-browser-report`, `retention-days: 7`) covering `fc27-community-worker` and `fc27-discord-bot`:
+- Displays image name, Dockerfile, base image, target platform (`linux/amd64`), build duration, image size, local/published digest, tag list (or `not published (PR mode)`), runtime user (`10001:65534`), smoke-test result, secret-scan result (`IMAGE_SECRET_SCAN=PASS`, `SECRETS_IN_IMAGE_HISTORY=0`, `SECRETS_IN_IMAGE_FILESYSTEM=0`), Trivy vulnerability counts by severity (`CRITICAL`, `HIGH_FIXED`, `HIGH`, `MEDIUM`, `LOW`), SPDX SBOM digest/package count, and publication status.
+- Scanned by `scripts/sanitize_test_report.py` before upload or Job Summary publication.
 
 ---
 

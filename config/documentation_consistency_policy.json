@@ -37,6 +37,7 @@
   "removed_items_manifest_json": "config/fc27_removed_items_manifest.json",
   "required_current_scripts": [
     "scripts/aggregate_test_reports.py",
+    "scripts/build_container_report.py",
     "scripts/build_test_report.py",
     "scripts/check_documentation_consistency.py",
     "scripts/check_matchpulse_boundary.py",
