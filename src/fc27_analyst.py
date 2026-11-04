@@ -29,6 +29,7 @@ Non-negotiable boundaries:
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 import json
 import logging
 import os
@@ -326,6 +327,22 @@ _PROHIBITED_ANALYST_LANGUAGE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] =
 )
 
 
+@lru_cache(maxsize=4096)
+def _check_analyst_language_cached(
+    cleaned: str,
+    require_approved_phrase: bool,
+) -> tuple[str, str] | None:
+    for reason, pattern in _PROHIBITED_ANALYST_LANGUAGE_PATTERNS:
+        m = pattern.search(cleaned)
+        if m:
+            return ("PROHIBITED", f"contains prohibited {reason} wording: '{m.group(0)}'")
+    if require_approved_phrase:
+        lower_text = cleaned.lower()
+        if not any(phrase in lower_text for phrase in APPROVED_ANALYST_PHRASES):
+            return ("MISSING_PHRASE", "must include at least one approved observational phrase")
+    return None
+
+
 def validate_analyst_evidence_language(
     text: str,
     field_name: str = "statement",
@@ -340,18 +357,9 @@ def validate_analyst_evidence_language(
         raise FC27AnalystLanguageError(
             f"{field_name} exceeds maximum length of {MAX_STRING_LENGTH} characters"
         )
-    for reason, pattern in _PROHIBITED_ANALYST_LANGUAGE_PATTERNS:
-        m = pattern.search(cleaned)
-        if m:
-            raise FC27AnalystLanguageError(
-                f"{field_name} contains prohibited {reason} wording: '{m.group(0)}'"
-            )
-    if require_approved_phrase:
-        lower_text = cleaned.lower()
-        if not any(phrase in lower_text for phrase in APPROVED_ANALYST_PHRASES):
-            raise FC27AnalystLanguageError(
-                f"{field_name} must include at least one approved observational phrase"
-            )
+    err = _check_analyst_language_cached(cleaned, require_approved_phrase)
+    if err is not None:
+        raise FC27AnalystLanguageError(f"{field_name} {err[1]}")
     return cleaned
 
 
@@ -799,6 +807,34 @@ def _strip_safe_attestation_flags(obj: Any) -> Any:
     return obj
 
 
+def _is_frozen_validated_model(obj: Any) -> bool:
+    """Return True when `obj` is an already-validated frozen Pydantic BaseModel instance."""
+    return isinstance(obj, BaseModel) and bool(obj.model_config.get("frozen"))
+
+
+def _copy_and_scan_input_mapping(
+    data: Mapping[str, Any],
+    *,
+    path: str,
+) -> dict[str, Any]:
+    """Copy and privacy-scan untrusted mapping fields while reusing already-validated frozen models."""
+    copied: dict[str, Any] = {}
+    scan_target: dict[str, Any] = {}
+    for k, v in data.items():
+        if _is_frozen_validated_model(v):
+            copied[k] = v
+            scan_target[k] = None
+        elif isinstance(v, tuple) and v and all(_is_frozen_validated_model(item) for item in v):
+            copied[k] = v
+            scan_target[k] = None
+        else:
+            copied_v = copy.deepcopy(v) if isinstance(v, (Mapping, list, tuple, set)) else v
+            copied[k] = copied_v
+            scan_target[k] = copied_v
+    _scan_reject_privacy_fields(_strip_safe_attestation_flags(scan_target), path=path)
+    return copied
+
+
 class FC27AnalystInput(BaseModel):
     """Immutable input contract for East Coasters Analyst Evidence Synthesis (PART C)."""
 
@@ -820,8 +856,7 @@ class FC27AnalystInput(BaseModel):
     def _validate_raw_analyst_input(cls, data: Any) -> Any:
         if not isinstance(data, Mapping):
             raise FC27AnalystValidationError("FC27AnalystInput must be initialized from a mapping")
-        copied = copy.deepcopy(dict(data))
-        _scan_reject_privacy_fields(_strip_safe_attestation_flags(copied), path="analyst_input")
+        copied = _copy_and_scan_input_mapping(data, path="analyst_input")
         if "analysis_generated_at" in copied:
             dt = _ensure_utc_datetime(copied["analysis_generated_at"], "analysis_generated_at")
             copied["analysis_generated_at"] = _format_utc_iso(dt)
@@ -1148,10 +1183,7 @@ def _coerce_analyst_input(
     if isinstance(analyst_input, FC27AnalystInput):
         return analyst_input
     if isinstance(analyst_input, Mapping):
-        _scan_reject_privacy_fields(
-            _strip_safe_attestation_flags(analyst_input), path="analyst_input"
-        )
-        return FC27AnalystInput(**copy.deepcopy(dict(analyst_input)))
+        return FC27AnalystInput.model_validate(analyst_input)
     raise FC27AnalystValidationError(
         "analyst_input must be an FC27AnalystInput or mapping"
     )
@@ -1164,19 +1196,9 @@ def detect_evidence_contradictions(
     analyst_input: FC27AnalystInput | None = None,
     clusters: Sequence[FC27EvidenceCluster] = (),
     findings: Sequence[FC27AnalystFinding] = (),
+    _precomputed_upstream_contradictions: Sequence[FC27Contradiction] | None = None,
 ) -> tuple[FC27Contradiction, ...]:
     """Pure contradiction detector across Search, Scout, and Analyst evidence (PART J)."""
-    ctx = (
-        search_context
-        if isinstance(search_context, FC27SearchContext)
-        else FC27SearchContext(**copy.deepcopy(dict(search_context)))
-    )
-    rep = (
-        scout_report
-        if isinstance(scout_report, FC27ScoutReport)
-        else FC27ScoutReport(**copy.deepcopy(dict(scout_report)))
-    )
-
     contradictions: list[FC27Contradiction] = []
 
     def _add(
@@ -1198,372 +1220,386 @@ def detect_evidence_contradictions(
             )
         )
 
-    # 1. Identity mismatch
-    if (
-        ctx.identity.club_id != rep.identity.club_id
-        or ctx.identity.club_name != rep.identity.club_name
-        or ctx.identity.platform != rep.identity.platform
-        or ctx.identity.game_version != rep.identity.game_version
-    ):
-        _add(
-            "IDENTITY_MISMATCH",
-            "BLOCKING",
-            "Search context identity and Scout report identity do not match.",
-            (ctx.identity.club_id, rep.identity.club_id),
+    if _precomputed_upstream_contradictions is not None:
+        contradictions.extend(_precomputed_upstream_contradictions)
+    else:
+        ctx = (
+            search_context
+            if isinstance(search_context, FC27SearchContext)
+            else FC27SearchContext(**copy.deepcopy(dict(search_context)))
+        )
+        rep = (
+            scout_report
+            if isinstance(scout_report, FC27ScoutReport)
+            else FC27ScoutReport(**copy.deepcopy(dict(scout_report)))
         )
 
-    # 2. Formula and policy version mismatch
-    ctx_rank_ver = ctx.provenance.get("ranking_policy_version") if isinstance(ctx.provenance, Mapping) else None
-    in_rank_ver = (
-        analyst_input.provenance.get("ranking_policy_version")
-        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
-        else None
-    )
-    in_synth_ver = (
-        analyst_input.provenance.get("analyst_synthesis_version")
-        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
-        else None
-    )
-    in_pol_ver = (
-        analyst_input.provenance.get("analyst_policy_version")
-        if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
-        else None
-    )
-    if (
-        ctx.formula_version != FORMULA_VERSION
-        or rep.formula_version != FORMULA_VERSION
-        or ctx.formula_version != rep.formula_version
-        or (analyst_input is not None and analyst_input.formula_version != FORMULA_VERSION)
-        or (ctx_rank_ver is not None and ctx_rank_ver != RANKING_POLICY_VERSION)
-        or (in_rank_ver is not None and in_rank_ver != RANKING_POLICY_VERSION)
-        or (in_synth_ver is not None and in_synth_ver != ANALYST_SYNTHESIS_VERSION)
-        or (in_pol_ver is not None and in_pol_ver != ANALYST_POLICY_VERSION)
-    ):
-        _add(
-            "FORMULA_VERSION_MISMATCH",
-            "BLOCKING",
-            f"Formula or policy version mismatch across Search ({ctx.formula_version}) and Scout ({rep.formula_version}).",
-            (ctx.formula_version, rep.formula_version),
-        )
-
-    # 3. Hash verification
-    expected_ctx_hash = compute_search_context_hash(
-        identity=ctx.identity,
-        window=ctx.window,
-        formula_version=ctx.formula_version,
-        source_classification=ctx.source_classification,
-        eligible_match_count=ctx.eligible_match_count,
-        excluded_match_count=ctx.excluded_match_count,
-        confidence_tier=ctx.confidence_tier,
-        payload_hashes=ctx.payload_hashes,
-        match_hashes=ctx.match_hashes,
-        exclusion_summary=ctx.exclusion_summary,
-        baseline_matches=ctx.baseline_matches,
-        recent_matches=ctx.recent_matches,
-        baseline_team_aggregates=ctx.baseline_team_aggregates,
-        recent_team_aggregates=ctx.recent_team_aggregates,
-    )
-    if ctx.context_hash != expected_ctx_hash or (
-        analyst_input is not None
-        and analyst_input.search_context_hash is not None
-        and analyst_input.search_context_hash != ctx.context_hash
-    ):
-        _add(
-            "SEARCH_HASH_MISMATCH",
-            "BLOCKING",
-            "Search context_hash does not match recomputed canonical Search content hash.",
-            (ctx.context_hash, expected_ctx_hash),
-        )
-
-    expected_scout_hash = compute_scout_report_hash(
-        identity=rep.identity,
-        analysis_window=rep.analysis_window,
-        formula_version=rep.formula_version,
-        source_classification=rep.source_classification,
-        eligible_match_count=rep.eligible_match_count,
-        excluded_match_count=rep.excluded_match_count,
-        confidence_tier=rep.confidence_tier,
-        data_quality_status=rep.data_quality_status,
-        team_evidence=rep.team_evidence,
-        player_evidence=rep.player_evidence,
-        formation_evidence=rep.formation_evidence,
-        role_evidence=rep.role_evidence,
-        build_evidence=rep.build_evidence,
-        partnership_evidence=rep.partnership_evidence,
-        opponent_evidence=rep.opponent_evidence,
-        hypotheses=rep.hypotheses,
-        evidence_references=rep.evidence_references,
-    )
-    if rep.report_hash != expected_scout_hash or (
-        analyst_input is not None
-        and analyst_input.scout_report_hash is not None
-        and analyst_input.scout_report_hash != rep.report_hash
-    ):
-        _add(
-            "SCOUT_HASH_MISMATCH",
-            "BLOCKING",
-            "Scout report_hash does not match recomputed canonical Scout report hash.",
-            (rep.report_hash, expected_scout_hash),
-        )
-
-    # 4. Analysis window compatibility
-    if (
-        ctx.window.baseline_match_limit != rep.analysis_window.baseline_match_limit
-        or ctx.window.recent_form_match_limit != rep.analysis_window.recent_form_match_limit
-        or ctx.window.analysis_window_start != rep.analysis_window.analysis_window_start
-        or ctx.window.analysis_window_end != rep.analysis_window.analysis_window_end
-    ):
-        _add(
-            "ANALYSIS_WINDOW_MISMATCH",
-            "BLOCKING",
-            "Search context window and Scout report analysis_window do not match.",
-            (ctx.context_hash, rep.report_hash),
-        )
-
-    # 5. Aggregate consistency between Search and Scout
-    b_agg = ctx.baseline_team_aggregates
-    t_ev = rep.team_evidence
-    if (
-        ctx.eligible_match_count != rep.eligible_match_count
-        or ctx.excluded_match_count != rep.excluded_match_count
-        or b_agg.matches_played != t_ev.matches_played
-        or b_agg.wins != t_ev.wins
-        or b_agg.draws != t_ev.draws
-        or b_agg.losses != t_ev.losses
-        or b_agg.goals_for != t_ev.goals_for
-        or b_agg.goals_against != t_ev.goals_against
-        or b_agg.goal_differential != t_ev.goal_differential
-        or b_agg.clean_sheets != t_ev.clean_sheets
-    ):
-        _add(
-            "SEARCH_SCOUT_AGGREGATE_MISMATCH",
-            "BLOCKING",
-            "Search baseline team aggregates disagree with Scout team_evidence totals.",
-            (ctx.context_hash, rep.report_hash),
-        )
-
-    # 6. Confidence inflation checks
-    expected_ctx_tier = determine_sample_size_tier(ctx.eligible_match_count)
-    if CONFIDENCE_TIER_RANK[ctx.confidence_tier] > CONFIDENCE_TIER_RANK[expected_ctx_tier]:
-        _add(
-            "CONFIDENCE_INFLATION",
-            "BLOCKING",
-            f"Search confidence_tier '{ctx.confidence_tier}' exceeds sample-size tier '{expected_ctx_tier}'.",
-            (ctx.context_hash,),
-        )
-    if CONFIDENCE_TIER_RANK[rep.confidence_tier] > CONFIDENCE_TIER_RANK[ctx.confidence_tier]:
-        _add(
-            "CONFIDENCE_INFLATION",
-            "BLOCKING",
-            f"Scout confidence_tier '{rep.confidence_tier}' exceeds Search confidence_tier '{ctx.confidence_tier}'.",
-            (rep.report_hash,),
-        )
-    for f_ev in rep.formation_evidence:
-        f_max_tier = determine_sample_size_tier(f_ev.appearances)
-        if CONFIDENCE_TIER_RANK[f_ev.confidence_tier] > CONFIDENCE_TIER_RANK[f_max_tier]:
-            _add(
-                "CONFIDENCE_INFLATION",
-                "BLOCKING",
-                f"Formation '{f_ev.formation}' confidence '{f_ev.confidence_tier}' exceeds tier '{f_max_tier}'.",
-                (f"formation:{f_ev.formation}",),
-            )
-    for hyp in rep.hypotheses:
-        h_max_tier = determine_sample_size_tier(hyp.eligible_match_count)
-        if CONFIDENCE_TIER_RANK[hyp.confidence_tier] > CONFIDENCE_TIER_RANK[h_max_tier]:
-            _add(
-                "CONFIDENCE_INFLATION",
-                "BLOCKING",
-                f"Hypothesis '{hyp.hypothesis_id}' confidence '{hyp.confidence_tier}' exceeds tier '{h_max_tier}'.",
-                (hyp.hypothesis_id,),
-            )
-
-    # 7. Recent-vs-baseline sign conflict and warning divergence
-    if (
-        t_ev.win_rate is not None
-        and t_ev.recent_win_rate is not None
-        and t_ev.win_rate_delta is not None
-    ):
-        expected_wr_delta = round(t_ev.recent_win_rate - t_ev.win_rate, 4)
-        if abs(t_ev.win_rate_delta - expected_wr_delta) > 0.05 or (
-            expected_wr_delta != 0.0
-            and (t_ev.win_rate_delta > 0) != (expected_wr_delta > 0)
+        # 1. Identity mismatch
+        if (
+            ctx.identity.club_id != rep.identity.club_id
+            or ctx.identity.club_name != rep.identity.club_name
+            or ctx.identity.platform != rep.identity.platform
+            or ctx.identity.game_version != rep.identity.game_version
         ):
             _add(
-                "RECENT_VS_BASELINE_SIGN_CONFLICT",
+                "IDENTITY_MISMATCH",
                 "BLOCKING",
-                "Recent win-rate delta sign or value conflicts with recent_win_rate minus win_rate.",
-                ("team:win_rate_delta",),
-            )
-    if (
-        t_ev.average_goal_differential is not None
-        and t_ev.recent_average_goal_differential is not None
-        and t_ev.goal_differential_delta is not None
-    ):
-        expected_gd_delta = round(
-            t_ev.recent_average_goal_differential - t_ev.average_goal_differential, 4
-        )
-        if abs(t_ev.goal_differential_delta - expected_gd_delta) > 0.05 or (
-            expected_gd_delta != 0.0
-            and (t_ev.goal_differential_delta > 0) != (expected_gd_delta > 0)
-        ):
-            _add(
-                "RECENT_VS_BASELINE_SIGN_CONFLICT",
-                "BLOCKING",
-                "Recent goal-differential delta sign or value conflicts with recent minus baseline goal differential.",
-                ("team:goal_differential_delta",),
+                "Search context identity and Scout report identity do not match.",
+                (ctx.identity.club_id, rep.identity.club_id),
             )
 
-    # Non-blocking warning contradiction when recent win rate delta and recent GD delta have opposite signs
-    if (
-        t_ev.win_rate_delta is not None
-        and t_ev.goal_differential_delta is not None
-        and (
-            (t_ev.win_rate_delta > 0.0 and t_ev.goal_differential_delta < 0.0)
-            or (t_ev.win_rate_delta < 0.0 and t_ev.goal_differential_delta > 0.0)
+        # 2. Formula and policy version mismatch
+        ctx_rank_ver = ctx.provenance.get("ranking_policy_version") if isinstance(ctx.provenance, Mapping) else None
+        in_rank_ver = (
+            analyst_input.provenance.get("ranking_policy_version")
+            if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+            else None
         )
-    ):
-        _add(
-            "RECENT_VS_BASELINE_METRIC_DIVERGENCE",
-            "WARNING",
-            "In the available East Coasters sample, recent win-rate delta and recent goal-differential delta moved in opposite directions.",
-            ("team:recent_5_vs_baseline_20",),
-            resolution_status="EXPLAINED",
+        in_synth_ver = (
+            analyst_input.provenance.get("analyst_synthesis_version")
+            if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+            else None
         )
-
-    # 8. Hypothesis direction mismatch
-    for hyp in rep.hypotheses:
-        expected_delta = round(hyp.comparison_value - hyp.baseline_value, 4)
-        stmt_lower = hyp.statement.lower()
-        if abs(hyp.absolute_delta - expected_delta) > 0.05:
-            _add(
-                "HYPOTHESIS_DIRECTION_MISMATCH",
-                "BLOCKING",
-                f"Hypothesis '{hyp.hypothesis_id}' absolute_delta ({hyp.absolute_delta}) disagrees with comparison minus baseline ({expected_delta}).",
-                (hyp.hypothesis_id,),
-            )
-        elif (
-            (hyp.direction == "HIGHER" and hyp.comparison_value <= hyp.baseline_value)
-            or (hyp.direction == "LOWER" and hyp.comparison_value >= hyp.baseline_value)
-            or ("higher" in stmt_lower and hyp.comparison_value < hyp.baseline_value)
-            or ("lower" in stmt_lower and hyp.comparison_value > hyp.baseline_value)
-        ):
-            _add(
-                "HYPOTHESIS_DIRECTION_MISMATCH",
-                "BLOCKING",
-                f"Hypothesis '{hyp.hypothesis_id}' directional wording conflicts with comparison ({hyp.comparison_value}) vs baseline ({hyp.baseline_value}).",
-                (hyp.hypothesis_id,),
-            )
-
-    # 9. Formation total overflow
-    total_formation_matches = sum(f.appearances for f in rep.formation_evidence)
-    if total_formation_matches > ctx.eligible_match_count or any(
-        f.appearances > ctx.eligible_match_count or (f.wins + f.draws + f.losses != f.appearances)
-        for f in rep.formation_evidence
-    ):
-        _add(
-            "FORMATION_TOTAL_OVERFLOW",
-            "BLOCKING",
-            f"Formation match totals ({total_formation_matches}) exceed eligible match count ({ctx.eligible_match_count}) or W/D/L sums disagree.",
-            tuple(f"formation:{f.formation}" for f in rep.formation_evidence) or ("formation",),
-        )
-
-    # 10. Role total overflow
-    total_eligible_appearances = sum(len(m.player_appearances) for m in ctx.baseline_matches)
-    total_role_appearances = sum(r.appearances for r in rep.role_evidence)
-    if (
-        total_role_appearances > total_eligible_appearances
-        or any(
-            r.distinct_matches > ctx.eligible_match_count
-            or r.appearances > total_eligible_appearances
-            or (r.team_wins + r.team_draws + r.team_losses != r.distinct_matches)
-            for r in rep.role_evidence
-        )
-    ):
-        _add(
-            "ROLE_TOTAL_OVERFLOW",
-            "BLOCKING",
-            f"Role appearance totals ({total_role_appearances}) or match counts exceed eligible bounds ({total_eligible_appearances}).",
-            tuple(f"role:{r.role}:{r.focus}:{r.position}" for r in rep.role_evidence) or ("role",),
-        )
-
-    # 11. Partnership overflow
-    player_app_counts = {p.player_ref: p.appearances for p in rep.player_evidence}
-    for part in rep.partnership_evidence:
-        max_possible = min(
-            ctx.eligible_match_count,
-            player_app_counts.get(part.player_ref_a, ctx.eligible_match_count),
-            player_app_counts.get(part.player_ref_b, ctx.eligible_match_count),
+        in_pol_ver = (
+            analyst_input.provenance.get("analyst_policy_version")
+            if (analyst_input is not None and isinstance(analyst_input.provenance, Mapping))
+            else None
         )
         if (
-            part.shared_appearances > ctx.eligible_match_count
-            or part.shared_appearances > max_possible
-            or (part.wins + part.draws + part.losses != part.shared_appearances)
+            ctx.formula_version != FORMULA_VERSION
+            or rep.formula_version != FORMULA_VERSION
+            or ctx.formula_version != rep.formula_version
+            or (analyst_input is not None and analyst_input.formula_version != FORMULA_VERSION)
+            or (ctx_rank_ver is not None and ctx_rank_ver != RANKING_POLICY_VERSION)
+            or (in_rank_ver is not None and in_rank_ver != RANKING_POLICY_VERSION)
+            or (in_synth_ver is not None and in_synth_ver != ANALYST_SYNTHESIS_VERSION)
+            or (in_pol_ver is not None and in_pol_ver != ANALYST_POLICY_VERSION)
         ):
             _add(
-                "PARTNERSHIP_OVERFLOW",
+                "FORMULA_VERSION_MISMATCH",
                 "BLOCKING",
-                f"Partnership {part.player_ref_a}+{part.player_ref_b} shared_appearances ({part.shared_appearances}) exceeds eligible bound ({max_possible}).",
-                (f"partnership:{part.player_ref_a}:{part.player_ref_b}",),
+                f"Formula or policy version mismatch across Search ({ctx.formula_version}) and Scout ({rep.formula_version}).",
+                (ctx.formula_version, rep.formula_version),
             )
 
-    # 12. Evidence reference resolution & duplicate checks
-    known_match_hashes = {m.match_hash for m in ctx.baseline_matches}
-    known_player_refs = {
-        p.player_ref for m in ctx.baseline_matches for p in m.player_appearances
-    } | {p.player_ref for p in rep.player_evidence}
-    known_formations = {m.formation for m in ctx.baseline_matches if m.formation} | {
-        f.formation for f in rep.formation_evidence
-    }
-    known_roles = {
-        p.role for m in ctx.baseline_matches for p in m.player_appearances if p.role
-    } | {r.role for r in rep.role_evidence}
-
-    seen_rep_ev_ids: set[str] = set()
-    for ref in rep.evidence_references:
-        if ref.evidence_id in seen_rep_ev_ids:
+        # 3. Hash verification
+        expected_ctx_hash = compute_search_context_hash(
+            identity=ctx.identity,
+            window=ctx.window,
+            formula_version=ctx.formula_version,
+            source_classification=ctx.source_classification,
+            eligible_match_count=ctx.eligible_match_count,
+            excluded_match_count=ctx.excluded_match_count,
+            confidence_tier=ctx.confidence_tier,
+            payload_hashes=ctx.payload_hashes,
+            match_hashes=ctx.match_hashes,
+            exclusion_summary=ctx.exclusion_summary,
+            baseline_matches=ctx.baseline_matches,
+            recent_matches=ctx.recent_matches,
+            baseline_team_aggregates=ctx.baseline_team_aggregates,
+            recent_team_aggregates=ctx.recent_team_aggregates,
+        )
+        if ctx.context_hash != expected_ctx_hash or (
+            analyst_input is not None
+            and analyst_input.search_context_hash is not None
+            and analyst_input.search_context_hash != ctx.context_hash
+        ):
             _add(
-                "DUPLICATE_EVIDENCE_REFERENCE",
+                "SEARCH_HASH_MISMATCH",
                 "BLOCKING",
-                f"Duplicate evidence_id '{ref.evidence_id}' in Scout report evidence_references.",
-                (ref.evidence_id,),
-            )
-        seen_rep_ev_ids.add(ref.evidence_id)
-        if len(set(ref.match_hashes)) != len(ref.match_hashes) or len(set(ref.player_refs)) != len(ref.player_refs):
-            _add(
-                "DUPLICATE_EVIDENCE_REFERENCE",
-                "BLOCKING",
-                f"Evidence reference '{ref.evidence_id}' contains duplicate match_hashes or player_refs.",
-                (ref.evidence_id,),
-            )
-        unknown_mhashes = [mh for mh in ref.match_hashes if mh not in known_match_hashes]
-        unknown_prefs = [pr for pr in ref.player_refs if pr not in known_player_refs]
-        if unknown_mhashes or unknown_prefs:
-            _add(
-                "UNKNOWN_EVIDENCE_REFERENCE",
-                "BLOCKING",
-                f"Evidence reference '{ref.evidence_id}' cites unknown matches or player_refs.",
-                (ref.evidence_id,),
+                "Search context_hash does not match recomputed canonical Search content hash.",
+                (ctx.context_hash, expected_ctx_hash),
             )
 
-    for hyp in rep.hypotheses:
-        if len(set(hyp.supporting_match_hashes)) != len(hyp.supporting_match_hashes):
+        expected_scout_hash = compute_scout_report_hash(
+            identity=rep.identity,
+            analysis_window=rep.analysis_window,
+            formula_version=rep.formula_version,
+            source_classification=rep.source_classification,
+            eligible_match_count=rep.eligible_match_count,
+            excluded_match_count=rep.excluded_match_count,
+            confidence_tier=rep.confidence_tier,
+            data_quality_status=rep.data_quality_status,
+            team_evidence=rep.team_evidence,
+            player_evidence=rep.player_evidence,
+            formation_evidence=rep.formation_evidence,
+            role_evidence=rep.role_evidence,
+            build_evidence=rep.build_evidence,
+            partnership_evidence=rep.partnership_evidence,
+            opponent_evidence=rep.opponent_evidence,
+            hypotheses=rep.hypotheses,
+            evidence_references=rep.evidence_references,
+        )
+        if rep.report_hash != expected_scout_hash or (
+            analyst_input is not None
+            and analyst_input.scout_report_hash is not None
+            and analyst_input.scout_report_hash != rep.report_hash
+        ):
             _add(
-                "DUPLICATE_EVIDENCE_REFERENCE",
+                "SCOUT_HASH_MISMATCH",
                 "BLOCKING",
-                f"Hypothesis '{hyp.hypothesis_id}' contains duplicate supporting_match_hashes.",
-                (hyp.hypothesis_id,),
+                "Scout report_hash does not match recomputed canonical Scout report hash.",
+                (rep.report_hash, expected_scout_hash),
             )
-        bad_hyp_m = [mh for mh in hyp.supporting_match_hashes if mh not in known_match_hashes]
-        bad_hyp_p = [pr for pr in hyp.supporting_player_refs if pr not in known_player_refs]
-        bad_hyp_f = [fr for fr in hyp.supporting_formation_refs if fr not in known_formations]
-        bad_hyp_r = [rr for rr in hyp.supporting_role_refs if rr not in known_roles]
-        if bad_hyp_m or bad_hyp_p or bad_hyp_f or bad_hyp_r:
+
+        # 4. Analysis window compatibility
+        if (
+            ctx.window.baseline_match_limit != rep.analysis_window.baseline_match_limit
+            or ctx.window.recent_form_match_limit != rep.analysis_window.recent_form_match_limit
+            or ctx.window.analysis_window_start != rep.analysis_window.analysis_window_start
+            or ctx.window.analysis_window_end != rep.analysis_window.analysis_window_end
+        ):
             _add(
-                "UNKNOWN_EVIDENCE_REFERENCE",
+                "ANALYSIS_WINDOW_MISMATCH",
                 "BLOCKING",
-                f"Hypothesis '{hyp.hypothesis_id}' cites unknown supporting references.",
-                (hyp.hypothesis_id,),
+                "Search context window and Scout report analysis_window do not match.",
+                (ctx.context_hash, rep.report_hash),
             )
+
+        # 5. Aggregate consistency between Search and Scout
+        b_agg = ctx.baseline_team_aggregates
+        t_ev = rep.team_evidence
+        if (
+            ctx.eligible_match_count != rep.eligible_match_count
+            or ctx.excluded_match_count != rep.excluded_match_count
+            or b_agg.matches_played != t_ev.matches_played
+            or b_agg.wins != t_ev.wins
+            or b_agg.draws != t_ev.draws
+            or b_agg.losses != t_ev.losses
+            or b_agg.goals_for != t_ev.goals_for
+            or b_agg.goals_against != t_ev.goals_against
+            or b_agg.goal_differential != t_ev.goal_differential
+            or b_agg.clean_sheets != t_ev.clean_sheets
+        ):
+            _add(
+                "SEARCH_SCOUT_AGGREGATE_MISMATCH",
+                "BLOCKING",
+                "Search baseline team aggregates disagree with Scout team_evidence totals.",
+                (ctx.context_hash, rep.report_hash),
+            )
+
+        # 6. Confidence inflation checks
+        expected_ctx_tier = determine_sample_size_tier(ctx.eligible_match_count)
+        if CONFIDENCE_TIER_RANK[ctx.confidence_tier] > CONFIDENCE_TIER_RANK[expected_ctx_tier]:
+            _add(
+                "CONFIDENCE_INFLATION",
+                "BLOCKING",
+                f"Search confidence_tier '{ctx.confidence_tier}' exceeds sample-size tier '{expected_ctx_tier}'.",
+                (ctx.context_hash,),
+            )
+        if CONFIDENCE_TIER_RANK[rep.confidence_tier] > CONFIDENCE_TIER_RANK[ctx.confidence_tier]:
+            _add(
+                "CONFIDENCE_INFLATION",
+                "BLOCKING",
+                f"Scout confidence_tier '{rep.confidence_tier}' exceeds Search confidence_tier '{ctx.confidence_tier}'.",
+                (rep.report_hash,),
+            )
+        for f_ev in rep.formation_evidence:
+            f_max_tier = determine_sample_size_tier(f_ev.appearances)
+            if CONFIDENCE_TIER_RANK[f_ev.confidence_tier] > CONFIDENCE_TIER_RANK[f_max_tier]:
+                _add(
+                    "CONFIDENCE_INFLATION",
+                    "BLOCKING",
+                    f"Formation '{f_ev.formation}' confidence '{f_ev.confidence_tier}' exceeds tier '{f_max_tier}'.",
+                    (f"formation:{f_ev.formation}",),
+                )
+        for hyp in rep.hypotheses:
+            h_max_tier = determine_sample_size_tier(hyp.eligible_match_count)
+            if CONFIDENCE_TIER_RANK[hyp.confidence_tier] > CONFIDENCE_TIER_RANK[h_max_tier]:
+                _add(
+                    "CONFIDENCE_INFLATION",
+                    "BLOCKING",
+                    f"Hypothesis '{hyp.hypothesis_id}' confidence '{hyp.confidence_tier}' exceeds tier '{h_max_tier}'.",
+                    (hyp.hypothesis_id,),
+                )
+
+        # 7. Recent-vs-baseline sign conflict and warning divergence
+        if (
+            t_ev.win_rate is not None
+            and t_ev.recent_win_rate is not None
+            and t_ev.win_rate_delta is not None
+        ):
+            expected_wr_delta = round(t_ev.recent_win_rate - t_ev.win_rate, 4)
+            if abs(t_ev.win_rate_delta - expected_wr_delta) > 0.05 or (
+                expected_wr_delta != 0.0
+                and (t_ev.win_rate_delta > 0) != (expected_wr_delta > 0)
+            ):
+                _add(
+                    "RECENT_VS_BASELINE_SIGN_CONFLICT",
+                    "BLOCKING",
+                    "Recent win-rate delta sign or value conflicts with recent_win_rate minus win_rate.",
+                    ("team:win_rate_delta",),
+                )
+        if (
+            t_ev.average_goal_differential is not None
+            and t_ev.recent_average_goal_differential is not None
+            and t_ev.goal_differential_delta is not None
+        ):
+            expected_gd_delta = round(
+                t_ev.recent_average_goal_differential - t_ev.average_goal_differential, 4
+            )
+            if abs(t_ev.goal_differential_delta - expected_gd_delta) > 0.05 or (
+                expected_gd_delta != 0.0
+                and (t_ev.goal_differential_delta > 0) != (expected_gd_delta > 0)
+            ):
+                _add(
+                    "RECENT_VS_BASELINE_SIGN_CONFLICT",
+                    "BLOCKING",
+                    "Recent goal-differential delta sign or value conflicts with recent minus baseline goal differential.",
+                    ("team:goal_differential_delta",),
+                )
+
+        # Non-blocking warning contradiction when recent win rate delta and recent GD delta have opposite signs
+        if (
+            t_ev.win_rate_delta is not None
+            and t_ev.goal_differential_delta is not None
+            and (
+                (t_ev.win_rate_delta > 0.0 and t_ev.goal_differential_delta < 0.0)
+                or (t_ev.win_rate_delta < 0.0 and t_ev.goal_differential_delta > 0.0)
+            )
+        ):
+            _add(
+                "RECENT_VS_BASELINE_METRIC_DIVERGENCE",
+                "WARNING",
+                "In the available East Coasters sample, recent win-rate delta and recent goal-differential delta moved in opposite directions.",
+                ("team:recent_5_vs_baseline_20",),
+                resolution_status="EXPLAINED",
+            )
+
+        # 8. Hypothesis direction mismatch
+        for hyp in rep.hypotheses:
+            expected_delta = round(hyp.comparison_value - hyp.baseline_value, 4)
+            stmt_lower = hyp.statement.lower()
+            if abs(hyp.absolute_delta - expected_delta) > 0.05:
+                _add(
+                    "HYPOTHESIS_DIRECTION_MISMATCH",
+                    "BLOCKING",
+                    f"Hypothesis '{hyp.hypothesis_id}' absolute_delta ({hyp.absolute_delta}) disagrees with comparison minus baseline ({expected_delta}).",
+                    (hyp.hypothesis_id,),
+                )
+            elif (
+                (hyp.direction == "HIGHER" and hyp.comparison_value <= hyp.baseline_value)
+                or (hyp.direction == "LOWER" and hyp.comparison_value >= hyp.baseline_value)
+                or ("higher" in stmt_lower and hyp.comparison_value < hyp.baseline_value)
+                or ("lower" in stmt_lower and hyp.comparison_value > hyp.baseline_value)
+            ):
+                _add(
+                    "HYPOTHESIS_DIRECTION_MISMATCH",
+                    "BLOCKING",
+                    f"Hypothesis '{hyp.hypothesis_id}' directional wording conflicts with comparison ({hyp.comparison_value}) vs baseline ({hyp.baseline_value}).",
+                    (hyp.hypothesis_id,),
+                )
+
+        # 9. Formation total overflow
+        total_formation_matches = sum(f.appearances for f in rep.formation_evidence)
+        if total_formation_matches > ctx.eligible_match_count or any(
+            f.appearances > ctx.eligible_match_count or (f.wins + f.draws + f.losses != f.appearances)
+            for f in rep.formation_evidence
+        ):
+            _add(
+                "FORMATION_TOTAL_OVERFLOW",
+                "BLOCKING",
+                f"Formation match totals ({total_formation_matches}) exceed eligible match count ({ctx.eligible_match_count}) or W/D/L sums disagree.",
+                tuple(f"formation:{f.formation}" for f in rep.formation_evidence) or ("formation",),
+            )
+
+        # 10. Role total overflow
+        total_eligible_appearances = sum(len(m.player_appearances) for m in ctx.baseline_matches)
+        total_role_appearances = sum(r.appearances for r in rep.role_evidence)
+        if (
+            total_role_appearances > total_eligible_appearances
+            or any(
+                r.distinct_matches > ctx.eligible_match_count
+                or r.appearances > total_eligible_appearances
+                or (r.team_wins + r.team_draws + r.team_losses != r.distinct_matches)
+                for r in rep.role_evidence
+            )
+        ):
+            _add(
+                "ROLE_TOTAL_OVERFLOW",
+                "BLOCKING",
+                f"Role appearance totals ({total_role_appearances}) or match counts exceed eligible bounds ({total_eligible_appearances}).",
+                tuple(f"role:{r.role}:{r.focus}:{r.position}" for r in rep.role_evidence) or ("role",),
+            )
+
+        # 11. Partnership overflow
+        player_app_counts = {p.player_ref: p.appearances for p in rep.player_evidence}
+        for part in rep.partnership_evidence:
+            max_possible = min(
+                ctx.eligible_match_count,
+                player_app_counts.get(part.player_ref_a, ctx.eligible_match_count),
+                player_app_counts.get(part.player_ref_b, ctx.eligible_match_count),
+            )
+            if (
+                part.shared_appearances > ctx.eligible_match_count
+                or part.shared_appearances > max_possible
+                or (part.wins + part.draws + part.losses != part.shared_appearances)
+            ):
+                _add(
+                    "PARTNERSHIP_OVERFLOW",
+                    "BLOCKING",
+                    f"Partnership {part.player_ref_a}+{part.player_ref_b} shared_appearances ({part.shared_appearances}) exceeds eligible bound ({max_possible}).",
+                    (f"partnership:{part.player_ref_a}:{part.player_ref_b}",),
+                )
+
+        # 12. Evidence reference resolution & duplicate checks
+        known_match_hashes = {m.match_hash for m in ctx.baseline_matches}
+        known_player_refs = {
+            p.player_ref for m in ctx.baseline_matches for p in m.player_appearances
+        } | {p.player_ref for p in rep.player_evidence}
+        known_formations = {m.formation for m in ctx.baseline_matches if m.formation} | {
+            f.formation for f in rep.formation_evidence
+        }
+        known_roles = {
+            p.role for m in ctx.baseline_matches for p in m.player_appearances if p.role
+        } | {r.role for r in rep.role_evidence}
+
+        seen_rep_ev_ids: set[str] = set()
+        for ref in rep.evidence_references:
+            if ref.evidence_id in seen_rep_ev_ids:
+                _add(
+                    "DUPLICATE_EVIDENCE_REFERENCE",
+                    "BLOCKING",
+                    f"Duplicate evidence_id '{ref.evidence_id}' in Scout report evidence_references.",
+                    (ref.evidence_id,),
+                )
+            seen_rep_ev_ids.add(ref.evidence_id)
+            if len(set(ref.match_hashes)) != len(ref.match_hashes) or len(set(ref.player_refs)) != len(ref.player_refs):
+                _add(
+                    "DUPLICATE_EVIDENCE_REFERENCE",
+                    "BLOCKING",
+                    f"Evidence reference '{ref.evidence_id}' contains duplicate match_hashes or player_refs.",
+                    (ref.evidence_id,),
+                )
+            unknown_mhashes = [mh for mh in ref.match_hashes if mh not in known_match_hashes]
+            unknown_prefs = [pr for pr in ref.player_refs if pr not in known_player_refs]
+            if unknown_mhashes or unknown_prefs:
+                _add(
+                    "UNKNOWN_EVIDENCE_REFERENCE",
+                    "BLOCKING",
+                    f"Evidence reference '{ref.evidence_id}' cites unknown matches or player_refs.",
+                    (ref.evidence_id,),
+                )
+
+        for hyp in rep.hypotheses:
+            if len(set(hyp.supporting_match_hashes)) != len(hyp.supporting_match_hashes):
+                _add(
+                    "DUPLICATE_EVIDENCE_REFERENCE",
+                    "BLOCKING",
+                    f"Hypothesis '{hyp.hypothesis_id}' contains duplicate supporting_match_hashes.",
+                    (hyp.hypothesis_id,),
+                )
+            bad_hyp_m = [mh for mh in hyp.supporting_match_hashes if mh not in known_match_hashes]
+            bad_hyp_p = [pr for pr in hyp.supporting_player_refs if pr not in known_player_refs]
+            bad_hyp_f = [fr for fr in hyp.supporting_formation_refs if fr not in known_formations]
+            bad_hyp_r = [rr for rr in hyp.supporting_role_refs if rr not in known_roles]
+            if bad_hyp_m or bad_hyp_p or bad_hyp_f or bad_hyp_r:
+                _add(
+                    "UNKNOWN_EVIDENCE_REFERENCE",
+                    "BLOCKING",
+                    f"Hypothesis '{hyp.hypothesis_id}' cites unknown supporting references.",
+                    (hyp.hypothesis_id,),
+                )
 
     # 13. Cluster and finding level checks (if supplied)
     for cl in clusters:
@@ -3667,6 +3703,7 @@ def build_fc27_analyst_report(
         analyst_input=coerced,
         clusters=clusters,
         findings=bounded_findings,
+        _precomputed_upstream_contradictions=initial_contradictions,
     )
     blocking_final = [
         c

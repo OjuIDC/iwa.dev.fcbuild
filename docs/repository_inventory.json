@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
-  "base_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0",
-  "total_files": 366,
+  "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
+  "total_files": 369,
   "files": [
     {
       "path": ".gitattributes",
@@ -3663,6 +3663,36 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Offline verification suite for FC27 performance telemetry and optimization baseline",
       "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
+    },
+    {
+      "path": "docs/FC27_ADVISORY_CACHE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_ADVISORY_CACHE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Immutable six-report advisory bundle cache specification and before/after benchmark report",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
+    },
+    {
+      "path": "src/fc27_advisory_cache.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_advisory_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Thread-safe single-flight immutable six-report advisory cache and persisted batch key builder",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
+    },
+    {
+      "path": "tests/test_fc27_advisory_cache.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_advisory_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Offline verification suite for FC27 advisory report cache and internal validation optimization",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
     }
   ]
 }

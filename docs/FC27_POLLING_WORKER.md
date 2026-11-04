@@ -73,9 +73,10 @@ All polling settings in `src/settings.py` and `config.example.env` fail closed o
 - **Idempotency & Replay Conflict Quarantine**:
   - Identical `match_hash` rows are ignored (`duplicate_match_count`), returning `NO_NEW_MATCHES` when `inserted_match_count == 0`.
   - Changed `match_hash` for an existing `(club_id, match_id)` is recorded in `fc27_quarantine_records` (`REPLAY_CONFLICT`), rolls back the match batch, and trips the circuit breaker to `OPEN`.
-- **Analytics Only on New Matches**:
-  - `run_analytics_from_persisted_community_records` (`Search -> Scout -> Analyst`) executes **if and only if** `inserted_match_count > 0` (`NEW_MATCHES_PERSISTED`).
-  - When `inserted_match_count == 0`, `analytics_executed` is `False`.
+- **Analytics Only on New Matches & Advisory Cache Invalidation**:
+  - `run_analytics_from_persisted_community_records` (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`) executes **if and only if** `inserted_match_count > 0` (`NEW_MATCHES_PERSISTED`), invalidating any prior `FC27AdvisoryCache` entry (`reason="NEW_MATCHES_PERSISTED"`) and pre-warming the cache with the new six-report advisory bundle (`src/fc27_advisory_cache.py`, documented in [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)).
+  - When `inserted_match_count == 0` (`NO_NEW_MATCHES`), `analytics_executed` is `False` and any valid `FC27AdvisoryCache` entry for the current persisted batch key is preserved.
+  - On `REPLAY_CONFLICT`, the worker immediately invalidates the advisory cache (`reason="REPLAY_CONFLICT"`).
 
 ---
 

@@ -22,3 +22,4 @@ Allowed `candidate_type` values:
 - **Single-variable discipline**: `single_variable_change=True` and `len(changed_variables) == 1` for every active candidate (`DATA_COLLECTION_HOLD` has `changed_variables=()`).
 - **Mandatory risk & rollback metadata**: Every candidate defines `preconditions`, `target_metrics`, `stop_loss_triggers`, `rollback_condition`, `risk_notes`, `confounders`, and `data_gaps`.
 - **Privacy & roster protection**: Rejects gamer tags, raw player names, and lineup/selection directives (`bench`, `drop`, `replace player`).
+- **Verified upstream model fast-path & advisory caching**: Verified frozen upstream reports (`FC27SearchContext`, `FC27ScoutReport`, `FC27AnalystReport`, `FC27CoachReport`) skip redundant recursive privacy re-scans unless structurally mutated, and completed `FC27TacticsReport` bundles are cached in [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py) (see [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)).

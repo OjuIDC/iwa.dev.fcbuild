@@ -38,6 +38,11 @@ from src.fc27_api_cache import (
     FC27CacheKeySpec,
     build_fc27_cache_key,
 )
+from src.fc27_advisory_cache import (
+    FC27AdvisoryCache,
+    fetch_persisted_advisory_cache_key,
+    get_default_advisory_cache,
+)
 from src.fc27_api_rate_limit import (
     FC27AdapterCircuitBreaker,
     FC27CircuitState,
@@ -1377,6 +1382,7 @@ class FC27PollingRuntime:
     owner_id: str = field(default_factory=lambda: f"worker-{uuid.uuid4().hex[:8]}")
     clock: Callable[[], float] = field(default=time.monotonic, repr=False)
     cache: FC27BoundedNormalizedCache = field(init=False)
+    advisory_cache: FC27AdvisoryCache = field(init=False, repr=False)
     rate_limiter: FC27ProviderTokenBucketLimiter = field(init=False)
     circuit_breaker: FC27AdapterCircuitBreaker = field(init=False)
     worker_running: bool = False
@@ -1417,6 +1423,7 @@ class FC27PollingRuntime:
             operation_ttls={POLL_OPERATION_NAME: self.policy.cache_ttl_seconds},
             clock=self.clock,
         )
+        self.advisory_cache = FC27AdvisoryCache(clock_fn=self.clock)
         self.rate_limiter = FC27ProviderTokenBucketLimiter(
             enabled=True,
             capacity=1,
@@ -2047,6 +2054,18 @@ def run_fc27_poll_cycle(
                     )
         except FC27ReplayConflictError:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
+            conflict_cnt = max(1, match_envelope.accepted_record_count)
+            rt.advisory_cache.on_poll_cycle_outcome(
+                poll_status="REPLAY_CONFLICT",
+                replay_conflict_count=conflict_cnt,
+            )
+            if rt is get_default_polling_runtime():
+                get_default_advisory_cache().on_poll_cycle_outcome(
+                    poll_status="REPLAY_CONFLICT",
+                    replay_conflict_count=conflict_cnt,
+                )
+            else:
+                get_default_advisory_cache().invalidate_for_new_matches()
             return _finalize(
                 poll_status="REPLAY_CONFLICT",
                 single_flight_acquired=True,
@@ -2056,7 +2075,7 @@ def run_fc27_poll_cycle(
                 accepted_match_count=match_envelope.accepted_record_count,
                 inserted_match_count=0,
                 duplicate_ignored_count=0,
-                replay_conflict_count=max(1, match_envelope.accepted_record_count),
+                replay_conflict_count=conflict_cnt,
                 analytics_executed=False,
                 error_category="REPLAY_CONFLICT",
                 is_failure=True,
@@ -2101,6 +2120,17 @@ def run_fc27_poll_cycle(
 
         if persistence_summary.replay_conflicts > 0:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
+            rt.advisory_cache.on_poll_cycle_outcome(
+                poll_status="REPLAY_CONFLICT",
+                replay_conflict_count=persistence_summary.replay_conflicts,
+            )
+            if rt is get_default_polling_runtime():
+                get_default_advisory_cache().on_poll_cycle_outcome(
+                    poll_status="REPLAY_CONFLICT",
+                    replay_conflict_count=persistence_summary.replay_conflicts,
+                )
+            else:
+                get_default_advisory_cache().invalidate_for_new_matches()
             return _finalize(
                 poll_status="REPLAY_CONFLICT",
                 single_flight_acquired=True,
@@ -2164,6 +2194,18 @@ def run_fc27_poll_cycle(
 
         # PART L — Execute Search -> Scout -> Analyst ONLY when new matches were inserted
         if inserted_matches <= 0:
+            rt.advisory_cache.on_poll_cycle_outcome(
+                poll_status="NO_NEW_MATCHES",
+                inserted_match_count=0,
+                duplicate_ignored_count=duplicate_matches,
+                replay_conflict_count=0,
+            )
+            get_default_advisory_cache().on_poll_cycle_outcome(
+                poll_status="NO_NEW_MATCHES",
+                inserted_match_count=0,
+                duplicate_ignored_count=duplicate_matches,
+                replay_conflict_count=0,
+            )
             return _finalize(
                 poll_status="NO_NEW_MATCHES",
                 single_flight_acquired=True,
@@ -2187,6 +2229,19 @@ def run_fc27_poll_cycle(
                 continuity_last_verified_at=verified_at,
                 continuity_anchor_match_id=anchor_mid,
             )
+
+        rt.advisory_cache.on_poll_cycle_outcome(
+            poll_status="NEW_MATCHES_PERSISTED",
+            inserted_match_count=inserted_matches,
+            duplicate_ignored_count=duplicate_matches,
+            replay_conflict_count=0,
+        )
+        get_default_advisory_cache().on_poll_cycle_outcome(
+            poll_status="NEW_MATCHES_PERSISTED",
+            inserted_match_count=inserted_matches,
+            duplicate_ignored_count=duplicate_matches,
+            replay_conflict_count=0,
+        )
 
         if analytics_fn is not None:
             analytics_bundle = analytics_fn()
@@ -2219,6 +2274,35 @@ def run_fc27_poll_cycle(
                     payload_sha256=match_envelope.payload_hash,
                     analysis_generated_at=_normalize_utc(clock_utc()),
                 )
+                try:
+                    persisted_key, persisted_cnt = fetch_persisted_advisory_cache_key(
+                        guarded_conn
+                    )
+                    if persisted_cnt > 0:
+                        rt.advisory_cache.get_or_build(
+                            persisted_key,
+                            lambda: (
+                                search_ctx,
+                                scout_rep,
+                                analyst_rep,
+                                coach_rep,
+                                tactics_rep,
+                                director_rep,
+                            ),
+                        )
+                        get_default_advisory_cache().get_or_build(
+                            persisted_key,
+                            lambda: (
+                                search_ctx,
+                                scout_rep,
+                                analyst_rep,
+                                coach_rep,
+                                tactics_rep,
+                                director_rep,
+                            ),
+                        )
+                except Exception:
+                    pass
             analytics_bundle = {
                 "search_context_hash": search_ctx.context_hash,
                 "scout_report_hash": scout_rep.report_hash,

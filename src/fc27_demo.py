@@ -50,6 +50,11 @@ from scripts.fc27_demo_fixture_server import (
     validate_loopback_bind_host,
 )
 from src import settings
+from src.fc27_advisory_cache import (
+    FC27AdvisoryCache,
+    FC27AdvisoryCacheKey,
+    build_advisory_cache_key_from_matches,
+)
 from src.fc27_analyst import (
     ANALYST_POLICY_VERSION,
     ANALYST_SYNTHESIS_VERSION,
@@ -630,6 +635,7 @@ class FC27DemoSessionArtifacts(BaseModel):
     coach_report: Optional[FC27CoachReport] = None
     tactics_report: Optional[FC27TacticsReport] = None
     director_report: Optional[FC27DirectorReport] = None
+    advisory_cache_key: Optional[FC27AdvisoryCacheKey] = None
 
 
 class _CachedNormalizedDemoPayload(BaseModel):
@@ -956,6 +962,7 @@ class FC27DemoStateStore:
         self._lock = threading.Lock()
         self._artifacts: Optional[FC27DemoSessionArtifacts] = None
         self._cache = FC27BoundedNormalizedCache(enabled=True)
+        self._advisory_cache = FC27AdvisoryCache()
         self._limiter = FC27ProviderTokenBucketLimiter(
             enabled=True,
             capacity=4,
@@ -975,6 +982,10 @@ class FC27DemoStateStore:
         return self._cache
 
     @property
+    def advisory_cache(self) -> FC27AdvisoryCache:
+        return self._advisory_cache
+
+    @property
     def limiter(self) -> FC27ProviderTokenBucketLimiter:
         return self._limiter
 
@@ -988,12 +999,19 @@ class FC27DemoStateStore:
 
     def set_artifacts(self, artifacts: FC27DemoSessionArtifacts) -> None:
         with self._lock:
+            prev = self._artifacts
+            if prev is not None and (
+                prev.scenario != artifacts.scenario
+                or prev.result.execution_hash != artifacts.result.execution_hash
+            ):
+                self._advisory_cache.invalidate_for_new_matches()
             self._artifacts = artifacts
 
     def reset(self) -> None:
         with self._lock:
             self._artifacts = None
             self._cache.clear()
+            self._advisory_cache.reset()
             self._limiter.reset()
             self._breaker.manual_reset(authorization_reference=DEMO_AUTH_VERSION)
 
@@ -1388,59 +1406,94 @@ def run_fc27_demo_ingestion_with_artifacts(
                 "DUPLICATE_IGNORED" if apply_res.idempotent_duplicate else "APPLIED"
             )
 
-    # Step 20, 21, 22: Build Search context, Scout report, and Analyst report
+    # Step 20, 21, 22: Build Search context, Scout report, and Analyst report (cached via FC27AdvisoryCache)
+    target_store = state_store if state_store is not None else DEFAULT_DEMO_STATE_STORE
+    if persistence_status == "APPLIED" and accepted_count > 0:
+        target_store.advisory_cache.invalidate_for_new_matches()
+
     candidates = _supplied_matches_to_search_candidates(
         normalized_bundle.match_envelopes,
         normalized_bundle.supplied_matches,
         payload_sha256=normalized_bundle.payload_sha256,
     )
-    search_input = FC27SearchInput(
-        identity=FC27AnalysisIdentity(
-            club_id=TARGET_CLUB_ID,
-            club_name=TARGET_CLUB_NAME,
-            platform=TARGET_PLATFORM,
-            game_version=TARGET_GAME_VERSION,
-        ),
-        analysis_generated_at=analysis_generated_at,
-        source_classification="SYNTHETIC_FIXTURE",
-        candidate_matches=tuple(candidates),
+    advisory_key = build_advisory_cache_key_from_matches(
+        candidates,
+        latest_export_batch_id=f"{export_id}:{scenario}:{canonical_op_name}:{analysis_generated_at}",
+        club_id=TARGET_CLUB_ID,
+        platform=TARGET_PLATFORM,
+        game_version=TARGET_GAME_VERSION,
+        normalized_data_hash_override=hashlib.sha256(
+            f"{normalized_bundle.payload_sha256}:{analysis_generated_at}:{len(candidates)}".encode("utf-8")
+        ).hexdigest(),
     )
-    search_context = build_fc27_search_context(search_input)
-    scout_report = build_fc27_scout_report(search_context)
-    analyst_report = build_fc27_analyst_report(
-        FC27AnalystInput(
-            search_context=search_context,
-            scout_report=scout_report,
+
+    def _build_demo_advisory_bundle() -> Tuple[
+        FC27SearchContext,
+        FC27ScoutReport,
+        FC27AnalystReport,
+        FC27CoachReport,
+        FC27TacticsReport,
+        FC27DirectorReport,
+    ]:
+        search_input = FC27SearchInput(
+            identity=FC27AnalysisIdentity(
+                club_id=TARGET_CLUB_ID,
+                club_name=TARGET_CLUB_NAME,
+                platform=TARGET_PLATFORM,
+                game_version=TARGET_GAME_VERSION,
+            ),
             analysis_generated_at=analysis_generated_at,
+            source_classification="SYNTHETIC_FIXTURE",
+            candidate_matches=tuple(candidates),
         )
-    )
-    coach_report = build_fc27_coach_report(
-        FC27CoachInput(
-            search_context=search_context,
-            scout_report=scout_report,
-            analyst_report=analyst_report,
-            coach_generated_at=analysis_generated_at,
+        s_ctx = build_fc27_search_context(search_input)
+        sc_rep = build_fc27_scout_report(s_ctx)
+        an_rep = build_fc27_analyst_report(
+            FC27AnalystInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analysis_generated_at=analysis_generated_at,
+            )
         )
-    )
-    tactics_report = build_fc27_tactics_report(
-        FC27TacticsInput(
-            search_context=search_context,
-            scout_report=scout_report,
-            analyst_report=analyst_report,
-            coach_report=coach_report,
-            tactics_generated_at=analysis_generated_at,
+        co_rep = build_fc27_coach_report(
+            FC27CoachInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_generated_at=analysis_generated_at,
+            )
         )
-    )
-    director_report = build_fc27_director_report(
-        FC27DirectorInput(
-            search_context=search_context,
-            scout_report=scout_report,
-            analyst_report=analyst_report,
-            coach_report=coach_report,
-            tactics_report=tactics_report,
-            director_generated_at=analysis_generated_at,
+        ta_rep = build_fc27_tactics_report(
+            FC27TacticsInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_report=co_rep,
+                tactics_generated_at=analysis_generated_at,
+            )
         )
+        di_rep = build_fc27_director_report(
+            FC27DirectorInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_report=co_rep,
+                tactics_report=ta_rep,
+                director_generated_at=analysis_generated_at,
+            )
+        )
+        return (s_ctx, sc_rep, an_rep, co_rep, ta_rep, di_rep)
+
+    cached_advisory = target_store.advisory_cache.get_or_build(
+        advisory_key,
+        _build_demo_advisory_bundle,
     )
+    search_context = cached_advisory.search_context
+    scout_report = cached_advisory.scout_report
+    analyst_report = cached_advisory.analyst_report
+    coach_report = cached_advisory.coach_report
+    tactics_report = cached_advisory.tactics_report
+    director_report = cached_advisory.director_report
 
     player_perf_count = sum(len(m.player_statistics) for m in normalized_bundle.match_envelopes)
     unique_players = len(
@@ -1549,8 +1602,8 @@ def run_fc27_demo_ingestion_with_artifacts(
         coach_report=coach_report,
         tactics_report=tactics_report,
         director_report=director_report,
+        advisory_cache_key=advisory_key,
     )
-    target_store = state_store if state_store is not None else DEFAULT_DEMO_STATE_STORE
     target_store.set_artifacts(artifacts)
     return artifacts
 

@@ -317,24 +317,70 @@ def _ensure_non_negative_int(
     return val
 
 
-def _scan_reject_privacy_fields(obj: Any, path: str = "input") -> None:
-    """Recursively scan mapping keys and values for forbidden privacy/raw fields."""
-    sensitive_paths = scan_for_sensitive_fields(obj, prefix=path)
-    if sensitive_paths:
-        raise FC27PrivacyViolationError(
-            f"Sensitive or forbidden fields rejected at: {', '.join(sensitive_paths[:5])}"
-        )
+def _walk_reject_privacy_fields(
+    obj: Any,
+    path: str,
+    *,
+    already_scanned_by_sensitive_scan: bool,
+) -> None:
+    if not already_scanned_by_sensitive_scan and isinstance(obj, (dict, list)):
+        sensitive_paths = scan_for_sensitive_fields(obj, prefix=path)
+        if sensitive_paths:
+            raise FC27PrivacyViolationError(
+                f"Sensitive or forbidden fields rejected at: {', '.join(sensitive_paths[:5])}"
+            )
+        already_scanned_by_sensitive_scan = True
+
     if isinstance(obj, Mapping):
+        if not isinstance(obj, dict):
+            sensitive_paths = scan_for_sensitive_fields(
+                {str(k): None for k in obj.keys()}, prefix=path
+            )
+            if sensitive_paths:
+                raise FC27PrivacyViolationError(
+                    f"Sensitive or forbidden fields rejected at: {', '.join(sensitive_paths[:5])}"
+                )
+            child_scanned = False
+        else:
+            child_scanned = already_scanned_by_sensitive_scan
+
         for k, v in obj.items():
             key_norm = str(k).strip().lower()
             if key_norm in _FORBIDDEN_INPUT_KEYS:
                 raise FC27PrivacyViolationError(
                     f"Forbidden field '{k}' rejected at {path}.{k}"
                 )
-            _scan_reject_privacy_fields(v, f"{path}.{k}")
-    elif isinstance(obj, (list, tuple)):
+            if isinstance(v, (Mapping, list, tuple)):
+                _walk_reject_privacy_fields(
+                    v,
+                    f"{path}.{k}",
+                    already_scanned_by_sensitive_scan=child_scanned,
+                )
+    elif isinstance(obj, list):
         for idx, item in enumerate(obj):
-            _scan_reject_privacy_fields(item, f"{path}[{idx}]")
+            if isinstance(item, (Mapping, list, tuple)):
+                _walk_reject_privacy_fields(
+                    item,
+                    f"{path}[{idx}]",
+                    already_scanned_by_sensitive_scan=already_scanned_by_sensitive_scan,
+                )
+    elif isinstance(obj, tuple):
+        for idx, item in enumerate(obj):
+            if isinstance(item, (Mapping, list, tuple)):
+                _walk_reject_privacy_fields(
+                    item,
+                    f"{path}[{idx}]",
+                    already_scanned_by_sensitive_scan=False,
+                )
+
+
+def _scan_reject_privacy_fields(obj: Any, path: str = "input") -> None:
+    """Recursively scan mapping keys and values for forbidden privacy/raw fields."""
+    _walk_reject_privacy_fields(
+        obj,
+        path,
+        already_scanned_by_sensitive_scan=False,
+    )
 
 
 def _validate_statement_language(text: str, field_name: str = "statement") -> str:
@@ -1541,7 +1587,8 @@ def build_fc27_search_context(
 
     for idx, raw_cand in enumerate(validated_input.candidate_matches):
         raw_dict = _normalize_candidate_dict(raw_cand)
-        _scan_reject_privacy_fields(raw_dict, path=f"candidate_matches[{idx}]")
+        if not isinstance(raw_cand, (FC27NormalizedMatchEvidenceRecord, ClubMatchRow)):
+            _scan_reject_privacy_fields(raw_dict, path=f"candidate_matches[{idx}]")
         m_id = str(raw_dict.get("match_id") or raw_dict.get("external_match_id") or "").strip()
         m_hash = str(raw_dict.get("match_hash") or raw_dict.get("record_hash") or "").strip()
         if m_id and m_hash:
@@ -1688,41 +1735,39 @@ def build_fc27_search_context(
             if isinstance(app_item, FC27NormalizedPlayerAppearance):
                 norm_apps.append(app_item)
             elif isinstance(app_item, Mapping):
-                app_dict = copy.deepcopy(dict(app_item))
-                _scan_reject_privacy_fields(app_dict, path=f"match[{m_id}].player")
                 p_ref = str(
-                    app_dict.pop("player_ref", None)
-                    or app_dict.pop("local_player_reference", None)
-                    or app_dict.pop("local_player_ref", None)
-                    or app_dict.pop("player_id", None)
+                    app_item.get("player_ref")
+                    or app_item.get("local_player_reference")
+                    or app_item.get("local_player_ref")
+                    or app_item.get("player_id")
                     or ""
                 ).strip()
                 pos = str(
-                    app_dict.pop("position", None)
-                    or app_dict.pop("position_code", None)
+                    app_item.get("position")
+                    or app_item.get("position_code")
                     or "CM"
                 ).strip()
-                role_val = app_dict.pop("role", None) or app_dict.pop("role_name", None)
+                role_val = app_item.get("role") or app_item.get("role_name")
                 norm_apps.append(
                     FC27NormalizedPlayerAppearance(
                         player_ref=p_ref,
                         position=pos,
                         role=role_val,
-                        role_focus=app_dict.get("role_focus"),
-                        build_reference=app_dict.get("build_reference"),
-                        started=app_dict.get("started"),
-                        minutes_played=app_dict.get("minutes_played", 90),
-                        match_rating=app_dict.get("match_rating"),
-                        goals=app_dict.get("goals", 0),
-                        assists=app_dict.get("assists", 0),
-                        passes_attempted=app_dict.get("passes_attempted"),
-                        passes_completed=app_dict.get("passes_completed"),
-                        tackles_attempted=app_dict.get("tackles_attempted"),
-                        tackles_won=app_dict.get("tackles_won"),
-                        interceptions=app_dict.get("interceptions"),
-                        shots=app_dict.get("shots"),
-                        shots_on_target=app_dict.get("shots_on_target"),
-                        saves=app_dict.get("saves"),
+                        role_focus=app_item.get("role_focus"),
+                        build_reference=app_item.get("build_reference"),
+                        started=app_item.get("started"),
+                        minutes_played=app_item.get("minutes_played", 90),
+                        match_rating=app_item.get("match_rating"),
+                        goals=app_item.get("goals", 0),
+                        assists=app_item.get("assists", 0),
+                        passes_attempted=app_item.get("passes_attempted"),
+                        passes_completed=app_item.get("passes_completed"),
+                        tackles_attempted=app_item.get("tackles_attempted"),
+                        tackles_won=app_item.get("tackles_won"),
+                        interceptions=app_item.get("interceptions"),
+                        shots=app_item.get("shots"),
+                        shots_on_target=app_item.get("shots_on_target"),
+                        saves=app_item.get("saves"),
                     )
                 )
             else:

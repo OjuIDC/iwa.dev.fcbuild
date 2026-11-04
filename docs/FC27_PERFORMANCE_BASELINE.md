@@ -3,8 +3,8 @@
 - **Status**: Current (`IMPLEMENTED_AND_TESTED`)
 - **Audience**: Developers, Operators, Architects, Security Reviewers
 - **Target Club**: `East Coasters` (`club_id = 330323`, `platform = common-gen5`, `game_version = FC27`)
-- **Source of Truth**: [`src/fc27_performance.py`](../src/fc27_performance.py), [`src/settings.py`](../src/settings.py), [`config.example.env`](../config.example.env), [`tests/test_fc27_performance.py`](../tests/test_fc27_performance.py)
-- **Companion Specifications**: [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md), [`docs/FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md)
+- **Source of Truth**: [`src/fc27_performance.py`](../src/fc27_performance.py), [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py), [`src/settings.py`](../src/settings.py), [`config.example.env`](../config.example.env), [`tests/test_fc27_performance.py`](../tests/test_fc27_performance.py), [`tests/test_fc27_advisory_cache.py`](../tests/test_fc27_advisory_cache.py)
+- **Companion Specifications**: [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md), [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md), [`docs/FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md)
 - **Baseline Schema Version**: `fc27-performance-baseline-v1`
 - **Measured Baseline Hash**: `7ebee1784c0580a47a1b30f2c5fd8beb9eaee091c1255a67182c725226c23e4d`
 
@@ -192,6 +192,15 @@ Profiling the `LARGE` (`1,000` matches / `6,000` player rows) advisory chain wit
 1. **PostgreSQL 16 is sub-millisecond**: Operational read queries execute in `0.157 ms`–`0.352 ms` (`2.764 ms` with planning).
 2. **Warm cached endpoints are sub-60 ms**: The dashboard serves cached `/demo/status` in `3.904 ms` median (`6.388 ms` p95) and `/api/fc27/demo/director` in `23.175 ms` median (`24.706 ms` p95).
 3. **Every exceeded threshold is caused by uncached recomputation and redundant recursive `scan_for_sensitive_fields` calls inside Python**: Memoizing the read-only advisory report bundle in [`src/fc27_discord_bot.py`](../src/fc27_discord_bot.py) (matching [`src/fc27_demo_api.py`](../src/fc27_demo_api.py)) and skipping redundant recursive `scan_for_sensitive_fields` re-scans on already-validated frozen internal models (`INTERNAL_REVALIDATION_CANDIDATE_FOR_REVIEW`) resolves all three exceeded thresholds entirely within Python without introducing Go, Rust, C#/.NET, or C/C++.
+
+### Post-Optimization Verification (`src/fc27_advisory_cache.py`)
+
+Implementing [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py) (`FC27AdvisoryCache`, documented in [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)) and deduplicating internal privacy rescans on already-verified frozen models resolved all three exceeded baseline thresholds (`0` of `9` thresholds exceeded):
+
+- **Discord command handler warm p95**: reduced from `1293.184 ms` (`/fc27 director`) to `67.995 ms` (`< 100 ms` target; `115.151 ms` max across all 8 commands, well below `1000.0 ms`).
+- **Operational analytical transformation p95 (`SMALL`, `10` matches)**: reduced from `1290.522 ms` to `194.929 ms` (`< 500.0 ms` threshold).
+- **Full advisory pipeline p95 (`LARGE`, `1,000` matches)**: reduced from `5992.632 ms` to `609.692 ms` (`< 2000.0 ms` threshold).
+- **Dashboard endpoint warm p95**: `5.305 ms` (`/demo/matches`) to `79.228 ms` (`/demo/analysis`), with `/api/fc27/demo/director` at `12.236 ms` p95 (`< 100 ms`).
 
 ---
 

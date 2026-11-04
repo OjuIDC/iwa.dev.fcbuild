@@ -37,6 +37,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src import settings
 from src.db_roles import check_runtime_posture
+from src.fc27_advisory_cache import (
+    FC27AdvisoryCache,
+    FC27AdvisoryCacheEntry,
+    FC27AdvisoryCacheKey,
+    FC27AdvisoryCachePolicy,
+    FC27AdvisoryCacheStats,
+    fetch_persisted_advisory_cache_key,
+    get_default_advisory_cache,
+)
 from src.fc27_analyst import FC27AnalystReport
 from src.fc27_clubs_api_contracts import (
     TARGET_CLUB_ID,
@@ -593,6 +602,7 @@ class FC27DiscordBotService:
         ]
         | None = _default_tactics_provider,
         director_report_provider: Callable[..., Any] | None = _default_director_provider,
+        advisory_cache: FC27AdvisoryCache | None = None,
         clock_fn: Callable[[], float] = time.monotonic,
         now_utc_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         secret_tokens_to_scrub: Sequence[str] = (),
@@ -605,6 +615,18 @@ class FC27DiscordBotService:
         self._director_provider = director_report_provider
         self._clock_fn = clock_fn
         self._now_utc_fn = now_utc_fn
+        if advisory_cache is not None:
+            self._advisory_cache = advisory_cache
+        elif (
+            polling_runtime is not None
+            and getattr(polling_runtime, "advisory_cache", None) is not None
+        ):
+            self._advisory_cache = polling_runtime.advisory_cache
+        else:
+            self._advisory_cache = FC27AdvisoryCache(
+                clock_fn=clock_fn,
+                now_utc_fn=now_utc_fn,
+            )
         self._secret_tokens = tuple(secret_tokens_to_scrub)
         self._rate_limiter = FC27DiscordRateLimiter(
             max_user_commands_per_minute=config.max_user_commands_per_minute,
@@ -622,6 +644,10 @@ class FC27DiscordBotService:
     @property
     def config(self) -> FC27DiscordBotConfig:
         return self._config
+
+    @property
+    def advisory_cache(self) -> FC27AdvisoryCache:
+        return self._advisory_cache
 
     @property
     def provider_requests_executed(self) -> int:
@@ -900,9 +926,7 @@ class FC27DiscordBotService:
             if is_export:
                 self._rate_limiter.release_export_slot()
 
-    def _load_persisted_matches_and_analytics(
-        self,
-    ) -> tuple[list[Any], FC27SearchContext | None, FC27ScoutReport | None, FC27AnalystReport | None]:
+    def _load_persisted_match_count(self) -> int:
         own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
         guarded = self._open_readonly_connection()
         try:
@@ -910,15 +934,101 @@ class FC27DiscordBotService:
                 "SELECT COUNT(*) FROM public.fc27_matches WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (TARGET_CLUB_ID, TARGET_PLATFORM, TARGET_GAME_VERSION),
             ).fetchone()
-            if not row or int(row[0]) == 0:
-                return ([], None, None, None)
-            search_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
-                guarded._conn
-            )
-            return (list(search_ctx.baseline_matches), search_ctx, scout_rep, analyst_rep)
+            return int(row[0]) if row and row[0] is not None else 0
         finally:
             if own_conn:
                 guarded._conn.close()
+
+    def _load_or_build_advisory_entry(
+        self,
+    ) -> tuple[
+        list[Any],
+        FC27SearchContext | None,
+        FC27ScoutReport | None,
+        FC27AnalystReport | None,
+        Any,
+        Any,
+        Any,
+    ]:
+        own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
+        guarded = self._open_readonly_connection()
+        try:
+            cache_key, match_count = fetch_persisted_advisory_cache_key(guarded)
+            if match_count == 0:
+                return ([], None, None, None, None, None, None)
+
+            if (
+                self._coach_provider is not None
+                and self._tactics_provider is not None
+                and self._director_provider is not None
+            ):
+                coach_prov = self._coach_provider
+                tactics_prov = self._tactics_provider
+                director_prov = self._director_provider
+
+                def _build_all_reports() -> tuple[
+                    FC27SearchContext,
+                    FC27ScoutReport,
+                    FC27AnalystReport,
+                    Any,
+                    Any,
+                    Any,
+                ]:
+                    s_ctx, sc_rep, an_rep = run_analytics_from_persisted_community_records(
+                        guarded._conn
+                    )
+                    c_rep = coach_prov(s_ctx, sc_rep, an_rep)
+                    t_rep = tactics_prov(s_ctx, sc_rep, an_rep, c_rep)
+                    try:
+                        d_rep = director_prov(s_ctx, sc_rep, an_rep, c_rep, t_rep)
+                    except TypeError:
+                        d_rep = director_prov(an_rep, c_rep, t_rep)
+                    return (s_ctx, sc_rep, an_rep, c_rep, t_rep, d_rep)
+
+                entry = self._advisory_cache.get_or_build(cache_key, _build_all_reports)
+                return (
+                    list(entry.search_context.baseline_matches),
+                    entry.search_context,
+                    entry.scout_report,
+                    entry.analyst_report,
+                    entry.coach_report,
+                    entry.tactics_report,
+                    entry.director_report,
+                )
+
+            cached = self._advisory_cache.get(cache_key)
+            if cached is not None:
+                return (
+                    list(cached.search_context.baseline_matches),
+                    cached.search_context,
+                    cached.scout_report,
+                    cached.analyst_report,
+                    None,
+                    None,
+                    None,
+                )
+
+            search_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
+                guarded._conn
+            )
+            return (
+                list(search_ctx.baseline_matches),
+                search_ctx,
+                scout_rep,
+                analyst_rep,
+                None,
+                None,
+                None,
+            )
+        finally:
+            if own_conn:
+                guarded._conn.close()
+
+    def _load_persisted_matches_and_analytics(
+        self,
+    ) -> tuple[list[Any], FC27SearchContext | None, FC27ScoutReport | None, FC27AnalystReport | None]:
+        matches, search_ctx, scout_rep, analyst_rep, _, _, _ = self._load_or_build_advisory_entry()
+        return (matches, search_ctx, scout_rep, analyst_rep)
 
     def _dispatch_authorized_subcommand(
         self,
@@ -951,11 +1061,10 @@ class FC27DiscordBotService:
                 ),
             )
 
-        matches, search_ctx, scout_rep, analyst_rep = self._load_persisted_matches_and_analytics()
-        match_count = len(matches)
         snap = self._polling_runtime.snapshot_health()
 
         if cmd == "status":
+            match_count = self._load_persisted_match_count()
             embed = FC27DiscordEmbed(
                 title=f"East Coasters ({TARGET_CLUB_ID}) — Platform Status",
                 description=(
@@ -985,6 +1094,7 @@ class FC27DiscordBotService:
             )
 
         if cmd == "polling":
+            match_count = self._load_persisted_match_count()
             embed = FC27DiscordEmbed(
                 title="East Coasters — 12-Hour Polling & Continuity Status",
                 description=(
@@ -1016,6 +1126,43 @@ class FC27DiscordBotService:
                 embeds=(embed,),
                 row_count=match_count,
             )
+
+        if cmd == "coach" and self._coach_provider is None:
+            return FC27DiscordResponse(
+                command="coach",
+                status="NOT_AVAILABLE_NOT_IMPLEMENTED",
+                content=NOT_AVAILABLE_NOT_IMPLEMENTED,
+                row_count=0,
+            )
+        if cmd == "tactics" and (self._coach_provider is None or self._tactics_provider is None):
+            return FC27DiscordResponse(
+                command="tactics",
+                status="NOT_AVAILABLE_NOT_IMPLEMENTED",
+                content=NOT_AVAILABLE_NOT_IMPLEMENTED,
+                row_count=0,
+            )
+        if cmd == "director" and (
+            self._coach_provider is None
+            or self._tactics_provider is None
+            or self._director_provider is None
+        ):
+            return FC27DiscordResponse(
+                command="director",
+                status="NOT_AVAILABLE_NOT_IMPLEMENTED",
+                content=NOT_AVAILABLE_NOT_IMPLEMENTED,
+                row_count=0,
+            )
+
+        (
+            matches,
+            search_ctx,
+            scout_rep,
+            analyst_rep,
+            cached_coach_rep,
+            cached_tactics_rep,
+            cached_director_rep,
+        ) = self._load_or_build_advisory_entry()
+        match_count = len(matches)
 
         if cmd == "latest":
             if not matches:
@@ -1209,7 +1356,11 @@ class FC27DiscordBotService:
                     content=NOT_AVAILABLE_NOT_IMPLEMENTED,
                     row_count=0,
                 )
-            coach_rep = self._coach_provider(search_ctx, scout_rep, analyst_rep)
+            coach_rep = (
+                cached_coach_rep
+                if cached_coach_rep is not None
+                else self._coach_provider(search_ctx, scout_rep, analyst_rep)
+            )
             hyps = getattr(coach_rep, "hypotheses", ())
             lines = [
                 f"- `{h.hypothesis_id}` ({h.artifact_type}, `{h.confidence_tier}`): {h.summary[:160]}"
@@ -1248,8 +1399,15 @@ class FC27DiscordBotService:
                     content=NOT_AVAILABLE_NOT_IMPLEMENTED,
                     row_count=0,
                 )
-            coach_rep = self._coach_provider(search_ctx, scout_rep, analyst_rep)
-            tactics_rep = self._tactics_provider(search_ctx, scout_rep, analyst_rep, coach_rep)
+            if cached_tactics_rep is not None:
+                tactics_rep = cached_tactics_rep
+            else:
+                coach_rep = (
+                    cached_coach_rep
+                    if cached_coach_rep is not None
+                    else self._coach_provider(search_ctx, scout_rep, analyst_rep)
+                )
+                tactics_rep = self._tactics_provider(search_ctx, scout_rep, analyst_rep, coach_rep)
             cands = getattr(tactics_rep, "candidates", ())
             lines = [
                 f"- `{c.candidate_id}` ({c.candidate_type}, `{c.confidence_tier}`): {c.expected_observation[:150]}"
@@ -1289,14 +1447,25 @@ class FC27DiscordBotService:
                     content=NOT_AVAILABLE_NOT_IMPLEMENTED,
                     row_count=0,
                 )
-            coach_rep = self._coach_provider(search_ctx, scout_rep, analyst_rep)
-            tactics_rep = self._tactics_provider(search_ctx, scout_rep, analyst_rep, coach_rep)
-            try:
-                director_rep = self._director_provider(
-                    search_ctx, scout_rep, analyst_rep, coach_rep, tactics_rep
+            if cached_director_rep is not None:
+                director_rep = cached_director_rep
+            else:
+                coach_rep = (
+                    cached_coach_rep
+                    if cached_coach_rep is not None
+                    else self._coach_provider(search_ctx, scout_rep, analyst_rep)
                 )
-            except TypeError:
-                director_rep = self._director_provider(analyst_rep, coach_rep, tactics_rep)
+                tactics_rep = (
+                    cached_tactics_rep
+                    if cached_tactics_rep is not None
+                    else self._tactics_provider(search_ctx, scout_rep, analyst_rep, coach_rep)
+                )
+                try:
+                    director_rep = self._director_provider(
+                        search_ctx, scout_rep, analyst_rep, coach_rep, tactics_rep
+                    )
+                except TypeError:
+                    director_rep = self._director_provider(analyst_rep, coach_rep, tactics_rep)
             seq = getattr(director_rep, "sequenced_candidates", None) or getattr(
                 director_rep, "experiment_sequence", ()
             )
