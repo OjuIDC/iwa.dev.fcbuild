@@ -33,7 +33,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "pyyaml>=6,<7"]
+dev = [
+    "pytest>=8,<9",
+    "pytest-xdist>=3.6,<4",
+    "pytest-html>=4.1,<5",
+    "pyyaml>=6,<7",
+]
 voice = ["faster-whisper>=1.0,<2"]
 pandas = ["pandas>=2.0,<3", "openpyxl>=3.1,<4"]
 discord = ["discord.py==2.7.1"]
@@ -47,6 +52,21 @@ src = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "unit: Pure in-memory unit tests without database, Docker, or external network access.",
+    "domain: Offline FC27 domain, analytics, contract, and workflow logic tests.",
+    "postgres: Tests requiring a disposable PostgreSQL 16 test instance.",
+    "docker: Tests inspecting or invoking Docker CLI or container build contracts.",
+    "compose: Tests validating Docker Compose profile isolation, config, and service boundaries.",
+    "security: Adversarial, authentication, authorization, privacy, and boundary security tests.",
+    "documentation: Documentation consistency, archive manifest, and repository hygiene tests.",
+    "performance: Performance telemetry, benchmark, and latency threshold tests.",
+    "serial: Tests that must execute serially due to shared resources, concurrency races, or cluster state.",
+    "slow: Longer-running integration, stress, or multi-database migration tests.",
+    "offline: Tests verified to execute completely offline without external network access.",
+    "network_forbidden: Tests enforcing strict zero-network and zero-EA-DNS resolution guards.",
+    "allow_inconsistency: allow temporary inconsistency in fc27_approval_inconsistencies view",
+]
 
 [tool.pyrefly]
 disable-search-path-heuristics = true
