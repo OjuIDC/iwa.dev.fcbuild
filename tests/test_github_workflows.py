@@ -516,6 +516,26 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
     v_crit = parse_trivy_vulnerabilities(trivy_crit)
     assert v_crit["trivy_high_critical_gate"] == "FAIL"
 
+    trivy_os_high = tmp_path / "trivy-os-high.json"
+    trivy_os_high.write_text(
+        '{"Results": [{"Class": "os-pkgs", "Type": "debian", "Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "1.2"}]}]}',
+        encoding="utf-8",
+    )
+    v_os_active = parse_trivy_vulnerabilities(trivy_os_high, reference_date="2026-11-04")
+    assert v_os_active["trivy_high_critical_gate"] == "PASS"
+    assert v_os_active["waiver_id"] == "WAIVER-FC27-BASE-IMAGE-DEBIAN-3.11.16-SLIM"
+
+    v_os_expired = parse_trivy_vulnerabilities(trivy_os_high, reference_date="2027-01-01")
+    assert v_os_expired["trivy_high_critical_gate"] == "FAIL"
+
+    trivy_py_high = tmp_path / "trivy-py-high.json"
+    trivy_py_high.write_text(
+        '{"Results": [{"Class": "lang-pkgs", "Type": "pip", "Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "2.0"}]}]}',
+        encoding="utf-8",
+    )
+    v_py_high = parse_trivy_vulnerabilities(trivy_py_high, reference_date="2026-11-04")
+    assert v_py_high["trivy_high_critical_gate"] == "FAIL"
+
     # 4. SPDX SBOM parser and sanitized report generation
     sbom_file = tmp_path / "sbom.spdx.json"
     sbom_file.write_text(

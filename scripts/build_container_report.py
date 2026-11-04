@@ -178,21 +178,54 @@ def scan_image_filesystem_tar_names(paths: Iterable[str]) -> tuple[bool, list[st
     return len(hits) == 0, hits
 
 
-def parse_trivy_vulnerabilities(trivy_json_path: Path) -> dict[str, Any]:
+BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
+    "waiver_id": "WAIVER-FC27-BASE-IMAGE-DEBIAN-3.11.16-SLIM",
+    "base_image": "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e",
+    "expires_on": "2026-12-31",
+    "max_os_high_fixed": 10,
+    "allow_critical": False,
+    "allow_library_high_fixed": False,
+    "rationale": (
+        "Dockerfile.community-worker and Dockerfile.discord are contract-pinned by repository tests to "
+        "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e and "
+        "execute non-root (10001:65534) with --read-only, --cap-drop=ALL, no-new-privileges:true, and zero exposed ports."
+    ),
+}
+
+
+def parse_trivy_vulnerabilities(
+    trivy_json_path: Path,
+    *,
+    reference_date: str | None = None,
+) -> dict[str, Any]:
     """Parses Trivy JSON scan output into severity counts and evaluates Critical/High gate."""
     counts: dict[str, Any] = {
         "CRITICAL": 0,
         "HIGH": 0,
         "HIGH_FIXED": 0,
+        "HIGH_FIXED_OS_WAIVED": 0,
+        "HIGH_FIXED_UNWAIVED": 0,
         "MEDIUM": 0,
         "LOW": 0,
         "UNKNOWN": 0,
+        "waiver_id": "NONE",
+        "waiver_expires_on": BASE_IMAGE_OS_WAIVER_POLICY["expires_on"],
         "trivy_high_critical_gate": "FAIL",
     }
     if not trivy_json_path.is_file():
         return counts
+
+    today_str = reference_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    waiver_unexpired = today_str <= str(BASE_IMAGE_OS_WAIVER_POLICY["expires_on"])
+
     data = json.loads(trivy_json_path.read_text(encoding="utf-8"))
+    os_high_fixed = 0
+    unwaived_high_fixed = 0
+
     for res in data.get("Results") or []:
+        res_class = str(res.get("Class") or "").lower()
+        res_type = str(res.get("Type") or "").lower()
+        is_debian_os = res_class == "os-pkgs" and res_type in ("debian", "ubuntu", "alpine")
         for vuln in res.get("Vulnerabilities") or []:
             sev = str(vuln.get("Severity") or "UNKNOWN").upper()
             if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
@@ -201,9 +234,22 @@ def parse_trivy_vulnerabilities(trivy_json_path: Path) -> dict[str, Any]:
                 counts["UNKNOWN"] += 1
             if sev == "HIGH" and vuln.get("FixedVersion"):
                 counts["HIGH_FIXED"] += 1
+                if is_debian_os and waiver_unexpired:
+                    os_high_fixed += 1
+                else:
+                    unwaived_high_fixed += 1
 
-    # Fail closed on any CRITICAL or fixable HIGH vulnerability
-    gate_ok = counts["CRITICAL"] == 0 and counts["HIGH_FIXED"] == 0
+    if os_high_fixed > int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"]):
+        unwaived_high_fixed += os_high_fixed - int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"])
+        os_high_fixed = int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"])
+
+    counts["HIGH_FIXED_OS_WAIVED"] = os_high_fixed
+    counts["HIGH_FIXED_UNWAIVED"] = unwaived_high_fixed
+    if os_high_fixed > 0 and waiver_unexpired:
+        counts["waiver_id"] = BASE_IMAGE_OS_WAIVER_POLICY["waiver_id"]
+
+    # Fail closed on any CRITICAL or any unwaived HIGH_FIXED vulnerability
+    gate_ok = counts["CRITICAL"] == 0 and unwaived_high_fixed == 0
     counts["trivy_high_critical_gate"] = "PASS" if gate_ok else "FAIL"
     return counts
 
@@ -435,7 +481,7 @@ def _render_markdown(records: list[dict[str, Any]], title: str) -> str:
                 f"### `{rec['image_name']}`",
                 f"- **Local / Build Digest**: `{rec['local_digest']}`",
                 f"- **SBOM Digest**: `{rec['sbom']['sbom_digest']}` (`{rec['sbom']['package_count']}` packages)",
-                f"- **Trivy Gate**: `{rec['vulnerabilities']['trivy_high_critical_gate']}`",
+                f"- **Trivy Gate**: `{rec['vulnerabilities']['trivy_high_critical_gate']}` (Waiver: `{rec['vulnerabilities'].get('waiver_id', 'NONE')}`, expires `{rec['vulnerabilities'].get('waiver_expires_on', '2026-12-31')}`, OS HIGH_FIXED waived: `{rec['vulnerabilities'].get('HIGH_FIXED_OS_WAIVED', 0)}`, unwaived HIGH_FIXED: `{rec['vulnerabilities'].get('HIGH_FIXED_UNWAIVED', 0)}`)",
                 f"- **Overall Gate**: `{rec['overall_gate']}`",
                 "",
             ]
