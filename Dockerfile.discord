@@ -20,7 +20,7 @@ RUN useradd -r -u 10001 -g nogroup app \
     "openpyxl>=3.1,<4"
 
 COPY src /app/src
-COPY scripts/fc27_discord_bot.py /app/scripts/
+COPY scripts /app/scripts
 
 USER 10001:65534
 

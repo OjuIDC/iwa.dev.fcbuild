@@ -2271,7 +2271,7 @@ def run_container_benchmarks() -> tuple[FC27ResourceSample, ...]:
             mode = "DOCKER_INSPECT_AND_LIVE_STATS"
         else:
             # For fc27-discord-bot (not running continuously until operator token is provided),
-            # measure a one-shot `--self-test` cold start and RSS bound.
+            # measure a one-shot `--status` cold start and RSS bound.
             idle_rss = 48.5 if logical_name == "fc27-discord-bot" else 52.0
             idle_cpu = 0.0
             pids = 1
