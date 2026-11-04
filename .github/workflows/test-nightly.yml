@@ -77,15 +77,17 @@ jobs:
           python -c "from src.db_roles import bootstrap_cluster; bootstrap_cluster('postgresql://fc27test@127.0.0.1:55432/postgres', {'fc27_migrator': None, 'fc27_app': None, 'fc27_dispatch': None, 'fc27_relay': None})"
           NON_SERIAL=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('quality') + modules_for_maintained_group('unit_domain_parallel') + modules_for_maintained_group('postgres_parallel_safe')))")
           SERIAL_ALL=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('unit_domain_serial') + modules_for_maintained_group('postgres_serial') + modules_for_maintained_group('compose_serial')))")
+          rc=0
           python -m pytest -o addopts="" -q -rs -n 4 --dist loadfile \
             --durations=10 \
             --junitxml=.ci-reports/nightly/junit-parallel.xml \
             --html=.ci-reports/nightly/raw-report.html --self-contained-html \
-            $NON_SERIAL
+            $NON_SERIAL || rc=$?
           python -m pytest -o addopts="" -q -rs \
             --durations=10 \
             --junitxml=.ci-reports/nightly/junit-serial.xml \
-            $SERIAL_ALL
+            $SERIAL_ALL || rc=$?
+          exit $rc
       - name: Build, aggregate, and sanitize nightly browser report
         if: always()
         run: |

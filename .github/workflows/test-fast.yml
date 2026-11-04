@@ -145,15 +145,17 @@ jobs:
           mkdir -p .ci-reports/unit-domain
           PAR_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('unit_domain_parallel')))")
           SER_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('unit_domain_serial')))")
+          rc=0
           python -m pytest -o addopts="" -q -rs -n auto --dist loadfile \
             --durations=10 \
             --junitxml=.ci-reports/unit-domain/junit-parallel.xml \
             --html=.ci-reports/unit-domain/raw-report.html --self-contained-html \
-            $PAR_MODULES
+            $PAR_MODULES || rc=$?
           python -m pytest -o addopts="" -q -rs \
             --durations=10 \
             --junitxml=.ci-reports/unit-domain/junit-serial.xml \
-            $SER_MODULES
+            $SER_MODULES || rc=$?
+          exit $rc
       - name: Build and sanitize unit-domain test report
         if: always()
         run: |
@@ -201,6 +203,7 @@ jobs:
           --health-cmd "pg_isready -U fc27test" --health-interval 3s --health-timeout 5s --health-retries 20
     env:
       TEST_POSTGRES_URI: postgresql://fc27test@127.0.0.1:55432/postgres
+      TEST_POSTGRES_ADMIN_URI: postgresql://fc27test@127.0.0.1:55432/postgres
       SWARMS_TELEMETRY_ON: "false"
       FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
@@ -220,6 +223,7 @@ jobs:
       - name: Run focused PostgreSQL integration tests
         run: |
           mkdir -p .ci-reports/postgres-focused
+          python -c "from src.db_roles import bootstrap_cluster; bootstrap_cluster('postgresql://fc27test@127.0.0.1:55432/postgres', {'fc27_migrator': None, 'fc27_app': None, 'fc27_dispatch': None, 'fc27_relay': None})"
           MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_fast_group; print(' '.join(modules_for_fast_group('postgres-focused')))")
           python -m pytest -o addopts="" -q -rs \
             --durations=10 \

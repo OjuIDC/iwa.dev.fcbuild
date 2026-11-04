@@ -95,7 +95,7 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/identity/test_totp.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/identity/test_webauthn.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_end_to_end.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_fc27_advisory_cache.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, performance, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
+| `tests/test_fc27_advisory_cache.py` | `POSTGRES_SERIAL` | `postgres, domain, performance, serial, offline, network_forbidden` | `postgres_serial` | `full-postgres` | `postgres-focused` | `serial` |
 | `tests/test_fc27_analyst.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_fc27_api_cache.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_fc27_api_rate_limit.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
@@ -183,7 +183,7 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/test_fc27_polling_worker.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, docker, compose, domain, security, offline, network_forbidden` | `postgres_parallel_safe` | `full-postgres` | `postgres-focused, docker-compose-focused` | `parallel-xdist` |
 | `tests/test_fc27_preapproval_validator.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, security, offline, network_forbidden` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/test_fc27_search_scout_graph.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline, network_forbidden` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
-| `tests/test_graph_api_v1.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, security, slow, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
+| `tests/test_graph_api_v1.py` | `POSTGRES_SERIAL` | `postgres, domain, security, serial, slow, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
 | `tests/test_graph_persistence.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/test_langgraph_flow.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/test_m1_adversarial_challenger.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
