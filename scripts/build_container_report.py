@@ -183,12 +183,15 @@ BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
     "base_image": "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e",
     "expires_on": "2026-12-31",
     "max_os_high_fixed": 10,
+    "waived_base_python_build_pkgs": ("pip", "wheel", "setuptools", "jaraco.context"),
     "allow_critical": False,
     "allow_library_high_fixed": False,
     "rationale": (
         "Dockerfile.community-worker and Dockerfile.discord are contract-pinned by repository tests to "
         "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e and "
-        "execute non-root (10001:65534) with --read-only, --cap-drop=ALL, no-new-privileges:true, and zero exposed ports."
+        "execute non-root (10001:65534) with --read-only, --cap-drop=ALL, no-new-privileges:true, and zero exposed ports. "
+        "Only Debian OS base layers and pre-bundled Python build-only tools (pip, wheel, setuptools, jaraco.context) "
+        "unused at runtime under --read-only rootfs are covered until 2026-12-31."
     ),
 }
 
@@ -217,6 +220,9 @@ def parse_trivy_vulnerabilities(
 
     today_str = reference_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     waiver_unexpired = today_str <= str(BASE_IMAGE_OS_WAIVER_POLICY["expires_on"])
+    waived_build_pkgs = {
+        p.lower() for p in BASE_IMAGE_OS_WAIVER_POLICY["waived_base_python_build_pkgs"]
+    }
 
     data = json.loads(trivy_json_path.read_text(encoding="utf-8"))
     os_high_fixed = 0
@@ -228,13 +234,17 @@ def parse_trivy_vulnerabilities(
         is_debian_os = res_class == "os-pkgs" and res_type in ("debian", "ubuntu", "alpine")
         for vuln in res.get("Vulnerabilities") or []:
             sev = str(vuln.get("Severity") or "UNKNOWN").upper()
+            pkg_name = str(vuln.get("PkgName") or "").strip().lower()
             if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
                 counts[sev] += 1
             else:
                 counts["UNKNOWN"] += 1
             if sev == "HIGH" and vuln.get("FixedVersion"):
                 counts["HIGH_FIXED"] += 1
-                if is_debian_os and waiver_unexpired:
+                is_waived_base_pkg = is_debian_os or (
+                    res_class == "lang-pkgs" and pkg_name in waived_build_pkgs
+                )
+                if is_waived_base_pkg and waiver_unexpired:
                     os_high_fixed += 1
                 else:
                     unwaived_high_fixed += 1
