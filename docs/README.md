@@ -102,6 +102,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 ## 8. Testing
 
 - **[`TESTING.md`](TESTING.md)** — Complete test suite guide, disposable PostgreSQL 16 workflow, and focused validation gates
+- **[`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md)** — Two-tier GitHub Actions test strategy (`test-fast`, `ci`, `test-nightly`), changed-file classification, and benchmark comparisons
+- **[`FC27_TEST_ISOLATION_MATRIX.md`](FC27_TEST_ISOLATION_MATRIX.md)** — Authoritative 128-module test isolation classification matrix, 12 canonical pytest markers, and shard disjointness proofs (`src/fc27_ci_test_groups.py`)
+- **[`FC27_CI_BROWSER_REPORTS.md`](FC27_CI_BROWSER_REPORTS.md)** — Browser-previewable GitHub Actions Job Summaries, self-contained HTML reports, GitHub Pages security evaluation, and fail-closed privacy sanitization (`scripts/sanitize_test_report.py`)
 - **[`../TEST_RESULTS.md`](../TEST_RESULTS.md)** — Current reproducible test verification summary
 
 ---

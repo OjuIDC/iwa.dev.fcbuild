@@ -281,6 +281,18 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
         "src/fc27_performance.py",
         "tests/test_fc27_performance.py",
+        ".github/workflows/test-fast.yml",
+        ".github/workflows/test-nightly.yml",
+        "docs/FC27_CI_BROWSER_REPORTS.md",
+        "docs/FC27_CI_TEST_STRATEGY.md",
+        "docs/FC27_TEST_ISOLATION_MATRIX.md",
+        "scripts/aggregate_test_reports.py",
+        "scripts/build_test_report.py",
+        "scripts/classify_ci_changes.py",
+        "scripts/sanitize_test_report.py",
+        "src/fc27_ci_test_groups.py",
+        "tests/test_ci_report_sanitization.py",
+        "tests/test_github_workflows.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
@@ -303,7 +315,7 @@ def test_48_current_startup_commands_resolve() -> None:
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 14
+    assert len(py_scripts) == 18
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))

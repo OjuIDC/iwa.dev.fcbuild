@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 369,
+  "total_files": 381,
   "files": [
     {
       "path": ".gitattributes",
@@ -43,6 +43,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "fa0d2663c8b684ffdb62ef34559bca573b6f1d46"
+    },
+    {
+      "path": ".github/workflows/test-fast.yml",
+      "category": "workflow",
+      "status": "CURRENT",
+      "authoritative_role": "Fast change-aware pull-request GitHub Actions workflow with sanitized browser reports",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Fast change-aware pull-request GitHub Actions workflow with sanitized browser reports",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
+    {
+      "path": ".github/workflows/test-nightly.yml",
+      "category": "workflow",
+      "status": "CURRENT",
+      "authoritative_role": "Nightly and manual full-suite regression, xdist stability, and container-build workflow",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Nightly and manual full-suite regression, xdist stability, and container-build workflow",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": ".gitignore",
@@ -415,6 +435,16 @@
       "last_relevant_commit": "c500ad30d7663741a5550468431015123670d7a8"
     },
     {
+      "path": "docs/FC27_ADVISORY_CACHE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_ADVISORY_CACHE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Immutable six-report advisory bundle cache specification and before/after benchmark report",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
+    },
+    {
       "path": "docs/FC27_ANALYTICS.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -443,6 +473,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active East Coasters FC27 local analytics platform file",
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "docs/FC27_CI_BROWSER_REPORTS.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Browser-previewable GitHub Actions Job Summaries, self-contained HTML reports, and sanitization policy",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Browser-previewable GitHub Actions Job Summaries, self-contained HTML reports, and sanitization policy",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
+    {
+      "path": "docs/FC27_CI_TEST_STRATEGY.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Two-tier GitHub Actions test strategy, changed-file classification, and benchmark comparisons",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Two-tier GitHub Actions test strategy, changed-file classification, and benchmark comparisons",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "docs/FC27_COACH_HYPOTHESIS_ENGINE.md",
@@ -545,6 +595,36 @@
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
+      "path": "docs/FC27_LANGUAGE_DECISION_MATRIX.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_LANGUAGE_DECISION_MATRIX.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Evidence-based multi-language decision matrix (KEEP_PYTHON default)",
+      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
+    },
+    {
+      "path": "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_LOCAL_INFERENCE_BOUNDARY.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Read-only non-authoritative local inference sidecar boundary specification",
+      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
+    },
+    {
+      "path": "docs/FC27_PERFORMANCE_BASELINE.md",
+      "category": "documentation",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative repository documentation (docs/FC27_PERFORMANCE_BASELINE.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Performance telemetry contract and repeatable optimization baseline",
+      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
+    },
+    {
       "path": "docs/FC27_POLLING_WORKER.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -583,6 +663,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active East Coasters FC27 local analytics platform file",
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "docs/FC27_TEST_ISOLATION_MATRIX.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Authoritative 128-module test isolation classification matrix and pytest marker reference",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Authoritative 128-module test isolation classification matrix and pytest marker reference",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "docs/FEATURE_FLAGS.md",
@@ -1145,6 +1235,16 @@
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
     },
     {
+      "path": "scripts/aggregate_test_reports.py",
+      "category": "script",
+      "status": "CURRENT",
+      "authoritative_role": "Shard test report aggregator, count reconciler, and bounded static Pages report tree builder",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Shard test report aggregator, count reconciler, and bounded static Pages report tree builder",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
+    {
       "path": "scripts/archive/experiments/matchpulse_conformance.py",
       "category": "archived_script",
       "status": "ARCHIVED_HISTORICAL",
@@ -1153,6 +1253,16 @@
       "archive_decision": "ARCHIVE_TO_SCRIPTS_ARCHIVE",
       "reason": "Superseded placeholder MatchPulse conformance script; active repository isolation is enforced by scripts/check_matchpulse_boundary.py.",
       "last_relevant_commit": "c50121f1e85778b87d3b25be54de901ff3988688"
+    },
+    {
+      "path": "scripts/build_test_report.py",
+      "category": "script",
+      "status": "CURRENT",
+      "authoritative_role": "Sanitized browser-previewable JUnit XML, self-contained HTML, and Job Summary builder",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Sanitized browser-previewable JUnit XML, self-contained HTML, and Job Summary builder",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "scripts/check_documentation_consistency.py",
@@ -1173,6 +1283,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active CLI helper verified by regression tests",
       "last_relevant_commit": "e8d19e8a3d68fdfac0eee1986376763732a627ff"
+    },
+    {
+      "path": "scripts/classify_ci_changes.py",
+      "category": "script",
+      "status": "CURRENT",
+      "authoritative_role": "Changed-file classifier across 11 FC27 CI categories and trusted-context evaluator",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Changed-file classifier across 11 FC27 CI categories and trusted-context evaluator",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "scripts/commissioner_decide.py",
@@ -1303,6 +1423,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active CLI helper verified by regression tests",
       "last_relevant_commit": "f0d22f3aaf0e41e4626a48f3a6d8126dd86ce43d"
+    },
+    {
+      "path": "scripts/sanitize_test_report.py",
+      "category": "script",
+      "status": "CURRENT",
+      "authoritative_role": "Fail-closed privacy, security, and external-HTML-resource scanner for CI test reports",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Fail-closed privacy, security, and external-HTML-resource scanner for CI test reports",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "scripts/test_postgres.sh",
@@ -1485,6 +1615,16 @@
       "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
     },
     {
+      "path": "src/fc27_advisory_cache.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_advisory_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Thread-safe single-flight immutable six-report advisory cache and persisted batch key builder",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
+    },
+    {
       "path": "src/fc27_analyst.py",
       "category": "runtime_source",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1573,6 +1713,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "098f919084c0527d0d9e53cfae2cbe3bb8f75c5a"
+    },
+    {
+      "path": "src/fc27_ci_test_groups.py",
+      "category": "source",
+      "status": "CURRENT",
+      "authoritative_role": "Authoritative test module isolation classification, marker mapping, and CI shard registry",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Authoritative test module isolation classification, marker mapping, and CI shard registry",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "src/fc27_clubs.py",
@@ -1693,6 +1843,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active application source module",
       "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+    },
+    {
+      "path": "src/fc27_performance.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative runtime module (src/fc27_performance.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Bounded privacy-safe performance telemetry and offline benchmark runner",
+      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
     },
     {
       "path": "src/fc27_polling_worker.py",
@@ -2895,6 +3055,16 @@
       "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
     },
     {
+      "path": "tests/test_ci_report_sanitization.py",
+      "category": "test",
+      "status": "CURRENT",
+      "authoritative_role": "Unit and adversarial policy tests for CI browser report sanitization and count reconciliation",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Unit and adversarial policy tests for CI browser report sanitization and count reconciliation",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
+    {
       "path": "tests/test_commissioner_cli.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -3003,6 +3173,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "c1b7e75c144e4c44698a0cb4afc13427d5451e1e"
+    },
+    {
+      "path": "tests/test_fc27_advisory_cache.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_advisory_cache.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Offline verification suite for FC27 advisory report cache and internal validation optimization",
+      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
     },
     {
       "path": "tests/test_fc27_advisory_pipeline_e2e.py",
@@ -3205,6 +3385,16 @@
       "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
+      "path": "tests/test_fc27_performance.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_performance.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Offline verification suite for FC27 performance telemetry and optimization baseline",
+      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
+    },
+    {
       "path": "tests/test_fc27_persistence_and_queries.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -3313,6 +3503,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
+    },
+    {
+      "path": "tests/test_github_workflows.py",
+      "category": "test",
+      "status": "CURRENT",
+      "authoritative_role": "Static policy, security, and shard-completeness tests for GitHub Actions workflows",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Static policy, security, and shard-completeness tests for GitHub Actions workflows",
+      "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
     },
     {
       "path": "tests/test_graph_api_v1.py",
@@ -3613,86 +3813,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
-    },
-    {
-      "path": "docs/FC27_LANGUAGE_DECISION_MATRIX.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_LANGUAGE_DECISION_MATRIX.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Evidence-based multi-language decision matrix (KEEP_PYTHON default)",
-      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
-    },
-    {
-      "path": "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_LOCAL_INFERENCE_BOUNDARY.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Read-only non-authoritative local inference sidecar boundary specification",
-      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
-    },
-    {
-      "path": "docs/FC27_PERFORMANCE_BASELINE.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_PERFORMANCE_BASELINE.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Performance telemetry contract and repeatable optimization baseline",
-      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
-    },
-    {
-      "path": "src/fc27_performance.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_performance.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Bounded privacy-safe performance telemetry and offline benchmark runner",
-      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
-    },
-    {
-      "path": "tests/test_fc27_performance.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_performance.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Offline verification suite for FC27 performance telemetry and optimization baseline",
-      "last_relevant_commit": "c55f1a18a7281dd9af6779c309d1bc9eabaadbf8"
-    },
-    {
-      "path": "docs/FC27_ADVISORY_CACHE.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_ADVISORY_CACHE.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Immutable six-report advisory bundle cache specification and before/after benchmark report",
-      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
-    },
-    {
-      "path": "src/fc27_advisory_cache.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_advisory_cache.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Thread-safe single-flight immutable six-report advisory cache and persisted batch key builder",
-      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
-    },
-    {
-      "path": "tests/test_fc27_advisory_cache.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_advisory_cache.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Offline verification suite for FC27 advisory report cache and internal validation optimization",
-      "last_relevant_commit": "1b128167f753b9925683e149e4b54791dfab4338"
     }
   ]
 }
