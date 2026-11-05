@@ -171,9 +171,9 @@ All external networking, persistence writes, analytics execution, recommendation
 ## 12. Docker Compose Status
 
 - **Compose Files**:
-  - `docker-compose.yml` — Base topology (`postgres`, `redis`, `db-bootstrap`, `db-migrate`, `ollama`, `ollama-init`, `fc27-mcp`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, plus optional `--profile rtsp` and `--profile voice` services documented in `docs/VOICE_CAPABILITIES.md`).
-  - `docker-compose.gpu.yml` — NVIDIA GPU reservation overlay for `ollama`.
-  - `docker-compose.cpu.yml` — CPU-only overlay for `ollama`.
+  - `docker-compose.yml` — Base topology (`postgres`, `redis`, `db-bootstrap`, `db-migrate`, `model-health`, `fc27-mcp`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, plus optional `--profile rtsp` and `--profile voice` services documented in `docs/VOICE_CAPABILITIES.md`, and `--profile local-ollama` for the bundled `ollama` and `ollama-init` containers). By default model inference uses the remote Ollama server at `OLLAMA_BASE_URL` (`http://araba.ojuidc.olutech.systems:11434`); no Ollama container is started.
+  - `docker-compose.gpu.yml` — NVIDIA GPU reservation overlay for the bundled `ollama` (only with `--profile local-ollama`).
+  - `docker-compose.cpu.yml` — CPU-only overlay for the bundled `ollama` (only with `--profile local-ollama`).
   - `docker-compose.langfuse.yml` — Optional self-hosted Langfuse observability overlay (`--profile langfuse`).
   - `docker-compose.voice-gpu.yml` — Optional GPU overlay for Faster Whisper STT (`--profile voice`).
   - `docker-compose.ghcr.yml` — Optional digest-pinned private GHCR deployment overlay for `fc27-community-worker` and `fc27-discord-bot` (documented in [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md)).

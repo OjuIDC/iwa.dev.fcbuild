@@ -185,13 +185,13 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 
 ### 10. `scripts/model_health.py`
 - **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: Verifies connectivity and loaded model availability against a local Ollama instance (`OLLAMA_BASE_URL`) for the optional LangGraph runtime.
+- **Purpose**: Verifies connectivity and loaded model availability against the configured Ollama server (`OLLAMA_URL`, falling back to `OLLAMA_BASE_URL`; default `http://araba.ojuidc.olutech.systems:11434`) for the optional LangGraph runtime.
 - **Safe Invocation**:
   ```powershell
   .\.venv\Scripts\python.exe scripts/model_health.py --help
   ```
-- **Required Feature Flags**: Uses `OLLAMA_BASE_URL` (defaults to local Ollama endpoint).
-- **Network Behavior**: Queries only the configured local Ollama HTTP health/tags endpoint.
+- **Required Feature Flags**: Uses `OLLAMA_URL` / `OLLAMA_BASE_URL` (defaults to the remote lab Ollama server).
+- **Network Behavior**: Queries only the configured Ollama HTTP tags and generate endpoints.
 - **Database Behavior**: Zero database access.
 - **Expected Output**: Model availability status and exit code `0` when healthy.
 - **Teardown**: Stateless CLI process.
@@ -199,8 +199,8 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 
 ### 11. `scripts/ollama-init.sh`
 - **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: Container initialization shell script referenced by `docker-compose.yml` (`ollama-init` service) to pull configured local Ollama models when running the full multi-container stack.
-- **Safe Invocation**: Invoked inside the `ollama-init` container via `docker compose up`.
+- **Purpose**: Container initialization shell script referenced by `docker-compose.yml` (`ollama-init` service) to pull configured models into the bundled Ollama container. Runs only with `--profile local-ollama`; the default remote server is provisioned by its owner.
+- **Safe Invocation**: Invoked inside the `ollama-init` container via `docker compose --profile local-ollama up`.
 - **Required Feature Flags**: None.
 - **Network Behavior**: Connects to the internal `ollama` service container (`http://ollama:11434`).
 - **Database Behavior**: Zero database access.

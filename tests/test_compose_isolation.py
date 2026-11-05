@@ -411,3 +411,29 @@ def test_ghcr_runtime_promotion_documentation():
     assert "replicas=1" in text
     assert "fc27-rollback/" in text
     assert "Local-Build Mode" in text
+
+
+REMOTE_OLLAMA = "http://araba.ojuidc.olutech.systems:11434"
+
+
+def test_no_local_ollama_container_by_default(model):
+    services = model["services"]
+    assert "ollama" not in services and "ollama-init" not in services
+    assert "depends_on" not in services["model-health"] or "ollama-init" not in services["model-health"]["depends_on"]
+    assert services["model-health"]["environment"]["OLLAMA_URL"] == REMOTE_OLLAMA
+    assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == REMOTE_OLLAMA
+    assert "ollama_data" not in {v.get("source") for s in services.values() for v in s.get("volumes", [])}
+
+
+@pytest.mark.parametrize("overlay", ["docker-compose.gpu.yml", "docker-compose.cpu.yml"])
+def test_local_ollama_profile_still_resolves(tmp_path, overlay):
+    env = _env_file(tmp_path)
+    with env.open("a", encoding="utf-8") as fh:
+        fh.write("OLLAMA_BASE_URL=http://ollama:11434\n")
+    out = _config(env, "-f", "docker-compose.yml", "-f", overlay, "--profile", "local-ollama")
+    assert out.returncode == 0, out.stderr
+    services = json.loads(out.stdout)["services"]
+    assert {"ollama", "ollama-init"} <= services.keys()
+    assert "ports" not in services["ollama"]
+    assert services["model-health"]["environment"]["OLLAMA_URL"] == "http://ollama:11434"
+    assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == "http://ollama:11434"

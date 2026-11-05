@@ -30,7 +30,9 @@ PostgreSQL sits on the internal `fc27_data` network, which only graph-api joins.
 ```bash
 cp config.example.env .env   # then fill in every value
 docker compose --env-file .env config --quiet
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # or docker-compose.cpu.yml
+docker compose --env-file .env up -d --build   # uses the remote Ollama at OLLAMA_BASE_URL (araba)
+# Bundled Ollama instead (set OLLAMA_BASE_URL=http://ollama:11434 first):
+# docker compose --env-file .env -f docker-compose.yml -f docker-compose.gpu.yml --profile local-ollama up -d --build   # or docker-compose.cpu.yml
 docker compose --env-file .env ps
 curl -fsS http://127.0.0.1:8001/health
 ```
@@ -38,10 +40,10 @@ graph-api applies the SQL migrations (`migrations/`) and the LangGraph checkpoin
 To disable this, set `GRAPH_RUN_MIGRATIONS=false` and run `python -m src.db_migrate` yourself.
 
 ## 5. GPU sizing
-Start with `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_NUM_PARALLEL=2`. If you see out-of-memory errors or model eviction, reduce both to 1.
+The default remote server (araba, RTX 3080 10 GB) is sized and tuned by its owner; its `OLLAMA_*` settings are not controlled from this repository. For the bundled container (`--profile local-ollama`), start with `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_NUM_PARALLEL=2`. If you see out-of-memory errors or model eviction, reduce both to 1.
 
 ## 6. Network hardening
-- Ollama, MCP and PostgreSQL publish no host ports.
+- MCP and PostgreSQL publish no host ports; the bundled Ollama (`--profile local-ollama`) publishes none either. The default remote Ollama server is reached outbound over plain HTTP on the lab network and has no authentication; it relies on its host firewall, so run the stack only on an admitted client.
 - Redis is published on `127.0.0.1:6379` for the Windows capture agent only.
 - Put any remote access behind a VPN or a TLS reverse proxy with authentication. Do not change the bindings to `0.0.0.0`.
 - Live calls to `proclubs.ea.com` are disabled and blocked by default (`FC27_PROVIDER_ENABLED=false`, `FC27_LIVE_INGESTION_ENABLED=false`); only the provider-neutral boundary (`src/fc27_authorized_transport.py`) may contact an approved provider after formal written authorization is configured.
