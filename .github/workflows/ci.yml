@@ -3,11 +3,192 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
+  full-quality:
     runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    outputs:
+      trusted_context: ${{ steps.context.outputs.trusted_context }}
+      can_publish_pages: ${{ steps.context.outputs.can_publish_pages }}
+      pages_security_decision: ${{ steps.context.outputs.pages_security_decision }}
+      browser_preview: ${{ steps.context.outputs.browser_preview }}
+    env:
+      SWARMS_TELEMETRY_ON: "false"
+      FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+      - name: Evaluate trusted context and Pages policy
+        id: context
+        run: |
+          python scripts/classify_ci_changes.py \
+            --files README.md \
+            --event-name "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --repository "${{ github.repository }}" \
+            --head-repo "${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
+            --head-repo-fork "${{ github.event.pull_request.head.repo.fork || 'false' }}" \
+            --enable-pages-var "${{ vars.FC27_ENABLE_PAGES_TEST_REPORTS || 'false' }}" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements-swarms.txt -r requirements-langfuse.txt
+          pip check
+      - name: Compile and static boundary gates
+        run: |
+          python -m compileall -q src scripts tests host_agent voice
+          python scripts/check_documentation_consistency.py --check --strict
+          python scripts/check_matchpulse_boundary.py
+      - name: Record full-suite collection count and run full-quality shard
+        run: |
+          mkdir -p .ci-reports/full-quality/out
+          python - <<'PY'
+          import subprocess, sys
+          from pathlib import Path
+          proc = subprocess.run(
+              [sys.executable, "-m", "pytest", "-o", "addopts=", "--collect-only", "-q"],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          items = [
+              line.strip()
+              for line in proc.stdout.splitlines()
+              if "::" in line and not line.startswith("=")
+          ]
+          if not items:
+              print(proc.stdout)
+              print(proc.stderr)
+              sys.exit(1)
+          Path(".ci-reports/full-quality/out/expected-total.txt").write_text(
+              str(len(items)), encoding="utf-8"
+          )
+          print(f"FULL_COLLECTION_COUNT={len(items)}")
+          PY
+          MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_full_shard; print(' '.join(modules_for_full_shard('full-quality')))")
+          python -m pytest -o addopts="" -q -rs \
+            --durations=10 \
+            --junitxml=.ci-reports/full-quality/raw-junit.xml \
+            --html=.ci-reports/full-quality/raw-report.html --self-contained-html \
+            $MODULES
+      - name: Build and sanitize full-quality shard report
+        if: always()
+        run: |
+          python scripts/build_test_report.py \
+            --junit-in .ci-reports/full-quality/raw-junit.xml \
+            --raw-html-in .ci-reports/full-quality/raw-report.html \
+            --junit-out .ci-reports/full-quality/out/test-results/junit.xml \
+            --html-out .ci-reports/full-quality/out/test-report/index.html \
+            --summary-out .ci-reports/full-quality/out/job-summary.md \
+            --durations-out .ci-reports/full-quality/out/test-results/durations.json \
+            --meta-out .ci-reports/full-quality/out/job-meta.json \
+            --workflow "ci" \
+            --test-group "full-quality" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number || 'N/A' }}" \
+            --python-version "3.11" \
+            --postgres-version "N/A" \
+            --artifact-name "report-ci-full-quality" \
+            --browser-preview "${{ steps.context.outputs.browser_preview }}" \
+            --pages-security-decision "${{ steps.context.outputs.pages_security_decision }}" \
+            --append-github-step-summary
+          python scripts/sanitize_test_report.py .ci-reports/full-quality/out
+      - name: Upload full-quality shard report artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-ci-full-quality
+          path: .ci-reports/full-quality/out/
+          retention-days: 7
+
+  full-unit-domain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SWARMS_TELEMETRY_ON: "false"
+      FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+      - name: System packages (real espeak-ng/tesseract for TTS and OCR tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends espeak-ng tesseract-ocr
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements-swarms.txt -r requirements-langfuse.txt
+          pip check
+      - name: Run full-unit-domain shard (parallel-safe + serial)
+        run: |
+          mkdir -p .ci-reports/full-unit-domain
+          PAR_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('unit_domain_parallel')))")
+          SER_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('unit_domain_serial')))")
+          rc=0
+          python -m pytest -o addopts="" -q -rs -n auto --dist loadfile \
+            --durations=10 \
+            --junitxml=.ci-reports/full-unit-domain/junit-parallel.xml \
+            --html=.ci-reports/full-unit-domain/raw-report.html --self-contained-html \
+            $PAR_MODULES || rc=$?
+          python -m pytest -o addopts="" -q -rs \
+            --durations=10 \
+            --junitxml=.ci-reports/full-unit-domain/junit-serial.xml \
+            $SER_MODULES || rc=$?
+          exit $rc
+      - name: Build and sanitize full-unit-domain shard report
+        if: always()
+        run: |
+          python scripts/build_test_report.py \
+            --junit-in .ci-reports/full-unit-domain/junit-parallel.xml .ci-reports/full-unit-domain/junit-serial.xml \
+            --raw-html-in .ci-reports/full-unit-domain/raw-report.html \
+            --junit-out .ci-reports/full-unit-domain/out/test-results/junit.xml \
+            --html-out .ci-reports/full-unit-domain/out/test-report/index.html \
+            --summary-out .ci-reports/full-unit-domain/out/job-summary.md \
+            --durations-out .ci-reports/full-unit-domain/out/test-results/durations.json \
+            --meta-out .ci-reports/full-unit-domain/out/job-meta.json \
+            --workflow "ci" \
+            --test-group "full-unit-domain" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number || 'N/A' }}" \
+            --python-version "3.11" \
+            --postgres-version "N/A" \
+            --artifact-name "report-ci-full-unit-domain" \
+            --browser-preview "JOB_SUMMARY_ONLY" \
+            --pages-security-decision "NOT_APPROVED_USE_JOB_SUMMARY_ONLY" \
+            --append-github-step-summary
+          python scripts/sanitize_test_report.py .ci-reports/full-unit-domain/out
+      - name: Upload full-unit-domain shard report artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-ci-full-unit-domain
+          path: .ci-reports/full-unit-domain/out/
+          retention-days: 7
+
+  full-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
@@ -16,37 +197,239 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports: ["127.0.0.1:55432:5432"]
         options: >-
-          --health-cmd "pg_isready -U fc27test" --health-interval 5s --health-timeout 5s --health-retries 20
+          --tmpfs /var/lib/postgresql/data:rw,size=1024m
+          --health-cmd "pg_isready -U fc27test" --health-interval 3s --health-timeout 5s --health-retries 20
     env:
       TEST_POSTGRES_URI: postgresql://fc27test@127.0.0.1:55432/postgres
+      TEST_POSTGRES_ADMIN_URI: postgresql://fc27test@127.0.0.1:55432/postgres
       SWARMS_TELEMETRY_ON: "false"
+      FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements*.txt
-      - name: System packages (real espeak-ng/tesseract for TTS and OCR tests)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends espeak-ng tesseract-ocr
-      - name: Install
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt -r requirements-swarms.txt -r requirements-langfuse.txt
           pip check
-      - name: Compile
-        run: python -m compileall -q src scripts tests host_agent voice
-      - name: Documentation consistency gate
+      - name: Run full-postgres shard (parallel-safe per-DB + serial cluster/race)
         run: |
-          python -m pytest tests/test_documentation_consistency.py -q
-          python scripts/check_documentation_consistency.py --check --strict
-      - name: Test
-        run: python -m pytest -o addopts="" -q -rs
-      - name: Compose config (all profiles)
+          mkdir -p .ci-reports/full-postgres
+          python -c "from src.db_roles import bootstrap_cluster; bootstrap_cluster('postgresql://fc27test@127.0.0.1:55432/postgres', {'fc27_migrator': None, 'fc27_app': None, 'fc27_dispatch': None, 'fc27_relay': None})"
+          PG_PAR_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('postgres_parallel_safe')))")
+          PG_SER_MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_maintained_group; print(' '.join(modules_for_maintained_group('postgres_serial')))")
+          rc=0
+          python -m pytest -o addopts="" -q -rs -n 4 --dist loadfile \
+            --durations=10 \
+            --junitxml=.ci-reports/full-postgres/junit-parallel.xml \
+            --html=.ci-reports/full-postgres/raw-report.html --self-contained-html \
+            $PG_PAR_MODULES || rc=$?
+          python -m pytest -o addopts="" -q -rs \
+            --durations=10 \
+            --junitxml=.ci-reports/full-postgres/junit-serial.xml \
+            $PG_SER_MODULES || rc=$?
+          exit $rc
+      - name: Build and sanitize full-postgres shard report
+        if: always()
         run: |
+          python scripts/build_test_report.py \
+            --junit-in .ci-reports/full-postgres/junit-parallel.xml .ci-reports/full-postgres/junit-serial.xml \
+            --raw-html-in .ci-reports/full-postgres/raw-report.html \
+            --junit-out .ci-reports/full-postgres/out/test-results/junit.xml \
+            --html-out .ci-reports/full-postgres/out/test-report/index.html \
+            --summary-out .ci-reports/full-postgres/out/job-summary.md \
+            --durations-out .ci-reports/full-postgres/out/test-results/durations.json \
+            --meta-out .ci-reports/full-postgres/out/job-meta.json \
+            --workflow "ci" \
+            --test-group "full-postgres" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number || 'N/A' }}" \
+            --python-version "3.11" \
+            --postgres-version "16.15" \
+            --artifact-name "report-ci-full-postgres" \
+            --browser-preview "JOB_SUMMARY_ONLY" \
+            --pages-security-decision "NOT_APPROVED_USE_JOB_SUMMARY_ONLY" \
+            --append-github-step-summary
+          python scripts/sanitize_test_report.py .ci-reports/full-postgres/out
+      - name: Upload full-postgres shard report artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-ci-full-postgres
+          path: .ci-reports/full-postgres/out/
+          retention-days: 7
+
+  full-compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      SWARMS_TELEMETRY_ON: "false"
+      COMPOSE_PROJECT_NAME: fc27-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip check
+      - name: Compose config (all profiles) and run full-compose shard
+        run: |
+          mkdir -p .ci-reports/full-compose
           sed -E 's/=replace_with_[A-Za-z0-9_-]+/=placeholder_ci_only_0123456789abcdef0123456789abcdef/' config.example.env > /tmp/ci.env
-          docker compose --env-file /tmp/ci.env config --quiet
-          docker compose --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.cpu.yml config --quiet
-          docker compose --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
-          docker compose --env-file /tmp/ci.env --profile voice --profile rtsp config --quiet
-          docker compose --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.langfuse.yml --profile langfuse config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.cpu.yml config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env --profile voice --profile rtsp config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.langfuse.yml --profile langfuse config --quiet
+          MODULES=$(python -c "from src.fc27_ci_test_groups import modules_for_full_shard; print(' '.join(modules_for_full_shard('full-compose')))")
+          python -m pytest -o addopts="" -q -rs \
+            --durations=10 \
+            --junitxml=.ci-reports/full-compose/raw-junit.xml \
+            --html=.ci-reports/full-compose/raw-report.html --self-contained-html \
+            $MODULES
+      - name: Clean up isolated Compose project state
+        if: always()
+        run: |
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" down -v --remove-orphans || true
+          rm -f /tmp/ci.env
+      - name: Build and sanitize full-compose shard report
+        if: always()
+        run: |
+          python scripts/build_test_report.py \
+            --junit-in .ci-reports/full-compose/raw-junit.xml \
+            --raw-html-in .ci-reports/full-compose/raw-report.html \
+            --junit-out .ci-reports/full-compose/out/test-results/junit.xml \
+            --html-out .ci-reports/full-compose/out/test-report/index.html \
+            --summary-out .ci-reports/full-compose/out/job-summary.md \
+            --durations-out .ci-reports/full-compose/out/test-results/durations.json \
+            --meta-out .ci-reports/full-compose/out/job-meta.json \
+            --workflow "ci" \
+            --test-group "full-compose" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number || 'N/A' }}" \
+            --python-version "3.11" \
+            --postgres-version "N/A" \
+            --artifact-name "report-ci-full-compose" \
+            --browser-preview "JOB_SUMMARY_ONLY" \
+            --pages-security-decision "NOT_APPROVED_USE_JOB_SUMMARY_ONLY" \
+            --append-github-step-summary
+          python scripts/sanitize_test_report.py .ci-reports/full-compose/out
+      - name: Upload full-compose shard report artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-ci-full-compose
+          path: .ci-reports/full-compose/out/
+          retention-days: 7
+
+  aggregate-report:
+    needs: [full-quality, full-unit-domain, full-postgres, full-compose]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Download full CI shard reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: report-ci-*
+          path: .ci-reports/downloaded
+      - name: Reconcile shard union against full collection and sanitize reports
+        run: |
+          EXPECTED_TOTAL=$(cat .ci-reports/downloaded/report-ci-full-quality/expected-total.txt)
+          python scripts/aggregate_test_reports.py \
+            --input-dirs .ci-reports/downloaded \
+            --out-dir .ci-reports/aggregate \
+            --workflow "ci" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number || 'N/A' }}" \
+            --run-number "${{ github.run_number }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --python-version "3.11" \
+            --postgres-version "16.15" \
+            --browser-preview "${{ needs.full-quality.outputs.browser_preview }}" \
+            --pages-security-decision "${{ needs.full-quality.outputs.pages_security_decision }}" \
+            --expected-total-collected "$EXPECTED_TOTAL" \
+            --append-github-step-summary
+          python scripts/sanitize_test_report.py .ci-reports/aggregate
+      - name: Upload unified full CI browser test report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-browser-report
+          path: |
+            .ci-reports/aggregate/test-report/
+            .ci-reports/aggregate/test-results/
+            .ci-reports/aggregate/job-summary.md
+            .ci-reports/aggregate/aggregate-meta.json
+          retention-days: 7
+      - name: Upload Pages artifact when safely approved in trusted context
+        if: needs.full-quality.outputs.can_publish_pages == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .ci-reports/aggregate/pages-site
+
+  publish-pages:
+    needs: [full-quality, aggregate-report]
+    if: needs.full-quality.outputs.can_publish_pages == 'true' && needs.aggregate-report.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Deploy sanitized static report to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  test:
+    needs: [full-quality, full-unit-domain, full-postgres, full-compose, aggregate-report]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce fail-closed full CI required gate
+        env:
+          RES_QUALITY: ${{ needs.full-quality.result }}
+          RES_UNIT: ${{ needs.full-unit-domain.result }}
+          RES_PG: ${{ needs.full-postgres.result }}
+          RES_COMPOSE: ${{ needs.full-compose.result }}
+          RES_AGG: ${{ needs.aggregate-report.result }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          required = [
+              ("full-quality", os.environ.get("RES_QUALITY")),
+              ("full-unit-domain", os.environ.get("RES_UNIT")),
+              ("full-postgres", os.environ.get("RES_PG")),
+              ("full-compose", os.environ.get("RES_COMPOSE")),
+              ("aggregate-report", os.environ.get("RES_AGG")),
+          ]
+          failed = [f"{name}={res}" for name, res in required if res != "success"]
+          if failed:
+              print("FULL_CI_REQUIRED_GATE=FAIL: " + ", ".join(failed))
+              sys.exit(1)
+          print("FULL_CI_REQUIRED_GATE=PASS")
+          PY

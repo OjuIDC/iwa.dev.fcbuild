@@ -1,0 +1,96 @@
+# FC27 Build-Time Secret and Context Isolation (.dockerignore)
+# Excludes operational secrets, local state, recovery archives, and test artifacts
+# from all Docker build contexts.
+
+# Environment files and local configuration
+.env
+.env.*
+*.env
+!config.example.env
+
+# Secret directories and credential files
+secrets
+secrets/
+secrets/**
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.der
+*.kdbx
+discord_bot_token*
+
+# Local runtime data, backups, and staging
+.local-data
+.local-data/
+.local-data/**
+.local-artifacts
+.local-artifacts/
+.local-artifacts/**
+secret-backups
+secret-backups/
+secret-backups/**
+secret-recovery
+secret-recovery/
+secret-recovery/**
+backups
+backups/
+backups/**
+
+# Encrypted recovery archives and database dumps
+*.7z
+*.7z.sha256
+*recovery*
+*.sql
+*.sql.gz
+*.dump
+*.pgdump
+*.bak
+
+# Git, Docker, and developer environment metadata
+.git
+.git/
+.git/**
+.gitignore
+.gitattributes
+.git-credentials
+.netrc
+.docker
+.docker/
+.docker/**
+.github
+.github/
+.github/**
+
+# Virtual environments, caches, and test/report outputs
+.venv
+.venv/
+venv
+venv/
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.ci-reports
+.ci-reports/
+reports
+reports/
+tests
+tests/
+docs
+docs/
+archive
+archive/
+
+# Explicitly preserve required runtime source, scripts, and SQL migrations
+!src/**
+!scripts/**
+!migrations/**
+!migrations/**/*.sql
+!**/__pycache__
+!**/*.py[cod]

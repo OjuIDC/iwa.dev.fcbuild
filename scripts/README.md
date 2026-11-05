@@ -30,6 +30,11 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`fc27_backup.py`](fc27_backup.py) | `CURRENT_OPERATOR_COMMAND` | Active (Local PostgreSQL Domain Backup CLI) | `NONE` |
 | [`fc27_restore_verify.py`](fc27_restore_verify.py) | `CURRENT_OPERATOR_COMMAND` | Active (Disposable Restore Verification CLI) | `NONE` |
 | [`fc27_discord_bot.py`](fc27_discord_bot.py) | `CURRENT_OPERATOR_COMMAND` | Active (Disabled-by-Default Read-Only Discord Bot CLI) | `NONE` |
+| [`classify_ci_changes.py`](classify_ci_changes.py) | `CURRENT_CI_COMMAND` | Active (CI Changed-File & Trusted-Context Classifier) | `NONE` |
+| [`build_test_report.py`](build_test_report.py) | `CURRENT_CI_COMMAND` | Active (Sanitized Browser Test Report Builder) | `NONE` |
+| [`build_container_report.py`](build_container_report.py) | `CURRENT_CI_COMMAND` | Active (Container Image Validator, Trivy/SBOM Gate & Report Builder) | `NONE` |
+| [`aggregate_test_reports.py`](aggregate_test_reports.py) | `CURRENT_CI_COMMAND` | Active (Shard Report Aggregator & Pages Tree Builder) | `NONE` |
+| [`sanitize_test_report.py`](sanitize_test_report.py) | `CURRENT_SECURITY_COMMAND` | Active (Fail-Closed Report Privacy & HTML Scanner) | `NONE` |
 | [`fc27_demo_ingest.py`](fc27_demo_ingest.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Demo) | `NONE` |
 | [`fc27_demo_fixture_server.py`](fc27_demo_fixture_server.py) | `CURRENT_DEMO_COMMAND` | Active (Synthetic Loopback Fixture Server) | `NONE` |
 | [`check_documentation_consistency.py`](check_documentation_consistency.py) | `CURRENT_CI_COMMAND` | Active (CI & Security Gate) | `NONE` |
@@ -259,6 +264,51 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
   .\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
   ```
 - **Replacement Status**: Current authoritative read-only Discord bot CLI (`NONE`).
+
+### 17. `scripts/classify_ci_changes.py`
+- **Classification**: `CURRENT_CI_COMMAND`
+- **Purpose**: Classifies changed repository paths across the 11 canonical FC27 CI categories, enforces fail-closed broad coverage fallbacks, and evaluates trusted-context and GitHub Pages eligibility (`PAGES_PUBLICATION_TRUSTED_CONTEXT_ONLY=YES`, `UNTRUSTED_FORK_PAGES_PUBLICATION=NO`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/classify_ci_changes.py --files docs/TESTING.md
+  ```
+- **Replacement Status**: Current authoritative CI changed-file classifier (`NONE`).
+
+### 18. `scripts/build_test_report.py`
+- **Classification**: `CURRENT_CI_COMMAND`
+- **Purpose**: Merges JUnit XML test outputs, strips `pytest-html` environment tables, renders a 100% self-contained HTML test report (`HTML_EXTERNAL_RESOURCES=0`), builds the bounded GitHub Actions Job Summary (`$GITHUB_STEP_SUMMARY`), reconciles counts fail-closed (`REPORT_COUNT_RECONCILIATION=PASS`), and runs `scripts/sanitize_test_report.py`.
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/build_test_report.py --help
+  ```
+- **Replacement Status**: Current authoritative CI job report builder (`NONE`).
+
+### 19. `scripts/aggregate_test_reports.py`
+- **Classification**: `CURRENT_CI_COMMAND`
+- **Purpose**: Aggregates shard test reports across workflow jobs, verifies that the aggregate count equals the sum of shard counts (and expected full-suite collection total), builds the bounded static Pages report tree (`PAGES_REPORT_RETENTION_COUNT=30`), writes the final aggregate Job Summary, and scans all outputs via `scripts/sanitize_test_report.py`.
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/aggregate_test_reports.py --help
+  ```
+- **Replacement Status**: Current authoritative CI report aggregator (`NONE`).
+
+### 20. `scripts/sanitize_test_report.py`
+- **Classification**: `CURRENT_SECURITY_COMMAND`
+- **Purpose**: Scans HTML reports, JUnit XML files, Markdown Job Summaries, JSON duration/metadata files, and logs for forbidden credentials, tokens, URIs, host/UNC paths, private IPs, Discord snowflakes, player pseudonyms, raw provider fields, environment dumps, and external HTML resources, failing closed without printing matched secret values (`FORBIDDEN_VALUES_PUBLISHED=0`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/sanitize_test_report.py .local-artifacts/ci/report-preview
+  ```
+- **Replacement Status**: Current authoritative CI report privacy and security scanner (`NONE`).
+
+### 21. `scripts/build_container_report.py`
+- **Classification**: `CURRENT_CI_COMMAND`
+- **Purpose**: Validates `.dockerignore` build-context exclusions, inspects built container image history and filesystem for secret leaks (`IMAGE_SECRET_SCAN=PASS`), verifies non-root `10001:65534` and `--read-only` rootfs compatibility, parses Trivy JSON vulnerability reports (`TRIVY_HIGH_CRITICAL_GATE=PASS`) and SPDX JSON SBOMs, and generates sanitized GitHub Actions Job Summaries and self-contained HTML reports (`container-browser-report`).
+- **Safe Invocation**:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts/build_container_report.py --help
+  ```
+- **Replacement Status**: Current authoritative container validation and report builder (`NONE`).
 
 ---
 

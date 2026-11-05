@@ -36,8 +36,12 @@
   "archive_manifest_json": "config/fc27_archive_manifest.json",
   "removed_items_manifest_json": "config/fc27_removed_items_manifest.json",
   "required_current_scripts": [
+    "scripts/aggregate_test_reports.py",
+    "scripts/build_container_report.py",
+    "scripts/build_test_report.py",
     "scripts/check_documentation_consistency.py",
     "scripts/check_matchpulse_boundary.py",
+    "scripts/classify_ci_changes.py",
     "scripts/commissioner_decide.py",
     "scripts/fc27_capture_preflight.py",
     "scripts/fc27_club_lookup.py",
@@ -48,6 +52,7 @@
     "scripts/fc27_user_export_import.py",
     "scripts/model_health.py",
     "scripts/ollama-init.sh",
+    "scripts/sanitize_test_report.py",
     "scripts/test_postgres.sh"
   ],
   "required_docker_compose_files": [
@@ -107,6 +112,9 @@
     "FC27_DOCUMENTATION_TRUTH_TABLE.md",
     "DEVELOPMENT.md",
     "TESTING.md",
+    "FC27_CI_TEST_STRATEGY.md",
+    "FC27_TEST_ISOLATION_MATRIX.md",
+    "FC27_CI_BROWSER_REPORTS.md",
     "OPERATIONS.md",
     "SECURITY_BOUNDARIES.md",
     "APPROVAL_SECURITY.md",
