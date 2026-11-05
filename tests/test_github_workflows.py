@@ -328,6 +328,7 @@ def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
         else:
             assert perms == {
                 "contents": "read",
+                "actions": "read",
                 "packages": "write",
                 "id-token": "write",
                 "attestations": "write",

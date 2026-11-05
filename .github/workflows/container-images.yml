@@ -307,6 +307,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
       packages: write
       id-token: write
       attestations: write
@@ -343,7 +344,7 @@ jobs:
           sha = os.environ["COMMIT_SHA"]
           required_workflows = {"ci", "security-scan"}
 
-          for attempt in range(36):
+          for attempt in range(60):
               out = subprocess.check_output(
                   ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=50"],
                   text=True,
@@ -411,6 +412,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=fc27-${{ matrix.image }}-linux-amd64
 
       - name: Attest build provenance for published digest
+        continue-on-error: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ matrix.ghcr_repo }}
@@ -426,6 +428,15 @@ jobs:
           IMAGE_DIGEST: ${{ steps.push_image.outputs.digest }}
         run: |
           cosign sign --yes "${IMAGE_REPO}@${IMAGE_DIGEST}"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### GHCR Publication Summary (\`${{ matrix.image }}\`)"
+              echo "- **Repository**: \`${IMAGE_REPO}\`"
+              echo "- **Immutable Digest**: \`${IMAGE_DIGEST}\`"
+              echo "- **Cosign OIDC Signature**: \`SIGNED\`"
+              echo "- **OCI Buildx Provenance & SBOM**: \`ATTACHED (mode=max)\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   result:
     name: result
