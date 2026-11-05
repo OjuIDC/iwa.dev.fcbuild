@@ -31,7 +31,7 @@ This document specifies the container image build, vulnerability and secret scan
 | **OS Family / Distro** | Debian GNU/Linux 13 (`trixie`) | Debian GNU/Linux 13 (`trixie`) |
 | **Target Architecture** | `linux/amd64` | `linux/amd64` |
 | **Base Image Size** | `178.35 MB` (`187,017,053` bytes) | `178.43 MB` (`187,099,229` bytes) |
-| **Pre-Bundled Build Tool Hardening** | Base `setuptools 79.0.1` (vendored `jaraco.context 5.3.0`), `wheel 0.45.1` | Upgraded in `RUN` layer to `setuptools 84.2.1` (`jaraco.context 6.1.0`) and `wheel 0.48.0` (replacing base-image `wheel 0.46.3`) |
+| **Pre-Bundled Build Tool Hardening** | Base `setuptools 79.0.1` (vendored `jaraco.context 5.3.0`), `wheel 0.45.1` | Upgraded in `RUN` layer to `setuptools 84.2.1` (vendored `jaraco.context 6.1.0`; SBOM also identifies vendored `wheel 0.46.3`) and top-level `wheel 0.48.0` |
 
 ### 2.2 Candidate Base-Image Comparison Matrix
 
