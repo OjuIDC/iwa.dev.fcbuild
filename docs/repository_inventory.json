@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 384,
+  "total_files": 386,
   "files": [
     {
       "path": ".dockerignore",
@@ -345,6 +345,16 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
+      "path": "docker-compose.ghcr.yml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Digest-pinned private GHCR Docker Compose deployment overlay (docker-compose.ghcr.yml)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Digest-pinned private GHCR deployment overlay for fc27-community-worker and fc27-discord-bot",
+      "last_relevant_commit": "299a7376b4cb96f2d7cae419d3d3c787bfb33c97"
+    },
+    {
       "path": "docker-compose.gpu.yml",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -613,6 +623,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+    },
+    {
+      "path": "docs/FC27_GHCR_RUNTIME_PROMOTION.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Private GHCR digest-pinned runtime promotion, verification, and rollback runbook",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Private GHCR digest-pinned runtime promotion, verification, and rollback runbook",
+      "last_relevant_commit": "299a7376b4cb96f2d7cae419d3d3c787bfb33c97"
     },
     {
       "path": "docs/FC27_LANGUAGE_DECISION_MATRIX.md",

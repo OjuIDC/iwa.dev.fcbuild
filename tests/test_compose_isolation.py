@@ -73,7 +73,22 @@ def _env_file(tmp_path, drop=()):
 def _config(env, *args):
     cmd = ["docker", "compose", "--env-file", str(env), *args, "config", "--format", "json"]
     # Isolate from the caller's environment: shell variables override --env-file.
-    clean = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
+    allowed_host_vars = {
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "COMMONPROGRAMFILES",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "TEMP",
+        "TMP",
+    }
+    clean = {k: v for k, v in os.environ.items() if k.upper() in allowed_host_vars or k.upper().startswith("DOCKER_")}
     return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=clean)
 
 
@@ -282,3 +297,117 @@ def test_langfuse_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)), "-f", "docker-compose.yml", "-f", "docker-compose.langfuse.yml",
                   "--profile", "langfuse", "--profile", "bootstrap")
     assert out.returncode != 0 and missing in out.stderr
+
+
+EXPECTED_GHCR_WORKER_IMAGE = (
+    "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker"
+    "@sha256:8628acc26c9c73d9360a5e47d66c10c988e03d8273b5f15bb1f7cd3e1dc1fb79"
+)
+EXPECTED_GHCR_DISCORD_IMAGE = (
+    "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot"
+    "@sha256:b8b571088b9a490fa4a1a517c60e1f43305ad863f3ecea9fc5df636541e7e084"
+)
+
+
+def test_ghcr_overlay_static_contract():
+    overlay_path = ROOT / "docker-compose.ghcr.yml"
+    assert overlay_path.is_file(), "docker-compose.ghcr.yml must exist"
+    raw = overlay_path.read_text(encoding="utf-8")
+
+    for forbidden in ("ghp_", "gho_", "github_pat_", "PASSWORD", "SECRET", "TOKEN", ":latest", ":main"):
+        assert forbidden not in raw, f"Forbidden token {forbidden!r} found in docker-compose.ghcr.yml"
+
+    import yaml
+
+    parsed = yaml.safe_load(raw)
+    assert set(parsed.keys()) == {"services"}
+    services = parsed["services"]
+    assert set(services.keys()) == {"fc27-community-worker", "fc27-discord-bot"}
+    assert services["fc27-community-worker"] == {"image": EXPECTED_GHCR_WORKER_IMAGE}
+    assert services["fc27-discord-bot"] == {"image": EXPECTED_GHCR_DISCORD_IMAGE}
+
+    for svc_name, svc_cfg in services.items():
+        img = svc_cfg["image"]
+        assert img.startswith("ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/"), svc_name
+        repo_part, digest_part = img.split("@", 1)
+        assert ":" not in repo_part, f"{svc_name} must not include a mutable tag before @sha256: {img}"
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest_part), f"{svc_name} invalid digest: {img}"
+
+
+def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(tmp_path):
+    env = _env_file(tmp_path)
+
+    # 1. Local-build mode remains supported when docker-compose.ghcr.yml is omitted
+    local_out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert local_out.returncode == 0, local_out.stderr
+    local_model = json.loads(local_out.stdout)
+    assert local_model["services"]["fc27-community-worker"]["build"]["dockerfile"] == "Dockerfile.community-worker"
+    assert local_model["services"]["fc27-discord-bot"]["build"]["dockerfile"] == "Dockerfile.discord"
+
+    # 2. GHCR overlay pins exact digests while preserving worker interval, Discord command, healthchecks, and hardening
+    ghcr_out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "-f",
+        "docker-compose.ghcr.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert ghcr_out.returncode == 0, ghcr_out.stderr
+    ghcr_model = json.loads(ghcr_out.stdout)
+
+    worker = ghcr_model["services"]["fc27-community-worker"]
+    discord = ghcr_model["services"]["fc27-discord-bot"]
+
+    assert worker["image"] == EXPECTED_GHCR_WORKER_IMAGE
+    assert discord["image"] == EXPECTED_GHCR_DISCORD_IMAGE
+
+    assert worker["environment"]["FC27_COMMUNITY_POLL_INTERVAL_SECONDS"] == "43200"
+    assert worker["environment"]["FC27_COMMUNITY_POLL_MIN_SECONDS"] == "43200"
+    assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_SECONDS"] == "43200"
+    assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_REQUESTS"] == "1"
+    assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_RETRIES"] == "0"
+    assert worker["command"] == ["--worker", "--confirm-live-polling"]
+    assert worker["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_polling_worker.py", "--status"]
+    assert worker["user"] == "10001:65534"
+    assert worker["read_only"] is True
+    assert worker["cap_drop"] == ["ALL"]
+
+    assert discord["command"] == ["--run"]
+    assert discord["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
+    assert discord["user"] == "10001:65534"
+    assert discord["read_only"] is True
+    assert discord["cap_drop"] == ["ALL"]
+    assert discord["environment"]["FC27_COMMUNITY_POLLING_ENABLED"] == "false"
+    assert discord["environment"]["FC27_COMMUNITY_PROVIDER_ENABLED"] == "false"
+
+
+def test_ghcr_runtime_promotion_documentation():
+    doc_path = ROOT / "docs" / "FC27_GHCR_RUNTIME_PROMOTION.md"
+    assert doc_path.is_file(), "docs/FC27_GHCR_RUNTIME_PROMOTION.md must exist"
+    text = doc_path.read_text(encoding="utf-8")
+    assert EXPECTED_GHCR_WORKER_IMAGE in text
+    assert EXPECTED_GHCR_DISCORD_IMAGE in text
+    assert "docker-compose.ghcr.yml" in text
+    assert "replicas=1" in text
+    assert "fc27-rollback/" in text
+    assert "Local-Build Mode" in text

@@ -296,6 +296,8 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "src/fc27_ci_test_groups.py",
         "tests/test_ci_report_sanitization.py",
         "tests/test_github_workflows.py",
+        "docker-compose.ghcr.yml",
+        "docs/FC27_GHCR_RUNTIME_PROMOTION.md",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
