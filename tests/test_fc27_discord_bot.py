@@ -735,7 +735,7 @@ def test_50_discord_container_and_compose_isolation() -> None:
     """50. `Dockerfile.discord` and `docker-compose.discord.yml` enforce non-root, read-only, opt-in profile isolation."""
     dockerfile_text = (REPO_ROOT / "Dockerfile.discord").read_text(encoding="utf-8")
     assert dockerfile_text.startswith(
-        "FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+        "FROM python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
     )
     assert "USER 10001:65534" in dockerfile_text
     assert "discord.py==2.7.1" in dockerfile_text

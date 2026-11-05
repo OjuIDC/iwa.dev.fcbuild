@@ -10,7 +10,7 @@ This guide covers setting up a local development environment for `iwa.dev.fcbuil
 
 ## 1. Python Environment Setup
 
-- **Required Python Version**: Python `>=3.11` (production container images pin `python:3.11.16-slim`; local development is verified on Python 3.11 through 3.14).
+- **Required Python Version**: Python `>=3.11` (production container images pin `python:3.11.18-slim`; local development is verified on Python 3.11 through 3.14).
 - **Virtual Environment Setup (Windows PowerShell)**:
   ```powershell
   python -m venv .venv
