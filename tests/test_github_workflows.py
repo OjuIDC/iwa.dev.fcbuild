@@ -523,8 +523,10 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
         encoding="utf-8",
     )
     v_os_active = parse_trivy_vulnerabilities(trivy_os_high, reference_date="2026-11-04")
-    assert v_os_active["trivy_high_critical_gate"] == "PASS"
-    assert v_os_active["waiver_id"] == "WAIVER-FC27-BASE-IMAGE-DEBIAN-3.11.16-SLIM"
+    assert v_os_active["trivy_high_critical_gate"] == "FAIL"
+    assert v_os_active["waiver_id"] == "NONE"
+    assert v_os_active["HIGH_FIXED_OS_WAIVED"] == 0
+    assert v_os_active["HIGH_FIXED_UNWAIVED"] == 1
 
     v_os_expired = parse_trivy_vulnerabilities(trivy_os_high, reference_date="2027-01-01")
     assert v_os_expired["trivy_high_critical_gate"] == "FAIL"
@@ -536,6 +538,7 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
     )
     v_py_high = parse_trivy_vulnerabilities(trivy_py_high, reference_date="2026-11-04")
     assert v_py_high["trivy_high_critical_gate"] == "FAIL"
+    assert v_py_high["waiver_id"] == "NONE"
 
     # 4. SPDX SBOM parser and sanitized report generation
     sbom_file = tmp_path / "sbom.spdx.json"
@@ -550,7 +553,7 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
     validation_data = {
         "image_name": "fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
-        "base_image": "python:3.11-slim",
+        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
         "target_platform": "linux/amd64",
         "size_bytes": 185000000,
         "local_digest": "sha256:" + "a" * 64,
@@ -587,4 +590,57 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
     scan = scan_text_content(html_text, source_label="index.html", is_html=True)
     assert scan["status"] == "PASS"
     assert scan["findings"] == []
+
+
+def test_base_image_waiver_remediation_contracts_and_operational_overlay_unchanged() -> None:
+    """Verifies Part M base-image digest pin, waiver removal, and untouched operational GHCR overlay."""
+    from scripts.build_container_report import (
+        BASE_IMAGE_OS_WAIVER_POLICY,
+        EXPECTED_IMAGE_CONTRACTS,
+    )
+
+    expected_base = (
+        "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+    )
+    assert re.match(r"^python:3\.11\.\d+-slim@sha256:[0-9a-f]{64}$", expected_base)
+
+    # 1. Both production Dockerfiles and EXPECTED_IMAGE_CONTRACTS pin the exact official Python 3.11.18-slim digest
+    for image_name, df_name in (
+        ("fc27-community-worker", "Dockerfile.community-worker"),
+        ("fc27-discord-bot", "Dockerfile.discord"),
+    ):
+        contract = EXPECTED_IMAGE_CONTRACTS[image_name]
+        assert contract["base_image"] == expected_base
+        assert contract["user"] == "10001:65534"
+        df_text = (REPO_ROOT / df_name).read_text(encoding="utf-8")
+        assert df_text.startswith(f"FROM {expected_base}\n")
+        assert "USER 10001:65534" in df_text
+        assert '"setuptools>=84.2.1"' in df_text
+        assert '"wheel>=0.48.0"' in df_text
+
+    # 2. The expired-risk waiver is removed and no replacement waiver is introduced
+    assert BASE_IMAGE_OS_WAIVER_POLICY["waiver_id"] == "NONE"
+    assert BASE_IMAGE_OS_WAIVER_POLICY["expires_on"] == "NONE"
+    assert BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"] == 0
+    assert BASE_IMAGE_OS_WAIVER_POLICY["waived_base_python_build_pkgs"] == ()
+    assert BASE_IMAGE_OS_WAIVER_POLICY["allow_critical"] is False
+    assert BASE_IMAGE_OS_WAIVER_POLICY["allow_library_high_fixed"] is False
+    report_script_text = (REPO_ROOT / "scripts" / "build_container_report.py").read_text(
+        encoding="utf-8"
+    )
+    assert "WAIVER-FC27-BASE-IMAGE-DEBIAN-3.11.16-SLIM" not in report_script_text
+
+    # 3. Operational GHCR runtime overlay digests remain untouched during candidate evaluation
+    ghcr_overlay = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.ghcr.yml").read_text(encoding="utf-8")
+    )
+    services = ghcr_overlay["services"]
+    assert (
+        services["fc27-discord-bot"]["image"]
+        == "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot@sha256:b8b571088b9a490fa4a1a517c60e1f43305ad863f3ecea9fc5df636541e7e084"
+    )
+    assert (
+        services["fc27-community-worker"]["image"]
+        == "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker@sha256:8628acc26c9c73d9360a5e47d66c10c988e03d8273b5f15bb1f7cd3e1dc1fb79"
+    )
 

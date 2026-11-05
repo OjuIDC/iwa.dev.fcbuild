@@ -1,4 +1,4 @@
-FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+FROM python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN useradd -r -u 10001 -g nogroup app \
+ && pip install --no-cache-dir --upgrade \
+    "setuptools>=84.2.1" \
+    "wheel>=0.48.0" \
  && pip install --no-cache-dir \
     "pydantic>=2.8,<3" \
     "psycopg[binary]>=3.2,<4" \

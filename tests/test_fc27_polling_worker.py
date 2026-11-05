@@ -1944,7 +1944,10 @@ def test_088_cli_output_is_metadata_only(
 def test_089_dockerfile_community_worker_uses_digest_pinned_base_image_and_non_root_user() -> None:
     """89. Dockerfile.community-worker uses a digest-pinned base image and non-root user."""
     dockerfile_text = (REPO_ROOT / "Dockerfile.community-worker").read_text(encoding="utf-8")
-    assert "FROM python:3.11.16-slim@sha256:" in dockerfile_text
+    assert (
+        "FROM python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+        in dockerfile_text
+    )
     assert "USER 10001:65534" in dockerfile_text
     assert "26a5ff12ea793042bd776a858c74f3f44dd427f5" in dockerfile_text
 
