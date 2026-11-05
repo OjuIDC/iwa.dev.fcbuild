@@ -113,6 +113,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 - **[`FEATURE_FLAGS.md`](FEATURE_FLAGS.md)** — Authoritative reference for all environment flags (`src/settings.py` and `config.example.env`) and fail-closed defaults
 - **[`OPERATIONS.md`](OPERATIONS.md)** — Day-2 operational runbooks, secret rotation, health probes, and rollback procedures
+- **[`FC27_GHCR_RUNTIME_PROMOTION.md`](FC27_GHCR_RUNTIME_PROMOTION.md)** — Digest-pinned private GHCR runtime promotion overlay (`docker-compose.ghcr.yml`), Cosign/SLSA/SBOM verification, sequential one-service-at-a-time promotion, and rollback runbook
 - **[`DEVELOPMENT.md`](DEVELOPMENT.md)** — Local development setup, virtual environment, and contributor workflow
 - **[`VOICE_CAPABILITIES.md`](VOICE_CAPABILITIES.md)** — Optional local Discord/voice subsystem boundary (non-primary)
 

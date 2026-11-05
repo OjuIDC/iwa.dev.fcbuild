@@ -1,0 +1,26 @@
+# Optional Docker Compose deployment overlay that pins the FC27 community polling
+# worker and read-only Discord bot to verified, signed, private GHCR images by
+# immutable SHA-256 digest.
+#
+# Local build definitions remain available by default in
+# `docker-compose.community-worker.yml` and `docker-compose.discord.yml`.
+#
+# Usage:
+#   docker compose `
+#     --env-file .env `
+#     --env-file .local-data/polling.env `
+#     --env-file .local-data/discord.env `
+#     -f docker-compose.yml `
+#     -f docker-compose.community-worker.yml `
+#     -f docker-compose.discord.yml `
+#     -f docker-compose.ghcr.yml `
+#     --profile fc27-polling `
+#     --profile fc27-discord `
+#     up -d
+
+services:
+  fc27-community-worker:
+    image: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker@sha256:8628acc26c9c73d9360a5e47d66c10c988e03d8273b5f15bb1f7cd3e1dc1fb79
+
+  fc27-discord-bot:
+    image: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot@sha256:b8b571088b9a490fa4a1a517c60e1f43305ad863f3ecea9fc5df636541e7e084
