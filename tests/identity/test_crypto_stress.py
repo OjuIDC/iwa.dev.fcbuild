@@ -293,7 +293,7 @@ def test_normalize_fernet_key_whitespace_stripping():
     b"too_short",
     secrets.token_bytes(16),   # 16 bytes (AES-128 key without HMAC)
     secrets.token_bytes(31),   # 31 bytes (1 byte short)
-    secrets.token_bytes(33),   # 33 bytes (1 byte long)
+    b"\n" + b"A" * 32,         # 33 bytes that must not be trimmed into a raw key
     "A" * 43,                  # 43 base64 characters
     "A" * 45,                  # 45 base64 characters
     "0" * 63,                  # 63 hex characters
