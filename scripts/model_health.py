@@ -1,6 +1,6 @@
 from __future__ import annotations
 import argparse, json, os, time, urllib.request
-BASE=os.getenv("OLLAMA_URL","http://ollama:11434").rstrip("/")
+BASE=(os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_BASE_URL") or "http://araba.ojuidc.olutech.systems:11434").rstrip("/")
 REQUIRED=os.getenv("REQUIRED_MODELS","llama3.2:3b qwen2.5:7b").split()
 def get(path):
     with urllib.request.urlopen(BASE+path,timeout=10) as r:return json.loads(r.read())

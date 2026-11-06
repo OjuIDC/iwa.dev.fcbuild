@@ -17,6 +17,10 @@ class ModelRegistry:
         if rp and Path(rp).exists(): self.load_results(rp)
         # LM Studio is used only when explicitly enabled. Invalid values raise ConfigError.
         self.lm_studio_enabled=env_bool('LM_STUDIO_FALLBACK_ENABLED',False)
+        # OLLAMA_BASE_URL overrides the catalog's Ollama endpoint (default: the shared
+        # lab server araba; use http://ollama:11434 with `--profile local-ollama`).
+        ollama_url=os.getenv('OLLAMA_BASE_URL')
+        if ollama_url and 'ollama' in self.catalog.get('providers',{}): self.catalog['providers']['ollama']['base_url']=ollama_url
         lm_url=os.getenv('LM_STUDIO_BASE_URL')
         if lm_url and 'lm_studio' in self.catalog.get('providers',{}): self.catalog['providers']['lm_studio']['base_url']=lm_url
     def load_results(self,path): self.results=json.loads(Path(path).read_text());return self

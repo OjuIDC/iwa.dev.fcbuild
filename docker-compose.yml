@@ -112,8 +112,13 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Model inference runs on the shared lab Ollama server (OLLAMA_BASE_URL,
+  # default http://araba.ojuidc.olutech.systems:11434). The bundled Ollama
+  # container is NOT started by default; it starts only with
+  # `--profile local-ollama` (then also set OLLAMA_BASE_URL=http://ollama:11434).
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.13@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429}
+    profiles: [local-ollama]
     volumes:
       - ollama_data:/root/.ollama
     networks: [fc27_net]
@@ -134,6 +139,7 @@ services:
 
   ollama-init:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.13@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429}
+    profiles: [local-ollama]
     depends_on:
       ollama:
         condition: service_healthy
@@ -150,12 +156,12 @@ services:
   model-health:
     image: ${PYTHON_IMAGE:-python:3.15.0-slim@sha256:f5b92f2a669a4c347044f29367f31983280b648250ca94dea66f98c53bc87e58}
     <<: *app-security
-    depends_on:
-      ollama-init:
-        condition: service_completed_successfully
+    # No dependency on ollama-init: the default model server is remote and
+    # models are provisioned there. The watcher retries every 30 s, so with
+    # --profile local-ollama it turns healthy once ollama-init has pulled them.
     networks: [fc27_net]
     environment:
-      OLLAMA_URL: http://ollama:11434
+      OLLAMA_URL: ${OLLAMA_BASE_URL:-http://araba.ojuidc.olutech.systems:11434}
       REQUIRED_MODELS: ${REQUIRED_MODELS:-llama3.2:3b qwen2.5:7b}
     volumes:
       - ./scripts/model_health.py:/app/model_health.py:ro
@@ -225,6 +231,7 @@ services:
       MODEL_CATALOG: /app/config/model_catalog.json
       MODEL_BENCHMARK_MATRIX: /app/config/role_benchmark_matrix.json
       MODEL_BENCHMARK_RESULTS: /app/reports/model_benchmark_results.json
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://araba.ojuidc.olutech.systems:11434}
       LM_STUDIO_FALLBACK_ENABLED: ${LM_STUDIO_FALLBACK_ENABLED:-false}
       LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
       ROLE_BACKEND: ${ROLE_BACKEND:-swarms}

@@ -1,7 +1,7 @@
 {
   "providers": {
     "ollama": {
-      "base_url": "http://ollama:11434",
+      "base_url": "http://araba.ojuidc.olutech.systems:11434",
       "priority": 10
     },
     "lm_studio": {

@@ -51,3 +51,15 @@ def test_invalid_lm_studio_flag_fails_clearly(monkeypatch):
     from src.settings import ConfigError
     monkeypatch.setenv('LM_STUDIO_FALLBACK_ENABLED','maybe')
     with pytest.raises(ConfigError):ModelRegistry()
+
+
+def test_ollama_base_url_defaults_to_remote_lab_server(monkeypatch):
+    monkeypatch.delenv('OLLAMA_BASE_URL', raising=False)
+    assert ModelRegistry().select('analyst').base_url == 'http://araba.ojuidc.olutech.systems:11434'
+
+
+def test_ollama_base_url_env_override(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama:11434')
+    reg = ModelRegistry()
+    assert reg.select('analyst').base_url == 'http://ollama:11434'
+    assert all(r.base_url == 'http://ollama:11434' for r in reg.fallback_chain('coach') if r.provider == 'ollama')
