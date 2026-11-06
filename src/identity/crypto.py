@@ -159,8 +159,8 @@ def normalize_fernet_key(raw_key: str | bytes) -> bytes:
         except Exception:
             pass
 
-    # 32 raw bytes (e.g. after whitespace strip)
-    if len(key_bytes) == 32:
+    # 32-character strings may represent raw key material after whitespace stripping
+    if len(key_bytes) == 32 and isinstance(raw_key, str):
         return base64.urlsafe_b64encode(key_bytes)
 
     # 64 hex characters
