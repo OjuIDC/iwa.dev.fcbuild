@@ -3,11 +3,11 @@
 #   redis -> redis, dxcam / mss (screen capture; mss is the fallback)
 # install.ps1 retries without the dxcam line if the full list fails.
 dxcam>=0.3.0,<1
-mss>=9,<11
+mss>=10.2.0,<11
 opencv-python>=4.10,<5
 numpy>=1.26,<3
 pytesseract>=0.3.13,<0.4
 Pillow>=13,<14
-redis>=5,<7
+redis>=5,<9
 websockets>=13,<16
 python-dotenv>=1,<2

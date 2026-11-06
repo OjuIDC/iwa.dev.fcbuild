@@ -61,7 +61,7 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
     "fc27-community-worker": {
         "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
-        "base_image": "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e",
+        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
         "user": "10001:65534",
         "entrypoint": ["python", "scripts/fc27_polling_worker.py"],
         "cmd": ["--status"],
@@ -80,7 +80,7 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
     "fc27-discord-bot": {
         "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot",
         "dockerfile": "Dockerfile.discord",
-        "base_image": "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e",
+        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
         "user": "10001:65534",
         "entrypoint": ["python", "scripts/fc27_discord_bot.py"],
         "cmd": ["--status"],
@@ -179,19 +179,18 @@ def scan_image_filesystem_tar_names(paths: Iterable[str]) -> tuple[bool, list[st
 
 
 BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
-    "waiver_id": "WAIVER-FC27-BASE-IMAGE-DEBIAN-3.11.16-SLIM",
-    "base_image": "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e",
-    "expires_on": "2026-12-31",
-    "max_os_high_fixed": 10,
-    "waived_base_python_build_pkgs": ("pip", "wheel", "setuptools", "jaraco.context"),
+    "waiver_id": "NONE",
+    "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+    "expires_on": "NONE",
+    "max_os_high_fixed": 0,
+    "waived_base_python_build_pkgs": (),
     "allow_critical": False,
     "allow_library_high_fixed": False,
     "rationale": (
-        "Dockerfile.community-worker and Dockerfile.discord are contract-pinned by repository tests to "
-        "python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e and "
-        "execute non-root (10001:65534) with --read-only, --cap-drop=ALL, no-new-privileges:true, and zero exposed ports. "
-        "Only Debian OS base layers and pre-bundled Python build-only tools (pip, wheel, setuptools, jaraco.context) "
-        "unused at runtime under --read-only rootfs are covered until 2026-12-31."
+        "No vulnerability waiver is active. Dockerfile.community-worker and Dockerfile.discord "
+        "pin python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545 "
+        "and upgrade setuptools>=84.2.1 and wheel>=0.48.0 so both images pass Trivy with zero "
+        "CRITICAL and zero fixed HIGH vulnerabilities without waivers."
     ),
 }
 
@@ -201,7 +200,8 @@ def parse_trivy_vulnerabilities(
     *,
     reference_date: str | None = None,
 ) -> dict[str, Any]:
-    """Parses Trivy JSON scan output into severity counts and evaluates Critical/High gate."""
+    """Parses Trivy JSON scan output into severity counts and evaluates fail-closed Critical/High gate."""
+    _ = reference_date
     counts: dict[str, Any] = {
         "CRITICAL": 0,
         "HIGH": 0,
@@ -212,54 +212,28 @@ def parse_trivy_vulnerabilities(
         "LOW": 0,
         "UNKNOWN": 0,
         "waiver_id": "NONE",
-        "waiver_expires_on": BASE_IMAGE_OS_WAIVER_POLICY["expires_on"],
+        "waiver_expires_on": "NONE",
         "trivy_high_critical_gate": "FAIL",
     }
     if not trivy_json_path.is_file():
         return counts
 
-    today_str = reference_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    waiver_unexpired = today_str <= str(BASE_IMAGE_OS_WAIVER_POLICY["expires_on"])
-    waived_build_pkgs = {
-        p.lower() for p in BASE_IMAGE_OS_WAIVER_POLICY["waived_base_python_build_pkgs"]
-    }
-
     data = json.loads(trivy_json_path.read_text(encoding="utf-8"))
-    os_high_fixed = 0
-    unwaived_high_fixed = 0
-
     for res in data.get("Results") or []:
-        res_class = str(res.get("Class") or "").lower()
-        res_type = str(res.get("Type") or "").lower()
-        is_debian_os = res_class == "os-pkgs" and res_type in ("debian", "ubuntu", "alpine")
         for vuln in res.get("Vulnerabilities") or []:
             sev = str(vuln.get("Severity") or "UNKNOWN").upper()
-            pkg_name = str(vuln.get("PkgName") or "").strip().lower()
             if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
                 counts[sev] += 1
             else:
                 counts["UNKNOWN"] += 1
             if sev == "HIGH" and vuln.get("FixedVersion"):
                 counts["HIGH_FIXED"] += 1
-                is_waived_base_pkg = is_debian_os or (
-                    res_class == "lang-pkgs" and pkg_name in waived_build_pkgs
-                )
-                if is_waived_base_pkg and waiver_unexpired:
-                    os_high_fixed += 1
-                else:
-                    unwaived_high_fixed += 1
 
-    if os_high_fixed > int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"]):
-        unwaived_high_fixed += os_high_fixed - int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"])
-        os_high_fixed = int(BASE_IMAGE_OS_WAIVER_POLICY["max_os_high_fixed"])
+    counts["HIGH_FIXED_OS_WAIVED"] = 0
+    counts["HIGH_FIXED_UNWAIVED"] = counts["HIGH_FIXED"]
 
-    counts["HIGH_FIXED_OS_WAIVED"] = os_high_fixed
-    counts["HIGH_FIXED_UNWAIVED"] = unwaived_high_fixed
-    if os_high_fixed > 0 and waiver_unexpired:
-        counts["waiver_id"] = BASE_IMAGE_OS_WAIVER_POLICY["waiver_id"]
-
-    # Fail closed on any CRITICAL or any unwaived HIGH_FIXED vulnerability
-    gate_ok = counts["CRITICAL"] == 0 and unwaived_high_fixed == 0
+    # Fail closed on any CRITICAL or any HIGH_FIXED vulnerability (zero waivers)
+    gate_ok = counts["CRITICAL"] == 0 and counts["HIGH_FIXED"] == 0
     counts["trivy_high_critical_gate"] = "PASS" if gate_ok else "FAIL"
     return counts
 
@@ -491,7 +465,7 @@ def _render_markdown(records: list[dict[str, Any]], title: str) -> str:
                 f"### `{rec['image_name']}`",
                 f"- **Local / Build Digest**: `{rec['local_digest']}`",
                 f"- **SBOM Digest**: `{rec['sbom']['sbom_digest']}` (`{rec['sbom']['package_count']}` packages)",
-                f"- **Trivy Gate**: `{rec['vulnerabilities']['trivy_high_critical_gate']}` (Waiver: `{rec['vulnerabilities'].get('waiver_id', 'NONE')}`, expires `{rec['vulnerabilities'].get('waiver_expires_on', '2026-12-31')}`, OS HIGH_FIXED waived: `{rec['vulnerabilities'].get('HIGH_FIXED_OS_WAIVED', 0)}`, unwaived HIGH_FIXED: `{rec['vulnerabilities'].get('HIGH_FIXED_UNWAIVED', 0)}`)",
+                f"- **Trivy Gate**: `{rec['vulnerabilities']['trivy_high_critical_gate']}` (Waiver: `{rec['vulnerabilities'].get('waiver_id', 'NONE')}`, expires `{rec['vulnerabilities'].get('waiver_expires_on', 'NONE')}`, OS HIGH_FIXED waived: `{rec['vulnerabilities'].get('HIGH_FIXED_OS_WAIVED', 0)}`, unwaived HIGH_FIXED: `{rec['vulnerabilities'].get('HIGH_FIXED_UNWAIVED', 0)}`)",
                 f"- **Overall Gate**: `{rec['overall_gate']}`",
                 "",
             ]

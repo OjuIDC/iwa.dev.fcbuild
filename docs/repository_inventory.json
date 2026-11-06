@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 386,
+  "total_files": 387,
   "files": [
     {
       "path": ".dockerignore",
@@ -553,6 +553,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/FC27_CONTAINER_PUBLISHING.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Container image build, fail-closed Trivy scan, SPDX-2.3 SBOM, SLSA v1 provenance, base-image remediation, and private GHCR publication policy",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Authoritative container build, vulnerability scan, base-image remediation, and private GHCR publication reference",
+      "last_relevant_commit": "a1dc93fa2b2724ba902c32cdcdf3f5e94972151a"
     },
     {
       "path": "docs/FC27_DAILY_POLLING_OPERATIONS.md",

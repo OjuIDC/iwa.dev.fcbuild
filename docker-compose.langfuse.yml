@@ -67,7 +67,7 @@ services:
       langfuse-web: {condition: service_healthy}
 
   langfuse-worker:
-    image: langfuse/langfuse-worker:4.49.0@sha256:40df08a1d15ecfa9542f1fd3b481f6d1afa16404a512e1ff51bc85b72144cedd
+    image: langfuse/langfuse-worker:4.72.0@sha256:aa1724b989a00f1e4ca9930709202489c73deaaf2f1116bbd3d71c77edb8fedb
     profiles: [langfuse]
     restart: unless-stopped
     depends_on: *lf-depends
@@ -140,7 +140,7 @@ services:
       retries: 10
 
   langfuse-redis:
-    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    image: redis:8.10.3-alpine@sha256:21090af93f8324db2f0f0f4f38a7c60369d47d917e000c3423d89d2ae2883537
     profiles: [langfuse]
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_PASSWORD:?Set LANGFUSE_REDIS_PASSWORD}", "--maxmemory-policy", "noeviction"]
