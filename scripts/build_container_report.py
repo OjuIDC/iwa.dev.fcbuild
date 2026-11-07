@@ -188,9 +188,9 @@ BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
     "allow_library_high_fixed": False,
     "rationale": (
         "No vulnerability waiver is active. Dockerfile.community-worker and Dockerfile.discord "
-        "pin python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545 "
-        "and upgrade setuptools>=84.2.1 and wheel>=0.48.0 so both images pass Trivy with zero "
-        "CRITICAL and zero fixed HIGH vulnerabilities without waivers."
+        "pin python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545, "
+        "upgrade zlib1g from Debian, and upgrade setuptools>=84.2.1 and wheel>=0.48.0 so both "
+        "images pass Trivy with zero CRITICAL and zero fixed HIGH vulnerabilities without waivers."
     ),
 }
 

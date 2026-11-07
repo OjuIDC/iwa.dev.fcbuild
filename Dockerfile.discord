@@ -11,7 +11,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd -r -u 10001 -g nogroup app \
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 10001 -g nogroup app \
  && pip install --no-cache-dir --upgrade \
     "pip>=26.1.2" \
     "setuptools>=84.2.1" \
