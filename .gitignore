@@ -27,3 +27,10 @@ docker-compose.local.yml
 
 # Local Python virtual environment
 /.venv/
+
+# Visual Studio local IDE state and user-specific files (never commit)
+/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates

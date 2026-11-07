@@ -1,0 +1,114 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.11.3.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "iwa.dev.fcbuild", "iwa.dev.fcbuild.pyproj", "{F27EC330-3230-4FC2-8700-330323000001}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Application", "Application", "{F27EC330-3230-4FC2-8700-330323000010}"
+	ProjectSection(SolutionItems) = preProject
+		src\fc27_demo_api.py = src\fc27_demo_api.py
+		src\fc27_community_provider.py = src\fc27_community_provider.py
+		src\fc27_polling_worker.py = src\fc27_polling_worker.py
+		src\fc27_discord_bot.py = src\fc27_discord_bot.py
+		src\graph_api.py = src\graph_api.py
+		src\settings.py = src\settings.py
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{F27EC330-3230-4FC2-8700-330323000020}"
+	ProjectSection(SolutionItems) = preProject
+		tests\conftest.py = tests\conftest.py
+		tests\test_compose_isolation.py = tests\test_compose_isolation.py
+		tests\test_documentation_consistency.py = tests\test_documentation_consistency.py
+		tests\test_fc27_repository_cleanup.py = tests\test_fc27_repository_cleanup.py
+		tests\test_packaging.py = tests\test_packaging.py
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Database and Migrations", "Database and Migrations", "{F27EC330-3230-4FC2-8700-330323000030}"
+	ProjectSection(SolutionItems) = preProject
+		migrations\0001_initial.sql = migrations\0001_initial.sql
+		migrations\0012_fc27_performance_and_quarantine.sql = migrations\0012_fc27_performance_and_quarantine.sql
+		migrations\post\grants.sql = migrations\post\grants.sql
+		src\db_migrate.py = src\db_migrate.py
+		src\db_roles.py = src\db_roles.py
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Infrastructure and Containers", "Infrastructure and Containers", "{F27EC330-3230-4FC2-8700-330323000040}"
+	ProjectSection(SolutionItems) = preProject
+		Dockerfile.community-eval = Dockerfile.community-eval
+		Dockerfile.community-worker = Dockerfile.community-worker
+		Dockerfile.discord = Dockerfile.discord
+		Dockerfile.graph = Dockerfile.graph
+		Dockerfile.mcp = Dockerfile.mcp
+		Dockerfile.stt = Dockerfile.stt
+		Dockerfile.tts = Dockerfile.tts
+		docker-compose.yml = docker-compose.yml
+		docker-compose.cpu.yml = docker-compose.cpu.yml
+		docker-compose.gpu.yml = docker-compose.gpu.yml
+		docker-compose.langfuse.yml = docker-compose.langfuse.yml
+		docker-compose.voice-gpu.yml = docker-compose.voice-gpu.yml
+		docker-compose.community-eval.yml = docker-compose.community-eval.yml
+		docker-compose.community-worker.yml = docker-compose.community-worker.yml
+		docker-compose.discord.yml = docker-compose.discord.yml
+		docker-compose.ghcr.yml = docker-compose.ghcr.yml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Documentation", "Documentation", "{F27EC330-3230-4FC2-8700-330323000050}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+		MIGRATION_GUIDE.md = MIGRATION_GUIDE.md
+		SECURITY.md = SECURITY.md
+		TEST_RESULTS.md = TEST_RESULTS.md
+		THIRD_PARTY_NOTICES.md = THIRD_PARTY_NOTICES.md
+		docs\README.md = docs\README.md
+		docs\ARCHITECTURE.md = docs\ARCHITECTURE.md
+		docs\DEVELOPMENT.md = docs\DEVELOPMENT.md
+		docs\TESTING.md = docs\TESTING.md
+		docs\OPERATIONS.md = docs\OPERATIONS.md
+		docs\SECURITY_BOUNDARIES.md = docs\SECURITY_BOUNDARIES.md
+		docs\DEPLOYMENT_AND_SECURITY.md = docs\DEPLOYMENT_AND_SECURITY.md
+		docs\VISUAL_STUDIO_SETUP.md = docs\VISUAL_STUDIO_SETUP.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Configuration", "Configuration", "{F27EC330-3230-4FC2-8700-330323000060}"
+	ProjectSection(SolutionItems) = preProject
+		pyproject.toml = pyproject.toml
+		requirements.txt = requirements.txt
+		requirements-dev.txt = requirements-dev.txt
+		requirements-langfuse.txt = requirements-langfuse.txt
+		requirements-swarms.txt = requirements-swarms.txt
+		config.example.env = config.example.env
+		config\documentation_consistency_policy.json = config\documentation_consistency_policy.json
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Automation", "Automation", "{F27EC330-3230-4FC2-8700-330323000070}"
+	ProjectSection(SolutionItems) = preProject
+		scripts\README.md = scripts\README.md
+		scripts\check_documentation_consistency.py = scripts\check_documentation_consistency.py
+		scripts\check_matchpulse_boundary.py = scripts\check_matchpulse_boundary.py
+		scripts\fc27_backup.py = scripts\fc27_backup.py
+		scripts\fc27_discord_bot.py = scripts\fc27_discord_bot.py
+		scripts\fc27_polling_worker.py = scripts\fc27_polling_worker.py
+		.github\workflows\ci.yml = .github\workflows\ci.yml
+		.github\workflows\test-fast.yml = .github\workflows\test-fast.yml
+		.github\workflows\test-nightly.yml = .github\workflows\test-nightly.yml
+		.github\workflows\container-images.yml = .github\workflows\container-images.yml
+		.github\workflows\security-scan.yml = .github\workflows\security-scan.yml
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F27EC330-3230-4FC2-8700-330323000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F27EC330-3230-4FC2-8700-330323000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F27EC330-3230-4FC2-8700-330323000000}
+	EndGlobalSection
+EndGlobal
