@@ -56,6 +56,105 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_quarantine_records",
 )
 
+# `fc27_match_team_stats` in `FC27BackupTableCounts` is a derived manifest row-count
+# alias equal to `fc27_matches`, not a physical PostgreSQL table in migrations 0001-0012.
+FC27_DERIVED_MANIFEST_COUNT_ALIASES: dict[str, str] = {
+    "fc27_match_team_stats": "fc27_matches",
+}
+
+FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN: dict[str, tuple[str, ...]] = {
+    "migration_ledger": (
+        "schema_migrations",
+        "schema_policy_versions",
+    ),
+    "identity_state": (
+        "fc27_users",
+        "fc27_user_roles",
+        "fc27_invitations",
+        "fc27_sessions",
+        "fc27_webauthn_credentials",
+        "fc27_totp_credentials",
+        "fc27_recovery_codes",
+        "fc27_action_tokens",
+        "fc27_challenges",
+        "fc27_bootstrap_locks",
+    ),
+    "approval_and_authority_state": (
+        "graph_threads",
+        "run_sequences",
+        "approval_requests",
+        "approval_nonces",
+        "approval_audit",
+        "fc27_decision_evidence",
+        "authority_policies",
+        "authority_delegations",
+        "player_assignments",
+        "player_decision_requests",
+        "player_decisions",
+        "approval_escalations",
+        "authority_conflicts",
+        "idempotency_keys",
+    ),
+    "dispatch_and_outbox_state": (
+        "domain_events",
+        "outbox",
+        "dispatches",
+        "dispatch_plans",
+        "dispatch_transition_rules",
+        "player_observations",
+        "dispatch_assessments",
+        "dispatch_delivery_attempts",
+        "dispatch_acknowledgments",
+        "dispatch_plan_decisions",
+        "dispatch_comments",
+        "analyst_notes",
+        "players",
+        "activation_gate_log",
+        "service_heartbeats",
+        "dispatch_worker_claims",
+    ),
+    "langgraph_checkpoint_state": (
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+        "checkpoint_migrations",
+    ),
+}
+
+FC27_BACKUP_OMITTED_VIEWS: tuple[str, ...] = (
+    "fc27_credentials",
+    "fc27_delegations",
+    "activation_gates",
+)
+
+FC27_PENDING_FUTURE_BACKUP_DOMAINS: tuple[str, ...] = (
+    "future_manual_match_results",
+    "future_match_results_audit_and_discord_linkage",
+)
+
+
+def get_fc27_backup_scope_inventory() -> dict[str, Any]:
+    """Return the deterministic inventory of current backup inclusions and omissions."""
+    omitted_flat = tuple(
+        table
+        for tables in FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN.values()
+        for table in tables
+    )
+    return {
+        "backup_scope_classification": "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
+        "full_required_database_state_covered": False,
+        "included_tables": FC27_DOMAIN_TABLES,
+        "derived_manifest_count_aliases": dict(FC27_DERIVED_MANIFEST_COUNT_ALIASES),
+        "omitted_tables_by_domain": {
+            domain: list(tables)
+            for domain, tables in FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN.items()
+        },
+        "omitted_tables_flat": list(omitted_flat),
+        "omitted_views": list(FC27_BACKUP_OMITTED_VIEWS),
+        "pending_future_domains": list(FC27_PENDING_FUTURE_BACKUP_DOMAINS),
+        "historical_recovery_verified": False,
+    }
+
 FORBIDDEN_BACKUP_MANIFEST_SUBSTRINGS: tuple[str, ...] = (
     "postgresql://",
     "postgres://",

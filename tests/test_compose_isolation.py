@@ -31,6 +31,8 @@ ALL_DB_SECRETS = {
     "fc27_migrator_uri",
     "fc27_app_uri",
     "fc27_relay_uri",
+    "postgres_password",
+    "redis_password",
 }
 
 
@@ -163,7 +165,13 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_relay_password",
                 "fc27_migrator_uri",
                 "fc27_relay_uri",
+                "postgres_password",
+                "redis_password",
             })
+        elif name == "postgres":
+            assert mounted == {"postgres_password"}
+        elif name == "redis":
+            assert mounted == {"redis_password"}
         else:
             assert not (mounted & ALL_DB_SECRETS), f"{name} must not mount any DB secrets, got {mounted & ALL_DB_SECRETS}"
 
@@ -242,8 +250,27 @@ def test_images_are_pinned(model):
             assert "@sha256:" in image and not image.split("@")[0].endswith(":latest"), f"{name}: {image}"
 
 
+def test_postgres_and_redis_runtime_controls(model):
+    postgres = model["services"]["postgres"]
+    redis = model["services"]["redis"]
+
+    assert postgres["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+    assert int(postgres["mem_limit"]) == 1_073_741_824
+    assert float(postgres["cpus"]) == pytest.approx(1.5)
+    assert postgres["pids_limit"] == 128
+    assert postgres["stop_grace_period"] == "1m30s"
+    assert postgres["logging"]["driver"] == "json-file"
+
+    assert "--requirepass \"$$(cat /run/secrets/redis_password)\"" in redis["command"][2]
+    assert int(redis["mem_limit"]) == 536_870_912
+    assert float(redis["cpus"]) == pytest.approx(1.0)
+    assert redis["pids_limit"] == 128
+    assert redis["stop_grace_period"] == "45s"
+    assert redis["logging"]["driver"] == "json-file"
+
+
 @pytest.mark.parametrize("missing", ["GRAPH_SERVICE_TOKEN", "GRAPH_COMMISSIONER_TOKEN_SHA256", "APPROVAL_SIGNING_SECRET",
-                                     "COMMISSIONER_ID", "MCP_API_TOKEN", "WS_AUTH_TOKEN", "POSTGRES_PASSWORD"])
+                                      "COMMISSIONER_ID", "MCP_API_TOKEN", "WS_AUTH_TOKEN", "REDIS_PASSWORD"])
 def test_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)))
     assert out.returncode != 0 and missing in out.stderr
@@ -437,3 +464,87 @@ def test_local_ollama_profile_still_resolves(tmp_path, overlay):
     assert "ports" not in services["ollama"]
     assert services["model-health"]["environment"]["OLLAMA_URL"] == "http://ollama:11434"
     assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == "http://ollama:11434"
+
+
+def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_path):
+    """Verify current Discord and community-worker overlay network and DB role posture."""
+    env = _env_file(tmp_path)
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "bootstrap",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    merged = json.loads(out.stdout)
+
+    on_data = sorted(
+        name for name, svc in merged["services"].items() if "fc27_data" in (svc.get("networks") or {})
+    )
+    assert on_data == [
+        "db-bootstrap",
+        "db-migrate",
+        "dispatch-worker",
+        "fc27-community-worker",
+        "fc27-discord-bot",
+        "graph-api",
+        "outbox-relay",
+        "postgres",
+    ]
+
+    discord = merged["services"]["fc27-discord-bot"]
+    worker = merged["services"]["fc27-community-worker"]
+    assert discord["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert worker["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert _service_secrets(discord) == {"discord_bot_token", "fc27_app_uri"}
+    assert _service_secrets(worker) == {"fc27_app_uri"}
+
+    grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
+    assert "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;" in grants_sql
+    assert "fc27_discord_reader" not in grants_sql
+
+
+def test_deployment_and_security_documentation_reconciliation():
+    """Verify docs/DEPLOYMENT_AND_SECURITY.md and docs/FC27_BACKUP_AND_RECOVERY.md reflect live boundaries."""
+    dep_doc = (ROOT / "docs" / "DEPLOYMENT_AND_SECURITY.md").read_text(encoding="utf-8")
+    backup_doc = (ROOT / "docs" / "FC27_BACKUP_AND_RECOVERY.md").read_text(encoding="utf-8")
+
+    assert "only graph-api joins" not in dep_doc.lower()
+    assert "MIGRATE_SETUP_CHECKPOINTS" not in dep_doc
+    for required_token in (
+        "db-migrate",
+        "src.db_migrate",
+        "GRAPH_RUN_MIGRATIONS=false",
+        "GRAPH_CHECKPOINT_SETUP=false",
+        "PostgresSaver.setup()",
+        "postgres_password",
+        "redis_password",
+        "POSTGRES_ROLE_MODEL=FAIL",
+        "DISCORD_ANALYTICS_READ_ONLY=NO",
+        "SEPARATE_SECURITY_PR",
+        "BLOCKED_RUNTIME_CREDENTIAL_ROTATION",
+        "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
+        "fc27_match_team_stats",
+        "HISTORICAL_RECOVERY_VERIFIED=NO",
+    ):
+        assert required_token in dep_doc, f"Missing {required_token!r} in docs/DEPLOYMENT_AND_SECURITY.md"
+
+    for required_backup_token in (
+        "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
+        "FC27_DOMAIN_TABLES",
+        "derived manifest row-count alias",
+        "HISTORICAL_RECOVERY_VERIFIED=NO",
+        "Pending feature migration",
+    ):
+        assert required_backup_token in backup_doc, (
+            f"Missing {required_backup_token!r} in docs/FC27_BACKUP_AND_RECOVERY.md"
+        )

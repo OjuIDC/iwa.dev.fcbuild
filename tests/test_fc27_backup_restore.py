@@ -24,11 +24,16 @@ from scripts.fc27_restore_verify import main as restore_cli_main
 from src.fc27_backup_restore import (
     BACKUP_RETENTION_COUNT,
     EXPECTED_MIGRATION_VERSION,
+    FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN,
+    FC27_DERIVED_MANIFEST_COUNT_ALIASES,
+    FC27_DOMAIN_TABLES,
+    FC27_PENDING_FUTURE_BACKUP_DOMAINS,
     FC27BackupIntegrityError,
     FC27BackupManifest,
     FC27BackupRecordHashes,
     FC27BackupTableCounts,
     create_fc27_backup,
+    get_fc27_backup_scope_inventory,
     verify_fc27_backup_restore,
 )
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
@@ -255,3 +260,36 @@ def test_backup_and_restore_cli_entrypoints(
     assert "RESTORE_VERIFICATION=PASS" in out_restore
     assert "RESTORED_MATCH_ROWS=10" in out_restore
     assert "RESTORED_PLAYER_STAT_ROWS=60" in out_restore
+
+
+def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
+    """Verify deterministic backup inclusions, derived alias, omitted tables, and pending domains."""
+    inv = get_fc27_backup_scope_inventory()
+    assert inv["backup_scope_classification"] == "PARTIAL_FC27_DOMAIN_TABLES_ONLY"
+    assert inv["full_required_database_state_covered"] is False
+    assert inv["historical_recovery_verified"] is False
+    assert inv["included_tables"] == (
+        "fc27_clubs",
+        "fc27_export_batches",
+        "fc27_matches",
+        "fc27_player_match_stats",
+        "fc27_quarantine_records",
+    )
+    assert "fc27_match_team_stats" not in FC27_DOMAIN_TABLES
+    assert FC27_DERIVED_MANIFEST_COUNT_ALIASES == {"fc27_match_team_stats": "fc27_matches"}
+    assert set(FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN.keys()) == {
+        "migration_ledger",
+        "identity_state",
+        "approval_and_authority_state",
+        "dispatch_and_outbox_state",
+        "langgraph_checkpoint_state",
+    }
+    assert "schema_migrations" in inv["omitted_tables_flat"]
+    assert "approval_audit" in inv["omitted_tables_flat"]
+    assert "fc27_users" in inv["omitted_tables_flat"]
+    assert "outbox" in inv["omitted_tables_flat"]
+    assert "dispatches" in inv["omitted_tables_flat"]
+    assert "checkpoints" in inv["omitted_tables_flat"]
+    assert set(inv["omitted_views"]) == {"fc27_credentials", "fc27_delegations", "activation_gates"}
+    assert not set(inv["omitted_views"]) & set(inv["omitted_tables_flat"])
+    assert tuple(inv["pending_future_domains"]) == FC27_PENDING_FUTURE_BACKUP_DOMAINS
