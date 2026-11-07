@@ -615,6 +615,7 @@ def test_base_image_waiver_remediation_contracts_and_operational_overlay_unchang
         df_text = (REPO_ROOT / df_name).read_text(encoding="utf-8")
         assert df_text.startswith(f"FROM {expected_base}\n")
         assert "USER 10001:65534" in df_text
+        assert '"pip>=26.1.2"' in df_text
         assert '"setuptools>=84.2.1"' in df_text
         assert '"wheel>=0.48.0"' in df_text
 
