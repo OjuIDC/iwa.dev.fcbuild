@@ -10,15 +10,17 @@ networks:
   # Shared application network (Redis event bus, MCP, Ollama, Graph API).
   fc27_net:
     driver: bridge
-  # PostgreSQL holds thread state, nonces and the approval audit. Only graph-api
-  # joins this network, so no other container can reach the database at all.
+  # Internal PostgreSQL data network (fc27_data). Bounded database-role services
+  # join this network: postgres, db-bootstrap, db-migrate, graph-api, outbox-relay,
+  # and dispatch-worker (plus optional overlays fc27-community-worker and
+  # fc27-discord-bot when their profiles are explicitly enabled).
   fc27_data:
     driver: bridge
     internal: true
 
 # Non-secret settings shared by application services. Deliberately contains NO
-# credentials: approval/commissioner/signing secrets and the database URI are
-# given only to graph-api; each other service receives only what it needs.
+# approval/commissioner/signing secrets or database URIs: approval signing secrets
+# are given only to graph-api, and database URIs are mounted as per-service files.
 x-common: &common
   FC27_CLUB_ID: ${FC27_CLUB_ID:-330323}
   FC_PLATFORM: ${FC_PLATFORM:-common-gen5}
