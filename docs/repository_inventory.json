@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 387,
+  "total_files": 390,
   "files": [
     {
       "path": ".dockerignore",
@@ -805,6 +805,16 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
+      "path": "docs/VISUAL_STUDIO_SETUP.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Visual Studio Enterprise 2026 and Antigravity setup guide (docs/VISUAL_STUDIO_SETUP.md)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Documents portable Visual Studio 2026 solution, existing .venv selection, lock glyph behavior, pytest discovery, and Antigravity coexistence",
+      "last_relevant_commit": "4a7d3509cbdc975e556868e7ca2e957528e869f4"
+    },
+    {
       "path": "docs/VOICE_CAPABILITIES.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1093,6 +1103,26 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "cc2239610778784c82d60649beaf5a3fd7d10fd1"
+    },
+    {
+      "path": "iwa.dev.fcbuild.pyproj",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT",
+      "authoritative_role": "Portable Visual Studio Python project specification (iwa.dev.fcbuild.pyproj)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Configures Visual Studio Python project structure, relative .venv interpreter reference, and pytest discovery without machine-specific paths",
+      "last_relevant_commit": "4a7d3509cbdc975e556868e7ca2e957528e869f4"
+    },
+    {
+      "path": "iwa.dev.fcbuild.sln",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT",
+      "authoritative_role": "Visual Studio 2026 solution file (iwa.dev.fcbuild.sln)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Provides standard .sln entry point and logical solution folders for Visual Studio Enterprise 2026",
+      "last_relevant_commit": "4a7d3509cbdc975e556868e7ca2e957528e869f4"
     },
     {
       "path": "migrations/0001_initial.sql",

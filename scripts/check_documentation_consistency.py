@@ -397,6 +397,8 @@ ROOT_FILE_NAMES = frozenset(
         "Dockerfile.mcp",
         "Dockerfile.stt",
         "Dockerfile.tts",
+        "iwa.dev.fcbuild.sln",
+        "iwa.dev.fcbuild.pyproj",
     }
 )
 
