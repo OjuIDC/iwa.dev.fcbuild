@@ -384,11 +384,11 @@ def test_51_visual_studio_solution_and_hygiene_rules() -> None:
         vs_path = REPO_ROOT / tracked_vs_file
         assert vs_path.is_file(), f"Missing Visual Studio file: {tracked_vs_file}"
         proc = subprocess.run(
-            ["git", "check-ignore", "-q", tracked_vs_file],
+            ["git", "check-ignore", "--no-index", "-q", tracked_vs_file],
             cwd=str(REPO_ROOT),
             check=False,
         )
-        assert proc.returncode != 0, f"Expected {tracked_vs_file} NOT to be gitignored"
+        assert proc.returncode == 1, f"Expected {tracked_vs_file} NOT to be gitignored"
 
     sln_text = (REPO_ROOT / "iwa.dev.fcbuild.sln").read_text(encoding="utf-8")
     assert "Microsoft Visual Studio Solution File, Format Version 12.00" in sln_text
