@@ -646,3 +646,313 @@ def test_base_image_waiver_remediation_contracts_and_operational_overlay_unchang
         == "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker@sha256:8628acc26c9c73d9360a5e47d66c10c988e03d8273b5f15bb1f7cd3e1dc1fb79"
     )
 
+
+def test_container_report_pr_and_main_modes_and_fail_closed_invariants(tmp_path: Path) -> None:
+    """Covers all 15 Part J PR-mode, main-mode, aggregate, terminal-gate, and sanitization invariants."""
+    import json
+    from scripts.build_container_report import main as container_report_main
+    from scripts.sanitize_test_report import scan_paths
+
+    base_validation = {
+        "image_name": "fc27-community-worker",
+        "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
+        "dockerfile": "Dockerfile.community-worker",
+        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+        "target_platform": "linux/amd64",
+        "size_bytes": 59322596,
+        "size_mb": 56.6,
+        "local_digest": "sha256:" + "b" * 64,
+        "runtime_user": "10001:65534",
+        "entrypoint": ["python", "scripts/fc27_polling_worker.py"],
+        "cmd": ["--status"],
+        "user_non_root_pass": True,
+        "dockerignore_pass": True,
+        "image_secret_scan": "PASS",
+        "secrets_in_image_history": 0,
+        "secrets_in_image_filesystem": 0,
+        "smoke_test_result": "PASS",
+        "read_only_rootfs_pass": True,
+        "poll_interval_seconds": "43200",
+        "validation_gate": "PASS",
+        "errors": [],
+    }
+    clean_trivy = {
+        "CRITICAL": 0,
+        "HIGH": 47,
+        "HIGH_FIXED": 0,
+        "HIGH_FIXED_OS_WAIVED": 0,
+        "HIGH_FIXED_UNWAIVED": 0,
+        "MEDIUM": 79,
+        "LOW": 63,
+        "UNKNOWN": 0,
+        "waiver_id": "NONE",
+        "waiver_expires_on": "NONE",
+        "trivy_high_critical_gate": "PASS",
+    }
+    valid_sbom = {
+        "sbom_generation": "PASS",
+        "sbom_digest": "sha256:" + "c" * 64,
+        "package_count": 113,
+    }
+
+    # 1 & 2. PR mode accepts intentionally empty published tags and records publication as not published
+    pr_empty_tags = build_single_image_report(
+        validation=base_validation,
+        trivy_counts=clean_trivy,
+        sbom_info=valid_sbom,
+        build_duration_seconds=10.0,
+        publication_status="not published (PR mode)",
+        planned_tags=[],
+        output_dir=tmp_path / "pr-empty-tags",
+    )
+    assert pr_empty_tags["overall_gate"] == "PASS"
+    assert pr_empty_tags["publication_status"] == "not published (PR mode)"
+    assert pr_empty_tags["planned_tags"] == ["not published (PR mode)"]
+
+    # 3. PR mode still requires successful build validation
+    bad_val = {**base_validation, "validation_gate": "FAIL", "errors": ["smoke test failed"]}
+    assert (
+        build_single_image_report(
+            validation=bad_val,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-bad-val",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 4. PR mode still requires a valid SBOM
+    bad_sbom = {**valid_sbom, "sbom_generation": "FAIL", "package_count": 0}
+    assert (
+        build_single_image_report(
+            validation=base_validation,
+            trivy_counts=clean_trivy,
+            sbom_info=bad_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-bad-sbom",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 5. PR mode still fails on CRITICAL
+    crit_trivy = {**clean_trivy, "CRITICAL": 1, "trivy_high_critical_gate": "FAIL"}
+    assert (
+        build_single_image_report(
+            validation=base_validation,
+            trivy_counts=crit_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-crit",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 6. PR mode still fails on fixed HIGH
+    high_fixed_trivy = {
+        **clean_trivy,
+        "HIGH": 49,
+        "HIGH_FIXED": 2,
+        "HIGH_FIXED_UNWAIVED": 2,
+        "trivy_high_critical_gate": "FAIL",
+    }
+    assert (
+        build_single_image_report(
+            validation=base_validation,
+            trivy_counts=high_fixed_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-high-fixed",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 7. PR mode still fails on secrets
+    secret_val = {**base_validation, "image_secret_scan": "FAIL", "secrets_in_image_history": 1}
+    assert (
+        build_single_image_report(
+            validation=secret_val,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-secret",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 8. PR mode still fails on invalid runtime user
+    root_user_val = {**base_validation, "runtime_user": "0:0", "user_non_root_pass": False}
+    assert (
+        build_single_image_report(
+            validation=root_user_val,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-bad-user",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 9. PR mode still fails on invalid entrypoint
+    bad_ep_val = {**base_validation, "entrypoint": ["/bin/sh"]}
+    assert (
+        build_single_image_report(
+            validation=bad_ep_val,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="not published (PR mode)",
+            planned_tags=[],
+            output_dir=tmp_path / "pr-bad-ep",
+        )["overall_gate"]
+        == "FAIL"
+    )
+
+    # 10. PR mode still fails on malformed JSON
+    malformed_val_path = tmp_path / "malformed-validation.json"
+    malformed_val_path.write_text("{not valid json", encoding="utf-8")
+    trivy_json_path = tmp_path / "trivy.json"
+    trivy_json_path.write_text('{"Results": []}', encoding="utf-8")
+    sbom_json_path = tmp_path / "sbom.spdx.json"
+    sbom_json_path.write_text('{"spdxVersion": "SPDX-2.3", "packages": [{"name": "zlib1g"}]}', encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        container_report_main(
+            [
+                "report",
+                "--validation-json",
+                str(malformed_val_path),
+                "--trivy-json",
+                str(trivy_json_path),
+                "--sbom-json",
+                str(sbom_json_path),
+                "--publication-status",
+                "not published (PR mode)",
+                "--planned-tags",
+                "",
+                "--output-dir",
+                str(tmp_path / "pr-malformed"),
+            ]
+        )
+
+    # 11 & 12. main mode still requires immutable planned tags & publication behavior remains unchanged
+    assert (
+        build_single_image_report(
+            validation=base_validation,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="ghcr-immutable-main",
+            planned_tags=[],
+            output_dir=tmp_path / "main-empty-tags",
+        )["overall_gate"]
+        == "FAIL"
+    )
+    assert (
+        build_single_image_report(
+            validation=base_validation,
+            trivy_counts=clean_trivy,
+            sbom_info=valid_sbom,
+            build_duration_seconds=10.0,
+            publication_status="ghcr-immutable-main",
+            planned_tags=["ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker:latest"],
+            output_dir=tmp_path / "main-latest-tag",
+        )["overall_gate"]
+        == "FAIL"
+    )
+    main_ok = build_single_image_report(
+        validation=base_validation,
+        trivy_counts=clean_trivy,
+        sbom_info=valid_sbom,
+        build_duration_seconds=10.0,
+        publication_status="ghcr-immutable-main",
+        planned_tags=[
+            "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker:sha-1fbd4ed",
+            "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker:main",
+        ],
+        output_dir=tmp_path / "main-valid-tags",
+    )
+    assert main_ok["overall_gate"] == "PASS"
+
+    # 13, 14, 15. Aggregate report succeeds only when every image report passes, terminal gate fails on any failure, and sanitized output has no forbidden values
+    agg_pass_in = tmp_path / "agg-pass-in"
+    build_single_image_report(
+        validation=base_validation,
+        trivy_counts=clean_trivy,
+        sbom_info=valid_sbom,
+        build_duration_seconds=10.0,
+        publication_status="not published (PR mode)",
+        planned_tags=[],
+        output_dir=agg_pass_in / "worker",
+    )
+    discord_validation = {
+        **base_validation,
+        "image_name": "fc27-discord-bot",
+        "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot",
+        "dockerfile": "Dockerfile.discord",
+        "entrypoint": ["python", "scripts/fc27_discord_bot.py"],
+    }
+    build_single_image_report(
+        validation=discord_validation,
+        trivy_counts=clean_trivy,
+        sbom_info=valid_sbom,
+        build_duration_seconds=12.0,
+        publication_status="not published (PR mode)",
+        planned_tags=[],
+        output_dir=agg_pass_in / "discord",
+    )
+    agg_pass_out = tmp_path / "agg-pass-out"
+    assert (
+        container_report_main(
+            [
+                "aggregate",
+                "--input-dir",
+                str(agg_pass_in),
+                "--output-dir",
+                str(agg_pass_out),
+            ]
+        )
+        == 0
+    )
+    scan_res = scan_paths([agg_pass_out / "job-summary.md", agg_pass_out / "index.html"])
+    assert scan_res["status"] == "PASS"
+    assert scan_res["findings"] == []
+
+    # When one image fails, aggregate fails (rc=1) and terminal workflow gate fails
+    build_single_image_report(
+        validation=discord_validation,
+        trivy_counts=high_fixed_trivy,
+        sbom_info=valid_sbom,
+        build_duration_seconds=12.0,
+        publication_status="not published (PR mode)",
+        planned_tags=[],
+        output_dir=agg_pass_in / "discord",
+    )
+    assert (
+        container_report_main(
+            [
+                "aggregate",
+                "--input-dir",
+                str(agg_pass_in),
+                "--output-dir",
+                str(tmp_path / "agg-fail-out"),
+            ]
+        )
+        == 1
+    )
+    wf = _load_workflow("container-images.yml")
+    result_step_run = str(wf["jobs"]["result"]["steps"][0]["run"])
+    assert "CONTAINER_WORKFLOW_GATE=FAIL" in result_step_run
+    assert 'res_gate != "success" or res_build != "success" or res_report != "success"' in result_step_run
+

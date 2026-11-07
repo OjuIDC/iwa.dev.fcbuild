@@ -302,6 +302,14 @@ def validate_built_image(
     if not user_non_root_pass:
         errors.append(f"unexpected user {runtime_user!r} != {contract['user']!r}")
 
+    actual_entrypoint = list(config.get("Entrypoint") or [])
+    if actual_entrypoint != list(contract["entrypoint"]):
+        errors.append(f"unexpected entrypoint {actual_entrypoint!r} != {contract['entrypoint']!r}")
+
+    actual_cmd = list(config.get("Cmd") or [])
+    if actual_cmd != list(contract["cmd"]):
+        errors.append(f"unexpected cmd {actual_cmd!r} != {contract['cmd']!r}")
+
     env_list = list(config.get("Env") or [])
     env_map: dict[str, str] = {}
     for entry in env_list:
@@ -407,6 +415,8 @@ def validate_built_image(
         "size_mb": round(size_bytes / (1024 * 1024), 1),
         "local_digest": local_digest,
         "runtime_user": runtime_user,
+        "entrypoint": actual_entrypoint,
+        "cmd": actual_cmd,
         "user_non_root_pass": user_non_root_pass,
         "dockerignore_pass": dockerignore_ok,
         "image_secret_scan": secret_scan_status,
@@ -550,18 +560,53 @@ def build_single_image_report(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Builds per-image JSON, Markdown, and HTML reports and evaluates all image gates."""
+    normalized_tags = [str(t).strip() for t in (planned_tags or []) if str(t).strip()]
+    pub_status = str(publication_status or "").strip()
+    if pub_status.startswith("not published"):
+        if not normalized_tags:
+            normalized_tags = [pub_status]
+        publication_ok = normalized_tags == [pub_status]
+    else:
+        publication_ok = (
+            pub_status.startswith("ghcr-immutable-")
+            and len(normalized_tags) > 0
+            and all(
+                not t.startswith("not published")
+                and not t.endswith(":latest")
+                and t != "latest"
+                for t in normalized_tags
+            )
+        )
+
+    contract = EXPECTED_IMAGE_CONTRACTS.get(str(validation.get("image_name") or ""), {})
+    expected_user = contract.get("user", "10001:65534")
+    user_ok = (
+        validation.get("user_non_root_pass", True) is True
+        and str(validation.get("runtime_user") or "") == expected_user
+    )
+    expected_entrypoint = contract.get("entrypoint")
+    actual_entrypoint = validation.get("entrypoint")
+    entrypoint_ok = (
+        True
+        if actual_entrypoint is None or expected_entrypoint is None
+        else list(actual_entrypoint) == list(expected_entrypoint)
+    )
+
     overall_ok = (
         validation.get("validation_gate") == "PASS"
         and validation.get("image_secret_scan") == "PASS"
         and validation.get("smoke_test_result") == "PASS"
         and trivy_counts.get("trivy_high_critical_gate") == "PASS"
         and sbom_info.get("sbom_generation") == "PASS"
+        and publication_ok
+        and user_ok
+        and entrypoint_ok
     )
     record = {
         **validation,
         "build_duration_seconds": float(build_duration_seconds),
-        "publication_status": publication_status,
-        "planned_tags": planned_tags,
+        "publication_status": pub_status,
+        "planned_tags": normalized_tags,
         "vulnerabilities": trivy_counts,
         "sbom": sbom_info,
         "overall_gate": "PASS" if overall_ok else "FAIL",

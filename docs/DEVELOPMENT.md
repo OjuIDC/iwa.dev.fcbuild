@@ -11,6 +11,7 @@ This guide covers setting up a local development environment for `iwa.dev.fcbuil
 ## 1. Python Environment Setup
 
 - **Required Python Version**: Python `>=3.11` (production container images pin `python:3.11.18-slim`; local development is verified on Python 3.11 through 3.14).
+- **Visual Studio Enterprise 2026 & Antigravity Setup**: Open `iwa.dev.fcbuild.sln` (`iwa.dev.fcbuild.pyproj`) rather than Folder View so Visual Studio reuses the existing repository-root `.venv`, suppresses new-environment prompts, and discovers `tests/` via pytest. See [`VISUAL_STUDIO_SETUP.md`](VISUAL_STUDIO_SETUP.md) for the complete IDE and Antigravity guide.
 - **Virtual Environment Setup (Windows PowerShell)**:
   ```powershell
   python -m venv .venv

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -299,6 +300,9 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "docker-compose.ghcr.yml",
         "docs/FC27_CONTAINER_PUBLISHING.md",
         "docs/FC27_GHCR_RUNTIME_PROMOTION.md",
+        "docs/VISUAL_STUDIO_SETUP.md",
+        "iwa.dev.fcbuild.pyproj",
+        "iwa.dev.fcbuild.sln",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
@@ -343,3 +347,90 @@ def test_50_current_docker_entrypoints_import() -> None:
         assert path.is_file(), f"Missing Docker entrypoint target: {rel}"
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         assert isinstance(tree, ast.Module)
+
+
+def test_51_visual_studio_solution_and_hygiene_rules() -> None:
+    gitignore_text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    for required_ignore in (
+        "/.venv/",
+        "/.vs/",
+        "*.suo",
+        "*.user",
+        "*.userosscache",
+        "*.sln.docstates",
+    ):
+        assert required_ignore in gitignore_text, f"Missing .gitignore rule: {required_ignore}"
+
+    for ignored_probe in (
+        ".venv/pyvenv.cfg",
+        ".vs/iwa.dev.fcbuild/v18/.suo",
+        "iwa.dev.fcbuild.suo",
+        "iwa.dev.fcbuild.pyproj.user",
+        "iwa.dev.fcbuild.userosscache",
+        "iwa.dev.fcbuild.sln.docstates",
+    ):
+        proc = subprocess.run(
+            ["git", "check-ignore", "-q", ignored_probe],
+            cwd=str(REPO_ROOT),
+            check=False,
+        )
+        assert proc.returncode == 0, f"Expected {ignored_probe} to be gitignored"
+
+    for tracked_vs_file in (
+        "iwa.dev.fcbuild.sln",
+        "iwa.dev.fcbuild.pyproj",
+        "docs/VISUAL_STUDIO_SETUP.md",
+    ):
+        vs_path = REPO_ROOT / tracked_vs_file
+        assert vs_path.is_file(), f"Missing Visual Studio file: {tracked_vs_file}"
+        proc = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-q", tracked_vs_file],
+            cwd=str(REPO_ROOT),
+            check=False,
+        )
+        assert proc.returncode == 1, f"Expected {tracked_vs_file} NOT to be gitignored"
+
+    sln_text = (REPO_ROOT / "iwa.dev.fcbuild.sln").read_text(encoding="utf-8")
+    assert "Microsoft Visual Studio Solution File, Format Version 12.00" in sln_text
+    assert '"iwa.dev.fcbuild.pyproj"' in sln_text
+    assert ".dcproj" not in sln_text
+    for folder_name in (
+        "Application",
+        "Tests",
+        "Database and Migrations",
+        "Infrastructure and Containers",
+        "Documentation",
+        "Configuration",
+        "Automation",
+    ):
+        assert f'"{folder_name}"' in sln_text
+
+    pyproj_text = (REPO_ROOT / "iwa.dev.fcbuild.pyproj").read_text(encoding="utf-8")
+    assert "<TestFramework>Pytest</TestFramework>" in pyproj_text
+    assert "<UnitTestRootDirectory>tests</UnitTestRootDirectory>" in pyproj_text
+    assert "<UnitTestPattern>test_*.py</UnitTestPattern>" in pyproj_text
+    assert "<SuppressEnvironmentCreationPrompt>True</SuppressEnvironmentCreationPrompt>" in pyproj_text
+    assert '<Interpreter Include=".venv\\">' in pyproj_text
+    assert "<StartupFile>scripts\\check_documentation_consistency.py</StartupFile>" in pyproj_text
+    assert "fc27_discord_bot.py --run" not in pyproj_text
+    assert "fc27_polling_worker.py --run" not in pyproj_text
+
+    vs_doc_text = (REPO_ROOT / "docs" / "VISUAL_STUDIO_SETUP.md").read_text(encoding="utf-8")
+    assert "SOURCE_CONTROL_TRACKED_UNMODIFIED" in vs_doc_text
+    assert "iwa.dev.fcbuild.sln" in vs_doc_text
+    assert "Python Environments" in vs_doc_text
+
+    current_user = os.environ.get("USERNAME", "").strip()
+    for rel_file in ("iwa.dev.fcbuild.sln", "iwa.dev.fcbuild.pyproj", "docs/VISUAL_STUDIO_SETUP.md"):
+        content = (REPO_ROOT / rel_file).read_text(encoding="utf-8")
+        assert "C:\\Users\\" not in content
+        assert "/Users/" not in content
+        if current_user and len(current_user) >= 3:
+            assert f"\\Users\\{current_user}\\".lower() not in content.lower()
+            assert f"/Users/{current_user}/".lower() not in content.lower()
+        for banned_prefix in (".venv\\", ".vs\\", ".local-data\\", ".local-artifacts\\", "secrets\\"):
+            if rel_file == "iwa.dev.fcbuild.pyproj" and banned_prefix == ".venv\\":
+                assert '<Compile Include=".venv\\' not in content
+                assert '<Content Include=".venv\\' not in content
+            elif rel_file in ("iwa.dev.fcbuild.sln", "iwa.dev.fcbuild.pyproj"):
+                assert f'Include="{banned_prefix}' not in content

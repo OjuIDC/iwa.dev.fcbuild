@@ -1,0 +1,470 @@
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{f27ec330-3230-4fc2-8700-330323000001}</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <StartupFile>scripts\check_documentation_consistency.py</StartupFile>
+    <CommandLineArguments>--check --strict</CommandLineArguments>
+    <SearchPath>src;scripts</SearchPath>
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <Name>iwa.dev.fcbuild</Name>
+    <RootNamespace>iwa.dev.fcbuild</RootNamespace>
+    <InterpreterId>MSBuild|env|$(MSBuildProjectFullPath)</InterpreterId>
+    <SuppressEnvironmentCreationPrompt>True</SuppressEnvironmentCreationPrompt>
+    <TestFramework>Pytest</TestFramework>
+    <UnitTestPattern>test_*.py</UnitTestPattern>
+    <UnitTestRootDirectory>tests</UnitTestRootDirectory>
+    <IsWindowsApplication>False</IsWindowsApplication>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <ItemGroup>
+    <Interpreter Include=".venv\">
+      <Id>env</Id>
+      <Version>3.11</Version>
+      <Description>.venv (Python 3.11 (64-bit))</Description>
+      <InterpreterPath>Scripts\python.exe</InterpreterPath>
+      <WindowsInterpreterPath>Scripts\pythonw.exe</WindowsInterpreterPath>
+      <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
+      <Architecture>X64</Architecture>
+    </Interpreter>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include=".github\" />
+    <Folder Include=".github\workflows\" />
+    <Folder Include="config\" />
+    <Folder Include="docs\" />
+    <Folder Include="docs\archive\" />
+    <Folder Include="docs\archive\architecture\" />
+    <Folder Include="docs\archive\experiments\" />
+    <Folder Include="docs\archive\phases\" />
+    <Folder Include="docs\archive\plans\" />
+    <Folder Include="docs\archive\prompts\" />
+    <Folder Include="docs\archive\providers\" />
+    <Folder Include="docs\archive\reports\" />
+    <Folder Include="docs\archive\test-results\" />
+    <Folder Include="host_agent\" />
+    <Folder Include="migrations\" />
+    <Folder Include="migrations\post\" />
+    <Folder Include="scripts\" />
+    <Folder Include="scripts\archive\" />
+    <Folder Include="scripts\archive\experiments\" />
+    <Folder Include="src\" />
+    <Folder Include="src\dispatch\" />
+    <Folder Include="src\identity\" />
+    <Folder Include="src\identity\routers\" />
+    <Folder Include="tests\" />
+    <Folder Include="tests\adversarial\" />
+    <Folder Include="tests\dispatch\" />
+    <Folder Include="tests\e2e\" />
+    <Folder Include="tests\identity\" />
+    <Folder Include="voice\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="host_agent\capture_agent.py" />
+    <Compile Include="scripts\aggregate_test_reports.py" />
+    <Compile Include="scripts\archive\experiments\matchpulse_conformance.py" />
+    <Compile Include="scripts\build_container_report.py" />
+    <Compile Include="scripts\build_test_report.py" />
+    <Compile Include="scripts\check_documentation_consistency.py" />
+    <Compile Include="scripts\check_matchpulse_boundary.py" />
+    <Compile Include="scripts\classify_ci_changes.py" />
+    <Compile Include="scripts\commissioner_decide.py" />
+    <Compile Include="scripts\fc27_backup.py" />
+    <Compile Include="scripts\fc27_capture_preflight.py" />
+    <Compile Include="scripts\fc27_club_lookup.py" />
+    <Compile Include="scripts\fc27_community_eval.py" />
+    <Compile Include="scripts\fc27_demo_fixture_server.py" />
+    <Compile Include="scripts\fc27_demo_ingest.py" />
+    <Compile Include="scripts\fc27_discord_bot.py" />
+    <Compile Include="scripts\fc27_polling_worker.py" />
+    <Compile Include="scripts\fc27_restore_verify.py" />
+    <Compile Include="scripts\fc27_user_export_import.py" />
+    <Compile Include="scripts\model_health.py" />
+    <Compile Include="scripts\sanitize_test_report.py" />
+    <Compile Include="src\__init__.py" />
+    <Compile Include="src\approval.py" />
+    <Compile Include="src\approval_store.py" />
+    <Compile Include="src\audit_query.py" />
+    <Compile Include="src\benchmark.py" />
+    <Compile Include="src\correlation.py" />
+    <Compile Include="src\db_migrate.py" />
+    <Compile Include="src\db_roles.py" />
+    <Compile Include="src\decision.py" />
+    <Compile Include="src\dispatch\__init__.py" />
+    <Compile Include="src\dispatch\creation.py" />
+    <Compile Include="src\dispatch\gates.py" />
+    <Compile Include="src\dispatch\objective.py" />
+    <Compile Include="src\dispatch\outbox_relay.py" />
+    <Compile Include="src\dispatch\transition.py" />
+    <Compile Include="src\dispatch\worker.py" />
+    <Compile Include="src\events.py" />
+    <Compile Include="src\fc27_advisory_cache.py" />
+    <Compile Include="src\fc27_analyst.py" />
+    <Compile Include="src\fc27_analytics.py" />
+    <Compile Include="src\fc27_api_cache.py" />
+    <Compile Include="src\fc27_api_rate_limit.py" />
+    <Compile Include="src\fc27_authorized_api.py" />
+    <Compile Include="src\fc27_authorized_provider.py" />
+    <Compile Include="src\fc27_authorized_transport.py" />
+    <Compile Include="src\fc27_backup_restore.py" />
+    <Compile Include="src\fc27_capture.py" />
+    <Compile Include="src\fc27_ci_test_groups.py" />
+    <Compile Include="src\fc27_clubs.py" />
+    <Compile Include="src\fc27_clubs_api_contracts.py" />
+    <Compile Include="src\fc27_coach.py" />
+    <Compile Include="src\fc27_coaching.py" />
+    <Compile Include="src\fc27_community_provider.py" />
+    <Compile Include="src\fc27_dashboard_queries.py" />
+    <Compile Include="src\fc27_demo.py" />
+    <Compile Include="src\fc27_demo_api.py" />
+    <Compile Include="src\fc27_director.py" />
+    <Compile Include="src\fc27_discord_bot.py" />
+    <Compile Include="src\fc27_mcp_server.py" />
+    <Compile Include="src\fc27_pandas_view.py" />
+    <Compile Include="src\fc27_performance.py" />
+    <Compile Include="src\fc27_polling_worker.py" />
+    <Compile Include="src\fc27_provider.py" />
+    <Compile Include="src\fc27_provider_contract.py" />
+    <Compile Include="src\fc27_repository.py" />
+    <Compile Include="src\fc27_search_scout.py" />
+    <Compile Include="src\fc27_tactics.py" />
+    <Compile Include="src\fc27_user_export.py" />
+    <Compile Include="src\graph.py" />
+    <Compile Include="src\graph_api.py" />
+    <Compile Include="src\hierarchy.py" />
+    <Compile Include="src\identity\__init__.py" />
+    <Compile Include="src\identity\crypto.py" />
+    <Compile Include="src\identity\deps.py" />
+    <Compile Include="src\identity\policy.py" />
+    <Compile Include="src\identity\readiness.py" />
+    <Compile Include="src\identity\recovery.py" />
+    <Compile Include="src\identity\routers\__init__.py" />
+    <Compile Include="src\identity\routers\delegations.py" />
+    <Compile Include="src\identity\routers\invitations.py" />
+    <Compile Include="src\identity\routers\passkeys.py" />
+    <Compile Include="src\identity\routers\player.py" />
+    <Compile Include="src\identity\routers\recovery.py" />
+    <Compile Include="src\identity\routers\sessions.py" />
+    <Compile Include="src\identity\routers\step_up.py" />
+    <Compile Include="src\identity\routers\totp.py" />
+    <Compile Include="src\identity\routers\users.py" />
+    <Compile Include="src\identity\services.py" />
+    <Compile Include="src\identity\store.py" />
+    <Compile Include="src\identity\tokens.py" />
+    <Compile Include="src\identity\totp.py" />
+    <Compile Include="src\identity\webauthn.py" />
+    <Compile Include="src\lead_packages.py" />
+    <Compile Include="src\live_match_watcher.py" />
+    <Compile Include="src\live_ws_server.py" />
+    <Compile Include="src\mcp_healthcheck.py" />
+    <Compile Include="src\mcp_retry.py" />
+    <Compile Include="src\model_selection.py" />
+    <Compile Include="src\ocr_parsing.py" />
+    <Compile Include="src\post_match_rundown.py" />
+    <Compile Include="src\roles.py" />
+    <Compile Include="src\rtsp_frame_analyzer.py" />
+    <Compile Include="src\schemas.py" />
+    <Compile Include="src\security.py" />
+    <Compile Include="src\settings.py" />
+    <Compile Include="src\swarms_backend.py" />
+    <Compile Include="src\thread_ids.py" />
+    <Compile Include="src\tracing.py" />
+    <Compile Include="src\voice_gateway.py" />
+    <Compile Include="tests\__init__.py" />
+    <Compile Include="tests\adversarial\__init__.py" />
+    <Compile Include="tests\adversarial\test_adversarial_phase2.py" />
+    <Compile Include="tests\adversarial\test_r3_it3_stress_harness.py" />
+    <Compile Include="tests\adversarial\test_r3_r4_empirical_challenger.py" />
+    <Compile Include="tests\adversarial\test_r4_adversarial_empirical_challenge.py" />
+    <Compile Include="tests\adversarial\test_r4_empirical_concurrency_race.py" />
+    <Compile Include="tests\adversarial\test_r5_it2_adversarial_empirical_challenge.py" />
+    <Compile Include="tests\adversarial\test_r6_empirical_security_boundary_challenges.py" />
+    <Compile Include="tests\conftest.py" />
+    <Compile Include="tests\dispatch\test_outbox_relay.py" />
+    <Compile Include="tests\dispatch\test_worker.py" />
+    <Compile Include="tests\e2e\__init__.py" />
+    <Compile Include="tests\e2e\conftest.py" />
+    <Compile Include="tests\e2e\phase2_helpers.py" />
+    <Compile Include="tests\e2e\test_phase2_tier1_features.py" />
+    <Compile Include="tests\e2e\test_phase2_tier2_boundaries.py" />
+    <Compile Include="tests\e2e\test_phase2_tier3_combinations.py" />
+    <Compile Include="tests\e2e\test_phase2_tier4_scenarios.py" />
+    <Compile Include="tests\e2e\test_tier1_features.py" />
+    <Compile Include="tests\e2e\test_tier2_boundaries.py" />
+    <Compile Include="tests\e2e\test_tier3_combinations.py" />
+    <Compile Include="tests\e2e\test_tier4_scenarios.py" />
+    <Compile Include="tests\fc27_fixtures.py" />
+    <Compile Include="tests\helpers.py" />
+    <Compile Include="tests\identity\__init__.py" />
+    <Compile Include="tests\identity\test_adversarial_m2_1.py" />
+    <Compile Include="tests\identity\test_adversarial_m3_2.py" />
+    <Compile Include="tests\identity\test_adversarial_m4_1.py" />
+    <Compile Include="tests\identity\test_adversarial_r1_2.py" />
+    <Compile Include="tests\identity\test_adversarial_r2_2.py" />
+    <Compile Include="tests\identity\test_bootstrap.py" />
+    <Compile Include="tests\identity\test_bootstrap_ceremony.py" />
+    <Compile Include="tests\identity\test_bootstrap_secret_fail_closed.py" />
+    <Compile Include="tests\identity\test_crypto.py" />
+    <Compile Include="tests\identity\test_crypto_stress.py" />
+    <Compile Include="tests\identity\test_decision_proof_discriminated_union.py" />
+    <Compile Include="tests\identity\test_delegations.py" />
+    <Compile Include="tests\identity\test_player.py" />
+    <Compile Include="tests\identity\test_policy.py" />
+    <Compile Include="tests\identity\test_r12_model_validation.py" />
+    <Compile Include="tests\identity\test_r3_atomic_decision_commit.py" />
+    <Compile Include="tests\identity\test_r3_evidence_binding.py" />
+    <Compile Include="tests\identity\test_r4_concurrency_race.py" />
+    <Compile Include="tests\identity\test_r4_player_concurrency.py" />
+    <Compile Include="tests\identity\test_r4_player_decision_proofs.py" />
+    <Compile Include="tests\identity\test_r5_legacy_tokens.py" />
+    <Compile Include="tests\identity\test_r5_negative_matrix.py" />
+    <Compile Include="tests\identity\test_recovery.py" />
+    <Compile Include="tests\identity\test_routers_delegations.py" />
+    <Compile Include="tests\identity\test_routers_invitations.py" />
+    <Compile Include="tests\identity\test_routers_player_verification.py" />
+    <Compile Include="tests\identity\test_routers_sessions.py" />
+    <Compile Include="tests\identity\test_routers_users.py" />
+    <Compile Include="tests\identity\test_services.py" />
+    <Compile Include="tests\identity\test_session_lifecycle_adversarial.py" />
+    <Compile Include="tests\identity\test_step_up.py" />
+    <Compile Include="tests\identity\test_store.py" />
+    <Compile Include="tests\identity\test_store_totp_atomic.py" />
+    <Compile Include="tests\identity\test_tokens.py" />
+    <Compile Include="tests\identity\test_totp.py" />
+    <Compile Include="tests\identity\test_webauthn.py" />
+    <Compile Include="tests\test_adversarial_m1.py" />
+    <Compile Include="tests\test_adversarial_m2_2.py" />
+    <Compile Include="tests\test_adversarial_m2_it2_2.py" />
+    <Compile Include="tests\test_adversarial_m3_challenger.py" />
+    <Compile Include="tests\test_approval_lifecycle.py" />
+    <Compile Include="tests\test_approval_security.py" />
+    <Compile Include="tests\test_archive_integrity.py" />
+    <Compile Include="tests\test_ci_report_sanitization.py" />
+    <Compile Include="tests\test_commissioner_cli.py" />
+    <Compile Include="tests\test_compose_isolation.py" />
+    <Compile Include="tests\test_db_migrate_roles.py" />
+    <Compile Include="tests\test_db_roles.py" />
+    <Compile Include="tests\test_dispatch_creation.py" />
+    <Compile Include="tests\test_dispatch_schema.py" />
+    <Compile Include="tests\test_dispatch_transition.py" />
+    <Compile Include="tests\test_dispatch_transition_probe.py" />
+    <Compile Include="tests\test_documentation_consistency.py" />
+    <Compile Include="tests\test_end_to_end.py" />
+    <Compile Include="tests\test_events_outbox.py" />
+    <Compile Include="tests\test_fc27_advisory_cache.py" />
+    <Compile Include="tests\test_fc27_advisory_pipeline_e2e.py" />
+    <Compile Include="tests\test_fc27_analyst.py" />
+    <Compile Include="tests\test_fc27_analyst_graph.py" />
+    <Compile Include="tests\test_fc27_api_cache.py" />
+    <Compile Include="tests\test_fc27_api_ingestion.py" />
+    <Compile Include="tests\test_fc27_api_rate_limit.py" />
+    <Compile Include="tests\test_fc27_archive_manifest.py" />
+    <Compile Include="tests\test_fc27_authorized_api.py" />
+    <Compile Include="tests\test_fc27_authorized_provider.py" />
+    <Compile Include="tests\test_fc27_backup_restore.py" />
+    <Compile Include="tests\test_fc27_clubs_api_contracts.py" />
+    <Compile Include="tests\test_fc27_clubs_compatibility.py" />
+    <Compile Include="tests\test_fc27_coach.py" />
+    <Compile Include="tests\test_fc27_community_provider.py" />
+    <Compile Include="tests\test_fc27_dashboard_queries.py" />
+    <Compile Include="tests\test_fc27_demo.py" />
+    <Compile Include="tests\test_fc27_director.py" />
+    <Compile Include="tests\test_fc27_discord_bot.py" />
+    <Compile Include="tests\test_fc27_operator_capture.py" />
+    <Compile Include="tests\test_fc27_pandas_view.py" />
+    <Compile Include="tests\test_fc27_performance.py" />
+    <Compile Include="tests\test_fc27_persistence_and_queries.py" />
+    <Compile Include="tests\test_fc27_platform.py" />
+    <Compile Include="tests\test_fc27_polling_worker.py" />
+    <Compile Include="tests\test_fc27_preapproval_validator.py" />
+    <Compile Include="tests\test_fc27_repository_cleanup.py" />
+    <Compile Include="tests\test_fc27_safe_adapter_bundle_manifest.py" />
+    <Compile Include="tests\test_fc27_scout.py" />
+    <Compile Include="tests\test_fc27_search.py" />
+    <Compile Include="tests\test_fc27_search_scout_graph.py" />
+    <Compile Include="tests\test_fc27_tactics.py" />
+    <Compile Include="tests\test_fc27_user_export.py" />
+    <Compile Include="tests\test_github_workflows.py" />
+    <Compile Include="tests\test_graph_api_v1.py" />
+    <Compile Include="tests\test_graph_persistence.py" />
+    <Compile Include="tests\test_identifiers_and_tts.py" />
+    <Compile Include="tests\test_installer_static.py" />
+    <Compile Include="tests\test_integrated_services.py" />
+    <Compile Include="tests\test_langgraph_flow.py" />
+    <Compile Include="tests\test_m1_adversarial_challenger.py" />
+    <Compile Include="tests\test_m1_phase2_adversarial.py" />
+    <Compile Include="tests\test_m2_adversarial_challenger.py" />
+    <Compile Include="tests\test_m2_phase2_adversarial.py" />
+    <Compile Include="tests\test_m4_phase2_adversarial.py" />
+    <Compile Include="tests\test_mcp_http_server.py" />
+    <Compile Include="tests\test_mcp_retry_and_tools.py" />
+    <Compile Include="tests\test_migration_0003.py" />
+    <Compile Include="tests\test_model_selection.py" />
+    <Compile Include="tests\test_ocr_parsing.py" />
+    <Compile Include="tests\test_packaging.py" />
+    <Compile Include="tests\test_phase1_scope.py" />
+    <Compile Include="tests\test_roles.py" />
+    <Compile Include="tests\test_rundown_match_and_prompt.py" />
+    <Compile Include="tests\test_swarms_backend.py" />
+    <Compile Include="tests\test_tracing.py" />
+    <Compile Include="tests\test_typed_graph_voice.py" />
+    <Compile Include="tests\test_voice_gateway_api.py" />
+    <Compile Include="tests\test_watcher_processing.py" />
+    <Compile Include="tests\test_workflow.py" />
+    <Compile Include="tests\test_ws_server.py" />
+    <Compile Include="voice\__init__.py" />
+    <Compile Include="voice\stt_service.py" />
+    <Compile Include="voice\tts_service.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include=".dockerignore" />
+    <Content Include=".gitattributes" />
+    <Content Include=".github\dependabot.yml" />
+    <Content Include=".github\workflows\ci.yml" />
+    <Content Include=".github\workflows\container-images.yml" />
+    <Content Include=".github\workflows\security-scan.yml" />
+    <Content Include=".github\workflows\test-fast.yml" />
+    <Content Include=".github\workflows\test-nightly.yml" />
+    <Content Include=".gitignore" />
+    <Content Include="Dockerfile.community-eval" />
+    <Content Include="Dockerfile.community-worker" />
+    <Content Include="Dockerfile.discord" />
+    <Content Include="Dockerfile.graph" />
+    <Content Include="Dockerfile.mcp" />
+    <Content Include="Dockerfile.stt" />
+    <Content Include="Dockerfile.tts" />
+    <Content Include="LICENSE" />
+    <Content Include="MIGRATION_GUIDE.md" />
+    <Content Include="README.md" />
+    <Content Include="SECURITY.md" />
+    <Content Include="TEST_RESULTS.md" />
+    <Content Include="THIRD_PARTY_NOTICES.md" />
+    <Content Include="config.example.env" />
+    <Content Include="config\documentation_consistency_policy.json" />
+    <Content Include="config\fc27_archive_manifest.json" />
+    <Content Include="config\fc27_east_coasters_normalized_export.schema.json" />
+    <Content Include="config\fc27_removed_items_manifest.json" />
+    <Content Include="config\fc27_safe_adapter_bundle_manifest.json" />
+    <Content Include="config\model_catalog.json" />
+    <Content Include="config\role_benchmark_matrix.json" />
+    <Content Include="docker-compose.community-eval.yml" />
+    <Content Include="docker-compose.community-worker.yml" />
+    <Content Include="docker-compose.cpu.yml" />
+    <Content Include="docker-compose.discord.yml" />
+    <Content Include="docker-compose.ghcr.yml" />
+    <Content Include="docker-compose.gpu.yml" />
+    <Content Include="docker-compose.langfuse.yml" />
+    <Content Include="docker-compose.voice-gpu.yml" />
+    <Content Include="docker-compose.yml" />
+    <Content Include="docs\ADR_FC27_EAST_COASTERS_PLATFORM.md" />
+    <Content Include="docs\APPROVAL_SECURITY.md" />
+    <Content Include="docs\ARCHITECTURE.md" />
+    <Content Include="docs\DEPLOYMENT_AND_SECURITY.md" />
+    <Content Include="docs\DEVELOPMENT.md" />
+    <Content Include="docs\DISPATCH_ACTIVATION.md" />
+    <Content Include="docs\EA_PLAYER_IDENTITY_VERIFICATION.md" />
+    <Content Include="docs\FC27_ADVISORY_CACHE.md" />
+    <Content Include="docs\FC27_ANALYTICS.md" />
+    <Content Include="docs\FC27_APPROVAL_FLOW.md" />
+    <Content Include="docs\FC27_BACKUP_AND_RECOVERY.md" />
+    <Content Include="docs\FC27_CI_BROWSER_REPORTS.md" />
+    <Content Include="docs\FC27_CI_TEST_STRATEGY.md" />
+    <Content Include="docs\FC27_COACH_HYPOTHESIS_ENGINE.md" />
+    <Content Include="docs\FC27_COMMUNITY_PROVIDER_EVALUATION.md" />
+    <Content Include="docs\FC27_COMPONENT_STATUS.md" />
+    <Content Include="docs\FC27_CONTAINER_PUBLISHING.md" />
+    <Content Include="docs\FC27_DAILY_POLLING_OPERATIONS.md" />
+    <Content Include="docs\FC27_DATA_MODEL.md" />
+    <Content Include="docs\FC27_DEMO.md" />
+    <Content Include="docs\FC27_DIRECTOR_RECONCILIATION.md" />
+    <Content Include="docs\FC27_DISCORD_BOT.md" />
+    <Content Include="docs\FC27_DOCUMENTATION_TRUTH_TABLE.md" />
+    <Content Include="docs\FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md" />
+    <Content Include="docs\FC27_GHCR_RUNTIME_PROMOTION.md" />
+    <Content Include="docs\FC27_LANGUAGE_DECISION_MATRIX.md" />
+    <Content Include="docs\FC27_LOCAL_INFERENCE_BOUNDARY.md" />
+    <Content Include="docs\FC27_PERFORMANCE_BASELINE.md" />
+    <Content Include="docs\FC27_POLLING_WORKER.md" />
+    <Content Include="docs\FC27_PROVIDER_INTEGRATION.md" />
+    <Content Include="docs\FC27_TACTICAL_HYPOTHESES.md" />
+    <Content Include="docs\FC27_TACTICS_CANDIDATE_ENGINE.md" />
+    <Content Include="docs\FC27_TEST_ISOLATION_MATRIX.md" />
+    <Content Include="docs\FEATURE_FLAGS.md" />
+    <Content Include="docs\MATCHPULSE_INTEGRATION_BOUNDARY.md" />
+    <Content Include="docs\MODEL_SELECTION.md" />
+    <Content Include="docs\OPERATIONS.md" />
+    <Content Include="docs\README.md" />
+    <Content Include="docs\ROLE_MODEL_BENCHMARK_MATRIX.md" />
+    <Content Include="docs\SECURITY_BOUNDARIES.md" />
+    <Content Include="docs\TESTING.md" />
+    <Content Include="docs\VISUAL_STUDIO_SETUP.md" />
+    <Content Include="docs\VOICE_CAPABILITIES.md" />
+    <Content Include="docs\archive\ARCHIVE_MANIFEST.md" />
+    <Content Include="docs\archive\README.md" />
+    <Content Include="docs\archive\architecture\PHASE2_EVIDENCE_BINDING.md" />
+    <Content Include="docs\archive\architecture\PHASE2_RUNBOOKS.md" />
+    <Content Include="docs\archive\architecture\PHASE2_SECURITY_INVARIANTS.md" />
+    <Content Include="docs\archive\architecture\PHASE2_TRANSACTION_MODEL.md" />
+    <Content Include="docs\archive\architecture\PHASE2_WEBAUTHN_POLICY.md" />
+    <Content Include="docs\archive\experiments\WINDHOVER_INTEGRATION_GAP.md" />
+    <Content Include="docs\archive\phases\installer.md" />
+    <Content Include="docs\archive\phases\watcher_ocr_rundown.md" />
+    <Content Include="docs\archive\plans\2026-10-02-player-dispatch-design.md" />
+    <Content Include="docs\archive\prompts\ORIGINAL_REQUEST.md" />
+    <Content Include="docs\archive\prompts\PHASE2_VICTORY_AUDIT_REQUEST.md" />
+    <Content Include="docs\archive\providers\mcp_ws.md" />
+    <Content Include="docs\archive\reports\BUNDLE_AUDIT.md" />
+    <Content Include="docs\archive\reports\FINAL_ARCHIVE_AUDIT.md" />
+    <Content Include="docs\archive\reports\HACKATHON_ALIGNMENT.md" />
+    <Content Include="docs\archive\reports\IMPLEMENTATION_REPORT.md" />
+    <Content Include="docs\archive\reports\PHASE2_LOCAL_MERGE_GATE_REPORT.md" />
+    <Content Include="docs\archive\reports\PHASE2_REMEDIATION_REPORT.md" />
+    <Content Include="docs\archive\reports\SECURITY_CHANGES.md" />
+    <Content Include="docs\archive\reports\TYPED_GRAPH_VOICE_AUDIT.md" />
+    <Content Include="docs\archive\test-results\PHASE2_TEST_TRACEABILITY.md" />
+    <Content Include="docs\archive\test-results\TEST_RESULTS_2026-10-03_PHASE1.md" />
+    <Content Include="docs\repository_inventory.json" />
+    <Content Include="host_agent\install.ps1" />
+    <Content Include="host_agent\requirements_windows.txt" />
+    <Content Include="migrations\0001_initial.sql" />
+    <Content Include="migrations\0002_approval_security.sql" />
+    <Content Include="migrations\0003_dispatch_foundation.sql" />
+    <Content Include="migrations\0004_identity_foundation.sql" />
+    <Content Include="migrations\0005_delegations.sql" />
+    <Content Include="migrations\0006_bootstrap_and_recovery.sql" />
+    <Content Include="migrations\0007_decision_evidence.sql" />
+    <Content Include="migrations\0008_r2_remediation.sql" />
+    <Content Include="migrations\0009_r3_evidence_binding.sql" />
+    <Content Include="migrations\0010_outbox_claim_ownership.sql" />
+    <Content Include="migrations\0011_dispatch_worker_claims.sql" />
+    <Content Include="migrations\0012_fc27_performance_and_quarantine.sql" />
+    <Content Include="migrations\post\grants.sql" />
+    <Content Include="pyproject.toml" />
+    <Content Include="requirements-dev.txt" />
+    <Content Include="requirements-langfuse.txt" />
+    <Content Include="requirements-swarms.txt" />
+    <Content Include="requirements.txt" />
+    <Content Include="scripts\README.md" />
+    <Content Include="scripts\ollama-init.sh" />
+    <Content Include="scripts\test_postgres.sh" />
+    <Content Include="tests\synthetic_fc27_east_coasters_normalized_template.json" />
+    <Content Include="tests\synthetic_fc27_user_export.csv" />
+    <Content Include="tests\synthetic_fc27_user_export.json" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+</Project>

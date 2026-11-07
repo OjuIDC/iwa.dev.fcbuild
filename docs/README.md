@@ -116,6 +116,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **[`FC27_CONTAINER_PUBLISHING.md`](FC27_CONTAINER_PUBLISHING.md)** — Container image build, fail-closed Trivy scan (`CRITICAL=0`, `HIGH_FIXED=0`, zero waivers), SPDX-2.3 SBOM, SLSA v1 provenance, `python:3.11.18-slim` base-image remediation, and private GHCR publication policy
 - **[`FC27_GHCR_RUNTIME_PROMOTION.md`](FC27_GHCR_RUNTIME_PROMOTION.md)** — Digest-pinned private GHCR runtime promotion overlay (`docker-compose.ghcr.yml`), Cosign/SLSA/SBOM verification, sequential one-service-at-a-time promotion, and rollback runbook
 - **[`DEVELOPMENT.md`](DEVELOPMENT.md)** — Local development setup, virtual environment, and contributor workflow
+- **[`VISUAL_STUDIO_SETUP.md`](VISUAL_STUDIO_SETUP.md)** — Visual Studio Enterprise 2026 (`iwa.dev.fcbuild.sln` / `iwa.dev.fcbuild.pyproj`), existing `.venv` integration, Test Explorer pytest discovery, lock glyph behavior, and Antigravity coexistence
 - **[`VOICE_CAPABILITIES.md`](VOICE_CAPABILITIES.md)** — Optional local Discord/voice subsystem boundary (non-primary)
 
 ---
