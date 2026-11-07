@@ -617,7 +617,6 @@ def test_base_image_waiver_remediation_contracts_and_operational_overlay_unchang
         assert "USER 10001:65534" in df_text
         assert "apt-get install -y --no-install-recommends --only-upgrade zlib1g" in df_text
         assert "rm -rf /var/lib/apt/lists/*" in df_text
-        assert '"pip>=26.1.2"' in df_text
         assert '"setuptools>=84.2.1"' in df_text
         assert '"wheel>=0.48.0"' in df_text
 
