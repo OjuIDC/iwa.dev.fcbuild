@@ -31,6 +31,8 @@ ALL_DB_SECRETS = {
     "fc27_migrator_uri",
     "fc27_app_uri",
     "fc27_relay_uri",
+    "postgres_password",
+    "redis_password",
 }
 
 
@@ -163,7 +165,13 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_relay_password",
                 "fc27_migrator_uri",
                 "fc27_relay_uri",
+                "postgres_password",
+                "redis_password",
             })
+        elif name == "postgres":
+            assert mounted == {"postgres_password"}
+        elif name == "redis":
+            assert mounted == {"redis_password"}
         else:
             assert not (mounted & ALL_DB_SECRETS), f"{name} must not mount any DB secrets, got {mounted & ALL_DB_SECRETS}"
 
@@ -242,8 +250,27 @@ def test_images_are_pinned(model):
             assert "@sha256:" in image and not image.split("@")[0].endswith(":latest"), f"{name}: {image}"
 
 
+def test_postgres_and_redis_runtime_controls(model):
+    postgres = model["services"]["postgres"]
+    redis = model["services"]["redis"]
+
+    assert postgres["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+    assert int(postgres["mem_limit"]) == 1_073_741_824
+    assert float(postgres["cpus"]) == pytest.approx(1.5)
+    assert postgres["pids_limit"] == 128
+    assert postgres["stop_grace_period"] == "1m30s"
+    assert postgres["logging"]["driver"] == "json-file"
+
+    assert "--requirepass \"$$(cat /run/secrets/redis_password)\"" in redis["command"][2]
+    assert int(redis["mem_limit"]) == 536_870_912
+    assert float(redis["cpus"]) == pytest.approx(1.0)
+    assert redis["pids_limit"] == 128
+    assert redis["stop_grace_period"] == "45s"
+    assert redis["logging"]["driver"] == "json-file"
+
+
 @pytest.mark.parametrize("missing", ["GRAPH_SERVICE_TOKEN", "GRAPH_COMMISSIONER_TOKEN_SHA256", "APPROVAL_SIGNING_SECRET",
-                                     "COMMISSIONER_ID", "MCP_API_TOKEN", "WS_AUTH_TOKEN", "POSTGRES_PASSWORD"])
+                                      "COMMISSIONER_ID", "MCP_API_TOKEN", "WS_AUTH_TOKEN", "REDIS_PASSWORD"])
 def test_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)))
     assert out.returncode != 0 and missing in out.stderr

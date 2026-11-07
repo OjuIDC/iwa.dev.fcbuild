@@ -33,6 +33,15 @@ x-app-security: &app-security
     - ALL
   init: true
 
+x-runtime-controls: &runtime-controls
+  pids_limit: ${FC27_DEFAULT_PIDS_LIMIT:-256}
+  stop_grace_period: ${FC27_DEFAULT_STOP_GRACE_PERIOD:-30s}
+  logging:
+    driver: json-file
+    options:
+      max-size: ${FC27_LOG_MAX_SIZE:-10m}
+      max-file: "${FC27_LOG_MAX_FILE:-3}"
+
 services:
   db-bootstrap:
     build:
@@ -80,36 +89,50 @@ services:
         condition: service_healthy
 
   postgres:
+    <<: *runtime-controls
     image: ${POSTGRES_IMAGE:-postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea}
     environment:
       POSTGRES_DB: fc27
       POSTGRES_USER: fc27
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks: [fc27_data]
+    mem_limit: ${FC27_POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${FC27_POSTGRES_CPUS:-1.50}
+    pids_limit: ${FC27_POSTGRES_PIDS_LIMIT:-128}
+    stop_grace_period: ${FC27_POSTGRES_STOP_GRACE_PERIOD:-90s}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fc27 -d fc27"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 15s
     restart: unless-stopped
 
   redis:
+    <<: *runtime-controls
     image: ${REDIS_IMAGE:-redis:8.10.3-alpine@sha256:21090af93f8324db2f0f0f4f38a7c60369d47d917e000c3423d89d2ae2883537}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
-    environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command: ["sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$(cat /run/secrets/redis_password)\""]
+    secrets:
+      - redis_password
     volumes:
       - redis_data:/data
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     networks: [fc27_net]
+    mem_limit: ${FC27_REDIS_MEM_LIMIT:-512m}
+    cpus: ${FC27_REDIS_CPUS:-1.00}
+    pids_limit: ${FC27_REDIS_PIDS_LIMIT:-128}
+    stop_grace_period: ${FC27_REDIS_STOP_GRACE_PERIOD:-45s}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" ping"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   # Model inference runs on the shared lab Ollama server (OLLAMA_BASE_URL,
@@ -477,3 +500,7 @@ secrets:
     file: ./secrets/fc27_relay_uri
   fc27_dispatch_uri:
     file: ./secrets/fc27_dispatch_uri
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password

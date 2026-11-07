@@ -10,8 +10,9 @@
 ## 2. Secrets
 1. Copy `config.example.env` to `.env` and replace every `replace_with_*` value with an independently generated random value.
 2. Store the Commissioner token in a password manager. Put only its SHA-256 in `.env`: `python scripts/commissioner_decide.py hash-token`.
-3. In this lab deployment, secrets reach containers as environment variables. `src/settings.py` (`read_secret`) also accepts `NAME_FILE`, so you can move to Docker/Compose secrets or a vault without code changes.
-4. Compose fails closed: `docker compose config` errors if any required secret is missing.
+3. Secrets are split by boundary: graph and commissioner controls remain environment-backed, while PostgreSQL and Redis now consume file-backed Compose secrets (`secrets/postgres_password`, `secrets/redis_password`, both gitignored).
+4. `src/settings.py` (`read_secret`) accepts both `NAME` and `NAME_FILE`, so remaining environment secrets can move to Docker/Compose secrets or a vault without code changes.
+5. Compose fails closed: `docker compose config` errors if any required secret is missing.
 
 ## 3. Credential placement (enforced by `tests/test_compose_isolation.py`)
 
@@ -50,6 +51,7 @@ The default remote server (araba, RTX 3080 10 GB) is sized and tuned by its owne
 
 ## 7. Container hardening
 - Application containers run with `no-new-privileges`, `cap_drop: ALL`, an init process and non-root users.
+- PostgreSQL and Redis run with bounded CPU/memory/PID limits, json-file log rotation (`max-size`, `max-file`), and explicit stop-grace periods to prevent unbounded shutdown behavior.
 - Base images are pinned by tag and digest. The digests were resolved from the registries on 2026-10-01; re-verify them with `docker buildx imagetools inspect <image>`.
 - Never mount the Docker socket into any container.
 
