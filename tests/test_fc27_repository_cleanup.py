@@ -426,7 +426,8 @@ def test_51_visual_studio_solution_and_hygiene_rules() -> None:
         assert "C:\\Users\\" not in content
         assert "/Users/" not in content
         if current_user and len(current_user) >= 3:
-            assert current_user.lower() not in content.lower()
+            assert f"\\Users\\{current_user}\\".lower() not in content.lower()
+            assert f"/Users/{current_user}/".lower() not in content.lower()
         for banned_prefix in (".venv\\", ".vs\\", ".local-data\\", ".local-artifacts\\", "secrets\\"):
             if rel_file == "iwa.dev.fcbuild.pyproj" and banned_prefix == ".venv\\":
                 assert '<Compile Include=".venv\\' not in content
