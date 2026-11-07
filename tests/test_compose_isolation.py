@@ -464,3 +464,87 @@ def test_local_ollama_profile_still_resolves(tmp_path, overlay):
     assert "ports" not in services["ollama"]
     assert services["model-health"]["environment"]["OLLAMA_URL"] == "http://ollama:11434"
     assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == "http://ollama:11434"
+
+
+def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_path):
+    """Verify current Discord and community-worker overlay network and DB role posture."""
+    env = _env_file(tmp_path)
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "bootstrap",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    merged = json.loads(out.stdout)
+
+    on_data = sorted(
+        name for name, svc in merged["services"].items() if "fc27_data" in (svc.get("networks") or {})
+    )
+    assert on_data == [
+        "db-bootstrap",
+        "db-migrate",
+        "dispatch-worker",
+        "fc27-community-worker",
+        "fc27-discord-bot",
+        "graph-api",
+        "outbox-relay",
+        "postgres",
+    ]
+
+    discord = merged["services"]["fc27-discord-bot"]
+    worker = merged["services"]["fc27-community-worker"]
+    assert discord["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert worker["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert _service_secrets(discord) == {"discord_bot_token", "fc27_app_uri"}
+    assert _service_secrets(worker) == {"fc27_app_uri"}
+
+    grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
+    assert "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;" in grants_sql
+    assert "fc27_discord_reader" not in grants_sql
+
+
+def test_deployment_and_security_documentation_reconciliation():
+    """Verify docs/DEPLOYMENT_AND_SECURITY.md and docs/FC27_BACKUP_AND_RECOVERY.md reflect live boundaries."""
+    dep_doc = (ROOT / "docs" / "DEPLOYMENT_AND_SECURITY.md").read_text(encoding="utf-8")
+    backup_doc = (ROOT / "docs" / "FC27_BACKUP_AND_RECOVERY.md").read_text(encoding="utf-8")
+
+    assert "only graph-api joins" not in dep_doc.lower()
+    assert "MIGRATE_SETUP_CHECKPOINTS" not in dep_doc
+    for required_token in (
+        "db-migrate",
+        "src.db_migrate",
+        "GRAPH_RUN_MIGRATIONS=false",
+        "GRAPH_CHECKPOINT_SETUP=false",
+        "PostgresSaver.setup()",
+        "postgres_password",
+        "redis_password",
+        "POSTGRES_ROLE_MODEL=FAIL",
+        "DISCORD_ANALYTICS_READ_ONLY=NO",
+        "SEPARATE_SECURITY_PR",
+        "BLOCKED_RUNTIME_CREDENTIAL_ROTATION",
+        "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
+        "fc27_match_team_stats",
+        "HISTORICAL_RECOVERY_VERIFIED=NO",
+    ):
+        assert required_token in dep_doc, f"Missing {required_token!r} in docs/DEPLOYMENT_AND_SECURITY.md"
+
+    for required_backup_token in (
+        "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
+        "FC27_DOMAIN_TABLES",
+        "derived manifest row-count alias",
+        "HISTORICAL_RECOVERY_VERIFIED=NO",
+        "Pending feature migration",
+    ):
+        assert required_backup_token in backup_doc, (
+            f"Missing {required_backup_token!r} in docs/FC27_BACKUP_AND_RECOVERY.md"
+        )
