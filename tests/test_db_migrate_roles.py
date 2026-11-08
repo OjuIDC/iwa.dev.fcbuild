@@ -22,11 +22,12 @@ PINNED_APPLIED_MIGRATION_SHA256 = {
     "0010_outbox_claim_ownership.sql": "9dc88b9f8f6c6c29f5473a2cb8d01bdbd3fe89d7128a4b2f84797bc0ef93c895",
     "0011_dispatch_worker_claims.sql": "50163beab93318e64bfd6be7645f7c096b13eaee40436e993f6299ab0ad1407e",
     "0012_fc27_performance_and_quarantine.sql": "84279fa7bddafd8bd056adb69dc5cfbf2b178475d4dbc5442fd7993df8ec1807",
+    "0013_fc27_manual_match_results.sql": "2504c4c07d2e7a81a25b408a027122965e66c636e242af0b37f929a6e01242f0",
 }
 
 
 def test_applied_migrations_0001_to_0012_sha256_pinned():
-    """Pins SHA-256 of applied migrations 0001-0012 so any byte modification fails CI."""
+    """Pins SHA-256 of applied migrations 0001-0013 so any byte modification fails CI."""
     files_by_name = {path.name: path for _, path in migration_files()}
     for name, expected_sha256 in PINNED_APPLIED_MIGRATION_SHA256.items():
         assert name in files_by_name, f"missing applied migration {name}"
