@@ -29,7 +29,7 @@ from typing import Any  # noqa: E402
 from .model_selection import ModelRegistry, OpenAICompatibleClient, invoke_role  # noqa: E402
 from .roles import RoleResult, build_messages, parse_output  # noqa: E402
 
-SWARMS_VERSION_REQUIRED = "15.0.3"
+SWARMS_VERSION_REQUIRED = "17.0.0"
 
 
 class SwarmsUnavailable(RuntimeError):
