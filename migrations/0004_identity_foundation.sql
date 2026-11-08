@@ -16,11 +16,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_users (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS fc27_users_club_status_idx
+CREATE INDEX IF NOT EXISTS fc27_users_club_status_idx 
     ON public.fc27_users(club_id, status);
 
-CREATE INDEX IF NOT EXISTS fc27_users_player_id_idx
-    ON public.fc27_users(player_id)
+CREATE INDEX IF NOT EXISTS fc27_users_player_id_idx 
+    ON public.fc27_users(player_id) 
     WHERE player_id IS NOT NULL;
 
 -- Guard for user status transitions, immutability of identifiers, and automatic timestamps
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS public.fc27_user_roles (
     PRIMARY KEY (user_id, role)
 );
 
-CREATE INDEX IF NOT EXISTS fc27_user_roles_role_idx
+CREATE INDEX IF NOT EXISTS fc27_user_roles_role_idx 
     ON public.fc27_user_roles(role, user_id);
 
 
@@ -119,11 +119,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_invitations (
     CHECK (consumed_at IS NULL OR revoked_at IS NULL)
 );
 
-CREATE INDEX IF NOT EXISTS fc27_invitations_club_role_idx
+CREATE INDEX IF NOT EXISTS fc27_invitations_club_role_idx 
     ON public.fc27_invitations(club_id, intended_role);
 
-CREATE INDEX IF NOT EXISTS fc27_invitations_active_idx
-    ON public.fc27_invitations(token_hash, expires_at)
+CREATE INDEX IF NOT EXISTS fc27_invitations_active_idx 
+    ON public.fc27_invitations(token_hash, expires_at) 
     WHERE consumed_at IS NULL AND revoked_at IS NULL;
 
 
@@ -145,11 +145,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_sessions (
     CHECK (idle_expires_at > created_at)
 );
 
-CREATE INDEX IF NOT EXISTS fc27_sessions_user_idx
+CREATE INDEX IF NOT EXISTS fc27_sessions_user_idx 
     ON public.fc27_sessions(user_id);
 
-CREATE INDEX IF NOT EXISTS fc27_sessions_active_idx
-    ON public.fc27_sessions(token_hash, idle_expires_at, absolute_expires_at)
+CREATE INDEX IF NOT EXISTS fc27_sessions_active_idx 
+    ON public.fc27_sessions(token_hash, idle_expires_at, absolute_expires_at) 
     WHERE revoked_at IS NULL;
 
 
@@ -166,8 +166,8 @@ CREATE TABLE IF NOT EXISTS public.fc27_webauthn_credentials (
     revoked_at timestamptz NULL
 );
 
-CREATE INDEX IF NOT EXISTS fc27_webauthn_credentials_user_idx
-    ON public.fc27_webauthn_credentials(user_id)
+CREATE INDEX IF NOT EXISTS fc27_webauthn_credentials_user_idx 
+    ON public.fc27_webauthn_credentials(user_id) 
     WHERE revoked_at IS NULL;
 
 -- Sign counter monotonicity guard against cloned authenticators
@@ -212,11 +212,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_recovery_codes (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS fc27_recovery_codes_user_idx
+CREATE INDEX IF NOT EXISTS fc27_recovery_codes_user_idx 
     ON public.fc27_recovery_codes(user_id);
 
-CREATE INDEX IF NOT EXISTS fc27_recovery_codes_active_idx
-    ON public.fc27_recovery_codes(user_id)
+CREATE INDEX IF NOT EXISTS fc27_recovery_codes_active_idx 
+    ON public.fc27_recovery_codes(user_id) 
     WHERE consumed_at IS NULL;
 
 -- Deletions strictly forbidden via fc27_reject_mutation()
@@ -270,11 +270,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_action_tokens (
     CHECK (consumed_at IS NULL OR revoked_at IS NULL)
 );
 
-CREATE INDEX IF NOT EXISTS fc27_action_tokens_user_scope_idx
+CREATE INDEX IF NOT EXISTS fc27_action_tokens_user_scope_idx 
     ON public.fc27_action_tokens(user_id, scope);
 
-CREATE INDEX IF NOT EXISTS fc27_action_tokens_assignment_idx
-    ON public.fc27_action_tokens(assignment_id)
+CREATE INDEX IF NOT EXISTS fc27_action_tokens_assignment_idx 
+    ON public.fc27_action_tokens(assignment_id) 
     WHERE assignment_id IS NOT NULL;
 
 -- Action token parameter immutability and consumption guard
@@ -319,12 +319,12 @@ CREATE TABLE IF NOT EXISTS public.fc27_challenges (
     CHECK (expires_at > created_at)
 );
 
-CREATE INDEX IF NOT EXISTS fc27_challenges_user_idx
-    ON public.fc27_challenges(user_id)
+CREATE INDEX IF NOT EXISTS fc27_challenges_user_idx 
+    ON public.fc27_challenges(user_id) 
     WHERE user_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS fc27_challenges_active_idx
-    ON public.fc27_challenges(challenge_str, expires_at)
+CREATE INDEX IF NOT EXISTS fc27_challenges_active_idx 
+    ON public.fc27_challenges(challenge_str, expires_at) 
     WHERE consumed_at IS NULL;
 
 -- Challenge immutability and consumption guard

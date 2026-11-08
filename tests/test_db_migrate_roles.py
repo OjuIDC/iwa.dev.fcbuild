@@ -7,7 +7,36 @@ from pathlib import Path
 import pytest
 import psycopg
 
-from src.db_migrate import migrate, MigrationError, GRANTS_POLICY, verify_postconditions
+from src.db_migrate import migrate, migration_files, MigrationError, GRANTS_POLICY, verify_postconditions
+
+PINNED_APPLIED_MIGRATION_SHA256 = {
+    "0001_initial.sql": "692e05d98453eb8a4c87016ad6b13cdb805bb68476b00fd8cb9df60811e88094",
+    "0002_approval_security.sql": "554573926f59d5723435e476084e3ca3b437c92e7ca77a260145dafb918ad606",
+    "0003_dispatch_foundation.sql": "089f5e05c12b50d323bdd085c22d656917f089a8d8fce21e0ae131fa6fccd40f",
+    "0004_identity_foundation.sql": "e64075f2d6faf390b5d5046c72d07705a4f2f07b1aa9300987f8010b19256f2c",
+    "0005_delegations.sql": "e5f73d7b272e4b7323b988bcb5595df32cac7c96cbaeb0615b10176be83af7c8",
+    "0006_bootstrap_and_recovery.sql": "80bf2fa6570573967e77cc95aaad600d19a56543fb52de64430366f85438e252",
+    "0007_decision_evidence.sql": "4641b28ffa48ea1c8c379b9a5004864b0e3558cc13597615ab50053a2063293b",
+    "0008_r2_remediation.sql": "4a0bacda155fe8c6724d87df2aa2c6f95480d7c5228bb8e62e6faddc1e23e723",
+    "0009_r3_evidence_binding.sql": "a173ca5679affa9fcfd9a8701bcc690e13e84cd6c99b51c8ffcd8255329f5d73",
+    "0010_outbox_claim_ownership.sql": "9dc88b9f8f6c6c29f5473a2cb8d01bdbd3fe89d7128a4b2f84797bc0ef93c895",
+    "0011_dispatch_worker_claims.sql": "50163beab93318e64bfd6be7645f7c096b13eaee40436e993f6299ab0ad1407e",
+    "0012_fc27_performance_and_quarantine.sql": "84279fa7bddafd8bd056adb69dc5cfbf2b178475d4dbc5442fd7993df8ec1807",
+    "0013_fc27_manual_match_results.sql": "2504c4c07d2e7a81a25b408a027122965e66c636e242af0b37f929a6e01242f0",
+}
+
+
+def test_applied_migrations_0001_to_0012_sha256_pinned():
+    """Pins SHA-256 of applied migrations 0001-0013 so any byte modification fails CI."""
+    files_by_name = {path.name: path for _, path in migration_files()}
+    for name, expected_sha256 in PINNED_APPLIED_MIGRATION_SHA256.items():
+        assert name in files_by_name, f"missing applied migration {name}"
+        path = files_by_name[name]
+        text_digest = hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()
+        bytes_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert text_digest == expected_sha256, f"{name} text SHA-256 drifted from pinned constant"
+        assert bytes_digest == expected_sha256, f"{name} raw bytes SHA-256 drifted from pinned constant"
+
 
 def test_objects_owned_by_fc27_owner(pg_db_migrated):
     with psycopg.connect(pg_db_migrated.admin) as conn:

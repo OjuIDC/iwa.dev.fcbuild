@@ -4,7 +4,7 @@
 -- and updates domain_events check constraint.
 
 -- 1. Generated column login_identifier on fc27_users for compatibility
-ALTER TABLE public.fc27_users
+ALTER TABLE public.fc27_users 
     ADD COLUMN IF NOT EXISTS login_identifier text GENERATED ALWAYS AS (login_id) STORED;
 
 -- 2. fc27_bootstrap_locks table
@@ -26,7 +26,7 @@ CREATE TRIGGER fc27_bootstrap_locks_immutable
 
 -- 3. Compatibility View public.fc27_credentials
 CREATE OR REPLACE VIEW public.fc27_credentials AS
-SELECT
+SELECT 
     credential_id,
     user_id,
     public_key,
