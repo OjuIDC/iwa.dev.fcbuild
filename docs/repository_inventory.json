@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 392,
+  "total_files": 396,
   "files": [
     {
       "path": ".dockerignore",
@@ -1073,6 +1073,46 @@
       "archive_decision": "ARCHIVED_IN_DOCS_ARCHIVE",
       "reason": "Superseded by current reconciled FC 27 architecture and operations documentation",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
+    },
+    {
+      "path": "docs/design/discord-analytics-design.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Recovered historical Discord analytics design; not current implementation guidance",
+      "replacement_path": "docs/FC27_DISCORD_BOT.md",
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Preserves the historical pre-implementation design for reference; superseded by the current Discord bot guide",
+      "last_relevant_commit": "c83894f329294d5c4066ae605ee9867eef27435b"
+    },
+    {
+      "path": "docs/design/player-dispatch-phase1-plan.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Recovered historical dispatch implementation plan; reference only",
+      "replacement_path": "docs/DISPATCH_ACTIVATION.md",
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Preserves a historical implementation plan; current migration and dispatch rules are documented separately",
+      "last_relevant_commit": "1e7f8289f663b66dfe025e23b7437dbc54a38320"
+    },
+    {
+      "path": "docs/design/player-dispatch-security-changes.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Historical security-change reference; not current security guidance",
+      "replacement_path": "docs/SECURITY_BOUNDARIES.md",
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Preserves historical security change notes; current security invariants are documented separately",
+      "last_relevant_commit": "dca3b49292373112bc3df023c11b736ef1ad8af1"
+    },
+    {
+      "path": "docs/design/player-dispatch-spec-v2.1.md",
+      "category": "documentation",
+      "status": "CURRENT",
+      "authoritative_role": "Recovered historical v2.1 dispatch specification; not current implementation guidance",
+      "replacement_path": "docs/ARCHITECTURE.md",
+      "archive_decision": "KEEP_CURRENT",
+      "reason": "Preserves the amended historical v2.1 design; current dispatch activation rules are documented separately",
+      "last_relevant_commit": "935198b0f144f1886a2cbb799caf8e0105adbc23"
     },
     {
       "path": "docs/repository_inventory.json",
