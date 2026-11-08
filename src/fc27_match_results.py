@@ -326,11 +326,9 @@ def parse_kickoff_datetime(
             return parsed.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-    try:
-        parsed_d = datetime.strptime(d_str, "%Y-%m-%d")
-        return parsed_d.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    raise MatchResultsValidationError(
+        "Date and time must form a valid kickoff (YYYY-MM-DD and HH:MM, optionally UTC)."
+    )
 
 
 class ParsedScorerEntry(BaseModel):
