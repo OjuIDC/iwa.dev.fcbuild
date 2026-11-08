@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 390,
+  "total_files": 391,
   "files": [
     {
       "path": ".dockerignore",
@@ -811,7 +811,7 @@
       "authoritative_role": "Visual Studio Enterprise 2026 and Antigravity setup guide (docs/VISUAL_STUDIO_SETUP.md)",
       "replacement_path": null,
       "archive_decision": "KEEP_CURRENT",
-      "reason": "Documents portable Visual Studio 2026 solution, existing .venv selection, lock glyph behavior, pytest discovery, and Antigravity coexistence",
+      "reason": "Documents supported Visual Studio Python MSBuild solution builds, existing .venv selection, pytest discovery, and safe startup",
       "last_relevant_commit": "4a7d3509cbdc975e556868e7ca2e957528e869f4"
     },
     {
@@ -3603,6 +3603,16 @@
       "archive_decision": "KEEP_CURRENT",
       "reason": "Static policy, security, and shard-completeness tests for GitHub Actions workflows",
       "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
+    },
+    {
+      "path": "tests/test_visual_studio_project.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Visual Studio Python project build and environment regression tests",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Guards Python targets, relative interpreter paths, solution configuration, ignored IDE state, and real Windows MSBuild builds",
+      "last_relevant_commit": "5d7ca5547e1d1e0c71932ba10c5d5521dff29f4"
     },
     {
       "path": "tests/test_graph_api_v1.py",

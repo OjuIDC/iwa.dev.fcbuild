@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Developers, Operators, Reviewers
 - **Last verified commit**: `4a7d3509cbdc975e556868e7ca2e957528e869f4`
-- **Source of truth**: `iwa.dev.fcbuild.sln`, `iwa.dev.fcbuild.pyproj`, `pyproject.toml`, `.gitignore`, `tests/test_fc27_repository_cleanup.py`
+- **Source of truth**: `iwa.dev.fcbuild.sln`, `iwa.dev.fcbuild.pyproj`, `pyproject.toml`, `.gitignore`, `tests/test_fc27_repository_cleanup.py`, `tests/test_visual_studio_project.py`
 - **Supersedes**: `NONE`
 
 This guide documents how to open, navigate, test, and maintain `iwa.dev.fcbuild` in **Visual Studio Enterprise 2026** alongside **Antigravity** using the tracked solution (`iwa.dev.fcbuild.sln`) and Python project (`iwa.dev.fcbuild.pyproj`) while reusing the existing repository-root virtual environment (`.venv`).
@@ -15,12 +15,29 @@ This guide documents how to open, navigate, test, and maintain `iwa.dev.fcbuild`
 | Capability | Verified Status | Repository Policy |
 |---|---|---|
 | **Visual Studio Product** | Visual Studio Enterprise 2026 (`18.11.3`) | Supported IDE via `iwa.dev.fcbuild.sln` (Format Version `12.00`, Visual Studio Version `18`) |
-| **MSBuild Engine** | MSBuild `18.11.1` | Evaluates `iwa.dev.fcbuild.sln` and `iwa.dev.fcbuild.pyproj` via `Microsoft.PythonTools.targets` |
+| **MSBuild Engine** | MSBuild `18.11.1.51303` | Builds the solution and Python project through the installed Visual Studio Python targets |
 | **Python Workload** | Installed (`Microsoft.VisualStudio.Workload.Python`) | Required for `.pyproj` project loading, Python Environments window, and Test Explorer pytest integration |
 | **Python Test Adapter** | Available (`Pytest`) | Configured via `<TestFramework>Pytest</TestFramework>`, `<UnitTestRootDirectory>tests</UnitTestRootDirectory>`, `<UnitTestPattern>test_*.py</UnitTestPattern>` |
 | **Docker Compose CLI** | Available (`docker compose` version `5.6.1`) | Authoritative CLI interface for Compose topology inspection (`docker compose config`) |
 | **Visual Studio Docker Workload** | Not installed | Do **not** create or commit a `.dcproj` project; manage `Dockerfile*` and `docker-compose*.yml` as solution/project items and validate via CLI |
 | **Repository Virtual Environment** | `.venv` (`Python 3.11.9`, `pip 26.3`, `pytest 8.4.2`) | Reuse existing `.venv`; never create a second virtual environment or commit `.venv/` |
+
+### Building the Python Solution
+
+The installed Visual Studio Python Console App template documents an empty `<Target Name="CoreCompile" />` as the opt-in that enables its MSBuild `Build` target. This target does not compile Python; use pytest and Test Explorer to execute tests. The project keeps the template's Python Tools import, which itself imports `Microsoft.Common.targets`.
+
+Resolve the installed Visual Studio MSBuild executable and build the solution or project from the repository root:
+
+```powershell
+$programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+$vswhere = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vsInstall = & $vswhere -latest -products '*' -version '[18.0,19.0)' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Workload.Python -property installationPath
+$msbuild = Join-Path $vsInstall 'MSBuild\Current\Bin\MSBuild.exe'
+& $msbuild '.\iwa.dev.fcbuild.sln' /t:Build /v:minimal
+& $msbuild '.\iwa.dev.fcbuild.pyproj' /t:Build /v:minimal
+```
+
+Both commands were verified with Visual Studio Enterprise 2026 `18.11.3` and MSBuild `18.11.1.51303`. `Clean` and `Rebuild` are also supported. Build only validates the project graph; it does not run pytest, start services, or make provider requests. If MSBuild reports `MSB4057` for missing `CoreCompile`, confirm the project still imports `Microsoft.PythonTools.targets` and retains the template-supported empty `CoreCompile` target; do not add a .NET compiler import.
 
 ---
 

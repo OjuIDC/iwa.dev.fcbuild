@@ -319,6 +319,7 @@
     <Compile Include="tests\test_swarms_backend.py" />
     <Compile Include="tests\test_tracing.py" />
     <Compile Include="tests\test_typed_graph_voice.py" />
+    <Compile Include="tests\test_visual_studio_project.py" />
     <Compile Include="tests\test_voice_gateway_api.py" />
     <Compile Include="tests\test_watcher_processing.py" />
     <Compile Include="tests\test_workflow.py" />
@@ -463,6 +464,8 @@
     <Content Include="tests\synthetic_fc27_user_export.json" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
+  <!-- The installed Python Console App template enables Build with this target. -->
+  <Target Name="CoreCompile" />
   <Target Name="BeforeBuild">
   </Target>
   <Target Name="AfterBuild">
