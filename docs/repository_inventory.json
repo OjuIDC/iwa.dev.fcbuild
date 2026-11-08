@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
-  "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 396,
+  "base_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470",
+  "total_files": 399,
   "files": [
     {
       "path": ".dockerignore",
@@ -3963,6 +3963,36 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "92c540ab19d538e9a5783e096357b6783e2701da"
+    },
+    {
+      "path": "migrations/0013_fc27_manual_match_results.sql",
+      "category": "database_migration",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative database migration for manual Match Results tables and append-only audit trigger (migrations/0013_fc27_manual_match_results.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Defines isolated public.fc27_manual_matches, public.fc27_manual_match_players, public.fc27_manual_match_events, and public.fc27_manual_match_audit",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
+    },
+    {
+      "path": "src/fc27_match_results.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Manual Match Results domain repository, parsers, embed renderers, and guarded writer connection (src/fc27_match_results.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Implements manual Match Results commands, role-ID authorization helpers, edit-in-place Discord card sync, and optimistic concurrency",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
+    },
+    {
+      "path": "tests/test_fc27_match_results.py",
+      "category": "automated_test",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Authoritative automated test module for manual Match Results schema, parsers, role-ID authz, and Discord commands (tests/test_fc27_match_results.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active verification suite guarding manual Match Results domain, least-privilege writer role, and privacy boundaries",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
     }
   ]
 }

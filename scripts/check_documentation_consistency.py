@@ -528,6 +528,7 @@ def _parse_migrations_inventory(repo_root: Path) -> dict[str, Any]:
         "fc27_app",
         "fc27_dispatch",
         "fc27_relay",
+        "fc27_match_results_writer",
     }
     grants_version: int | None = None
     if mig_dir.is_dir():

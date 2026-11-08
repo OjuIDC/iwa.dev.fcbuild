@@ -305,6 +305,9 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "docs/VISUAL_STUDIO_SETUP.md",
         "iwa.dev.fcbuild.pyproj",
         "iwa.dev.fcbuild.sln",
+        "migrations/0013_fc27_manual_match_results.sql",
+        "src/fc27_match_results.py",
+        "tests/test_fc27_match_results.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():

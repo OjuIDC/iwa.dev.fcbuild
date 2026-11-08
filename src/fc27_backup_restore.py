@@ -45,28 +45,32 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0012"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0013"
 BACKUP_SCHEMA_VERSION = "1.0.0"
+_EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 FC27_DOMAIN_TABLES: tuple[str, ...] = (
+    "schema_migrations",
+    "schema_policy_versions",
     "fc27_clubs",
     "fc27_export_batches",
     "fc27_matches",
     "fc27_player_match_stats",
     "fc27_quarantine_records",
+    "fc27_manual_matches",
+    "fc27_manual_match_players",
+    "fc27_manual_match_events",
+    "fc27_manual_match_audit",
 )
 
-# `fc27_match_team_stats` in `FC27BackupTableCounts` is a derived manifest row-count
-# alias equal to `fc27_matches`, not a physical PostgreSQL table in migrations 0001-0012.
+# `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` in `FC27BackupTableCounts`
+# are derived manifest row-count aliases over `fc27_matches` and `fc27_manual_matches`.
 FC27_DERIVED_MANIFEST_COUNT_ALIASES: dict[str, str] = {
     "fc27_match_team_stats": "fc27_matches",
+    "fc27_manual_discord_linked_matches": "fc27_manual_matches",
 }
 
 FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN: dict[str, tuple[str, ...]] = {
-    "migration_ledger": (
-        "schema_migrations",
-        "schema_policy_versions",
-    ),
     "identity_state": (
         "fc27_users",
         "fc27_user_roles",
@@ -127,10 +131,7 @@ FC27_BACKUP_OMITTED_VIEWS: tuple[str, ...] = (
     "activation_gates",
 )
 
-FC27_PENDING_FUTURE_BACKUP_DOMAINS: tuple[str, ...] = (
-    "future_manual_match_results",
-    "future_match_results_audit_and_discord_linkage",
-)
+FC27_PENDING_FUTURE_BACKUP_DOMAINS: tuple[str, ...] = ()
 
 
 def get_fc27_backup_scope_inventory() -> dict[str, Any]:
@@ -183,20 +184,27 @@ class FC27RestoreVerificationError(FC27BackupError):
 
 
 class FC27BackupTableCounts(BaseModel):
-    """Normalized FC27 domain table row counts recorded in a backup manifest."""
+    """Normalized FC27 domain, manual Match Results, and migration ledger row counts recorded in a backup manifest."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    schema_migrations: int = Field(default=13, ge=0)
+    schema_policy_versions: int = Field(default=1, ge=0)
     fc27_clubs: int = Field(..., ge=0)
     fc27_export_batches: int = Field(..., ge=0)
     fc27_matches: int = Field(..., ge=0)
     fc27_match_team_stats: int = Field(..., ge=0)
     fc27_player_match_stats: int = Field(..., ge=0)
     fc27_quarantine_records: int = Field(..., ge=0)
+    fc27_manual_matches: int = Field(default=0, ge=0)
+    fc27_manual_match_players: int = Field(default=0, ge=0)
+    fc27_manual_match_events: int = Field(default=0, ge=0)
+    fc27_manual_match_audit: int = Field(default=0, ge=0)
+    fc27_manual_discord_linked_matches: int = Field(default=0, ge=0)
 
 
 class FC27BackupRecordHashes(BaseModel):
-    """Deterministic SHA-256 digests of normalized FC27 rows."""
+    """Deterministic SHA-256 digests of normalized FC27, manual Match Results, and migration ledger rows."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -204,6 +212,11 @@ class FC27BackupRecordHashes(BaseModel):
     player_stats_sha256: str = Field(..., min_length=64, max_length=64)
     combined_records_sha256: str = Field(..., min_length=64, max_length=64)
     match_record_hashes: tuple[str, ...] = ()
+    manual_matches_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
+    manual_players_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
+    manual_events_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
+    manual_audit_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
+    migration_ledger_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
 
 
 class FC27BackupManifest(BaseModel):
@@ -282,17 +295,37 @@ def inspect_database_state_for_manifest(
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.schema_migrations')")
             has_migrations = cur.fetchone()[0] is not None
+            migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(version), '0012_fc27_performance_and_quarantine.sql') "
+                    "SELECT COUNT(*), COALESCE(MAX(name), '0013_fc27_manual_match_results.sql') "
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 12)
-                latest_mig = str(mig_row[1] or "0012_fc27_performance_and_quarantine.sql")
+                mig_count = int(mig_row[0] or 13)
+                latest_mig = str(mig_row[1] or "0013_fc27_manual_match_results.sql")
+                cur.execute(
+                    "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
+                )
+                migration_rows = cur.fetchall()
             else:
-                mig_count = 12
-                latest_mig = "0012_fc27_performance_and_quarantine.sql"
+                mig_count = 13
+                latest_mig = "0013_fc27_manual_match_results.sql"
+
+            cur.execute("SELECT to_regclass('public.schema_policy_versions')")
+            has_policy_versions = cur.fetchone()[0] is not None
+            policy_rows: list[tuple[Any, ...]] = []
+            if has_policy_versions:
+                cur.execute(
+                    "SELECT has_table_privilege(current_user, 'public.schema_policy_versions', 'SELECT')"
+                )
+                can_read_policy = bool(cur.fetchone()[0])
+                if can_read_policy:
+                    cur.execute(
+                        "SELECT policy, version, sha256 FROM public.schema_policy_versions ORDER BY policy ASC, version ASC"
+                    )
+                    policy_rows = cur.fetchall()
+            policy_cnt = len(policy_rows) if policy_rows else 1
 
             cur.execute(
                 "SELECT COUNT(*) FROM public.fc27_clubs WHERE club_id = %s AND platform = %s AND game_version = %s",
@@ -359,6 +392,103 @@ def inspect_database_state_for_manifest(
             )
             quarantine_cnt = int(cur.fetchone()[0])
 
+            cur.execute(
+                """
+                SELECT match_id,
+                       opponent,
+                       opponent_normalized,
+                       match_date,
+                       match_time,
+                       home_score,
+                       away_score,
+                       status,
+                       motm_display_label,
+                       possession,
+                       shots,
+                       shots_on_target,
+                       passes,
+                       pass_accuracy,
+                       corners,
+                       tackles,
+                       fouls,
+                       discord_guild_id,
+                       discord_channel_id,
+                       discord_message_id,
+                       source_classification,
+                       revision,
+                       deleted_at IS NOT NULL AS is_deleted
+                  FROM public.fc27_manual_matches
+                 WHERE club_id = %s
+                   AND platform = %s
+                   AND game_version = %s
+                 ORDER BY match_id ASC
+                """,
+                (club_id, platform, game_version),
+            )
+            manual_match_rows = cur.fetchall()
+            manual_matches_cnt = len(manual_match_rows)
+            manual_linked_cnt = sum(
+                1
+                for r in manual_match_rows
+                if r[18] is not None and r[19] is not None
+            )
+
+            cur.execute(
+                """
+                SELECT match_id,
+                       normalized_display_label,
+                       safe_display_label,
+                       goals,
+                       assists,
+                       tackles,
+                       passes,
+                       pass_accuracy,
+                       shots,
+                       rating,
+                       source_classification
+                  FROM public.fc27_manual_match_players
+                 ORDER BY match_id ASC, normalized_display_label ASC
+                """
+            )
+            manual_player_rows = cur.fetchall()
+            manual_players_cnt = len(manual_player_rows)
+
+            cur.execute(
+                """
+                SELECT match_id,
+                       event_type,
+                       normalized_display_label,
+                       safe_display_label,
+                       event_count,
+                       display_order,
+                       source_classification
+                  FROM public.fc27_manual_match_events
+                 ORDER BY match_id ASC, display_order ASC, normalized_display_label ASC
+                """
+            )
+            manual_event_rows = cur.fetchall()
+            manual_events_cnt = len(manual_event_rows)
+
+            cur.execute(
+                """
+                SELECT audit_id,
+                       match_id,
+                       action,
+                       actor_discord_user_id,
+                       discord_guild_id,
+                       discord_channel_id,
+                       discord_message_id,
+                       previous_revision,
+                       new_revision,
+                       changed_fields,
+                       source_classification
+                  FROM public.fc27_manual_match_audit
+                 ORDER BY audit_id ASC
+                """
+            )
+            manual_audit_rows = cur.fetchall()
+            manual_audit_cnt = len(manual_audit_rows)
+
     for p_row in player_rows:
         if p_row[12] is not None:
             raise FC27BackupError("Non-null display_alias detected in fc27_player_match_stats")
@@ -393,6 +523,91 @@ def inspect_database_state_for_manifest(
         }
         for r in player_rows
     ]
+    canonical_manual_matches = [
+        {
+            "match_id": int(r[0]),
+            "opponent": str(r[1]),
+            "opponent_normalized": str(r[2]),
+            "match_date": str(r[3]) if r[3] is not None else None,
+            "match_time": str(r[4]) if r[4] is not None else None,
+            "home_score": int(r[5]) if r[5] is not None else None,
+            "away_score": int(r[6]) if r[6] is not None else None,
+            "status": str(r[7]),
+            "motm_display_label": str(r[8]) if r[8] is not None else None,
+            "possession": int(r[9]) if r[9] is not None else None,
+            "shots": int(r[10]) if r[10] is not None else None,
+            "shots_on_target": int(r[11]) if r[11] is not None else None,
+            "passes": int(r[12]) if r[12] is not None else None,
+            "pass_accuracy": int(r[13]) if r[13] is not None else None,
+            "corners": int(r[14]) if r[14] is not None else None,
+            "tackles": int(r[15]) if r[15] is not None else None,
+            "fouls": int(r[16]) if r[16] is not None else None,
+            "discord_guild_id": str(r[17]) if r[17] is not None else None,
+            "discord_channel_id": str(r[18]) if r[18] is not None else None,
+            "discord_message_id": str(r[19]) if r[19] is not None else None,
+            "source_classification": str(r[20]),
+            "revision": int(r[21]),
+            "is_deleted": bool(r[22]),
+        }
+        for r in manual_match_rows
+    ]
+    canonical_manual_players = [
+        {
+            "match_id": int(r[0]),
+            "normalized_display_label": str(r[1]),
+            "safe_display_label": str(r[2]),
+            "goals": int(r[3]),
+            "assists": int(r[4]),
+            "tackles": int(r[5]) if r[5] is not None else None,
+            "passes": int(r[6]) if r[6] is not None else None,
+            "pass_accuracy": int(r[7]) if r[7] is not None else None,
+            "shots": int(r[8]) if r[8] is not None else None,
+            "rating": str(r[9]) if r[9] is not None else None,
+            "source_classification": str(r[10]),
+        }
+        for r in manual_player_rows
+    ]
+    canonical_manual_events = [
+        {
+            "match_id": int(r[0]),
+            "event_type": str(r[1]),
+            "normalized_display_label": str(r[2]),
+            "safe_display_label": str(r[3]),
+            "event_count": int(r[4]),
+            "display_order": int(r[5]),
+            "source_classification": str(r[6]),
+        }
+        for r in manual_event_rows
+    ]
+    canonical_manual_audit = [
+        {
+            "audit_id": int(r[0]),
+            "match_id": int(r[1]) if r[1] is not None else None,
+            "action": str(r[2]),
+            "actor_discord_user_id": str(r[3]),
+            "discord_guild_id": str(r[4]) if r[4] is not None else None,
+            "discord_channel_id": str(r[5]) if r[5] is not None else None,
+            "discord_message_id": str(r[6]) if r[6] is not None else None,
+            "previous_revision": int(r[7]) if r[7] is not None else None,
+            "new_revision": int(r[8]) if r[8] is not None else None,
+            "changed_fields": list(r[9]) if isinstance(r[9], list) else str(r[9]),
+            "source_classification": str(r[10]),
+        }
+        for r in manual_audit_rows
+    ]
+    canonical_migration_ledger = {
+        "schema_migrations": [
+            {"version": str(r[0]), "checksum": str(r[1])} for r in migration_rows
+        ],
+        "schema_policy_versions": [
+            {
+                "policy_name": str(r[0]),
+                "version": int(r[1]),
+                "checksum": str(r[2]),
+            }
+            for r in policy_rows
+        ],
+    }
 
     matches_digest = _sha256_bytes(
         json.dumps(canonical_matches, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -400,23 +615,53 @@ def inspect_database_state_for_manifest(
     players_digest = _sha256_bytes(
         json.dumps(canonical_players, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
+    manual_matches_digest = _sha256_bytes(
+        json.dumps(canonical_manual_matches, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    manual_players_digest = _sha256_bytes(
+        json.dumps(canonical_manual_players, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    manual_events_digest = _sha256_bytes(
+        json.dumps(canonical_manual_events, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    manual_audit_digest = _sha256_bytes(
+        json.dumps(canonical_manual_audit, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    migration_ledger_digest = _sha256_bytes(
+        json.dumps(canonical_migration_ledger, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
     combined_digest = _sha256_bytes(
-        f"{matches_digest}:{players_digest}".encode("utf-8")
+        (
+            f"{matches_digest}:{players_digest}:{manual_matches_digest}:"
+            f"{manual_players_digest}:{manual_events_digest}:{manual_audit_digest}"
+        ).encode("utf-8")
     )
 
     counts = FC27BackupTableCounts(
+        schema_migrations=mig_count,
+        schema_policy_versions=policy_cnt,
         fc27_clubs=clubs_cnt,
         fc27_export_batches=batches_cnt,
         fc27_matches=matches_cnt,
         fc27_match_team_stats=matches_cnt,
         fc27_player_match_stats=player_cnt,
         fc27_quarantine_records=quarantine_cnt,
+        fc27_manual_matches=manual_matches_cnt,
+        fc27_manual_match_players=manual_players_cnt,
+        fc27_manual_match_events=manual_events_cnt,
+        fc27_manual_match_audit=manual_audit_cnt,
+        fc27_manual_discord_linked_matches=manual_linked_cnt,
     )
     hashes = FC27BackupRecordHashes(
         matches_sha256=matches_digest,
         player_stats_sha256=players_digest,
         combined_records_sha256=combined_digest,
         match_record_hashes=tuple(str(r[7]) for r in match_rows),
+        manual_matches_sha256=manual_matches_digest,
+        manual_players_sha256=manual_players_digest,
+        manual_events_sha256=manual_events_digest,
+        manual_audit_sha256=manual_audit_digest,
+        migration_ledger_sha256=migration_ledger_digest,
     )
     return (latest_mig, mig_count, counts, hashes)
 
@@ -514,11 +759,17 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
 
     with psycopg.connect(db_uri, autocommit=True) as conn:
         conn.execute(
-            "TRUNCATE public.fc27_player_match_stats, "
+            "TRUNCATE public.schema_migrations, "
+            "public.schema_policy_versions, "
+            "public.fc27_player_match_stats, "
             "public.fc27_matches, "
             "public.fc27_quarantine_records, "
             "public.fc27_export_batches, "
-            "public.fc27_clubs CASCADE"
+            "public.fc27_clubs, "
+            "public.fc27_manual_match_audit, "
+            "public.fc27_manual_match_events, "
+            "public.fc27_manual_match_players, "
+            "public.fc27_manual_matches CASCADE"
         )
 
     archive_bytes = archive_path.read_bytes()
@@ -819,6 +1070,7 @@ def verify_fc27_backup_restore(
                     "fc27_app": None,
                     "fc27_dispatch": None,
                     "fc27_relay": None,
+                    "fc27_match_results_writer": None,
                 },
             )
             with psycopg.connect(reachable_admin_uri, autocommit=True) as admin_conn:
@@ -841,8 +1093,8 @@ def verify_fc27_backup_restore(
                 )
             )
             migration_ok = (
-                restored_mig_cnt >= 12
-                and "0012" in restored_mig
+                restored_mig_cnt >= 13
+                and "0013" in restored_mig
                 and manifest.migration_version == EXPECTED_MIGRATION_VERSION
             )
             if not migration_ok:
