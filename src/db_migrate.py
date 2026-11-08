@@ -56,7 +56,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
         cur.execute("SELECT has_schema_privilege('fc27_app', 'public', 'CREATE')")
         if cur.fetchone()[0]:
             violations.append("create_on_public")
-            
+
         # check fc27_dispatch
         cur.execute("SELECT pg_has_role('fc27_dispatch', 'fc27_owner', 'MEMBER')")
         row = cur.fetchone()
@@ -210,7 +210,7 @@ from src.db_roles import redact_conninfo
 
 def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | None = None, checkpoint_setup: bool = True) -> list[str]:
     applied_now: list[str] = []
-    
+
     with psycopg.connect(conninfo, autocommit=True, connect_timeout=3) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_owner'")
@@ -219,10 +219,10 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
             cur.execute("SELECT pg_has_role(current_user, 'fc27_owner', 'MEMBER')")
             if not cur.fetchone()[0]:
                 raise MigrationError("run python -m src.db_roles bootstrap first")
-            
+
             # SET ROLE fc27_owner
             cur.execute("SET ROLE fc27_owner")
-            
+
             cur.execute("SELECT pg_advisory_lock(%s)", (_LOCK_KEY,))
             try:
                 cur.execute(
@@ -234,14 +234,14 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
                 )
                 cur.execute(
                     """CREATE TABLE IF NOT EXISTS public.schema_policy_versions (
-                           policy text, 
-                           version int, 
-                           sha256 text NOT NULL, 
-                           applied_at timestamptz NOT NULL DEFAULT now(), 
-                           applied_by text NOT NULL DEFAULT session_user, 
+                           policy text,
+                           version int,
+                           sha256 text NOT NULL,
+                           applied_at timestamptz NOT NULL DEFAULT now(),
+                           applied_by text NOT NULL DEFAULT session_user,
                            PRIMARY KEY (policy, version))"""
                 )
-                
+
                 done = {row[0]: row[1] for row in cur.execute("SELECT version, sha256 FROM schema_migrations")}
                 for version, path in migration_files(directory):
                     if target and version > target:
@@ -259,7 +259,7 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
                             (version, path.name, digest),
                         )
                     applied_now.append(path.name)
-                    
+
                 if checkpoint_setup:
                     with psycopg.connect(conninfo, autocommit=True, row_factory=psycopg.rows.dict_row) as check_conn:
                         with check_conn.cursor() as check_cur:
@@ -274,13 +274,13 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
                     lines = sql.splitlines()
                     if not lines or not lines[0].startswith(f"-- grants-policy-version: {GRANTS_POLICY.version}"):
                         raise MigrationError("grants.sql changed without a policy version bump")
-                    
+
                     digest = hashlib.sha256(sql.encode()).hexdigest()
                     if digest != GRANTS_POLICY.sha256:
                         raise MigrationError("grants.sql changed without a policy version bump")
-                        
+
                     cur.execute(sql)
-                    
+
                     cur.execute("SELECT sha256 FROM public.schema_policy_versions WHERE policy = 'grants' AND version = %s", (GRANTS_POLICY.version,))
                     existing = cur.fetchone()
                     if existing:

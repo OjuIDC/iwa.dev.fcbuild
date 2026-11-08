@@ -49,7 +49,7 @@ COMMISSIONER = Principal(Role.commissioner, COMMISSIONER_ID)
 
 def test_adversarial_high_concurrency_race_at_expiry(pg_uri):
     """Stress Test: 10x expire_due + 10x apply_decision at sub-second deadline boundary.
-    
+
     Invariants:
     - Zero deadlocks under high contention.
     - Exactly one terminal state wins ('approved' or 'expired').
@@ -135,7 +135,7 @@ def test_adversarial_high_concurrency_race_at_expiry(pg_uri):
 
 def test_adversarial_dual_challenge_competing_decisions(pg_uri):
     """Stress Test: Two different challenges issued for same thread (APPROVE vs REJECT).
-    
+
     Both attempt concurrent application.
     Invariants:
     - Zero deadlocks.
@@ -207,7 +207,7 @@ def test_adversarial_dual_challenge_competing_decisions(pg_uri):
 
 def test_adversarial_batch_expiry_under_contention(pg_uri):
     """Stress Test: Multi-thread batch sweep (thread_id=None) under concurrent apply_decision contention.
-    
+
     Asserts zero deadlocks and consistent final state across all threads.
     """
     store = ApprovalStore(pg_uri, request_ttl=timedelta(seconds=1))
@@ -271,7 +271,7 @@ def test_adversarial_batch_expiry_under_contention(pg_uri):
 
 def test_adversarial_concurrent_identical_replays(pg_uri):
     """Idempotency Challenge: 10 threads concurrently sending the EXACT same signed decision.
-    
+
     Invariants:
     - ALL 10 threads succeed (200 OK / same returned state).
     - Exactly 1 approval_audit row created.
@@ -328,7 +328,7 @@ def test_adversarial_concurrent_identical_replays(pg_uri):
 
 def test_adversarial_concurrent_conflicting_replays(pg_uri):
     """Idempotency Challenge: 5 identical replays racing against 5 conflicting replays with same nonce.
-    
+
     Invariants:
     - All 5 identical replays return 200 OK.
     - All 5 conflicting replays fail with 409 Conflict ('replay: conflicting terminal decision...').
@@ -394,7 +394,7 @@ def test_adversarial_concurrent_conflicting_replays(pg_uri):
 
 def test_adversarial_replay_with_revoked_nonce(pg_uri):
     """Challenge: Nonce revoked by expiry cannot be replayed or used for decision.
-    
+
     Invariants:
     - Fails with 409 approval_expired.
     - Zero audit rows written.
@@ -431,7 +431,7 @@ def test_adversarial_replay_with_revoked_nonce(pg_uri):
 @pytest.mark.parametrize("target_table", ["approval_audit", "domain_events", "outbox"])
 def test_adversarial_fault_injection_atomic_rollback(pg_uri, pg_admin_db_uri, target_table):
     """Fault Injection: Injected failure in table rolls back entire transaction atomically.
-    
+
     Verifies:
     - graph_threads remains awaiting_approval.
     - approval_requests remains awaiting_approval.
@@ -488,7 +488,7 @@ def test_adversarial_fault_injection_atomic_rollback(pg_uri, pg_admin_db_uri, ta
 
 def test_adversarial_pair_consistency_guard_rollback(pg_uri):
     """Fault Injection: Deferred constraint trigger rollback on mismatched status mutation.
-    
+
     Verifies that any attempted partial update is aborted by fc27_check_approval_pair at commit time.
     """
     store = ApprovalStore(pg_uri)

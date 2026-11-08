@@ -621,4 +621,3 @@ def test_delegate_can_revoke_other_user_session(delegate_principal: PrincipalCon
     target_session_res = Resource.for_user(club_id=CLUB_A, user_id=target_user_id)
     assert authorize(delegate_principal, ActionType.SESSION_VIEW, target_session_res).allowed is True
     assert authorize(delegate_principal, ActionType.SESSION_REVOKE, target_session_res).allowed is True
-

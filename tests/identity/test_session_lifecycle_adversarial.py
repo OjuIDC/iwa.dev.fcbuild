@@ -637,8 +637,8 @@ class TestWorkerBugRegressionAudits:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT column_name 
-                    FROM information_schema.columns 
+                    SELECT column_name
+                    FROM information_schema.columns
                     WHERE table_name = 'fc27_sessions' AND column_name IN ('expires_at', 'absolute_expires_at')
                     """
                 )

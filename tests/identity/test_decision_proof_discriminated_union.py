@@ -47,7 +47,7 @@ class TestDecisionSubmissionDiscriminatedUnion:
         }
         with pytest.raises(ValidationError) as exc_info:
             _decision_adapter.validate_python(payload)
-        
+
         errors = exc_info.value.errors()
         assert any(
             err.get("type") in ("union_tag_invalid", "missing", "union_tag_not_found")
@@ -62,7 +62,7 @@ class TestDecisionSubmissionDiscriminatedUnion:
         }
         with pytest.raises(ValidationError) as exc_info:
             _decision_adapter.validate_python(payload)
-        
+
         errors = exc_info.value.errors()
         assert any("union_tag_invalid" in err.get("type", "") for err in errors)
 
@@ -74,7 +74,7 @@ class TestDecisionSubmissionDiscriminatedUnion:
         }
         with pytest.raises(ValidationError) as exc_info:
             _decision_adapter.validate_python(payload)
-        
+
         errors = exc_info.value.errors()
         assert any("authentication_evidence_id" in err.get("loc", ()) for err in errors)
 
@@ -89,7 +89,7 @@ class TestDecisionSubmissionDiscriminatedUnion:
         }
         with pytest.raises(ValidationError) as exc_info:
             _decision_adapter.validate_python(payload)
-        
+
         errors = exc_info.value.errors()
         assert any(err.get("type") == "extra_forbidden" for err in errors)
 

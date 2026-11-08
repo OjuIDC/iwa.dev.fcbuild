@@ -910,7 +910,7 @@ class TestChallenge10DormancyInvariants:
                 # Check dispatches table
                 cur.execute("""
                     SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables 
+                        SELECT 1 FROM information_schema.tables
                         WHERE table_schema = 'public' AND table_name = 'dispatches'
                     );
                 """)
@@ -922,7 +922,7 @@ class TestChallenge10DormancyInvariants:
                 # Check fc27_outbox table
                 cur.execute("""
                     SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables 
+                        SELECT 1 FROM information_schema.tables
                         WHERE table_schema = 'public' AND table_name = 'fc27_outbox'
                     );
                 """)

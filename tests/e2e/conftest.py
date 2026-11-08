@@ -98,7 +98,7 @@ def setup_human_commissioner_if_phase2(request, pg_uri):
 def table_exists(conn: psycopg.Connection, table_name: str, schema: str = "public") -> bool:
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT 1 FROM information_schema.tables 
+            """SELECT 1 FROM information_schema.tables
                WHERE table_schema = %s AND table_name = %s""",
             (schema, table_name),
         )
@@ -108,7 +108,7 @@ def table_exists(conn: psycopg.Connection, table_name: str, schema: str = "publi
 def column_exists(conn: psycopg.Connection, table_name: str, column_name: str, schema: str = "public") -> bool:
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT 1 FROM information_schema.columns 
+            """SELECT 1 FROM information_schema.columns
                WHERE table_schema = %s AND table_name = %s AND column_name = %s""",
             (schema, table_name, column_name),
         )
@@ -118,7 +118,7 @@ def column_exists(conn: psycopg.Connection, table_name: str, column_name: str, s
 def view_exists(conn: psycopg.Connection, view_name: str, schema: str = "public") -> bool:
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT 1 FROM information_schema.views 
+            """SELECT 1 FROM information_schema.views
                WHERE table_schema = %s AND table_name = %s""",
             (schema, view_name),
         )

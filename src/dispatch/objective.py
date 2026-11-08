@@ -40,4 +40,3 @@ def validate_metric_bounds(
         raise ValueError(
             f"target_delta for {metric} must be between {low_str} and {high_str} (policy {policy})"
         )
-

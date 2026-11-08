@@ -205,5 +205,3 @@ def seed_verified_players(admin_db_uri: str, ids: Iterable[str], club_id: str = 
                         club_id = EXCLUDED.club_id""",
                     (str(pid), club_id, f"Player {pid}"),
                 )
-
-

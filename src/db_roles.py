@@ -95,7 +95,7 @@ def bootstrap_cluster(admin_conninfo: str, passwords: Mapping[str, str | None]) 
                         cur.execute(f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
                     else:
                         cur.execute(f"CREATE ROLE {role} LOGIN NOINHERIT")
-            
+
             # GRANT fc27_owner TO fc27_migrator
             cur.execute(f"GRANT {ROLE_OWNER} TO {ROLE_MIGRATOR}")
 
@@ -111,17 +111,17 @@ def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
         cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
         if cur.fetchone()[0]:
             return ['superuser']
-        
+
         # Check owner_member
         cur.execute("SELECT pg_has_role(current_user, %s, 'MEMBER')", (ROLE_OWNER,))
         if cur.fetchone()[0]:
             violations.append("owner_member")
-        
+
         # Check create_on_public
         cur.execute("SELECT has_schema_privilege(current_user, 'public', 'CREATE')")
         if cur.fetchone()[0]:
             violations.append("create_on_public")
-            
+
     return violations
 
 def _acl_has(cur, *, catalog: str, name: str, grantee: str | None, privilege: str) -> bool:
@@ -194,20 +194,20 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
 
                 # GRANT USAGE ON SCHEMA public TO app, dispatch, relay
                 cur.execute(f"GRANT USAGE ON SCHEMA public TO {ROLE_APP}, {ROLE_DISPATCH}, {ROLE_RELAY}")
-            
+
             # Ownership transfer
             query = """
                 SELECT 'table', c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
-                WHERE n.nspname = 'public' 
+                WHERE n.nspname = 'public'
                   AND c.relkind IN ('r', 'v', 'm', 'p')
                   AND c.relowner::regrole::text != %s
                   AND d.objid IS NULL
-                
+
                 UNION ALL
-                
+
                 SELECT 'sequence', c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -216,9 +216,9 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                   AND c.relkind = 'S'
                   AND c.relowner::regrole::text != %s
                   AND d.objid IS NULL
-                  
+
                 UNION ALL
-                
+
                 SELECT 'function', p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
                 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -227,7 +227,7 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                   AND p.proowner::regrole::text != %s
                   AND d.objid IS NULL
             """
-            
+
             if legacy_owner:
                 query = f"""
                     WITH target_objs AS ({query})
@@ -241,14 +241,14 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
-                WHERE n.nspname = 'public' 
+                WHERE n.nspname = 'public'
                   AND c.relkind IN ('r', 'v', 'm', 'p')
                   AND c.relowner::regrole::text != %s
                   AND c.relowner::regrole::text = %s
                   AND d.objid IS NULL
-                
+
                 UNION ALL
-                
+
                 SELECT 'sequence', c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -258,9 +258,9 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                   AND c.relowner::regrole::text != %s
                   AND c.relowner::regrole::text = %s
                   AND d.objid IS NULL
-                  
+
                 UNION ALL
-                
+
                 SELECT 'function', p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
                 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -275,7 +275,7 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                 cur.execute(query, (ROLE_OWNER, ROLE_OWNER, ROLE_OWNER))
 
             objects = cur.fetchall()
-            
+
             for kind, name in objects:
                 obj_desc = f"{kind} public.{name}"
                 if kind == 'function':
@@ -287,7 +287,7 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                     # table, view, materialized view can be handled with ALTER TABLE
                     # Actually, standard ALTER TABLE works for tables, views, mat views
                     stmt = f"ALTER TABLE public.{name} OWNER TO {ROLE_OWNER}"
-                
+
                 if confirm:
                     cur.execute(stmt)
                     transferred.append(obj_desc)
@@ -373,5 +373,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

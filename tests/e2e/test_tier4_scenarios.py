@@ -194,7 +194,7 @@ class TestSection1AHumanAuthorityAndConsent:
                 cur.execute(
                     """INSERT INTO public.authority_policies (
                         policy_name, scope, action_type, allow_player_consent
-                    ) VALUES 
+                    ) VALUES
                     ('club_default', 'club', 'club_strategy', false),
                     ('player_individual', 'player_specific', 'player_drill', true)
                     ON CONFLICT (policy_name) DO NOTHING"""
