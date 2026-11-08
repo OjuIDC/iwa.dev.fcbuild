@@ -17,6 +17,9 @@ updates:
     directory: "/"
     schedule: {interval: weekly, day: monday}
     labels: [dependencies, docker]
+    ignore:
+      - dependency-name: "python"
+        versions: [">= 3.12.a"]
 
   - package-ecosystem: docker-compose  # docker-compose*.yml service images
     directory: "/"
@@ -25,6 +28,8 @@ updates:
     ignore:
       - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker"
       - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot"
+      - dependency-name: "python"
+        versions: [">= 3.12.a"]
 
   - package-ecosystem: github-actions
     directory: "/"
