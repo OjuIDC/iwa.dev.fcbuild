@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **v2.1. Architecture APPROVED WITH AMENDMENTS (owner, 2026-10-02). Amendments AM-1 to AM-15 are incorporated below. Implementation is limited to Phase 1 (§31), and only after the Phase 1 plan is reviewed.** |
+| Status | **Recovered historical v2.1 design input. Architecture approved with amendments by the owner on 2026-10-02; AM-1 to AM-15 are retained below. This is not current implementation or operational guidance.** See [current architecture](../ARCHITECTURE.md), [current dispatch activation rules](../DISPATCH_ACTIVATION.md), and the [recovered Phase 1 plan](player-dispatch-phase1-plan.md). |
 | Date | 2026-10-02 |
 | Supersedes | v2 (`c8de704`) and v1 (`8051741`) of this file. Both stay in git history for review. |
 | Repository | `iwa-ojuidc/iwa.dev.fcbuild`, base `main` @ `13a6d19` |
