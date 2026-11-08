@@ -913,6 +913,15 @@ class FC27DiscordBotService:
             if match_detail.status == "SCHEDULED"
             else render_match_result_embed(match_detail)
         )
+        for text in (
+            d_embed.title or "",
+            d_embed.description or "",
+            getattr(d_embed.footer, "text", "") or "",
+        ):
+            assert_discord_output_sanitized(text, forbidden_tokens=self._secret_tokens)
+        for field in d_embed.fields:
+            assert_discord_output_sanitized(field.name, forbidden_tokens=self._secret_tokens)
+            assert_discord_output_sanitized(field.value, forbidden_tokens=self._secret_tokens)
         if self._discord_channel_adapter is None:
             return match_detail
 
