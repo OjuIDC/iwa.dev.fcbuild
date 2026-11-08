@@ -85,7 +85,9 @@ To capture a complete custom-format PostgreSQL 16 dump (`pg_dump --format=custom
 # Operator procedure / development example: create full custom-format dump inside postgres container
 New-Item -ItemType Directory -Force -Path ".local-data/development-backups/stage-a" | Out-Null
 docker exec fc27-full-stack-postgres-1 sh -c "pg_dump --format=custom --blobs --verbose --username=fc27 --dbname=fc27 --file=/tmp/fc27_stage_a_full.dump 2>/tmp/fc27_stage_a_pg_dump.log"
+if ($LASTEXITCODE -ne 0) { throw "pg_dump failed; do not migrate. The diagnostic log remains in the PostgreSQL container." }
 docker cp fc27-full-stack-postgres-1:/tmp/fc27_stage_a_full.dump ".local-data/development-backups/stage-a/fc27_stage_a_full.dump"
+if ($LASTEXITCODE -ne 0) { throw "Backup copy failed; the container archive has been retained." }
 docker exec fc27-full-stack-postgres-1 rm -f /tmp/fc27_stage_a_full.dump /tmp/fc27_stage_a_pg_dump.log
 Get-FileHash -Algorithm SHA256 ".local-data/development-backups/stage-a/fc27_stage_a_full.dump"
 ```
