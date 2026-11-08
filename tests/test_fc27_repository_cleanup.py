@@ -283,6 +283,7 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "src/fc27_performance.py",
         "tests/test_fc27_performance.py",
         ".dockerignore",
+        ".pre-commit-config.yaml",
         ".github/workflows/container-images.yml",
         ".github/workflows/test-fast.yml",
         ".github/workflows/test-nightly.yml",

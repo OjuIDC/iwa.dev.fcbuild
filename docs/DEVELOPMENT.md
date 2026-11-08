@@ -124,6 +124,18 @@ Before staging any commit, run all static verification gates:
 git diff --check
 ```
 
+### Optional Pre-Commit Hooks
+
+The root `.pre-commit-config.yaml` enables whitespace cleanup (preserving Markdown hard breaks), end-of-file normalization, YAML/TOML/JSON parsing, and merge-conflict marker checks. To enable the hooks locally without changing the project's virtual environment:
+
+```powershell
+pipx install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+Run `pre-commit run` on staged files before each commit. Hooks run locally and are not required to be installed in CI.
+
 ---
 
 ## 5. Docker Compose Validation

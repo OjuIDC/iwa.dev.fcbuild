@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "1b128167f753b9925683e149e4b54791dfab4338",
-  "total_files": 391,
+  "total_files": 392,
   "files": [
     {
       "path": ".dockerignore",
@@ -23,6 +23,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "ba5afd13281b3a64e6f1bdba1fdf91cb53b553d6"
+    },
+    {
+      "path": ".pre-commit-config.yaml",
+      "category": "configuration_and_packaging",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Optional local pre-commit hook configuration",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Provides pinned whitespace, newline, YAML, TOML, JSON, and merge-conflict checks without adding CI dependencies",
+      "last_relevant_commit": "2c9104c2f53b8a37a2748f15b47ca24a2c5c9961"
     },
     {
       "path": ".github/dependabot.yml",

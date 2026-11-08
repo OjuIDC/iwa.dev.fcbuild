@@ -338,6 +338,7 @@
     <Content Include=".github\workflows\test-fast.yml" />
     <Content Include=".github\workflows\test-nightly.yml" />
     <Content Include=".gitignore" />
+    <Content Include=".pre-commit-config.yaml" />
     <Content Include="Dockerfile.community-eval" />
     <Content Include="Dockerfile.community-worker" />
     <Content Include="Dockerfile.discord" />
