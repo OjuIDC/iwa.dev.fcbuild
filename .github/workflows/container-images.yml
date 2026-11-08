@@ -56,9 +56,13 @@ jobs:
           ref_type = os.environ.get("REF_TYPE", "")
           pr_head_repo = os.environ.get("PR_HEAD_REPO", "")
 
-          trusted_repo = repo_name == "iwa-ojuidc/iwa.dev.fcbuild"
+          trusted_repo = repo_name.casefold() == "ojuidc/iwa.dev.fcbuild"
           is_pr = event_name == "pull_request"
-          is_fork_pr = is_pr and bool(pr_head_repo) and pr_head_repo != "iwa-ojuidc/iwa.dev.fcbuild"
+          is_fork_pr = (
+              is_pr
+              and bool(pr_head_repo)
+              and pr_head_repo.casefold() != "ojuidc/iwa.dev.fcbuild"
+          )
 
           semver_pattern = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
           semver_valid = "true"
@@ -299,7 +303,6 @@ jobs:
     needs: [gate-context, build-and-scan, container-report]
     if: >-
       github.event_name != 'pull_request' &&
-      github.repository == 'iwa-ojuidc/iwa.dev.fcbuild' &&
       needs.gate-context.outputs.allow_publish == 'true' &&
       needs.build-and-scan.result == 'success' &&
       needs.container-report.result == 'success'
