@@ -11,10 +11,10 @@ ALTER TABLE public.fc27_sessions ADD CONSTRAINT fc27_sessions_auth_method_check
     CHECK (auth_method IN ('bootstrap', 'passkey', 'totp', 'service_token', 'recovery_code'));
 
 -- 3. Add last_consumed_step to fc27_totp_credentials for atomic replay prevention (R9)
-ALTER TABLE public.fc27_totp_credentials
+ALTER TABLE public.fc27_totp_credentials 
     ADD COLUMN IF NOT EXISTS last_consumed_step bigint NULL;
 
-COMMENT ON COLUMN public.fc27_totp_credentials.last_consumed_step
+COMMENT ON COLUMN public.fc27_totp_credentials.last_consumed_step 
     IS 'Last consumed TOTP time step counter; strictly monotonic';
 
 -- 4. Reaffirm grants to fc27_app and fc27_migrator

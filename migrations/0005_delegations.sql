@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS authority_delegations_club_delegate_idx
 
 -- 5. Compatibility View public.fc27_delegations
 CREATE OR REPLACE VIEW public.fc27_delegations AS
-    SELECT
+    SELECT 
         delegation_id,
         club_id,
         delegator_id,

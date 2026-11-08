@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS public.approval_requests (
     CHECK ((status IN ('approved', 'rejected', 'revision_requested')) = (decided_at IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS approval_requests_status_expires_idx
+CREATE INDEX IF NOT EXISTS approval_requests_status_expires_idx 
     ON public.approval_requests(status, expires_at);
 
 CREATE OR REPLACE FUNCTION public.fc27_guard_approval_request_transition()
@@ -236,15 +236,15 @@ DECLARE
     r RECORD;
     v_req_id uuid;
 BEGIN
-    FOR r IN
-        SELECT thread_id, package_version, created_at
-          FROM public.graph_threads
-         WHERE status = 'awaiting_approval'
-           AND package_version IS NOT NULL
+    FOR r IN 
+        SELECT thread_id, package_version, created_at 
+          FROM public.graph_threads 
+         WHERE status = 'awaiting_approval' 
+           AND package_version IS NOT NULL 
            AND approval_request_id IS NULL
     LOOP
         v_req_id := gen_random_uuid();
-
+        
         INSERT INTO public.approval_requests (
             approval_request_id,
             thread_id,
@@ -292,21 +292,21 @@ BEGIN
     END IF;
 
     -- Package version immutability
-    IF (OLD.status = 'awaiting_approval' OR OLD.package_version IS NOT NULL)
+    IF (OLD.status = 'awaiting_approval' OR OLD.package_version IS NOT NULL) 
        AND NEW.package_version IS DISTINCT FROM OLD.package_version THEN
         RAISE EXCEPTION 'package_version is immutable'
             USING ERRCODE = 'check_violation';
     END IF;
 
     -- approval_request_id set at most once
-    IF OLD.approval_request_id IS NOT NULL
+    IF OLD.approval_request_id IS NOT NULL 
        AND NEW.approval_request_id IS DISTINCT FROM OLD.approval_request_id THEN
         RAISE EXCEPTION 'approval_request_id is immutable once set'
             USING ERRCODE = 'check_violation';
     END IF;
 
     -- State machine guards
-    IF NEW.status IN ('approved', 'rejected', 'revision_requested', 'expired')
+    IF NEW.status IN ('approved', 'rejected', 'revision_requested', 'expired') 
        AND OLD.status <> 'awaiting_approval' THEN
         RAISE EXCEPTION 'thread % must be awaiting_approval before a decision (was %)', OLD.thread_id, OLD.status
             USING ERRCODE = 'check_violation';
@@ -488,7 +488,7 @@ CREATE TABLE IF NOT EXISTS public.authority_policies (
     )
 );
 
-CREATE INDEX IF NOT EXISTS authority_policies_scope_idx
+CREATE INDEX IF NOT EXISTS authority_policies_scope_idx 
     ON public.authority_policies(scope, action_type);
 
 CREATE TABLE IF NOT EXISTS public.authority_delegations (
@@ -508,7 +508,7 @@ CREATE TABLE IF NOT EXISTS public.authority_delegations (
     CHECK (revoked_at IS NULL OR (revoked_by IS NOT NULL AND revocation_reason IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS authority_delegations_active_idx
+CREATE INDEX IF NOT EXISTS authority_delegations_active_idx 
     ON public.authority_delegations(delegate_id, scope)
     WHERE revoked_at IS NULL;
 
@@ -532,7 +532,7 @@ CREATE TABLE IF NOT EXISTS public.player_assignments (
     UNIQUE (package_id, subject_player_id, assignment_version)
 );
 
-CREATE INDEX IF NOT EXISTS player_assignments_player_status_idx
+CREATE INDEX IF NOT EXISTS player_assignments_player_status_idx 
     ON public.player_assignments(subject_player_id, status);
 
 CREATE TABLE IF NOT EXISTS public.player_decision_requests (
@@ -552,7 +552,7 @@ CREATE TABLE IF NOT EXISTS public.player_decision_requests (
     CHECK ((status = 'decided') = (decided_at IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS player_decision_requests_assignment_idx
+CREATE INDEX IF NOT EXISTS player_decision_requests_assignment_idx 
     ON public.player_decision_requests(assignment_id);
 
 CREATE TABLE IF NOT EXISTS public.player_decisions (
@@ -640,10 +640,10 @@ ALTER TABLE public.approval_audit
     ADD COLUMN IF NOT EXISTS actor_user_id uuid NULL,
     ADD COLUMN IF NOT EXISTS webauthn_credential_id bytea NULL,
     ADD COLUMN IF NOT EXISTS correlation_id uuid NULL,
-    ADD COLUMN IF NOT EXISTS approval_request_id uuid NULL
+    ADD COLUMN IF NOT EXISTS approval_request_id uuid NULL 
         REFERENCES public.approval_requests(approval_request_id);
 
-CREATE INDEX IF NOT EXISTS approval_audit_request_idx
+CREATE INDEX IF NOT EXISTS approval_audit_request_idx 
     ON public.approval_audit(approval_request_id);
 
 ALTER TABLE public.approval_audit
@@ -655,12 +655,12 @@ ALTER TABLE public.approval_audit
         CHECK (authority_basis IN ('primary', 'explicit_delegate', 'affected_player_consent', 'affected_player_fallback')),
     ADD COLUMN IF NOT EXISTS decision_scope text NOT NULL DEFAULT 'club'
         CHECK (decision_scope IN ('club', 'player_specific', 'mixed')),
-    ADD COLUMN IF NOT EXISTS delegation_id uuid NULL
+    ADD COLUMN IF NOT EXISTS delegation_id uuid NULL 
         REFERENCES public.authority_delegations(delegation_id),
     ADD COLUMN IF NOT EXISTS subject_player_id text NULL,
     ADD COLUMN IF NOT EXISTS package_id text NULL,
     ADD COLUMN IF NOT EXISTS package_hash text NULL,
-    ADD COLUMN IF NOT EXISTS assignment_id uuid NULL
+    ADD COLUMN IF NOT EXISTS assignment_id uuid NULL 
         REFERENCES public.player_assignments(assignment_id),
     ADD COLUMN IF NOT EXISTS assignment_version integer NULL,
     ADD COLUMN IF NOT EXISTS assignment_hash text NULL,
@@ -668,7 +668,7 @@ ALTER TABLE public.approval_audit
     ADD COLUMN IF NOT EXISTS action_token_reference text NULL,
     ADD COLUMN IF NOT EXISTS invalidated_at timestamptz NULL,
     ADD COLUMN IF NOT EXISTS superseded_by uuid NULL,
-    ADD COLUMN IF NOT EXISTS conflict_state text NULL
+    ADD COLUMN IF NOT EXISTS conflict_state text NULL 
         CHECK (conflict_state IS NULL OR conflict_state IN ('none', 'conflict_detected', 'reconciled'));
 
 -- Extensions to approval_nonces
@@ -702,20 +702,20 @@ ALTER TABLE public.approval_nonces
 ALTER TABLE public.approval_nonces
     ADD CONSTRAINT approval_nonces_subject_columns_chk
     CHECK (
-        (subject_type = 'thread'
-            AND thread_id IS NOT NULL AND package_version IS NOT NULL
+        (subject_type = 'thread' 
+            AND thread_id IS NOT NULL AND package_version IS NOT NULL 
             AND dispatch_id IS NULL AND user_id IS NULL AND gate_id IS NULL)
         OR
-        (subject_type IN ('dispatch_plan', 'dispatch_cancel')
-            AND dispatch_id IS NOT NULL
+        (subject_type IN ('dispatch_plan', 'dispatch_cancel') 
+            AND dispatch_id IS NOT NULL 
             AND thread_id IS NULL AND user_id IS NULL AND gate_id IS NULL)
         OR
-        (subject_type = 'role_grant'
-            AND user_id IS NOT NULL
+        (subject_type = 'role_grant' 
+            AND user_id IS NOT NULL 
             AND thread_id IS NULL AND dispatch_id IS NULL AND gate_id IS NULL)
         OR
-        (subject_type = 'activation_gate'
-            AND gate_id IS NOT NULL
+        (subject_type = 'activation_gate' 
+            AND gate_id IS NOT NULL 
             AND thread_id IS NULL AND dispatch_id IS NULL AND user_id IS NULL)
     );
 
@@ -728,8 +728,8 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
     -- Transition-only event types (C-10)
-    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created')
-       OR NEW.event_type LIKE 'plan.%'
+    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created') 
+       OR NEW.event_type LIKE 'plan.%' 
        OR NEW.event_type LIKE 'tracking.%' THEN
         IF current_user != 'fc27_owner' OR session_user NOT IN ('fc27_app', 'fc27_dispatch') THEN
             RAISE EXCEPTION 'transition-only event type not allowed outside transition function';
@@ -747,16 +747,16 @@ BEGIN
         -- Entity ownership check (entity_id matches approval_request_id or thread_id)
         IF NEW.entity_type = 'approval_request' THEN
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND approval_request_id = NEW.entity_id::uuid
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
             END IF;
         ELSE
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND thread_id = NEW.entity_id
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
@@ -772,8 +772,8 @@ BEGIN
         END IF;
         -- Validate source row exists and matches entity_id
         IF NOT EXISTS (
-            SELECT 1 FROM public.approval_requests
-             WHERE approval_request_id = NEW.source_id::uuid
+            SELECT 1 FROM public.approval_requests 
+             WHERE approval_request_id = NEW.source_id::uuid 
                AND approval_request_id = NEW.entity_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found or entity mismatch for approval request event';
@@ -828,14 +828,14 @@ CREATE TABLE IF NOT EXISTS public.players (
     CONSTRAINT players_club_squad_number_uniq UNIQUE (club_id, squad_number)
 );
 
-CREATE INDEX IF NOT EXISTS players_club_idx
+CREATE INDEX IF NOT EXISTS players_club_idx 
     ON public.players(club_id);
 
-CREATE INDEX IF NOT EXISTS players_club_active_idx
+CREATE INDEX IF NOT EXISTS players_club_active_idx 
     ON public.players(club_id, active);
 
-CREATE INDEX IF NOT EXISTS players_verified_idx
-    ON public.players(player_id)
+CREATE INDEX IF NOT EXISTS players_verified_idx 
+    ON public.players(player_id) 
     WHERE identity_verified_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS public.dispatches (
@@ -903,18 +903,18 @@ CREATE TABLE IF NOT EXISTS public.dispatches (
     platform text NOT NULL DEFAULT 'common-gen5' CHECK (platform = 'common-gen5')
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS dispatches_one_active_per_objective
+CREATE UNIQUE INDEX IF NOT EXISTS dispatches_one_active_per_objective 
     ON public.dispatches (
-        player_id,
-        owner,
+        player_id, 
+        owner, 
         (approved_instruction->'objective'->>'metric')
-    )
+    ) 
     WHERE dispatch_status NOT IN ('completed', 'expired', 'cancelled', 'superseded');
 
-CREATE INDEX IF NOT EXISTS dispatches_status_idx
+CREATE INDEX IF NOT EXISTS dispatches_status_idx 
     ON public.dispatches(dispatch_status);
 
-CREATE INDEX IF NOT EXISTS dispatches_player_idx
+CREATE INDEX IF NOT EXISTS dispatches_player_idx 
     ON public.dispatches(player_id);
 
 CREATE OR REPLACE FUNCTION public.fc27_guard_dispatch_insert()
@@ -1180,7 +1180,7 @@ CREATE TABLE IF NOT EXISTS public.dispatch_assessments (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS dispatch_assessments_dispatch_idx
+CREATE INDEX IF NOT EXISTS dispatch_assessments_dispatch_idx 
     ON public.dispatch_assessments(dispatch_id, assessed_at);
 
 CREATE TRIGGER fc27_dispatch_assessments_immutable
@@ -1206,8 +1206,8 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
     -- Transition-only event types (C-10)
-    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created')
-       OR NEW.event_type LIKE 'plan.%'
+    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created') 
+       OR NEW.event_type LIKE 'plan.%' 
        OR NEW.event_type LIKE 'tracking.%' THEN
         IF current_user != 'fc27_owner' OR session_user NOT IN ('fc27_app', 'fc27_dispatch') THEN
             RAISE EXCEPTION 'transition-only event type not allowed outside transition function';
@@ -1224,16 +1224,16 @@ BEGIN
         END IF;
         IF NEW.entity_type = 'approval_request' THEN
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND approval_request_id = NEW.entity_id::uuid
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
             END IF;
         ELSE
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND thread_id = NEW.entity_id
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
@@ -1248,8 +1248,8 @@ BEGIN
             RAISE EXCEPTION 'event requires a source_id';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM public.approval_requests
-             WHERE approval_request_id = NEW.source_id::uuid
+            SELECT 1 FROM public.approval_requests 
+             WHERE approval_request_id = NEW.source_id::uuid 
                AND approval_request_id = NEW.entity_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found or entity mismatch for approval request event';
@@ -1263,7 +1263,7 @@ BEGIN
             RAISE EXCEPTION 'event requires a source_id';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM public.dispatches
+            SELECT 1 FROM public.dispatches 
              WHERE dispatch_id = NEW.source_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found for dispatch.created';
@@ -1277,7 +1277,7 @@ BEGIN
             RAISE EXCEPTION 'event requires a source_id';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM public.dispatch_acknowledgments
+            SELECT 1 FROM public.dispatch_acknowledgments 
              WHERE dispatch_id = NEW.source_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found for dispatch.acknowledged';
@@ -1291,7 +1291,7 @@ BEGIN
             RAISE EXCEPTION 'event requires a source_id';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM public.dispatch_assessments
+            SELECT 1 FROM public.dispatch_assessments 
              WHERE assessment_id = NEW.source_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found for tracking assessment event';
@@ -1395,8 +1395,8 @@ BEGIN
     IF session_user = 'fc27_dispatch' THEN
         v_actor := 'service:dispatch-worker';
         v_actor_kind := 'service';
-        IF current_setting('fc27.actor', true) IS NOT NULL AND
-           current_setting('fc27.actor', true) <> '' AND
+        IF current_setting('fc27.actor', true) IS NOT NULL AND 
+           current_setting('fc27.actor', true) <> '' AND 
            current_setting('fc27.actor', true) <> 'service:dispatch-worker' THEN
             RAISE EXCEPTION 'fc27_dispatch cannot set foreign actor' USING ERRCODE = 'FC004';
         END IF;
@@ -1532,7 +1532,7 @@ BEGIN
         END IF;
 
     ELSIF p_to_status = 'failed' THEN
-        IF NOT (p_patch ? 'failure_reason') OR
+        IF NOT (p_patch ? 'failure_reason') OR 
            (p_patch->>'failure_reason') NOT IN (
                'personalization_unavailable', 'plan_schema_invalid', 'plan_policy_invalid',
                'player_not_enrolled', 'player_identity_unverified', 'delivery_store_error'
@@ -1591,7 +1591,7 @@ BEGIN
         END IF;
 
     ELSIF p_to_status = 'expired' THEN
-        IF NOT (p_patch ? 'expiry_reason') OR
+        IF NOT (p_patch ? 'expiry_reason') OR 
            (p_patch->>'expiry_reason') NOT IN ('ack_deadline', 'insufficient_data') THEN
             RAISE EXCEPTION 'expired requires valid expiry_reason' USING ERRCODE = 'FC003';
         END IF;
@@ -1630,67 +1630,67 @@ BEGIN
     UPDATE public.dispatches
        SET dispatch_status = p_to_status,
            version = v_new_version,
-           plan_version = CASE
-               WHEN p_to_status = 'delivered' THEN (p_patch->>'plan_version')::integer
-               ELSE plan_version
+           plan_version = CASE 
+               WHEN p_to_status = 'delivered' THEN (p_patch->>'plan_version')::integer 
+               ELSE plan_version 
            END,
-           delivered_at = CASE
-               WHEN p_to_status = 'delivered' THEN now()
-               ELSE delivered_at
+           delivered_at = CASE 
+               WHEN p_to_status = 'delivered' THEN now() 
+               ELSE delivered_at 
            END,
-           acknowledged_at = CASE
-               WHEN p_to_status = 'acknowledged' THEN now()
-               ELSE acknowledged_at
+           acknowledged_at = CASE 
+               WHEN p_to_status = 'acknowledged' THEN now() 
+               ELSE acknowledged_at 
            END,
-           tracking_started_at = CASE
-               WHEN p_to_status = 'tracking' THEN now()
-               ELSE tracking_started_at
+           tracking_started_at = CASE 
+               WHEN p_to_status = 'tracking' THEN now() 
+               ELSE tracking_started_at 
            END,
-           tracking_ended_at = CASE
-               WHEN p_to_status IN ('completed', 'expired') THEN now()
-               ELSE tracking_ended_at
+           tracking_ended_at = CASE 
+               WHEN p_to_status IN ('completed', 'expired') THEN now() 
+               ELSE tracking_ended_at 
            END,
-           baseline_metrics = CASE
-               WHEN p_to_status = 'tracking' THEN p_patch->'baseline_metrics'
-               ELSE baseline_metrics
+           baseline_metrics = CASE 
+               WHEN p_to_status = 'tracking' THEN p_patch->'baseline_metrics' 
+               ELSE baseline_metrics 
            END,
-           baseline_match_ids = CASE
-               WHEN p_to_status = 'tracking' AND (p_patch ? 'baseline_match_ids')
-               THEN ARRAY(SELECT jsonb_array_elements_text(p_patch->'baseline_match_ids'))
-               ELSE baseline_match_ids
+           baseline_match_ids = CASE 
+               WHEN p_to_status = 'tracking' AND (p_patch ? 'baseline_match_ids') 
+               THEN ARRAY(SELECT jsonb_array_elements_text(p_patch->'baseline_match_ids')) 
+               ELSE baseline_match_ids 
            END,
-           failure_reason = CASE
-               WHEN p_to_status = 'failed' THEN p_patch->>'failure_reason'
-               ELSE failure_reason
+           failure_reason = CASE 
+               WHEN p_to_status = 'failed' THEN p_patch->>'failure_reason' 
+               ELSE failure_reason 
            END,
-           failure_retryable = CASE
-               WHEN p_to_status = 'failed' THEN v_failure_retryable
-               ELSE failure_retryable
+           failure_retryable = CASE 
+               WHEN p_to_status = 'failed' THEN v_failure_retryable 
+               ELSE failure_retryable 
            END,
-           last_error = CASE
-               WHEN p_to_status = 'failed' AND (p_patch ? 'last_error') THEN p_patch->>'last_error'
-               ELSE last_error
+           last_error = CASE 
+               WHEN p_to_status = 'failed' AND (p_patch ? 'last_error') THEN p_patch->>'last_error' 
+               ELSE last_error 
            END,
-           expiry_reason = CASE
-               WHEN p_to_status = 'expired' THEN p_patch->>'expiry_reason'
-               ELSE expiry_reason
+           expiry_reason = CASE 
+               WHEN p_to_status = 'expired' THEN p_patch->>'expiry_reason' 
+               ELSE expiry_reason 
            END,
-           cancel_reason = CASE
-               WHEN p_to_status = 'cancelled' THEN p_patch->>'cancel_reason'
-               ELSE cancel_reason
+           cancel_reason = CASE 
+               WHEN p_to_status = 'cancelled' THEN p_patch->>'cancel_reason' 
+               ELSE cancel_reason 
            END,
            last_transition_reason = p_reason,
-           outcome = CASE
-               WHEN p_to_status = 'completed' THEN v_final_assessment.result
-               ELSE outcome
+           outcome = CASE 
+               WHEN p_to_status = 'completed' THEN v_final_assessment.result 
+               ELSE outcome 
            END,
-           final_assessment_id = CASE
-               WHEN p_to_status = 'completed' THEN (p_patch->>'final_assessment_id')::uuid
-               ELSE final_assessment_id
+           final_assessment_id = CASE 
+               WHEN p_to_status = 'completed' THEN (p_patch->>'final_assessment_id')::uuid 
+               ELSE final_assessment_id 
            END,
-           superseded_by = CASE
-               WHEN p_to_status = 'superseded' THEN (p_patch->>'superseded_by')::uuid
-               ELSE superseded_by
+           superseded_by = CASE 
+               WHEN p_to_status = 'superseded' THEN (p_patch->>'superseded_by')::uuid 
+               ELSE superseded_by 
            END
      WHERE dispatch_id = p_dispatch_id;
 
@@ -1773,13 +1773,13 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb)
+ALTER FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) 
     OWNER TO fc27_owner;
 
-REVOKE ALL ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb)
+REVOKE ALL ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) 
     FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb)
+GRANT EXECUTE ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) 
     TO fc27_app, fc27_dispatch;
 
 
@@ -1857,8 +1857,8 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
     -- Transition-only event types (C-10)
-    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created')
-       OR NEW.event_type LIKE 'plan.%'
+    IF (NEW.event_type LIKE 'dispatch.%' AND NEW.event_type != 'dispatch.created') 
+       OR NEW.event_type LIKE 'plan.%' 
        OR NEW.event_type LIKE 'tracking.%' THEN
         IF current_user != 'fc27_owner' OR session_user NOT IN ('fc27_app', 'fc27_dispatch') THEN
             RAISE EXCEPTION 'transition-only event type not allowed outside transition function';
@@ -1876,16 +1876,16 @@ BEGIN
         -- Entity ownership check (entity_id matches approval_request_id or thread_id)
         IF NEW.entity_type = 'approval_request' THEN
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND approval_request_id = NEW.entity_id::uuid
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
             END IF;
         ELSE
             IF NOT EXISTS (
-                SELECT 1 FROM public.approval_audit
-                 WHERE id = NEW.source_id::bigint
+                SELECT 1 FROM public.approval_audit 
+                 WHERE id = NEW.source_id::bigint 
                    AND thread_id = NEW.entity_id
             ) THEN
                 RAISE EXCEPTION 'source row not found or entity mismatch for approval.decided';
@@ -1900,8 +1900,8 @@ BEGIN
             RAISE EXCEPTION 'event requires a source_id';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM public.approval_requests
-             WHERE approval_request_id = NEW.source_id::uuid
+            SELECT 1 FROM public.approval_requests 
+             WHERE approval_request_id = NEW.source_id::uuid 
                AND approval_request_id = NEW.entity_id::uuid
         ) THEN
             RAISE EXCEPTION 'source row not found or entity mismatch for approval request event';
@@ -1950,3 +1950,4 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+

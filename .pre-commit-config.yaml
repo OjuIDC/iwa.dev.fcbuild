@@ -4,7 +4,9 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        exclude: ^migrations/
       - id: end-of-file-fixer
+        exclude: ^migrations/
       - id: check-yaml
       - id: check-toml
       - id: check-json
