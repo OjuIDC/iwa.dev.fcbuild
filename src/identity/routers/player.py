@@ -229,12 +229,12 @@ def compute_decision_bound_hash(
 
 def check_player_isolation(principal: PrincipalContext, assignment: dict[str, Any]) -> None:
     """Enforces Object-Level Player Isolation.
-    
+
     A player may ONLY access assignments where subject_player_id matches their player_id.
     Staff roles cannot impersonate or submit decisions as players.
     """
     subject_player_id = str(assignment["subject_player_id"])
-    
+
     # If caller has PLAYER role
     if principal.is_player:
         if not principal.player_id or str(principal.player_id) != subject_player_id:

@@ -340,4 +340,3 @@ def test_cli_status_only(monkeypatch, sample_key, capsys):
     captured = capsys.readouterr()
     assert "Active key version: 1" in captured.out
     assert "Rotation summary" not in captured.out
-

@@ -185,7 +185,7 @@ def test_verify_totp_replay_detected_older_step():
     seed = generate_totp_seed()
     totp = pyotp.TOTP(seed, interval=TOTP_INTERVAL)
     now = datetime.now(timezone.utc)
-    
+
     # Last verification was at now (step S)
     last_verified = now
 

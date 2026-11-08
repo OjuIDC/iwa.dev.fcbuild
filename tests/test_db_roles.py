@@ -18,12 +18,12 @@ def test_role_attributes(pg_db):
             # owner: rolcanlogin false
             cur.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ROLE_OWNER,))
             assert not cur.fetchone()[0]
-            
+
             # app/dispatch: not superuser, not member of fc27_owner
             cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname IN (%s, %s)", (ROLE_APP, ROLE_DISPATCH))
             for row in cur.fetchall():
                 assert not row[0]
-            
+
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_APP, ROLE_OWNER))
             assert not cur.fetchone()[0]
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_DISPATCH, ROLE_OWNER))
@@ -45,7 +45,7 @@ def test_bootstrap_transfers_legacy_objects_owned_by_admin(pg_db):
     with psycopg.connect(pg_db.admin, autocommit=True) as conn:
         conn.execute("CREATE TABLE legacy_t (id int)")
         conn.execute("CREATE FUNCTION legacy_f() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql")
-        
+
         # bootstrap_database(confirm=False)
         report = bootstrap_database(pg_db.admin, legacy_owner=None, confirm=False)
         assert set(report.pending_transfers) == {'function public.legacy_f()', 'table public.legacy_t'}
@@ -94,7 +94,7 @@ def test_bootstrap_cli_never_prints_password(pg_db, capsys):
     env["FC27_MIGRATOR_PASSWORD_FILE"] = "tests/test_s3cret_migrator"
     env["FC27_APP_PASSWORD_FILE"] = "tests/test_s3cret_app"
     env["FC27_DISPATCH_PASSWORD_FILE"] = "tests/test_s3cret_dispatch"
-    
+
     with open("tests/test_missing_uri", "w") as f:
         f.write("postgresql://admin:adminpw@127.0.0.1:9999/nodb")
     with open("tests/test_s3cret_migrator", "w") as f:
@@ -116,4 +116,3 @@ def test_bootstrap_cli_never_prints_password(pg_db, capsys):
         os.remove("tests/test_s3cret_migrator")
         os.remove("tests/test_s3cret_app")
         os.remove("tests/test_s3cret_dispatch")
-

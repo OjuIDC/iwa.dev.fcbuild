@@ -118,10 +118,10 @@ def evaluate_gates(conn: psycopg.Connection, identity: DeploymentIdentity) -> li
             grants_details.append("fc27_dispatch lacks EXECUTE on fc27_dispatch_transition")
 
         cur.execute("""
-            SELECT r.rolname 
-              FROM pg_proc p 
-              JOIN pg_roles r ON p.proowner = r.oid 
-             WHERE p.proname = 'fc27_dispatch_transition' 
+            SELECT r.rolname
+              FROM pg_proc p
+              JOIN pg_roles r ON p.proowner = r.oid
+             WHERE p.proname = 'fc27_dispatch_transition'
                AND p.pronamespace = 'public'::regnamespace
         """)
         fn_owner = cur.fetchone()

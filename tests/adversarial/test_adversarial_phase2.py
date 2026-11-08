@@ -386,7 +386,7 @@ class TestTrack2GTimeoutInvariantAdversarial:
         assert ch_resp.status_code == 200, f"Challenge failed: {ch_resp.text}"
         ch = ch_resp.json()
         signed_payload = signed_cli_hmac(ch)
-        
+
         # Now expire the approval request by transitioning status to 'expired' (valid state transition)
         # This is allowed: awaiting_approval -> expired
         with psycopg.connect(uri) as conn:
@@ -747,10 +747,10 @@ class TestTrack6DecisionStepUpReplayAndLockoutAdversarial:
                     "auth_level": "authenticated",
                     "auth_method": "passkey",
                 }
-            
+
             def get_user_roles(self, user_id):
                 return [UserRole.COMMISSIONER]
-            
+
             def get_user(self, user_id):
                 return {"player_id": None, "display_name": "Test Commissioner"}
 
@@ -891,10 +891,10 @@ def test_adv_t6_identical_decision_replay_is_safe_idempotent(client_v1_hmac):
                     "auth_level": "authenticated",
                     "auth_method": "passkey",
                 }
-            
+
             def get_user_roles(self, user_id):
                 return [UserRole.COMMISSIONER]
-            
+
             def get_user(self, user_id):
                 return {"player_id": None, "display_name": "Test Commissioner"}
 
@@ -1201,4 +1201,3 @@ class TestTrack10LegacyHmacKillSwitchAdversarial:
         with patch.dict(os.environ, {"APPROVAL_CLI_HMAC_ENABLED": "true"}):
             creds = ServiceCredentials.load()
             assert creds.cli_hmac_enabled is True
-

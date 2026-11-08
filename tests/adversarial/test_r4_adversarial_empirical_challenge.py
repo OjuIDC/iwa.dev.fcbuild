@@ -168,7 +168,7 @@ class TestPlayerDecisionProofBypass:
     )
     def test_all_five_decisions_proofless_rejected_422(self, test_setup, decision, extra_fields):
         """Attacker attempts to submit decision with zero proof fields.
-        
+
         All valid domain payload fields are supplied, but NO proof is attached.
         Must be rejected with HTTP 422 Unprocessable Content.
         """

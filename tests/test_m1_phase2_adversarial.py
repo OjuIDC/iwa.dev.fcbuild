@@ -100,7 +100,7 @@ def test_store_test_suite_has_no_undefined_hashlib():
 def test_recovery_codes_deletion_rejection_trigger():
     """Verify fc27_recovery_codes has fc27_reject_mutation attached BEFORE DELETE."""
     mig_0004 = (ROOT / "migrations" / "0004_identity_foundation.sql").read_text(encoding="utf-8")
-    
+
     # Assert trigger attachment
     match = re.search(
         r"CREATE\s+TRIGGER\s+fc27_recovery_codes_immutable\s+BEFORE\s+DELETE\s+ON\s+public\.fc27_recovery_codes\s+FOR\s+EACH\s+ROW\s+EXECUTE\s+FUNCTION\s+public\.fc27_reject_mutation\(\)",
@@ -117,11 +117,11 @@ def test_recovery_codes_deletion_rejection_trigger():
 def test_webauthn_sign_counter_monotonic_guard():
     """Verify fc27_guard_webauthn_counter prevents sign_counter from decrementing."""
     mig_0004 = (ROOT / "migrations" / "0004_identity_foundation.sql").read_text(encoding="utf-8")
-    
+
     assert "fc27_guard_webauthn_counter" in mig_0004
     assert "IF NEW.sign_counter < OLD.sign_counter THEN" in mig_0004
     assert "RAISE check_violation USING MESSAGE = 'webauthn sign_counter cannot decrease'" in mig_0004
-    
+
     match = re.search(
         r"CREATE\s+TRIGGER\s+fc27_webauthn_counter_guard\s+BEFORE\s+UPDATE\s+ON\s+public\.fc27_webauthn_credentials",
         mig_0004,
@@ -133,7 +133,7 @@ def test_webauthn_sign_counter_monotonic_guard():
 def test_fc27_users_duplicate_login_and_normalization_constraints():
     """Verify fc27_users table enforces UNIQUE and lower/trim check constraints on login_id."""
     mig_0004 = (ROOT / "migrations" / "0004_identity_foundation.sql").read_text(encoding="utf-8")
-    
+
     assert re.search(
         r"login_id\s+text\s+NOT\s+NULL\s+UNIQUE\s+CHECK\s*\(.*login_id\s*=\s*lower\(trim\(login_id\)\)\)",
         mig_0004,
@@ -144,7 +144,7 @@ def test_fc27_users_duplicate_login_and_normalization_constraints():
 def test_fc27_recovery_codes_update_guard():
     """Verify fc27_guard_recovery_code_consumption enforces single-use and attribute immutability."""
     mig_0004 = (ROOT / "migrations" / "0004_identity_foundation.sql").read_text(encoding="utf-8")
-    
+
     assert "IF OLD.consumed_at IS NOT NULL THEN" in mig_0004
     assert "RAISE check_violation USING MESSAGE = 'recovery code is already consumed'" in mig_0004
     assert "IF NEW.consumed_at IS NULL THEN" in mig_0004

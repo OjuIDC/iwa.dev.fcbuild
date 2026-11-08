@@ -59,7 +59,7 @@ async def get_current_principal(
     x_api_key: str | None = Header(None, alias="X-API-Key"),
 ) -> PrincipalContext:
     """FastAPI Dependency: Authenticates caller principal from HTTP headers.
-    
+
     Verification Flow:
     1. Extracts raw token from Authorization: Bearer or X-API-Key header.
     2. First evaluates service tokens (BFF, Graph, Worker) via constant-time matching.
@@ -225,7 +225,7 @@ def require_human_principal(
     principal: PrincipalContext = Depends(get_current_principal),
 ) -> PrincipalContext:
     """Strict Anti-Impersonation Guard (§3.3).
-    
+
     Verifies that the caller is an authenticated human actor and NOT a service,
     worker, agent, or automated caller.
     """
@@ -241,7 +241,7 @@ def require_service_principal(
     allowed_roles: set[UserRole] | None = None,
 ) -> Callable[..., PrincipalContext]:
     """Scoped Machine-to-Machine Service Guard (§11).
-    
+
     Ensures that only authorized service principals (e.g. BFF or Graph service)
     can access internal background endpoints.
     """
@@ -278,4 +278,3 @@ def get_identity_store(request: Request) -> IdentityStore:
     store = IdentityStore(uri)
     request.app.state.identity_store = store
     return store
-

@@ -326,4 +326,3 @@ def test_empty_package_is_not_approvable(pg_uri):
     with TestClient(app) as c:
         tid = start(c)
         assert decide(c, tid).status_code == 409
-

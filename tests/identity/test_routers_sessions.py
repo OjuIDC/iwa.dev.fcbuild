@@ -144,9 +144,9 @@ class TestSessionTouch:
         # Set absolute expires_at to 10 minutes from now, but idle_expires_at to 2 minutes from now
         with psycopg.connect(pg_uri) as conn:
             conn.execute(
-                """UPDATE public.fc27_sessions 
+                """UPDATE public.fc27_sessions
                    SET absolute_expires_at = now() + interval '10 minutes',
-                       idle_expires_at = now() + interval '2 minutes' 
+                       idle_expires_at = now() + interval '2 minutes'
                    WHERE session_id = %s""",
                 (sess["session_id"],),
             )

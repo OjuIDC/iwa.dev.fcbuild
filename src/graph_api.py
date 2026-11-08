@@ -996,7 +996,7 @@ def create_app(
                               now() >= r.expires_at AS is_expired
                          FROM public.approval_requests r
                          JOIN public.graph_threads g USING (thread_id)
-                        WHERE (r.approval_request_id::text = %s 
+                        WHERE (r.approval_request_id::text = %s
                                OR g.state->'lead_packages'->'coach'->'best'->>'candidate_id' = %s
                                OR g.thread_id = %s)
                           AND r.status = 'awaiting_approval'
@@ -1388,4 +1388,3 @@ def create_app(
     app.include_router(delegations_router, prefix="/v1/auth/delegations", tags=["delegations"])
 
     return app
-

@@ -266,15 +266,15 @@ class TestWorkerBugReproduction:
 
     def test_reproduce_test_recovery_line_148_contract_mismatch(self):
         """Empirically prove tests/identity/test_recovery.py:148 has a string mismatch bug.
-        
+
         In src/identity/recovery.py line 184:
             matched = self.store.verify_and_consume_recovery_code(...)
             if not matched:
                 return RecoveryResult(success=False, error="invalid_or_consumed_code")
-        
+
         In tests/identity/test_recovery.py line 148:
             assert res.error == "invalid_recovery_code"
-        
+
         Because 'invalid_or_consumed_code' != 'invalid_recovery_code', the test fails!
         """
         uid = uuid4()

@@ -78,7 +78,7 @@ _PRINTABLE_TOKEN_RE = re.compile(r"^[\x21-\x7e]+$")
 @dataclass(frozen=True)
 class ServiceCredentials:
     """Immutable runtime configuration holding service secrets and rotation keys.
-    
+
     Invariants (§11, §12):
     - Separate credentials for BFF, Graph API runtime, and Workers.
     - Zero shared root or omnipotent secret.
@@ -251,10 +251,10 @@ def require_human_principal(
     principal: PrincipalContext,
 ) -> PrincipalContext:
     """Strict Anti-Impersonation Guard (§3.3).
-    
+
     Verifies that the caller is an authenticated human actor and NOT a service,
     worker, agent, or automated caller.
-    
+
     Raises:
         AgentImpersonationError (403): If the caller principal is a service.
     """
@@ -270,7 +270,7 @@ def require_service_principal(
     allowed_roles: Set[UserRole] | None = None,
 ) -> Callable[[PrincipalContext], PrincipalContext]:
     """Scoped Machine-to-Machine Service Guard (§11).
-    
+
     Ensures that only authorized service principals (e.g. BFF or Graph service)
     can access internal background endpoints.
     """
@@ -303,7 +303,7 @@ class AntiImpersonationGuard:
         evidence_id: UUID | None = None,
     ) -> None:
         """Evaluates whether the caller can commit a human decision.
-        
+
         Rules:
         1. Services and agents CANNOT perform actions in HUMAN_DECISION_ACTIONS.
         2. High-value human decisions require authentic human proof (WebAuthn evidence or HMAC).
@@ -342,7 +342,7 @@ def resolve_display_identity(
     user_record: dict[str, Any] | None = None,
 ) -> DisplayIdentity:
     """Resolves presentation projection strictly without leaking into authorization logic.
-    
+
     Invariants (§3.4):
     - Gamertags and display names are presentation data only.
     - Authorization keys exclusively on immutable UUIDs (user_id, player_id).

@@ -688,11 +688,11 @@ class TestDormancyAndZeroDeliveryInvariants:
     def test_dispatch_dormancy_invariants_configured(self):
         """Verify DISPATCH_ENABLED and DISPATCH_WORKER_ENABLED remain false."""
         import os
-        
+
         # Check environment variables directly
         dispatch_enabled = os.environ.get("DISPATCH_ENABLED", "false").lower() == "true"
         dispatch_worker_enabled = os.environ.get("DISPATCH_WORKER_ENABLED", "false").lower() == "true"
-        
+
         assert dispatch_enabled is False, "DISPATCH_ENABLED must be false"
         assert dispatch_worker_enabled is False, "DISPATCH_WORKER_ENABLED must be false"
 
