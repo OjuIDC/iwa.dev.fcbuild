@@ -68,6 +68,6 @@ def test_graph_trace_is_correlated_and_redacted(pg_uri):
     blob = json.dumps([dict(s.attributes) for s in spans], default=str)
     for s in spans:
         attrs = dict(s.attributes)
-        assert attrs.get("langfuse.observation.metadata.fc_version") == "27", (s.name, attrs)
-        assert attrs.get("langfuse.observation.metadata.platform") == "common-gen5"
+        assert json.loads(attrs["langfuse.observation.metadata.fc_version"]) == "27", (s.name, attrs)
+        assert json.loads(attrs["langfuse.observation.metadata.platform"]) == "common-gen5"
     assert SERVICE_TOKEN not in blob and SIGNING_SECRET not in blob
