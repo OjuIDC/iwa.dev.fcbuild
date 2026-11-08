@@ -1460,9 +1460,14 @@ def record_match_result(
                     target_id = int(target_row[0])
                     prev_rev = int(target_row[31])
                     new_rev = prev_rev + 1
-                    eff_guild = guild_id or (str(target_row[23]) if target_row[23] else None)
-                    eff_chan = channel_id or (str(target_row[24]) if target_row[24] else None)
-                    eff_msg = message_id or (str(target_row[25]) if target_row[25] else None)
+                    if target_row[24] and target_row[25] and message_id is None:
+                        eff_guild = str(target_row[23]) if target_row[23] else None
+                        eff_chan = str(target_row[24])
+                        eff_msg = str(target_row[25])
+                    else:
+                        eff_guild = guild_id or (str(target_row[23]) if target_row[23] else None)
+                        eff_chan = channel_id or (str(target_row[24]) if target_row[24] else None)
+                        eff_msg = message_id or (str(target_row[25]) if target_row[25] else None)
 
                     cur.execute(
                         f"""
