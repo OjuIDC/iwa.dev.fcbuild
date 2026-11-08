@@ -14,8 +14,11 @@ Verifies:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -343,6 +346,9 @@ def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
         "publish-ghcr",
         "result",
     }
+    gate_script = jobs["gate-context"]["steps"][0]["run"]
+    assert 'repo_name.casefold() == "ojuidc/iwa.dev.fcbuild"' in gate_script
+    assert 'pr_head_repo.casefold() != "ojuidc/iwa.dev.fcbuild"' in gate_script
 
     for job_name, job in jobs.items():
         timeout = job.get("timeout-minutes")
@@ -367,7 +373,7 @@ def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
             }
             if_cond = str(job.get("if", ""))
             assert "github.event_name != 'pull_request'" in if_cond
-            assert "github.repository == 'iwa-ojuidc/iwa.dev.fcbuild'" in if_cond
+            assert "github.repository ==" not in if_cond
             assert "needs.gate-context.outputs.allow_publish == 'true'" in if_cond
             assert "needs.build-and-scan.result == 'success'" in if_cond
             assert "needs.container-report.result == 'success'" in if_cond
@@ -382,6 +388,31 @@ def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
                 assert not uses.startswith("docker/login-action@"), (
                     f"PR-reachable job {job_name} must never authenticate to ghcr.io"
                 )
+
+
+def test_container_image_gate_accepts_repository_owner_case_variants() -> None:
+    wf = _load_workflow("container-images.yml")
+    gate_script = wf["jobs"]["gate-context"]["steps"][0]["run"]
+    gate_script = gate_script.partition("python3 - <<'PY'\n")[2].rsplit("\nPY", 1)[0]
+    env = {
+        **os.environ,
+        "EVENT_NAME": "push",
+        "REPO_NAME": "OjuIDC/iwa.dev.fcbuild",
+        "REF_NAME": "main",
+        "REF_TYPE": "branch",
+        "PR_HEAD_REPO": "",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", gate_script],
+        capture_output=True,
+        check=True,
+        env=env,
+        text=True,
+    )
+
+    assert "ALLOW_PUBLISH=true" in result.stdout
+    assert "PUBLISH_MODE=ghcr-immutable-main" in result.stdout
 
 
 def test_container_workflow_build_push_steps_and_metadata_tag_rules() -> None:
