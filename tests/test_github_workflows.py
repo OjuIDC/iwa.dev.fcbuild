@@ -169,6 +169,19 @@ def test_ci_workflow_preserves_required_test_gate_and_runs_all_shards() -> None:
         "aggregate-report",
     }.issubset(needs)
 
+    aggregate = jobs["aggregate-report"]
+    reconcile = next(
+        step
+        for step in aggregate["steps"]
+        if step.get("name")
+        == "Reconcile shard union against full collection and sanitize reports"
+    )
+    run = reconcile["run"]
+    assert reconcile["env"]["FULL_QUALITY_RESULT"] == "${{ needs.full-quality.result }}"
+    assert 'if [[ -f "$EXPECTED_TOTAL_FILE" ]]; then' in run
+    assert 'elif [[ "$FULL_QUALITY_RESULT" == "success" ]]; then' in run
+    assert '"${EXPECTED_TOTAL_ARGS[@]}"' in run
+
 
 def test_fast_workflow_defines_all_tiers_and_result_gate() -> None:
     wf = _load_workflow("test-fast.yml")
