@@ -58,3 +58,56 @@ The target full-state backup scope requires complete coverage of the FC27 Postgr
 2. Creates a disposable temporary database, applies canonical migrations `0001` through `0013` via `src.db_migrate`, restores the 11-table domain archive via `pg_restore`, and drops the temporary database in a `finally` block.
 3. Verifies all 11 restored domain table counts (plus derived `fc27_match_team_stats` and `fc27_manual_discord_linked_matches`) and canonical record hashes against the manifest.
 4. Executes `Search -> Scout -> Analyst` over the restored records and verifies `MODERATE_CONFIDENCE` readback when >= 5 provider matches are present.
+
+## Internal PostgreSQL (`fc27_data`) Backup & Configuration Procedures
+
+Because `postgres` runs on the internal `fc27_data` bridge network (`internal: true`) with zero host-published ports (`ports: []`), host processes without a localhost port mapping cannot connect over TCP unless they either execute inside the PostgreSQL container (`docker exec`) or run in a one-shot container attached to `fc27_data`.
+
+### 1. Safe URI & Secret Configuration Precedence (`operator procedure`)
+
+`scripts/fc27_backup.py` and `scripts/fc27_restore_verify.py` resolve the database connection URI in strict order (`BACKUP_URI_PRECEDENCE` in `src/fc27_backup_restore.py`):
+
+1. `POSTGRES_ADMIN_URI_FILE`
+2. `POSTGRES_ADMIN_URI`
+3. `POSTGRES_URI_FILE`
+4. `POSTGRES_URI`
+5. `FC27_DEMO_POSTGRES_URI`
+
+When none of these variables are configured (or a referenced `*_FILE` cannot be read), both CLI tools fail closed with `ERROR_CATEGORY=ConfigError` and emit `EXPECTED_CONFIGURATION=POSTGRES_ADMIN_URI_FILE|POSTGRES_ADMIN_URI|POSTGRES_URI_FILE|POSTGRES_URI|FC27_DEMO_POSTGRES_URI` without printing any secret value, URI, password, token, or username.
+
+### 2. Full Custom-Format Backup via `docker exec` (`operator procedure` / `executed validation`)
+
+To capture a complete custom-format PostgreSQL 16 dump (`pg_dump --format=custom --blobs`) directly from `fc27-full-stack-postgres-1` without exposing PostgreSQL ports on the host or printing credentials:
+
+- **Classification**: `operator procedure` and `executed validation` (executed during Stage A pre-migration backup gate into `.local-data/development-backups/stage-a/fc27_stage_a_full.dump`, `250654` bytes, SHA-256 `637e9caedc7c3723341d74db9c48430ed001db155acc1bbe7485d808a07503b1`, verified via `pg_restore --list` and restored into an isolated disposable PostgreSQL 16 container prior to applying `migrations/0013_fc27_manual_match_results.sql`).
+
+```powershell
+# Operator procedure / development example: create full custom-format dump inside postgres container
+New-Item -ItemType Directory -Force -Path ".local-data/development-backups/stage-a" | Out-Null
+docker exec fc27-full-stack-postgres-1 sh -c "pg_dump --format=custom --blobs --verbose --username=fc27 --dbname=fc27 --file=/tmp/fc27_stage_a_full.dump 2>/tmp/fc27_stage_a_pg_dump.log"
+docker cp fc27-full-stack-postgres-1:/tmp/fc27_stage_a_full.dump ".local-data/development-backups/stage-a/fc27_stage_a_full.dump"
+docker exec fc27-full-stack-postgres-1 rm -f /tmp/fc27_stage_a_full.dump /tmp/fc27_stage_a_pg_dump.log
+Get-FileHash -Algorithm SHA256 ".local-data/development-backups/stage-a/fc27_stage_a_full.dump"
+```
+
+Verify the custom archive table of contents using `pg_restore --list` inside the container (`operator procedure`):
+
+```powershell
+Get-Content ".local-data/development-backups/stage-a/fc27_stage_a_full.dump" -AsByteStream | `
+  docker exec -i fc27-full-stack-postgres-1 pg_restore --list
+```
+
+### 3. Narrowly Scoped One-Shot Container Backup on `fc27_data` (`not-executed example`)
+
+When running `scripts/fc27_backup.py` against an internal-only `fc27_data` network without host TCP exposure, mount `./secrets/postgres_admin_uri` read-only (`POSTGRES_ADMIN_URI_FILE=/run/secrets/postgres_admin_uri`) and `.local-data/backups` into a one-shot container (`not-executed example`):
+
+```powershell
+# Not-executed example: run scripts/fc27_backup.py via secret file mount
+docker run --rm --network fc27-full-stack_fc27_data `
+  -v "${PWD}/secrets/postgres_admin_uri:/run/secrets/postgres_admin_uri:ro" `
+  -v "${PWD}/.local-data/backups:/app/.local-data/backups" `
+  -e POSTGRES_ADMIN_URI_FILE=/run/secrets/postgres_admin_uri `
+  fc27-full-stack-db-migrate:latest `
+  python scripts/fc27_backup.py --backup-dir /app/.local-data/backups --retention-count 7
+```
+
