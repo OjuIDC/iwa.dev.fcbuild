@@ -75,7 +75,7 @@ services:
     environment: *lf-env
 
   langfuse-web:
-    image: langfuse/langfuse:4.74.0@sha256:f409386b80aa7a77d15b16cf250118d05dab0f4535174f2d4a310ebcf1d7bfc1
+    image: langfuse/langfuse:4.75.0@sha256:23378ae8cdf1d92b647d68b81c0d0cea3632b43e9fbcbe9b765420af9c9c8662
     profiles: [langfuse]
     restart: unless-stopped
     depends_on: *lf-depends
