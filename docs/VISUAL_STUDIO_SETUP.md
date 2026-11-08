@@ -31,7 +31,7 @@ Resolve the installed Visual Studio MSBuild executable and build the solution or
 ```powershell
 $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
 $vswhere = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe'
-$vsInstall = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath
+$vsInstall = & $vswhere -latest -products '*' -version '[18.0,19.0)' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Workload.Python -property installationPath
 $msbuild = Join-Path $vsInstall 'MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild '.\iwa.dev.fcbuild.sln' /t:Build /v:minimal
 & $msbuild '.\iwa.dev.fcbuild.pyproj' /t:Build /v:minimal
