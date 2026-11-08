@@ -28,7 +28,7 @@ Keep `qwen2.5:7b` as the control model until a candidate wins the role-specific 
 
 **Role backend** (`ROLE_BACKEND`):
 - `native`: calls `invoke_role` directly.
-- `swarms`: the default in Compose. Uses a real `swarms==17.0.0` `Agent` per role, whose LLM adapter routes through the same `invoke_role`. Swarms OpenTelemetry export is forced off, and the backend refuses to run if it is on.
+- `swarms`: the default in Compose. Uses a real `swarms==15.0.3` `Agent` per role, whose LLM adapter routes through the same `invoke_role`. Swarms OpenTelemetry export is forced off, and the backend refuses to run if it is on.
 
 **Output contract.** Every reply must parse as `RoleOutput` (see `src/roles.py`): a summary, bounded per-player adjustments of ±10 and risks, with no extra keys. Invalid output makes that role's package non-approvable.
 

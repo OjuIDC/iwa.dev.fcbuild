@@ -22,7 +22,7 @@ This guide covers setting up a local development environment for `iwa.dev.fcbuil
 ### Optional Dependency Groups
 - `requirements.txt` — Core runtime dependencies (pinned identically in `pyproject.toml`, enforced by `tests/test_packaging.py`).
 - `requirements-dev.txt` — Test and static validation tools (`pytest`, `httpx`, `pyyaml`, etc.).
-- `requirements-swarms.txt` — Optional `swarms==17.0.0` multi-agent adapter dependencies (installed in `Dockerfile.graph`).
+- `requirements-swarms.txt` — Optional `swarms==15.0.3` multi-agent adapter dependencies (installed in `Dockerfile.graph`).
 - `requirements-langfuse.txt` — Optional `langfuse` tracing SDK dependencies.
 - `host_agent/requirements_windows.txt` — Optional Windows HUD capture dependencies (`pytesseract`, `mss`, `redis`, etc.).
 
