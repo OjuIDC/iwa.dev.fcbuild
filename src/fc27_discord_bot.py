@@ -891,7 +891,7 @@ class FC27DiscordBotService:
     def _resolve_writer_conn_or_uri(self, *, required: bool = True) -> Any:
         if self._writer_db_conn_or_uri is not None:
             return self._writer_db_conn_or_uri
-        resolved = resolve_match_results_writer_uri(required=False)
+        resolved = resolve_match_results_writer_uri(strict=False)
         if resolved:
             return resolved
         if required:
