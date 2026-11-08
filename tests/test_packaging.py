@@ -43,4 +43,3 @@ def test_applied_migrations_0001_to_0012_checksums_pinned():
 def test_precommit_excludes_migrations_from_whitespace_fixers():
     cfg = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     assert "exclude: ^migrations/" in cfg
-
