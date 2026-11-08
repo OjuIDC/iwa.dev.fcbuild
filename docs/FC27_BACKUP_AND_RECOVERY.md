@@ -93,8 +93,11 @@ Get-FileHash -Algorithm SHA256 ".local-data/development-backups/stage-a/fc27_sta
 Verify the custom archive table of contents using `pg_restore --list` inside the container (`operator procedure`):
 
 ```powershell
-Get-Content ".local-data/development-backups/stage-a/fc27_stage_a_full.dump" -AsByteStream | `
-  docker exec -i fc27-full-stack-postgres-1 pg_restore --list
+docker cp ".local-data/development-backups/stage-a/fc27_stage_a_full.dump" fc27-full-stack-postgres-1:/tmp/fc27_stage_a_full.verify.dump
+if ($LASTEXITCODE -ne 0) { throw "Could not copy the backup for verification." }
+docker exec fc27-full-stack-postgres-1 pg_restore --list /tmp/fc27_stage_a_full.verify.dump
+if ($LASTEXITCODE -ne 0) { throw "Backup archive validation failed; do not migrate." }
+docker exec fc27-full-stack-postgres-1 rm -f /tmp/fc27_stage_a_full.verify.dump
 ```
 
 ### 3. Narrowly Scoped One-Shot Container Backup on `fc27_data` (`not-executed example`)
