@@ -2461,7 +2461,26 @@ def fetch_manual_player_stats(
         motm_count = int(motm_row[0] or 0) if motm_row else 0
         motm_safe_label = str(motm_row[1]) if (motm_row and motm_row[1]) else None
 
-        matches_played = int(agg_row[1] or 0) if agg_row else 0
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM public.fc27_manual_matches m
+            WHERE m.club_id = %s
+              AND m.status = 'FULL_TIME'
+              AND m.deleted_at IS NULL
+              AND (
+                  m.motm_normalized_label = %s
+                  OR EXISTS (
+                      SELECT 1
+                      FROM public.fc27_manual_match_players p
+                      WHERE p.match_id = m.match_id
+                        AND p.normalized_display_label = %s
+                  )
+              )
+            """,
+            (club_id, norm_label, norm_label),
+        )
+        matches_played = int(cur.fetchone()[0])
         if matches_played == 0 and motm_count == 0:
             return None
 
