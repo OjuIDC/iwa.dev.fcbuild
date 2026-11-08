@@ -64,6 +64,25 @@ def _load_workflow(filename: str) -> dict[str, Any]:
     return data
 
 
+def test_dependabot_ignores_private_ghcr_compose_images() -> None:
+    config = yaml.safe_load(
+        (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+    compose_updates = next(
+        update
+        for update in config["updates"]
+        if update["package-ecosystem"] == "docker-compose"
+    )
+
+    ignored = {
+        item["dependency-name"] for item in compose_updates.get("ignore", [])
+    }
+    assert ignored == {
+        "iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
+        "iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot",
+    }
+
+
 @pytest.mark.parametrize(
     "workflow_file",
     ["ci.yml", "test-fast.yml", "test-nightly.yml", "security-scan.yml"],
@@ -955,4 +974,3 @@ def test_container_report_pr_and_main_modes_and_fail_closed_invariants(tmp_path:
     result_step_run = str(wf["jobs"]["result"]["steps"][0]["run"])
     assert "CONTAINER_WORKFLOW_GATE=FAIL" in result_step_run
     assert 'res_gate != "success" or res_build != "success" or res_report != "success"' in result_step_run
-

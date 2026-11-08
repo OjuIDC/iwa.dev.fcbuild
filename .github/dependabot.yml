@@ -22,6 +22,9 @@ updates:
     directory: "/"
     schedule: {interval: weekly, day: monday}
     labels: [dependencies, docker]
+    ignore:
+      - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker"
+      - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot"
 
   - package-ecosystem: github-actions
     directory: "/"
