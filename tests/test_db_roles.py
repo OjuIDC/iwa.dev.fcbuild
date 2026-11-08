@@ -5,12 +5,12 @@ import subprocess
 import psycopg
 import pytest
 
-from src.db_roles import ROLE_OWNER, ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH, redact_conninfo, check_runtime_posture, bootstrap_cluster, bootstrap_database
+from src.db_roles import ROLE_OWNER, ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH, ROLE_MATCH_RESULTS_WRITER, redact_conninfo, check_runtime_posture, bootstrap_cluster, bootstrap_database
 
 def test_bootstrap_is_idempotent(pg_admin_uri):
     # Call bootstrap_cluster twice; no error
-    bootstrap_cluster(pg_admin_uri, {ROLE_MIGRATOR: None, ROLE_APP: None, ROLE_DISPATCH: None})
-    bootstrap_cluster(pg_admin_uri, {ROLE_MIGRATOR: None, ROLE_APP: None, ROLE_DISPATCH: None})
+    bootstrap_cluster(pg_admin_uri, {ROLE_MIGRATOR: None, ROLE_APP: None, ROLE_DISPATCH: None, ROLE_MATCH_RESULTS_WRITER: None})
+    bootstrap_cluster(pg_admin_uri, {ROLE_MIGRATOR: None, ROLE_APP: None, ROLE_DISPATCH: None, ROLE_MATCH_RESULTS_WRITER: None})
 
 def test_role_attributes(pg_db):
     with psycopg.connect(pg_db.admin) as conn:
@@ -19,14 +19,16 @@ def test_role_attributes(pg_db):
             cur.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ROLE_OWNER,))
             assert not cur.fetchone()[0]
 
-            # app/dispatch: not superuser, not member of fc27_owner
-            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname IN (%s, %s)", (ROLE_APP, ROLE_DISPATCH))
+            # app/dispatch/match_results_writer: not superuser, not member of fc27_owner
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname IN (%s, %s, %s)", (ROLE_APP, ROLE_DISPATCH, ROLE_MATCH_RESULTS_WRITER))
             for row in cur.fetchall():
                 assert not row[0]
 
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_APP, ROLE_OWNER))
             assert not cur.fetchone()[0]
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_DISPATCH, ROLE_OWNER))
+            assert not cur.fetchone()[0]
+            cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_MATCH_RESULTS_WRITER, ROLE_OWNER))
             assert not cur.fetchone()[0]
 
             # migrator: pg_has_role('fc27_migrator','fc27_owner','MEMBER') is true
@@ -39,6 +41,8 @@ def test_public_cannot_create_in_public_schema(pg_db):
             cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE')", (ROLE_APP,))
             assert not cur.fetchone()[0]
             cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE')", (ROLE_DISPATCH,))
+            assert not cur.fetchone()[0]
+            cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE')", (ROLE_MATCH_RESULTS_WRITER,))
             assert not cur.fetchone()[0]
 
 def test_bootstrap_transfers_legacy_objects_owned_by_admin(pg_db):

@@ -102,12 +102,19 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
+        "schema_migrations": 13,
+        "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,
         "fc27_matches": 10,
         "fc27_match_team_stats": 10,
         "fc27_player_match_stats": 60,
         "fc27_quarantine_records": 0,
+        "fc27_manual_matches": 0,
+        "fc27_manual_match_players": 0,
+        "fc27_manual_match_events": 0,
+        "fc27_manual_match_audit": 0,
+        "fc27_manual_discord_linked_matches": 0,
     }
     assert len(manifest.archive_sha256) == 64
     assert len(manifest.record_hashes.matches_sha256) == 64
@@ -269,22 +276,30 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
     assert inv["full_required_database_state_covered"] is False
     assert inv["historical_recovery_verified"] is False
     assert inv["included_tables"] == (
+        "schema_migrations",
+        "schema_policy_versions",
         "fc27_clubs",
         "fc27_export_batches",
         "fc27_matches",
         "fc27_player_match_stats",
         "fc27_quarantine_records",
+        "fc27_manual_matches",
+        "fc27_manual_match_players",
+        "fc27_manual_match_events",
+        "fc27_manual_match_audit",
     )
     assert "fc27_match_team_stats" not in FC27_DOMAIN_TABLES
-    assert FC27_DERIVED_MANIFEST_COUNT_ALIASES == {"fc27_match_team_stats": "fc27_matches"}
+    assert FC27_DERIVED_MANIFEST_COUNT_ALIASES == {
+        "fc27_match_team_stats": "fc27_matches",
+        "fc27_manual_discord_linked_matches": "fc27_manual_matches",
+    }
     assert set(FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN.keys()) == {
-        "migration_ledger",
         "identity_state",
         "approval_and_authority_state",
         "dispatch_and_outbox_state",
         "langgraph_checkpoint_state",
     }
-    assert "schema_migrations" in inv["omitted_tables_flat"]
+    assert "schema_migrations" not in inv["omitted_tables_flat"]
     assert "approval_audit" in inv["omitted_tables_flat"]
     assert "fc27_users" in inv["omitted_tables_flat"]
     assert "outbox" in inv["omitted_tables_flat"]
@@ -292,4 +307,84 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
     assert "checkpoints" in inv["omitted_tables_flat"]
     assert set(inv["omitted_views"]) == {"fc27_credentials", "fc27_delegations", "activation_gates"}
     assert not set(inv["omitted_views"]) & set(inv["omitted_tables_flat"])
-    assert tuple(inv["pending_future_domains"]) == FC27_PENDING_FUTURE_BACKUP_DOMAINS
+    assert tuple(inv["pending_future_domains"]) == FC27_PENDING_FUTURE_BACKUP_DOMAINS == ()
+
+
+def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pg_db_migrated,
+    pg_admin_uri: str,
+) -> None:
+    """Backup and restore verification covers manual matches, players, events, audit, Discord linkage, and migration ledger."""
+    from src.fc27_match_results import (
+        create_scheduled_match,
+        record_match_result,
+        update_match_discord_message_link,
+    )
+
+    _seed_persisted_east_coasters_batch(monkeypatch, pg_db_migrated.app, count=10)
+    sched = create_scheduled_match(
+        pg_db_migrated.match_results_writer,
+        opponent="Harbor City",
+        match_date="2026-04-19",
+        match_time="21:30 UTC",
+        actor_discord_user_id="345678901234567890",
+        discord_guild_id="123456789012345678",
+        discord_channel_id="234567890123456789",
+        discord_message_id="700000000000000001",
+    )
+    ft = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Harbor City",
+        home_score=4,
+        away_score=2,
+        actor_discord_user_id="345678901234567890",
+        scorers="Lao x2, Jay, Mo",
+        motm="Lao",
+        possession=54,
+        shots=11,
+        shots_on_target=7,
+        passes=122,
+        pass_accuracy=83,
+        corners=5,
+        tackles=18,
+        fouls=6,
+        player_stats="Lao: 2 goals, 1 assist, 4 tackles, 32 passes, 84 pass_accuracy; Jay: 1 goal, 2 assists, 2 tackles, 28 passes, 81 pass_accuracy",
+        match_id=sched.match_id,
+    )
+    linked = update_match_discord_message_link(
+        pg_db_migrated.match_results_writer,
+        match_id=ft.match_id,
+        actor_discord_user_id="345678901234567890",
+        discord_guild_id="123456789012345678",
+        discord_channel_id="234567890123456789",
+        discord_message_id="700000000000000001",
+        is_replacement=False,
+    )
+    assert linked.discord_message_id == "700000000000000001"
+
+    backup_dir = tmp_path / ".local-data" / "backups"
+    archive_path, manifest_path, manifest = create_fc27_backup(
+        pg_db_migrated.admin,
+        backup_dir=backup_dir,
+    )
+    assert manifest.table_counts.schema_migrations == 13
+    assert manifest.table_counts.schema_policy_versions == 1
+    assert manifest.table_counts.fc27_manual_matches == 1
+    assert manifest.table_counts.fc27_manual_match_players == 3
+    assert manifest.table_counts.fc27_manual_match_events == 3
+    assert manifest.table_counts.fc27_manual_match_audit == 2
+    assert manifest.table_counts.fc27_manual_discord_linked_matches == 1
+
+    report = verify_fc27_backup_restore(
+        manifest_path=manifest_path,
+        archive_path=archive_path,
+        admin_db_uri=pg_admin_uri,
+    )
+    assert report.restore_verification == "PASS"
+    assert report.restored_counts.fc27_manual_matches == 1
+    assert report.restored_counts.fc27_manual_match_players == 3
+    assert report.restored_counts.fc27_manual_match_events == 3
+    assert report.restored_counts.fc27_manual_match_audit == 2
+    assert report.restored_counts.fc27_manual_discord_linked_matches == 1

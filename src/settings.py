@@ -569,6 +569,58 @@ def get_fc27_discord_allowed_role_ids(*, strict: bool = False) -> frozenset[str]
     return _parse_discord_snowflake_allowlist("DISCORD_ROLE_IDS", strict=strict)
 
 
+def get_fc27_discord_manager_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return configured Discord Manager role IDs for Match Results writes."""
+    roles = _parse_discord_snowflake_allowlist("FC27_DISCORD_MANAGER_ROLE_IDS", strict=strict)
+    if roles:
+        return roles
+    return _parse_discord_snowflake_allowlist("DISCORD_MANAGER_ROLE_IDS", strict=strict)
+
+
+def get_fc27_discord_captain_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return configured Discord Captain role IDs for Match Results writes."""
+    roles = _parse_discord_snowflake_allowlist("FC27_DISCORD_CAPTAIN_ROLE_IDS", strict=strict)
+    if roles:
+        return roles
+    return _parse_discord_snowflake_allowlist("DISCORD_CAPTAIN_ROLE_IDS", strict=strict)
+
+
+def get_fc27_discord_admin_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return configured Discord Admin role IDs for Match Results writes."""
+    roles = _parse_discord_snowflake_allowlist("FC27_DISCORD_ADMIN_ROLE_IDS", strict=strict)
+    if roles:
+        return roles
+    return _parse_discord_snowflake_allowlist("DISCORD_ADMIN_ROLE_IDS", strict=strict)
+
+
+def get_fc27_discord_match_results_writer_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return union of configured Discord Manager, Captain, and Admin role IDs."""
+    return (
+        get_fc27_discord_manager_role_ids(strict=strict)
+        | get_fc27_discord_captain_role_ids(strict=strict)
+        | get_fc27_discord_admin_role_ids(strict=strict)
+    )
+
+
+def get_fc27_discord_results_channel_id(*, strict: bool = False) -> str | None:
+    """Return optional dedicated Discord Match Results channel ID if configured."""
+    raw = os.getenv("FC27_DISCORD_RESULTS_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        raw = os.getenv("DISCORD_RESULTS_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        return None
+    token = raw.strip()
+    if token.startswith("replace_with_"):
+        return None
+    if not token.isdecimal() or int(token) <= 0:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_RESULTS_CHANNEL_ID must be a positive numeric Discord snowflake ID, got '{token}'"
+            )
+        return None
+    return token
+
+
 def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
     """Check if FC 27 bounded performance telemetry is enabled (default: False, fail-closed)."""
     raw = os.getenv("FC27_PERFORMANCE_TELEMETRY_ENABLED")

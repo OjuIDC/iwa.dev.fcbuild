@@ -280,8 +280,8 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
-    """Verifies Grants Policy Version 14 least-privilege separation for Migration 0012 tables."""
-    assert GRANTS_POLICY.version == 14
+    """Verifies Grants Policy Version 15 least-privilege separation for Migration 0012 and 0013 tables."""
+    assert GRANTS_POLICY.version == 15
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",
@@ -295,6 +295,25 @@ def test_fc27_performance_storage_least_privilege(pg_db_migrated):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 app_conn.execute(f"TRUNCATE TABLE public.{tbl}")
 
+        for manual_tbl in (
+            "fc27_manual_matches",
+            "fc27_manual_match_players",
+            "fc27_manual_match_events",
+            "fc27_manual_match_audit",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                app_conn.execute(f"DELETE FROM public.{manual_tbl}")
+
+    with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as writer_conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            writer_conn.execute("SELECT count(*) FROM public.fc27_matches")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            writer_conn.execute("DELETE FROM public.fc27_manual_matches")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            writer_conn.execute("DELETE FROM public.fc27_manual_match_audit")
+
     with psycopg.connect(pg_db_migrated.dispatch, autocommit=True) as disp_conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             disp_conn.execute("SELECT count(*) FROM public.fc27_matches")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            disp_conn.execute("SELECT count(*) FROM public.fc27_manual_matches")

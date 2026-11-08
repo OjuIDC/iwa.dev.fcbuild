@@ -37,7 +37,7 @@ This guide documents the test architecture, PostgreSQL 16 integration harness, o
    $env:TEST_POSTGRES_ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
    ```
 3. How the test harness isolates databases (`tests/conftest.py` and `tests/test_fc27_persistence_and_queries.py`):
-   - Each test function or fixture provisions an isolated temporary database (`fc27_test_<uuid>` or `fc27_p_<uuid>`), runs `src.db_roles.bootstrap` and `src.db_migrate.migrate` (migrations `0001`–`0012` + Grants Policy Version `14`), executes assertions using the least-privileged runtime roles (`fc27_app`, `fc27_dispatch`, `fc27_relay`), and drops the temporary database on teardown.
+   - Each test function or fixture provisions an isolated temporary database (`fc27_test_<uuid>` or `fc27_p_<uuid>`), runs `src.db_roles.bootstrap` and `src.db_migrate.migrate` (migrations `0001`–`0013` + Grants Policy Version `15`), executes assertions using the least-privileged runtime roles (`fc27_app`, `fc27_match_results_writer`, `fc27_dispatch`, `fc27_relay`), and drops the temporary database on teardown.
 
 ---
 
@@ -69,7 +69,8 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 
 ### 4.2 FC 27 Ingestion, Persistence, Analytics, & Pre-Approval Suites
 - `tests/test_fc27_api_ingestion.py` — End-to-end staged ingestion from mock provider envelopes into PostgreSQL 16 (`migrations/0012_fc27_performance_and_quarantine.sql`).
-- `tests/test_fc27_persistence_and_queries.py` — Normalized PostgreSQL storage (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), Grants Policy Version `14`, replay conflict detection, and `src/fc27_analytics.py`.
+- `tests/test_fc27_persistence_and_queries.py` — Normalized PostgreSQL storage (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), Grants Policy Version `15`, replay conflict detection, and `src/fc27_analytics.py`.
+- `tests/test_fc27_match_results.py` — Manual Match Results schema (`migrations/0013_fc27_manual_match_results.sql`), dedicated `fc27_match_results_writer` least-privilege boundaries, deterministic scorer and player-stat parsers, shared East Coasters FC embed renderers, role-ID write authorization, edit-in-place and deleted-message replacement relinking, optimistic concurrency, soft deletion, and `/fc27` commands.
 - `tests/test_fc27_dashboard_queries.py` — Read-only dashboard queries (`src/fc27_dashboard_queries.py`), `READ ONLY` transaction enforcement, `5000ms` statement timeout, rolling windows (`<= 730` days), and alias suppression.
 - `tests/test_fc27_search.py`, `tests/test_fc27_scout.py`, `tests/test_fc27_search_scout_graph.py` — Deterministic Search context assembly (`build_fc27_search_context`), Scout evidence metrics and observational hypotheses (`build_fc27_scout_report`), `FC27AnalyticsReader` (`InMemoryFC27AnalyticsReader` and `PostgresFC27AnalyticsReader`), and LangGraph `search_node` / `scout_node` adapters (`106` focused tests across items `1`–`105` + PostgreSQL 16 reader integration).
 - `tests/test_fc27_analyst.py`, `tests/test_fc27_analyst_graph.py` — Deterministic Analyst evidence validation (`validate_analyst_input`, `detect_evidence_contradictions`), clustering (`build_evidence_clusters`), counter-evidence (`analyze_counter_evidence`), confounders (`identify_confounders`), competing explanations (`generate_competing_explanations`), data gaps (`identify_data_gaps`), unresolved questions (`generate_unresolved_questions`), bounded observational finding synthesis (`build_fc27_analyst_report`), language safety validation (`validate_analyst_evidence_language`), and LangGraph `analyst_evidence_node` adapter (`129` focused tests across items `1`–`128` + PostgreSQL 16 end-to-end `PostgresFC27AnalyticsReader -> search_node -> scout_node -> analyst_evidence_node` integration).
@@ -80,7 +81,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 ### 4.3 Graph, Approval Security, & Database Role Suites
 - `tests/test_graph_persistence.py`, `tests/test_langgraph_flow.py`, `tests/test_graph_api_v1.py`, `tests/test_end_to_end.py` — LangGraph single `interrupt()`, `PostgresSaver` checkpoint recovery, `/v1/*` routes, and `ApprovalNotCommitted` resume protection.
 - `tests/test_approval_security.py`, `tests/test_approval_lifecycle.py`, `tests/test_commissioner_cli.py`, `tests/test_events_outbox.py` — Nonce binding, HMAC-SHA256 verification, 72h request expiry, append-only triggers, and sourced domain events.
-- `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py`, `tests/test_migration_0003.py` — Role bootstrap, migration checksums, Grants Policy Version `14`, and runtime role posture checks.
+- `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py`, `tests/test_migration_0003.py` — Role bootstrap, migration checksums, Grants Policy Version `15`, and runtime role posture checks.
 
 ### 4.4 Identity, Adversarial, Dispatch, & E2E Suites
 - `tests/identity/*.py` (32 files) — Phase 2 user/session/passkey/TOTP/recovery/delegation/player-proof/step-up ceremonies, 14-field `fc27_decision_evidence` binding, and multi-connection PostgreSQL concurrency races.

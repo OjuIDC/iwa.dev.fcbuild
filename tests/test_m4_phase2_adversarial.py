@@ -324,7 +324,7 @@ class TestScopeGuardsAndDormancy:
 
     def test_grants_policy_version_8(self):
         """Verify grants policy is synchronized."""
-        assert GRANTS_POLICY.version in (10, 13, 14)
+        assert GRANTS_POLICY.version in (10, 13, 14, 15)
         grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
         assert f"-- grants-policy-version: {GRANTS_POLICY.version}" in grants_sql
 

@@ -15,7 +15,8 @@ ROLE_MIGRATOR = "fc27_migrator"
 ROLE_APP = "fc27_app"
 ROLE_DISPATCH = "fc27_dispatch"
 ROLE_RELAY = "fc27_relay"
-GRANTS_POLICY_VERSION = 14
+ROLE_MATCH_RESULTS_WRITER = "fc27_match_results_writer"
+GRANTS_POLICY_VERSION = 15
 
 @dataclass
 class BootstrapReport:
@@ -26,7 +27,13 @@ class BootstrapReport:
     planned: list[str] = field(default_factory=list)
 
 
-LOGIN_ROLES = (ROLE_MIGRATOR, ROLE_APP, ROLE_DISPATCH, ROLE_RELAY)
+LOGIN_ROLES = (
+    ROLE_MIGRATOR,
+    ROLE_APP,
+    ROLE_DISPATCH,
+    ROLE_RELAY,
+    ROLE_MATCH_RESULTS_WRITER,
+)
 ALL_ROLES = (ROLE_OWNER, *LOGIN_ROLES)
 
 
@@ -155,7 +162,7 @@ def _plan_database_grants(cur, dbname: str) -> list[str]:
     for priv in ("USAGE", "CREATE"):
         if not _acl_has(cur, catalog="schema", name="public", grantee=ROLE_OWNER, privilege=priv):
             planned.append(f"GRANT {priv} ON SCHEMA public TO {ROLE_OWNER}")
-    for role in (ROLE_APP, ROLE_DISPATCH, ROLE_RELAY):
+    for role in (ROLE_APP, ROLE_DISPATCH, ROLE_RELAY, ROLE_MATCH_RESULTS_WRITER):
         if not _acl_has(cur, catalog="schema", name="public", grantee=role, privilege="USAGE"):
             planned.append(f"GRANT USAGE ON SCHEMA public TO {role}")
     return planned
@@ -192,8 +199,11 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                 # GRANT USAGE, CREATE ON SCHEMA public TO fc27_owner
                 cur.execute(f"GRANT USAGE, CREATE ON SCHEMA public TO {ROLE_OWNER}")
 
-                # GRANT USAGE ON SCHEMA public TO app, dispatch, relay
-                cur.execute(f"GRANT USAGE ON SCHEMA public TO {ROLE_APP}, {ROLE_DISPATCH}, {ROLE_RELAY}")
+                # GRANT USAGE ON SCHEMA public TO app, dispatch, relay, match_results_writer
+                cur.execute(
+                    f"GRANT USAGE ON SCHEMA public TO "
+                    f"{ROLE_APP}, {ROLE_DISPATCH}, {ROLE_RELAY}, {ROLE_MATCH_RESULTS_WRITER}"
+                )
 
             # Ownership transfer
             query = """
@@ -325,6 +335,11 @@ def main():
     except settings.ConfigError:
         relay_pw = None
 
+    try:
+        writer_pw = settings.read_secret("FC27_MATCH_RESULTS_WRITER_PASSWORD")
+    except settings.ConfigError:
+        writer_pw = None
+
     if not admin_uri:
         print("Configuration error: POSTGRES_ADMIN_URI is not set", file=sys.stderr)
         sys.exit(2)
@@ -332,6 +347,8 @@ def main():
     passwords = {ROLE_MIGRATOR: migrator_pw, ROLE_APP: app_pw, ROLE_DISPATCH: dispatch_pw}
     if relay_pw is not None:
         passwords[ROLE_RELAY] = relay_pw
+    if writer_pw is not None:
+        passwords[ROLE_MATCH_RESULTS_WRITER] = writer_pw
     info = psycopg.conninfo.conninfo_to_dict(admin_uri)
     info["dbname"] = args.database
     db_conninfo = psycopg.conninfo.make_conninfo(**info)

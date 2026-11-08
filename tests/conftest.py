@@ -185,6 +185,7 @@ class DbUris:
     app: str
     dispatch: str
     relay: str = ""
+    match_results_writer: str = ""
     _pre_migrated: bool = False
 
 
@@ -195,7 +196,16 @@ def _xdist_worker_tag() -> str:
 
 @pytest.fixture(scope="session")
 def pg_roles(pg_admin_uri):
-    bootstrap_cluster(pg_admin_uri, {"fc27_migrator": None, "fc27_app": None, "fc27_dispatch": None, "fc27_relay": None})
+    bootstrap_cluster(
+        pg_admin_uri,
+        {
+            "fc27_migrator": None,
+            "fc27_app": None,
+            "fc27_dispatch": None,
+            "fc27_relay": None,
+            "fc27_match_results_writer": None,
+        },
+    )
 
 
 from src.db_migrate import migrate
@@ -246,7 +256,8 @@ def pg_db(request, pg_admin_uri, pg_roles):
             )
             conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{tmpl_name}"')
             conn.execute(
-                f'GRANT CONNECT ON DATABASE "{name}" TO fc27_migrator, fc27_app, fc27_dispatch, fc27_relay'
+                f'GRANT CONNECT ON DATABASE "{name}" TO '
+                f'fc27_migrator, fc27_app, fc27_dispatch, fc27_relay, fc27_match_results_writer'
             )
         uri = _with_db(pg_admin_uri, name)
         pre_migrated = True
@@ -266,7 +277,9 @@ def pg_db(request, pg_admin_uri, pg_roles):
     dispatch = psycopg.conninfo.make_conninfo(**info)
     info['user'] = 'fc27_relay'
     relay = psycopg.conninfo.make_conninfo(**info)
-    yield DbUris(uri, migrator, app, dispatch, relay, _pre_migrated=pre_migrated)
+    info['user'] = 'fc27_match_results_writer'
+    match_results_writer = psycopg.conninfo.make_conninfo(**info)
+    yield DbUris(uri, migrator, app, dispatch, relay, match_results_writer, _pre_migrated=pre_migrated)
 
     with psycopg.connect(pg_admin_uri, autocommit=True) as conn:
         conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
