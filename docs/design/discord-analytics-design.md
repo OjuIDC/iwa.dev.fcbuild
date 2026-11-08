@@ -1,10 +1,10 @@
 # East Coasters FC 27 Discord Analytics Architecture Design
 
-- **Status**: Current
+- **Status**: Recovered historical pre-implementation design; statements below describe that baseline, not the current checkout.
 - **Audience**: Developers, Operators, Security Reviewers
-- **Last verified commit**: `86d79f9be9800920598c510bc95552692e8711ec`
-- **Source of truth**: `src/fc27_search_scout.py`, `src/fc27_analyst.py`, `src/fc27_pandas_view.py`, `src/fc27_dashboard_queries.py`, `src/fc27_clubs_api_contracts.py`
-- **Supersedes**: `NONE`
+- **Last verified commit (historical source)**: `86d79f9be9800920598c510bc95552692e8711ec`
+- **Historical source references**: `src/fc27_search_scout.py`, `src/fc27_analyst.py`, `src/fc27_pandas_view.py`, `src/fc27_dashboard_queries.py`, `src/fc27_clubs_api_contracts.py`
+- **Superseded by**: [Current Discord bot implementation and operations guide](../FC27_DISCORD_BOT.md)
 
 This document defines the **design-only architecture** (`DISCORD_BOT_IMPLEMENTED=NO`) for future East Coasters FC 27 (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`) Discord analytics delivery. No Discord bot is implemented, enabled, or executed in this phase.
 
