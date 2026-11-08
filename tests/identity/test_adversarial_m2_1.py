@@ -586,7 +586,7 @@ def test_adversarial_delegate_cannot_recursively_delegate(delegate_a: PrincipalC
 def test_adversarial_shared_service_tokens_forbidden(monkeypatch):
     """ConfigError raised if BFF, Graph, or Worker share identical token strings."""
     shared = "shared_secret_token_min_32_characters_12345678"
-    
+
     # 1. BFF == Graph
     monkeypatch.setenv("BFF_SERVICE_TOKEN", shared)
     monkeypatch.setenv("GRAPH_SERVICE_TOKEN", shared)
@@ -626,7 +626,7 @@ def test_adversarial_immutable_authorization_key_validation():
 def test_adversarial_grants_zero_dispatch_access_on_delegations():
     """Verify fc27_dispatch has ZERO grants on authority_delegations or fc27_delegations."""
     grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
-    
+
     # Look for grants to fc27_dispatch on delegations
     dispatch_delegation_grants = re.findall(
         r"GRANT\s+.*ON\s+public\.(?:authority_delegations|fc27_delegations)\s+TO\s+.*fc27_dispatch.*",

@@ -486,7 +486,7 @@ class IdentityStore:
         correlation_id: UUID | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Creates an invitation with a 64-char hex token, storing only its SHA-256 hash.
-        
+
         Also provisions the user record in fc27_users with status='invited' if not exists.
         """
         if intended_role in self.PROHIBITED_INVITATION_ROLES:
@@ -3137,4 +3137,3 @@ class IdentityStore:
             return dict(row)
 
     commit_player_decision = record_player_decision
-

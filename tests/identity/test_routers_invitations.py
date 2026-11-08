@@ -538,4 +538,3 @@ class TestInvitationsServiceRoleRejection:
         with pytest.raises(IdentityStoreError) as exc_info:
             store.consume_invitation_and_activate_user(raw_token)
         assert exc_info.value.status_code == 422
-

@@ -44,10 +44,10 @@ def test_checkpoint_setup_requires_owner(pg_uri):
 def test_app_can_use_checkpointer(pg_uri):
     from src.graph import GraphDeps, GraphRunner
     from src.approval_store import ApprovalStore
-    
+
     store = ApprovalStore(pg_uri)
     deps = GraphDeps(mcp=lambda t, a: {}, role_runner=lambda r, d, reg: None, registry_factory=lambda: None, decision_reader=store.load)
-    
+
     runner = GraphRunner.from_conninfo(pg_uri, deps, setup=False)
     # the thread inspector read works
     assert list(runner.history("test")) == []
@@ -69,7 +69,7 @@ def test_concurrent_migrate_is_idempotent(pg_db_migrated):
             results.append(migrate(pg_db_migrated.migrator))
         except Exception as e:
             errors.append(e)
-            
+
     threads = [threading.Thread(target=run) for _ in range(4)]
     for t in threads: t.start()
     for t in threads: t.join()
@@ -86,7 +86,7 @@ def test_db_migrate_cli_exit_code(pg_db_migrated):
     import sys
     with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
         conn.execute("GRANT CREATE ON SCHEMA public TO fc27_app")
-    
+
     env = os.environ.copy()
     env["POSTGRES_URI"] = pg_db_migrated.migrator
     proc = subprocess.run([sys.executable, "-m", "src.db_migrate"], env=env, capture_output=True, text=True)
@@ -98,15 +98,15 @@ def test_graph_api_refuses_owner_member_or_create(pg_db_migrated):
     from src.settings import ConfigError
     from tests.helpers import settings
     from fastapi.testclient import TestClient
-    
+
     # GRANT CREATE
     with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
         conn.execute("GRANT CREATE ON SCHEMA public TO fc27_app")
-    
+
     app = create_app(settings(pg_db_migrated.app, enforce_db_posture=True))
     with pytest.raises(ConfigError, match="create_on_public"):
         with TestClient(app): pass
-        
+
     with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
         conn.execute("REVOKE CREATE ON SCHEMA public FROM fc27_app")
         conn.execute("GRANT fc27_owner TO fc27_app")
@@ -124,7 +124,7 @@ def test_graph_api_refuses_privileged_role(pg_admin_db_uri):
     from src.settings import ConfigError
     from tests.helpers import settings
     from fastapi.testclient import TestClient
-    
+
     app = create_app(settings(pg_admin_db_uri, enforce_db_posture=True))
     with pytest.raises(ConfigError, match="superuser"):
         with TestClient(app): pass
@@ -163,7 +163,7 @@ def test_same_policy_version_different_hash_refused(pg_db_migrated, tmp_path):
     grants_path = mig_dir / "post" / "grants.sql"
     grants_path.write_text(grants_path.read_text() + "\n-- tampered")
     new_sha = hashlib.sha256(grants_path.read_text().encode()).hexdigest()
-    
+
     # monkeypatch GRANTS_POLICY
     old_policy = db_migrate.GRANTS_POLICY
     db_migrate.GRANTS_POLICY = replace(old_policy, sha256=new_sha)
@@ -270,4 +270,3 @@ def test_fc27_performance_storage_least_privilege(pg_db_migrated):
     with psycopg.connect(pg_db_migrated.dispatch, autocommit=True) as disp_conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             disp_conn.execute("SELECT count(*) FROM public.fc27_matches")
-

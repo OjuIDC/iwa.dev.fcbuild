@@ -492,4 +492,3 @@ def test_real_pg_challenge_consumption_race(pg_uri):
             "SELECT sign_counter FROM public.fc27_webauthn_credentials WHERE credential_id = %s", (cred_id,)
         ).fetchone()
         assert cred_row["sign_counter"] == 15
-

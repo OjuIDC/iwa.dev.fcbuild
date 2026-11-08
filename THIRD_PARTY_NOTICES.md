@@ -61,4 +61,3 @@ SOFTWARE.
 - **Pinned Version**: `2.7.1` (`pyproject.toml` `[project.optional-dependencies].discord`, `Dockerfile.discord`)
 - **Upstream License**: `MIT`
 - **Usage Scope**: Used exclusively in `src/fc27_discord_bot.py` and `Dockerfile.discord` for the optional, disabled-by-default (`FC27_DISCORD_BOT_ENABLED=false`) read-only East Coasters slash-command bot under the `fc27-discord` Compose profile. It has zero EA provider access (`DISCORD_PROVIDER_REQUESTS=0`), zero database write access, and requires secret-file token delivery plus explicit guild and channel allowlists.
-

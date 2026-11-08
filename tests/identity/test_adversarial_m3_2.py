@@ -368,7 +368,7 @@ class TestStateMachineAndRoleBoundariesAdversarial:
             # Audit events recorded in domain_events
             events = conn.execute(
                 """
-                SELECT event_type FROM public.domain_events 
+                SELECT event_type FROM public.domain_events
                 WHERE entity_id = %s OR source_id = %s
                 ORDER BY event_id ASC
                 """,

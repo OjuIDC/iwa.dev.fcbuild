@@ -169,7 +169,7 @@
       "repository_destination": "THIRD_PARTY_NOTICES.md",
       "integration_status": "ADAPT",
       "source_sha256": "11ea991f4ba6787d52642a2ce912d1f820cb6621ff0bf1218607a7ede9f4f8fe",
-      "repository_sha256": "9fe2303389d54565715c64fb9e7b9250fa4dbd19cdda86ef97b1fa68de4836ab",
+      "repository_sha256": "0bd2a4726aa245e977165cd755fb95ccd3c3c43036dc4b028881fd9c18518a18",
       "adaptation_summary": "Retained MIT license notice and explicit scope disclaimer for adapted contract/resilience concepts from 1erkandogan/fc27-clubs-api.",
       "tests": [
         "tests/test_fc27_safe_adapter_bundle_manifest.py"

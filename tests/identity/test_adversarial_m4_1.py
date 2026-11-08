@@ -203,12 +203,12 @@ class TestChallengeLifecycleAndSingleUse:
 
         engine = WebAuthnEngine(mock_store)
         uid = uuid4()
-        
+
         # Create a valid base64url-encoded challenge
         import base64
         challenge_bytes = b"single_use_challenge"
         challenge_b64 = base64.urlsafe_b64encode(challenge_bytes).decode().rstrip('=')
-        
+
         # Create a valid clientDataJSON structure for the mock
         client_data = {"challenge": challenge_b64, "type": "webauthn.create", "origin": "https://test.example"}
         client_data_b64 = base64.urlsafe_b64encode(json.dumps(client_data).encode()).decode().rstrip('=')
@@ -441,7 +441,7 @@ class TestAntiImpersonation:
         assert exc.value.status_code == 403
 
     def test_service_roles_strictly_lack_passkey_and_totp_permissions(self):
-        """RBAC matrix strictly denies PASSKEY actions to BFF/Graph service roles, 
+        """RBAC matrix strictly denies PASSKEY actions to BFF/Graph service roles,
         and TOTP actions to BFF/Graph service roles (but STAFF has TOTP permissions)."""
         res = Resource(resource_type="webauthn_credential", club_id="330323")
 

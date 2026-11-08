@@ -201,7 +201,7 @@ class TestApprovalLifecycleFeatures:
                 pytest.skip("Milestone M1 required: table approval_requests not yet migrated")
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT tgname FROM pg_trigger 
+                    """SELECT tgname FROM pg_trigger
                        WHERE tgname IN ('fc27_graph_threads_pair_check', 'fc27_approval_requests_pair_check')"""
                 )
                 rows = cur.fetchall()
@@ -488,7 +488,7 @@ class TestDispatchSchemaAndTransitionFeatures:
                 pytest.skip("Milestone M3 required: fc27_dispatch_transition not yet migrated")
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT prosecdef, provolatile FROM pg_proc 
+                    """SELECT prosecdef, provolatile FROM pg_proc
                        WHERE proname = 'fc27_dispatch_transition'"""
                 )
                 row = cur.fetchone()

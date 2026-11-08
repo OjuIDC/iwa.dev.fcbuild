@@ -584,4 +584,3 @@ def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
             f"FC27_PERFORMANCE_TELEMETRY_ENABLED must be a valid boolean, got '{raw}'"
         )
     return False
-

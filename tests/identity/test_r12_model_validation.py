@@ -58,7 +58,7 @@ def _assert_extra_forbidden(model_cls, valid_data: dict):
     tampered["unexpected_forbidden_field"] = "malicious_payload"
     with pytest.raises(ValidationError) as exc_info:
         model_cls(**tampered)
-    
+
     errors = exc_info.value.errors()
     assert any(err["type"] == "extra_forbidden" for err in errors), f"Expected extra_forbidden in {errors}"
 

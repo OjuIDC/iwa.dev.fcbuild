@@ -368,4 +368,3 @@ def test_step_up_counter_monotonicity_increasing_counter_accepted():
         )
         assert res.new_sign_counter == 101
         assert res.credential_id == stored_cred["credential_id"]
-

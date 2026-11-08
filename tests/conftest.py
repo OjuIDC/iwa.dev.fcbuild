@@ -329,7 +329,7 @@ def client_v1_hmac(pg_uri):
     os.environ.setdefault("BFF_SERVICE_TOKEN", "test-bff-service-token-0123456789abcdef0123456789abcdef")
     os.environ.setdefault("GRAPH_SERVICE_TOKEN", "test-graph-service-token-0123456789abcdef0123456789abcdef")
     os.environ.setdefault("APPROVAL_CLI_HMAC_ENABLED", "true")
-    
+
     from tests.helpers import settings as make_settings
     from src.graph_api import create_app
     from tests.helpers import StubPipeline
@@ -714,4 +714,3 @@ def active_human_commissioner(
         auth_method="passkey",
     )
     return user, raw_token, sess
-
