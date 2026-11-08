@@ -14,6 +14,7 @@ if str(_REPO_ROOT) not in sys.path:
 from src.fc27_backup_restore import (
     BACKUP_RETENTION_COUNT,
     DEFAULT_BACKUP_DIR,
+    EXPECTED_BACKUP_CONFIGURATION,
     FC27BackupError,
     create_fc27_backup,
     resolve_backup_database_uri,
@@ -51,7 +52,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             backup_dir=args.backup_dir,
             retention_count=args.retention_count,
         )
-    except (ConfigError, FC27BackupError, ValueError) as exc:
+    except ConfigError as exc:
+        print(
+            f"BACKUP_CREATED=NO\n"
+            f"ERROR_CATEGORY={exc.__class__.__name__}\n"
+            f"EXPECTED_CONFIGURATION={EXPECTED_BACKUP_CONFIGURATION}"
+        )
+        return 2
+    except (FC27BackupError, ValueError) as exc:
         print(f"BACKUP_CREATED=NO\nERROR_CATEGORY={exc.__class__.__name__}")
         return 2
 

@@ -1159,9 +1159,23 @@ def verify_fc27_backup_restore(
                     pass
 
 
+BACKUP_URI_PRECEDENCE: tuple[str, ...] = (
+    "POSTGRES_ADMIN_URI_FILE",
+    "POSTGRES_ADMIN_URI",
+    "POSTGRES_URI_FILE",
+    "POSTGRES_URI",
+    "FC27_DEMO_POSTGRES_URI",
+)
+EXPECTED_BACKUP_CONFIGURATION: str = "|".join(BACKUP_URI_PRECEDENCE)
+
+
 def resolve_backup_database_uri() -> str:
     """Resolve PostgreSQL connection URI for backup/restore operations."""
     for env_name in ("POSTGRES_ADMIN_URI", "POSTGRES_URI"):
+        if os.getenv(f"{env_name}_FILE") is not None:
+            val = read_secret(env_name, required=True)
+            assert val is not None
+            return val
         val = read_secret(env_name, required=False)
         if val:
             return val
@@ -1169,14 +1183,16 @@ def resolve_backup_database_uri() -> str:
     if fallback:
         return fallback
     raise ConfigError(
-        "POSTGRES_ADMIN_URI or POSTGRES_URI is required for FC27 backup/restore operations"
+        f"Database URI configuration is required ({EXPECTED_BACKUP_CONFIGURATION})"
     )
 
 
 __all__ = [
     "BACKUP_RETENTION_COUNT",
     "BACKUP_SCHEMA_VERSION",
+    "BACKUP_URI_PRECEDENCE",
     "DEFAULT_BACKUP_DIR",
+    "EXPECTED_BACKUP_CONFIGURATION",
     "EXPECTED_MIGRATION_VERSION",
     "FC27BackupError",
     "FC27BackupIntegrityError",
