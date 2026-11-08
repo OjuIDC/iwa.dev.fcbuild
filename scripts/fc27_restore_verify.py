@@ -13,6 +13,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from src.fc27_backup_restore import (
     DEFAULT_BACKUP_DIR,
+    EXPECTED_BACKUP_CONFIGURATION,
     FC27BackupError,
     resolve_backup_database_uri,
     verify_fc27_backup_restore,
@@ -55,13 +56,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
-        manifest_path = args.manifest or _latest_manifest_in_dir(args.backup_dir)
         admin_uri = resolve_backup_database_uri()
+        manifest_path = args.manifest or _latest_manifest_in_dir(args.backup_dir)
         report = verify_fc27_backup_restore(
             manifest_path=manifest_path,
             admin_db_uri=admin_uri,
         )
-    except (ConfigError, FC27BackupError, ValueError) as exc:
+    except ConfigError as exc:
+        print(
+            f"BACKUP_HASH_VERIFIED=NO\n"
+            f"RESTORE_VERIFICATION=FAIL\n"
+            f"ERROR_CATEGORY={exc.__class__.__name__}\n"
+            f"EXPECTED_CONFIGURATION={EXPECTED_BACKUP_CONFIGURATION}"
+        )
+        return 2
+    except (FC27BackupError, ValueError) as exc:
         print(
             f"BACKUP_HASH_VERIFIED=NO\n"
             f"RESTORE_VERIFICATION=FAIL\n"

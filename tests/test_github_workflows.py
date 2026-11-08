@@ -71,19 +71,27 @@ def test_dependabot_ignores_private_ghcr_compose_images() -> None:
     config = yaml.safe_load(
         (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
     )
-    compose_updates = next(
-        update
-        for update in config["updates"]
-        if update["package-ecosystem"] == "docker-compose"
-    )
+    ecosystems = {u["package-ecosystem"]: u for u in config["updates"]}
+    assert {"pip", "docker", "docker-compose", "github-actions"} <= set(ecosystems.keys())
 
-    ignored = {
+    compose_updates = ecosystems["docker-compose"]
+    ignored_names = {
         item["dependency-name"] for item in compose_updates.get("ignore", [])
     }
-    assert ignored == {
+    assert {
         "iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
         "iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot",
-    }
+        "python",
+    } <= ignored_names
+
+    for eco_name in ("docker", "docker-compose"):
+        py_ignores = [
+            item
+            for item in ecosystems[eco_name].get("ignore", [])
+            if item.get("dependency-name") == "python"
+        ]
+        assert py_ignores, f"Dependabot {eco_name} must ignore python >= 3.12"
+        assert py_ignores[0].get("versions") == [">= 3.12.a"]
 
 
 @pytest.mark.parametrize(

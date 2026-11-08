@@ -33,6 +33,7 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 | `./secrets/fc27_app_password` | `FC27_APP_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_app` |
 | `./secrets/fc27_dispatch_password` | `FC27_DISPATCH_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_dispatch` |
 | `./secrets/fc27_relay_password` | `FC27_RELAY_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_relay` |
+| `./secrets/fc27_match_results_writer_password` | `FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_match_results_writer` |
 | `./secrets/fc27_migrator_uri` | `POSTGRES_URI_FILE` | `db-migrate` | Connection URI for `fc27_migrator` |
 | `./secrets/fc27_app_uri` | `POSTGRES_URI_FILE` | `graph-api` | Connection URI for `fc27_app` |
 | `./secrets/fc27_relay_uri` | `POSTGRES_URI_FILE` | `outbox-relay` | Connection URI for `fc27_relay` |
@@ -56,15 +57,32 @@ PostgreSQL 16 separates schema ownership from runtime execution across six roles
 - `fc27_relay` (`LOGIN`): Runtime role for `outbox-relay`. Scoped strictly to `outbox` claim/relay operations.
 
 ### 3.2 Running Bootstrap and Migrations
-1. **Bootstrap roles** (requires explicit `--confirm` and superuser credentials):
+1. **Verify secret files before Compose actions**:
+   Confirm that every secret mounted by `postgres`, `db-bootstrap`, and `db-migrate` exists as a regular file (not an auto-created directory) under `./secrets/`, including `secrets/postgres_password`, `secrets/postgres_admin_uri`, `secrets/fc27_migrator_password`, `secrets/fc27_app_password`, `secrets/fc27_dispatch_password`, `secrets/fc27_relay_password`, `secrets/fc27_match_results_writer_password`, and `secrets/fc27_migrator_uri`. Never print secret contents.
+2. **Build `db-migrate` and `db-bootstrap` images before running migrations**:
+   ```bash
+   docker compose build db-migrate
+   docker compose --profile bootstrap build db-migrate db-bootstrap
+   ```
+3. **Complete migration safety gates before touching a running development database**:
+   - Record pre-change row counts (`fc27_matches`, `fc27_player_match_stats`, `fc27_clubs`, `fc27_export_batches`, `fc27_quarantine_records`, `schema_migrations`, `schema_policy_versions`).
+   - Create a full custom-format backup (`pg_dump --format=custom --blobs`), record its SHA-256 digest, validate its table of contents with `pg_restore --list`, and test migration `0001_initial.sql` through `0013_fc27_manual_match_results.sql` against a disposable PostgreSQL 16 restore first (see [`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)).
+   - Stop active runtime consumers (`fc27-community-worker` and `fc27-discord-bot`) while applying schema and grant updates.
+4. **Bootstrap roles** (preview with dry-run first; requires explicit `--confirm` and superuser credentials to apply):
    ```bash
    docker compose --profile bootstrap run --rm db-bootstrap --confirm
    ```
-2. **Apply numbered SQL migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 15**:
+5. **Apply numbered SQL migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 15**:
    ```bash
    python -m src.db_migrate
    ```
    `src/db_migrate.py` acquires transaction-scoped advisory lock, verifies SHA-256 checksums for every applied migration in `schema_migrations`, and applies `migrations/post/grants.sql` (`GRANTS_POLICY_VERSION = 15`).
+
+### 3.3 Explicit Service Targeting, Orphan Container Hygiene, and Persistent Volume Protection
+- **Explicit Service Targeting**: Always target specific reviewed services (for example, `docker compose build db-migrate` or starting/stopping `fc27-community-worker` and `fc27-discord-bot` explicitly) rather than running broad stack-wide recreation commands.
+- **Inspecting and Removing Reviewed Orphan Overlay Containers**: When overlay services (such as `fc27-community-worker` from `docker-compose.community-worker.yml` or `fc27-discord-bot` from `docker-compose.discord.yml`) run under the `fc27-full-stack` project, invoking base `docker-compose.yml` alone reports them as orphan containers. Inspect containers with `docker ps -a --filter "name=fc27-full-stack"` and remove only individually reviewed stopped containers (`docker rm <container_name>`).
+- **Prohibited Destructive Flags**: Never pass `--remove-orphans` (which can terminate active overlay containers such as `fc27-community-worker` or `fc27-discord-bot` when run without all overlay files) and never run `docker compose down -v` (which destroys persistent database and cache volumes).
+- **Proving Persistent Volumes Were Not Deleted**: Before and after any maintenance or migration operation, verify that `fc27-full-stack_postgres_data` and `fc27-full-stack_redis_data` remain intact (`docker volume ls --filter "name=fc27-full-stack"`) and that post-migration row counts in `public.fc27_matches` and `public.fc27_player_match_stats` match pre-change counts.
 
 ---
 
