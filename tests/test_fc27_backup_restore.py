@@ -23,6 +23,8 @@ from scripts.fc27_backup import main as backup_cli_main
 from scripts.fc27_restore_verify import main as restore_cli_main
 from src.fc27_backup_restore import (
     BACKUP_RETENTION_COUNT,
+    BACKUP_URI_PRECEDENCE,
+    EXPECTED_BACKUP_CONFIGURATION,
     EXPECTED_MIGRATION_VERSION,
     FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN,
     FC27_DERIVED_MANIFEST_COUNT_ALIASES,
@@ -34,6 +36,7 @@ from src.fc27_backup_restore import (
     FC27BackupTableCounts,
     create_fc27_backup,
     get_fc27_backup_scope_inventory,
+    resolve_backup_database_uri,
     verify_fc27_backup_restore,
 )
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
@@ -388,3 +391,123 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
     assert report.restored_counts.fc27_manual_match_events == 3
     assert report.restored_counts.fc27_manual_match_audit == 2
     assert report.restored_counts.fc27_manual_discord_linked_matches == 1
+
+
+def _clear_backup_uri_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in BACKUP_URI_PRECEDENCE:
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_backup_uri_resolution_precedence_and_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Covers A3: no variables, direct URI, _FILE, empty file, missing file, safe error output, and credential non-disclosure."""
+    from src.settings import ConfigError
+
+    expected_line = f"EXPECTED_CONFIGURATION={EXPECTED_BACKUP_CONFIGURATION}"
+    assert (
+        EXPECTED_BACKUP_CONFIGURATION
+        == "POSTGRES_ADMIN_URI_FILE|POSTGRES_ADMIN_URI|POSTGRES_URI_FILE|POSTGRES_URI|FC27_DEMO_POSTGRES_URI"
+    )
+
+    # 1. No variables set -> ConfigError and safe EXPECTED_CONFIGURATION output in both CLIs
+    _clear_backup_uri_env(monkeypatch)
+    with pytest.raises(ConfigError):
+        resolve_backup_database_uri()
+
+    rc_b = backup_cli_main(["--backup-dir", str(tmp_path / "backups")])
+    io_b = capsys.readouterr()
+    assert rc_b == 2
+    assert "BACKUP_CREATED=NO" in io_b.out
+    assert "ERROR_CATEGORY=ConfigError" in io_b.out
+    assert expected_line in io_b.out
+    assert io_b.err == ""
+
+    rc_r = restore_cli_main(["--backup-dir", str(tmp_path / "backups")])
+    io_r = capsys.readouterr()
+    assert rc_r == 2
+    assert "BACKUP_HASH_VERIFIED=NO" in io_r.out
+    assert "RESTORE_VERIFICATION=FAIL" in io_r.out
+    assert "ERROR_CATEGORY=ConfigError" in io_r.out
+    assert expected_line in io_r.out
+    assert io_r.err == ""
+
+    # 2. Direct URI resolution and precedence: POSTGRES_ADMIN_URI > POSTGRES_URI > FC27_DEMO_POSTGRES_URI
+    _clear_backup_uri_env(monkeypatch)
+    monkeypatch.setenv("FC27_DEMO_POSTGRES_URI", "postgresql://demo_user:demo_pw@127.0.0.1:5432/demo_db")
+    assert (
+        resolve_backup_database_uri()
+        == "postgresql://demo_user:demo_pw@127.0.0.1:5432/demo_db"
+    )
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://app_user:app_pw@127.0.0.1:5432/app_db")
+    assert (
+        resolve_backup_database_uri()
+        == "postgresql://app_user:app_pw@127.0.0.1:5432/app_db"
+    )
+    monkeypatch.setenv("POSTGRES_ADMIN_URI", "postgresql://admin_user:admin_pw@127.0.0.1:5432/admin_db")
+    assert (
+        resolve_backup_database_uri()
+        == "postgresql://admin_user:admin_pw@127.0.0.1:5432/admin_db"
+    )
+
+    # 3. _FILE resolution and precedence: POSTGRES_ADMIN_URI_FILE > POSTGRES_ADMIN_URI, POSTGRES_URI_FILE > POSTGRES_URI
+    admin_file = tmp_path / "admin_uri.secret"
+    admin_file.write_text("postgresql://admin_file_user:admin_file_pw@127.0.0.1:5432/admin_file_db\n", encoding="utf-8")
+    monkeypatch.setenv("POSTGRES_ADMIN_URI_FILE", str(admin_file))
+    assert (
+        resolve_backup_database_uri()
+        == "postgresql://admin_file_user:admin_file_pw@127.0.0.1:5432/admin_file_db"
+    )
+
+    monkeypatch.delenv("POSTGRES_ADMIN_URI_FILE", raising=False)
+    monkeypatch.delenv("POSTGRES_ADMIN_URI", raising=False)
+    uri_file = tmp_path / "pg_uri.secret"
+    uri_file.write_text("postgresql://uri_file_user:uri_file_pw@127.0.0.1:5432/uri_file_db\n", encoding="utf-8")
+    monkeypatch.setenv("POSTGRES_URI_FILE", str(uri_file))
+    assert (
+        resolve_backup_database_uri()
+        == "postgresql://uri_file_user:uri_file_pw@127.0.0.1:5432/uri_file_db"
+    )
+
+    # 4. Empty file fails closed with ConfigError and never leaks fallback credentials
+    empty_file = tmp_path / "empty.secret"
+    empty_file.write_text("   \n", encoding="utf-8")
+    _clear_backup_uri_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_ADMIN_URI_FILE", str(empty_file))
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://sensitive_user_x99:super_secret_pw_999@127.0.0.1:5432/fc27")
+    with pytest.raises(ConfigError):
+        resolve_backup_database_uri()
+
+    for cli_fn in (backup_cli_main, restore_cli_main):
+        rc = cli_fn(["--backup-dir", str(tmp_path / "backups")])
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert rc == 2
+        assert "ERROR_CATEGORY=ConfigError" in captured.out
+        assert expected_line in captured.out
+        assert "sensitive_user_x99" not in combined
+        assert "super_secret_pw_999" not in combined
+        assert "postgresql://" not in combined
+        assert str(empty_file) not in combined
+
+    # 5. Missing file fails closed with ConfigError and never leaks file path or credentials
+    missing_file = tmp_path / "does_not_exist_secret_token_abc123.txt"
+    _clear_backup_uri_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_URI_FILE", str(missing_file))
+    monkeypatch.setenv("FC27_DEMO_POSTGRES_URI", "postgresql://priv_admin_77:top_secret_token_88@127.0.0.1:5432/fc27")
+    with pytest.raises(ConfigError):
+        resolve_backup_database_uri()
+
+    for cli_fn in (backup_cli_main, restore_cli_main):
+        rc = cli_fn(["--backup-dir", str(tmp_path / "backups")])
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert rc == 2
+        assert "ERROR_CATEGORY=ConfigError" in captured.out
+        assert expected_line in captured.out
+        assert "priv_admin_77" not in combined
+        assert "top_secret_token_88" not in combined
+        assert "does_not_exist_secret_token_abc123" not in combined
+        assert "postgresql://" not in combined

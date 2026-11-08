@@ -28,6 +28,7 @@ ALL_DB_SECRETS = {
     "fc27_app_password",
     "fc27_dispatch_password",
     "fc27_relay_password",
+    "fc27_match_results_writer_password",
     "fc27_migrator_uri",
     "fc27_app_uri",
     "fc27_relay_uri",
@@ -148,6 +149,7 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_app_password",
                 "fc27_dispatch_password",
                 "fc27_relay_password",
+                "fc27_match_results_writer_password",
             }
         elif name == "db-migrate":
             assert mounted == {"fc27_migrator_uri"}
@@ -163,6 +165,7 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_app_password",
                 "fc27_dispatch_password",
                 "fc27_relay_password",
+                "fc27_match_results_writer_password",
                 "fc27_migrator_uri",
                 "fc27_relay_uri",
                 "postgres_password",
@@ -284,10 +287,103 @@ def test_settings_read_secret_fails_closed(tmp_path, monkeypatch):
         settings.read_secret("POSTGRES_URI")
 
 
-def test_dockerfiles_pin_base_images():
+APPROVED_PYTHON_311_BASE = (
+    "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+)
+OPERATIONAL_PYTHON_DOCKERFILES = (
+    "Dockerfile.graph",
+    "Dockerfile.community-worker",
+    "Dockerfile.discord",
+    "Dockerfile.community-eval",
+    "Dockerfile.mcp",
+    "Dockerfile.stt",
+    "Dockerfile.tts",
+)
+
+
+def test_dockerfiles_pin_base_images(model):
+    discovered = sorted(p.name for p in ROOT.glob("Dockerfile.*"))
+    assert discovered == sorted(OPERATIONAL_PYTHON_DOCKERFILES)
     for path in ROOT.glob("Dockerfile.*"):
-        first = next(l for l in path.read_text(encoding="utf-8").splitlines() if l.startswith("FROM"))
+        text = path.read_text(encoding="utf-8")
+        first = next(l for l in text.splitlines() if l.startswith("FROM"))
         assert "@sha256:" in first, path.name
+        assert first == f"FROM {APPROVED_PYTHON_311_BASE}", (
+            f"{path.name} must pin {APPROVED_PYTHON_311_BASE}, got {first!r}"
+        )
+        assert not re.search(r"python:3\.(?:1[2-9]|[2-9]\d)", text), (
+            f"{path.name} must not use Python 3.12 or newer"
+        )
+        for forbidden_compiler in ("gcc", "g++", "build-essential"):
+            assert not re.search(rf"(?<![\w-]){re.escape(forbidden_compiler)}(?![\w-])", text), (
+                f"{path.name} must not add compiler toolchain {forbidden_compiler!r}"
+            )
+        user_lines = [
+            l.strip()
+            for l in text.splitlines()
+            if l.strip().startswith("USER ")
+        ]
+        assert user_lines, f"{path.name} must specify non-root USER"
+        for uline in user_lines:
+            user_val = uline.split(None, 1)[1].strip()
+            assert user_val not in ("root", "0", "0:0"), f"{path.name} must not run as root ({uline})"
+
+    # Verify model-health in docker-compose.yml uses the same approved Python 3.11 digest
+    assert model["services"]["model-health"]["image"] == APPROVED_PYTHON_311_BASE
+    compose_raw = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert not re.search(r"python:3\.(?:1[2-9]|[2-9]\d)", compose_raw)
+
+    # Verify container hardening remains intact on db-bootstrap and db-migrate
+    for svc_name in ("db-bootstrap", "db-migrate"):
+        svc = model["services"][svc_name]
+        assert svc["build"]["dockerfile"] == "Dockerfile.graph"
+        assert svc["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in svc["security_opt"]
+        assert svc["init"] is True
+
+
+def test_match_results_writer_secret_wired_only_to_db_bootstrap(model, tmp_path, monkeypatch):
+    from src import settings
+
+    secrets_cfg = model.get("secrets") or {}
+    assert "fc27_match_results_writer_password" in secrets_cfg
+    writer_sec = secrets_cfg["fc27_match_results_writer_password"]
+    assert str(writer_sec.get("file", "")).replace("\\", "/").endswith(
+        "secrets/fc27_match_results_writer_password"
+    )
+
+    bootstrap = model["services"]["db-bootstrap"]
+    assert (
+        bootstrap["environment"].get("FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE")
+        == "/run/secrets/fc27_match_results_writer_password"
+    )
+    assert "FC27_MATCH_RESULTS_WRITER_PASSWORD" not in bootstrap["environment"]
+    assert "fc27_match_results_writer_password" in _service_secrets(bootstrap)
+
+    for name, svc in model["services"].items():
+        if name == "db-bootstrap":
+            continue
+        env = svc.get("environment") or {}
+        assert "FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE" not in env, (
+            f"{name} must not receive FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE"
+        )
+        assert "FC27_MATCH_RESULTS_WRITER_PASSWORD" not in env, (
+            f"{name} must not receive FC27_MATCH_RESULTS_WRITER_PASSWORD"
+        )
+        assert "fc27_match_results_writer_password" not in _service_secrets(svc), (
+            f"{name} must not mount fc27_match_results_writer_password"
+        )
+
+    rendered = json.dumps(model)
+    assert "placeholder_secret_for_validation" not in rendered
+
+    monkeypatch.delenv("FC27_MATCH_RESULTS_WRITER_PASSWORD", raising=False)
+    monkeypatch.setenv(
+        "FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE",
+        str(tmp_path / "missing_writer_password"),
+    )
+    with pytest.raises(settings.ConfigError):
+        settings.read_secret("FC27_MATCH_RESULTS_WRITER_PASSWORD")
 
 
 @pytest.fixture(scope="module")
