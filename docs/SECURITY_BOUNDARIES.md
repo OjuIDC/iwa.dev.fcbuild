@@ -63,17 +63,18 @@ Every human decision (`src/approval_store.py`) executes inside a single PostgreS
 
 ---
 
-## 5. Least-Privilege Database Roles (Grants Policy Version 14)
+## 5. Least-Privilege Database Roles (Grants Policy Version 15)
 
-Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 14`) and verified by `src/db_migrate.py` and `src/db_roles.py`:
+Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 15`) and verified by `src/db_migrate.py` and `src/db_roles.py`:
 
 | Role | Login | Capabilities | Restricted From |
 |---|---|---|---|
 | `fc27_owner` | `NOLOGIN` | Owns all schema objects | Direct runtime connection prohibited |
 | `fc27_migrator` | `LOGIN` (`NOINHERIT`) | DDL migrations via `SET ROLE fc27_owner` | Runtime application queries |
-| `fc27_app` | `LOGIN` | DML on app/FC27 tables; `SELECT, INSERT` only on `approval_audit` & `domain_events`; zero `DELETE` on `fc27_*` tables | DDL, `TRUNCATE`, `DELETE` on `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`, `approval_audit`, `domain_events` |
-| `fc27_dispatch` | `LOGIN` | Scoped to `outbox` and `dispatch_attempts` | Approval tables, graph threads, `fc27_*` analytics tables |
-| `fc27_relay` | `LOGIN` | Scoped to `outbox` relay operations | All approval, identity, and `fc27_*` analytics tables |
+| `fc27_app` | `LOGIN` | DML on app/FC27 provider tables; `SELECT`-only on `fc27_manual_*` tables; `SELECT, INSERT` only on `approval_audit` & `domain_events`; zero `DELETE` on `fc27_*` tables | DDL, `TRUNCATE`, `DELETE` on `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`, `fc27_manual_*`, `approval_audit`, `domain_events` |
+| `fc27_match_results_writer` | `LOGIN` | Narrow DML on `fc27_manual_matches` (`SELECT, INSERT, UPDATE`), `fc27_manual_match_players` (`SELECT, INSERT, UPDATE, DELETE`), `fc27_manual_match_events` (`SELECT, INSERT, UPDATE, DELETE`), and `fc27_manual_match_audit` (`SELECT, INSERT`) | Zero privileges on `fc27_matches`, `fc27_player_match_stats`, poll state, approval, dispatch, outbox, identity, or migration ledger tables; zero `DELETE` on `fc27_manual_matches` and `fc27_manual_match_audit` |
+| `fc27_dispatch` | `LOGIN` | Scoped to `outbox` and `dispatch_attempts` | Approval tables, graph threads, `fc27_*` analytics and manual tables |
+| `fc27_relay` | `LOGIN` | Scoped to `outbox` relay operations | All approval, identity, and `fc27_*` analytics and manual tables |
 
 ---
 

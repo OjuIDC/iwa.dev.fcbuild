@@ -215,8 +215,11 @@ def test_01_migration_0012_applies_on_database_through_0011(pg_db) -> None:
     assert "0011_dispatch_worker_claims.sql" in applied_to_11
     assert "0012_fc27_performance_and_quarantine.sql" not in applied_to_11
 
-    applied_12 = migrate(pg_db.migrator)
+    applied_12 = migrate(pg_db.migrator, target="0012")
     assert applied_12 == ["0012_fc27_performance_and_quarantine.sql"]
+
+    applied_remaining = migrate(pg_db.migrator)
+    assert "0013_fc27_manual_match_results.sql" in applied_remaining
 
 
 def test_02_migration_recorded_with_sha256(pg_db_migrated) -> None:
@@ -429,21 +432,21 @@ def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
 
 
 def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
-    """10. Grants policy version 14 is recorded in public.schema_policy_versions."""
-    assert GRANTS_POLICY_VERSION == 14
-    assert GRANTS_POLICY.version == 14
+    """10. Current grants policy version is recorded in public.schema_policy_versions."""
+    assert GRANTS_POLICY_VERSION == 15
+    assert GRANTS_POLICY.version == 15
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT version, sha256, applied_by
                 FROM public.schema_policy_versions
-                WHERE policy = 'grants' AND version = 14
+                WHERE policy = 'grants' AND version = 15
                 """
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 14
+            assert row[0] == 15
             assert row[1] == GRANTS_POLICY.sha256
             assert row[2] == "fc27_migrator"
 

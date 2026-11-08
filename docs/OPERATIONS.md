@@ -46,11 +46,12 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 ## 3. Database Role Bootstrap & Migration Workflow
 
 ### 3.1 Least-Privilege Database Roles
-PostgreSQL 16 separates schema ownership from runtime execution across five roles (`src/db_roles.py` and `migrations/post/grants.sql`):
+PostgreSQL 16 separates schema ownership from runtime execution across six roles (`src/db_roles.py` and `migrations/post/grants.sql`):
 
 - `fc27_owner` (`NOLOGIN`): Owns all application tables, sequences, and views.
 - `fc27_migrator` (`LOGIN`, `NOINHERIT`): Executes schema migrations under `SET ROLE fc27_owner`.
-- `fc27_app` (`LOGIN`): Runtime role for `graph-api`. Has DML access on operational tables, append-only `SELECT, INSERT` on `approval_audit` and `domain_events`, and zero `DELETE` privileges on `fc27_*` tables.
+- `fc27_app` (`LOGIN`): Runtime role for `graph-api`. Has DML access on operational tables, `SELECT`-only on `fc27_manual_*` tables, append-only `SELECT, INSERT` on `approval_audit` and `domain_events`, and zero `DELETE` privileges on `fc27_*` tables.
+- `fc27_match_results_writer` (`LOGIN`): Dedicated least-privilege writer role for authorized manual Match Results commands (`src/fc27_match_results.py`, `FC27_MATCH_RESULTS_WRITER_URI_FILE`). Scoped strictly to `fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, and `fc27_manual_match_audit`.
 - `fc27_dispatch` (`LOGIN`): Runtime role for `dispatch-worker`. Scoped strictly to `outbox`, `dispatch_attempts`, and `domain_events`.
 - `fc27_relay` (`LOGIN`): Runtime role for `outbox-relay`. Scoped strictly to `outbox` claim/relay operations.
 
@@ -59,11 +60,11 @@ PostgreSQL 16 separates schema ownership from runtime execution across five role
    ```bash
    docker compose --profile bootstrap run --rm db-bootstrap --confirm
    ```
-2. **Apply numbered SQL migrations (`0001_initial.sql` through `0012_fc27_performance_and_quarantine.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 14**:
+2. **Apply numbered SQL migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 15**:
    ```bash
    python -m src.db_migrate
    ```
-   `src/db_migrate.py` acquires transaction-scoped advisory lock, verifies SHA-256 checksums for every applied migration in `schema_migrations`, and applies `migrations/post/grants.sql` (`GRANTS_POLICY_VERSION = 14`).
+   `src/db_migrate.py` acquires transaction-scoped advisory lock, verifies SHA-256 checksums for every applied migration in `schema_migrations`, and applies `migrations/post/grants.sql` (`GRANTS_POLICY_VERSION = 15`).
 
 ---
 
@@ -98,7 +99,7 @@ Commissioner authentication uses FIDO2/WebAuthn passkeys (`require_user_verifica
 - **`GET /health/live`**: Liveness check returning `{"status": "ok"}`.
 - **`GET /health/ready`** and **`GET /health`**: Readiness check verifying:
   - Active PostgreSQL connection pool health and least-privilege role posture (`check_runtime_posture` in `src/db_roles.py`).
-  - Applied `schema_migrations` state and `GRANTS_POLICY_VERSION = 14`.
+  - Applied `schema_migrations` state and `GRANTS_POLICY_VERSION = 15`.
   - Approval consistency check (`fc27_approval_inconsistencies` view count `== 0`).
   - Fail-closed gate consistency (`DISPATCH_ENABLED` must be `false`).
 
@@ -142,7 +143,7 @@ See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`]
 
 ### 8.1 Rollback Procedure
 - **Feature Gate Rollback**: Immediately set `FC27_LIVE_INGESTION_ENABLED=false`, `FC27_PROVIDER_ENABLED=false`, or `DISPATCH_ENABLED=false` and restart services. All gates fail closed immediately at startup and per-operation.
-- **Database Rollback**: Numbered migrations (`0001_initial.sql` through `0012_fc27_performance_and_quarantine.sql`) are forward-only and checksum-verified. To roll back a schema change, restore from the pre-migration `pg_dump` snapshot rather than deleting rows from `schema_migrations`.
+- **Database Rollback**: Numbered migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`) are forward-only and checksum-verified. To roll back a schema change, restore from the pre-migration `pg_dump` snapshot rather than deleting rows from `schema_migrations`.
 
 ### 8.2 Connection & Log Redaction
 - `src/db_roles.py` (`redact_conninfo`) and `src/fc27_authorized_transport.py` scrub passwords, bearer tokens, API keys, and sensitive query parameters before any exception or structured log is emitted.
