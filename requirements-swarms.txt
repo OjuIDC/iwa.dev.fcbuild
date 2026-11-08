@@ -1,2 +1,2 @@
 # Optional Swarms role backend (ROLE_BACKEND=swarms). Exact pin: the backend checks the version.
-swarms==17.0.0
+swarms==15.0.3
