@@ -1234,11 +1234,21 @@ class FC27DiscordBotService:
                         outcome_category="ERROR",
                         started_mono=started,
                     )
+                    error_content = str(exc)
+                    fallback = "Unable to process this match request. Check the supplied values and try again."
+                    try:
+                        assert_discord_output_sanitized(
+                            error_content, forbidden_tokens=self._secret_tokens
+                        )
+                    except FC27DiscordPrivacyError:
+                        error_content = fallback
+                    if "@" in error_content or len(error_content) > MAX_DISCORD_CONTENT_LENGTH:
+                        error_content = fallback
                     return FC27DiscordResponse(
                         command=cmd_clean,
                         status="ERROR",
                         ephemeral=True,
-                        content=str(exc),
+                        content=error_content,
                     )
             else:
                 resp = self._dispatch_authorized_subcommand(
