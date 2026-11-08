@@ -140,7 +140,7 @@ def _find_visual_studio_msbuild() -> Path:
         python_targets = install_path / "MSBuild" / "Microsoft" / "VisualStudio"
         if any(
             (python_targets / version / "Python Tools" / "Microsoft.PythonTools.targets").is_file()
-            for version in ("v18.0", "v17.0")
+            for version in ("v18.0",)
         ):
             return candidate
 
