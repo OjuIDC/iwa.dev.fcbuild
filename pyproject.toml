@@ -24,7 +24,7 @@ dependencies = [
     "psycopg[binary]>=3.2,<4",
     "psycopg-pool>=3.2,<4",
     "python-multipart>=0.0.12,<1",
-    "langgraph==1.2.18",
+    "langgraph==1.2.19",
     "langgraph-checkpoint-postgres==3.2.0",
     "webauthn>=2.5,<4",
     "pyotp>=2.9,<3",
