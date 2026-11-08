@@ -60,6 +60,39 @@ from src.fc27_community_provider import (
     run_analytics_from_persisted_community_records,
 )
 from src.fc27_director import FC27DirectorInput, build_fc27_director_report
+from src.fc27_match_results import (
+    EAST_COASTERS_FULL_NAME,
+    EAST_COASTERS_SHORT_NAME,
+    MANUAL_MATCH_RESULT,
+    PERMISSION_DENIED_MESSAGE,
+    ManualMatchDetail,
+    MatchDeleteConfirmationView,
+    MatchResultsConcurrencyError,
+    MatchResultsError,
+    MatchResultsNotFoundError,
+    MatchResultsPaginationView,
+    MatchResultsPermissionError,
+    MatchResultsPostureError,
+    MatchResultsValidationError,
+    create_scheduled_match,
+    edit_match_result,
+    fetch_latest_manual_result,
+    fetch_manual_match,
+    fetch_manual_player_stats,
+    fetch_manual_results_page,
+    fetch_manual_top_scorers,
+    record_match_result,
+    record_unauthorized_write_attempt,
+    render_empty_match_results_embed,
+    render_match_result_embed,
+    render_matchday_embed,
+    render_player_stats_embed,
+    render_results_page_embed,
+    render_top_scorers_embed,
+    resolve_match_results_writer_uri,
+    soft_delete_match,
+    update_match_discord_message_link,
+)
 from src.fc27_pandas_view import (
     FC27PandasView,
     RECENT_MATCHES_COLUMNS,
@@ -159,6 +192,33 @@ SUPPORTED_DISCORD_SUBCOMMANDS: Final[tuple[str, ...]] = (
     "export-csv",
     "export-excel",
     "help",
+    "matchday",
+    "result",
+    "editresult",
+    "lastresult",
+    "match",
+    "results",
+    "topscorers",
+    "playerstats",
+    "deletematch",
+)
+
+DISCORD_SUBCOMMAND_ALIASES: Final[dict[str, str]] = {
+    "last5": "latest",
+    "summary": "form",
+    "squad": "topscorers",
+}
+
+MATCH_RESULTS_WRITE_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
+    {"matchday", "result", "editresult", "deletematch"}
+)
+
+MATCH_RESULTS_READ_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
+    {"lastresult", "match", "results", "topscorers", "playerstats"}
+)
+
+MATCH_RESULTS_SUBCOMMANDS: Final[frozenset[str]] = (
+    MATCH_RESULTS_WRITE_SUBCOMMANDS | MATCH_RESULTS_READ_SUBCOMMANDS
 )
 
 EXPORT_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
@@ -172,6 +232,10 @@ ALLOWED_READONLY_TABLES: Final[frozenset[str]] = frozenset(
         "fc27_matches",
         "fc27_player_match_stats",
         "fc27_quarantine_records",
+        "fc27_manual_matches",
+        "fc27_manual_match_players",
+        "fc27_manual_match_events",
+        "fc27_manual_match_audit",
     }
 )
 
@@ -281,6 +345,10 @@ class FC27DiscordBotConfig(BaseModel):
     allowed_guild_ids: frozenset[str] = Field(default_factory=frozenset)
     allowed_channel_ids: frozenset[str] = Field(default_factory=frozenset)
     allowed_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    manager_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    captain_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    admin_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    results_channel_id: str | None = None
     allow_direct_messages: bool = False
     slash_commands_only: bool = True
     administrator_permission_required: bool = False
@@ -292,6 +360,11 @@ class FC27DiscordBotConfig(BaseModel):
     max_guild_commands_per_minute: int = Field(default=DEFAULT_GUILD_COMMANDS_PER_MINUTE, ge=1, le=120)
     export_cooldown_seconds: float = Field(default=DEFAULT_EXPORT_COOLDOWN_SECONDS, ge=1.0, le=3600.0)
     max_concurrent_exports: int = Field(default=DEFAULT_MAX_CONCURRENT_EXPORTS, ge=1, le=2)
+
+    @property
+    def match_results_writer_role_ids(self) -> frozenset[str]:
+        """Return the union of configured Manager, Captain, and Admin role IDs for write authorization."""
+        return self.manager_role_ids | self.captain_role_ids | self.admin_role_ids
 
     @model_validator(mode="after")
     def _validate_security_invariants(self) -> FC27DiscordBotConfig:
@@ -324,6 +397,15 @@ class FC27DiscordBotConfig(BaseModel):
         for rid in self.allowed_role_ids:
             if not str(rid).isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid role ID in allowlist: '{rid}'")
+        for rid in self.manager_role_ids | self.captain_role_ids | self.admin_role_ids:
+            if not str(rid).isdecimal() or int(rid) <= 0:
+                raise FC27DiscordAuthzError(f"Invalid Match Results writer role ID: '{rid}'")
+        if self.results_channel_id is not None:
+            rc_clean = str(self.results_channel_id).strip()
+            if not rc_clean.isdecimal() or int(rc_clean) <= 0:
+                raise FC27DiscordAuthzError(
+                    f"Invalid Discord results_channel_id: '{self.results_channel_id}'"
+                )
         if self.enabled:
             if self.require_application_id and not self.application_id:
                 raise FC27DiscordDisabledError(
@@ -353,6 +435,10 @@ class FC27DiscordBotConfig(BaseModel):
             guilds = settings.get_fc27_discord_allowed_guild_ids(strict=strict)
             channels = settings.get_fc27_discord_allowed_channel_ids(strict=strict)
             roles = settings.get_fc27_discord_allowed_role_ids(strict=strict)
+            manager_roles = settings.get_fc27_discord_manager_role_ids(strict=strict)
+            captain_roles = settings.get_fc27_discord_captain_role_ids(strict=strict)
+            admin_roles = settings.get_fc27_discord_admin_role_ids(strict=strict)
+            results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         return cls(
@@ -362,6 +448,10 @@ class FC27DiscordBotConfig(BaseModel):
             allowed_guild_ids=guilds,
             allowed_channel_ids=channels,
             allowed_role_ids=roles,
+            manager_role_ids=manager_roles,
+            captain_role_ids=captain_roles,
+            admin_role_ids=admin_roles,
+            results_channel_id=results_chan,
         )
 
 
@@ -627,14 +717,40 @@ class FC27DiscordRateLimiter:
                 self._active_exports -= 1
 
 
+def _discord_embed_to_fc27_embed(d_emb: Any) -> FC27DiscordEmbed:
+    """Convert a `discord.Embed` instance into a bounded `FC27DiscordEmbed` model."""
+    field_map: dict[str, str] = {}
+    for f in getattr(d_emb, "fields", ()) or ():
+        name = str(getattr(f, "name", "") or "").strip()
+        val = str(getattr(f, "value", "") or "").strip()
+        if name:
+            field_map[name] = val
+    footer_obj = getattr(d_emb, "footer", None)
+    footer_text = (
+        str(getattr(footer_obj, "text", "") or "").strip()
+        if footer_obj is not None
+        else ""
+    )
+    if footer_text:
+        field_map["footer"] = footer_text
+    return FC27DiscordEmbed(
+        title=str(getattr(d_emb, "title", "") or EAST_COASTERS_SHORT_NAME)[:256],
+        description=str(getattr(d_emb, "description", "") or EAST_COASTERS_FULL_NAME)[:1800],
+        fields=field_map,
+    )
+
+
 class FC27DiscordBotService:
-    """Read-only East Coasters FC27 Discord slash-command service (`PHASE 3`)."""
+    """East Coasters FC27 Discord slash-command service (`PHASE 3` analytics + Manual Match Results)."""
 
     def __init__(
         self,
         config: FC27DiscordBotConfig,
         *,
         db_conn_or_uri: str | psycopg.Connection[Any] | None = None,
+        writer_db_conn_or_uri: str | psycopg.Connection[Any] | None = None,
+        discord_channel_adapter: Any | None = None,
+        require_dedicated_writer_role: bool = True,
         polling_runtime: FC27PollingRuntime | None = None,
         coach_report_provider: Callable[[FC27SearchContext, FC27ScoutReport, FC27AnalystReport], Any]
         | None = _default_coach_provider,
@@ -650,6 +766,9 @@ class FC27DiscordBotService:
     ) -> None:
         self._config = config
         self._db_conn_or_uri = db_conn_or_uri
+        self._writer_db_conn_or_uri = writer_db_conn_or_uri
+        self._discord_channel_adapter = discord_channel_adapter
+        self._require_dedicated_writer_role = bool(require_dedicated_writer_role)
         self._polling_runtime = polling_runtime or get_default_polling_runtime()
         self._coach_provider = coach_report_provider
         self._tactics_provider = tactics_report_provider
@@ -769,6 +888,79 @@ class FC27DiscordBotService:
             verify_posture=True,
         )
 
+    def _resolve_writer_conn_or_uri(self, *, required: bool = True) -> Any:
+        if self._writer_db_conn_or_uri is not None:
+            return self._writer_db_conn_or_uri
+        resolved = resolve_match_results_writer_uri(required=False)
+        if resolved:
+            return resolved
+        if required:
+            raise FC27DiscordError(
+                "No dedicated Match Results writer connection (`FC27_MATCH_RESULTS_WRITER_URI`) configured."
+            )
+        return None
+
+    def _sync_match_card_with_channel_adapter(
+        self,
+        match_detail: ManualMatchDetail,
+        *,
+        actor_uid: str,
+        guild_id: str,
+        fallback_channel_id: str,
+    ) -> ManualMatchDetail:
+        d_embed = (
+            render_matchday_embed(match_detail)
+            if match_detail.status == "SCHEDULED"
+            else render_match_result_embed(match_detail)
+        )
+        if self._discord_channel_adapter is None:
+            return match_detail
+
+        target_channel = (
+            match_detail.discord_channel_id
+            or self._config.results_channel_id
+            or fallback_channel_id
+        )
+        writer_target = self._resolve_writer_conn_or_uri(required=True)
+
+        if match_detail.discord_message_id and match_detail.discord_channel_id:
+            edited = bool(
+                self._discord_channel_adapter.edit_embed(
+                    match_detail.discord_channel_id,
+                    match_detail.discord_message_id,
+                    d_embed,
+                )
+            )
+            if edited:
+                return match_detail
+            new_msg_id, new_chan_id = self._discord_channel_adapter.post_embed(
+                target_channel, d_embed
+            )
+            return update_match_discord_message_link(
+                writer_target,
+                match_id=match_detail.match_id,
+                actor_discord_user_id=actor_uid,
+                discord_guild_id=guild_id,
+                discord_channel_id=new_chan_id,
+                discord_message_id=new_msg_id,
+                is_replacement=True,
+                require_dedicated_writer_role=self._require_dedicated_writer_role,
+            )
+
+        new_msg_id, new_chan_id = self._discord_channel_adapter.post_embed(
+            target_channel, d_embed
+        )
+        return update_match_discord_message_link(
+            writer_target,
+            match_id=match_detail.match_id,
+            actor_discord_user_id=actor_uid,
+            discord_guild_id=guild_id,
+            discord_channel_id=new_chan_id,
+            discord_message_id=new_msg_id,
+            is_replacement=False,
+            require_dedicated_writer_role=self._require_dedicated_writer_role,
+        )
+
     def handle_slash_command(
         self,
         subcommand: str,
@@ -781,10 +973,32 @@ class FC27DiscordBotService:
         page: int = 1,
         page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
         raw_argument: str | None = None,
+        opponent: str | None = None,
+        date_str: str | None = None,
+        time_str: str | None = None,
+        notes: str | None = None,
+        match_id: int | None = None,
+        our_score: int | None = None,
+        opponent_score: int | None = None,
+        scorers: str | None = None,
+        motm: str | None = None,
+        possession: int | None = None,
+        shots: int | None = None,
+        shots_on_target: int | None = None,
+        passes: int | None = None,
+        pass_accuracy: int | None = None,
+        corners: int | None = None,
+        tackles: int | None = None,
+        fouls: int | None = None,
+        player_stats: str | None = None,
+        expected_revision: int | None = None,
+        player_name: str | None = None,
+        confirm_delete: bool = False,
     ) -> FC27DiscordResponse:
         """Authorize, rate-limit, execute, sanitize, and audit a `/fc27` slash command."""
         started = float(self._clock_fn())
-        cmd_clean = str(subcommand or "").strip().lower()
+        cmd_raw = str(subcommand or "").strip().lower()
+        cmd_clean = DISCORD_SUBCOMMAND_ALIASES.get(cmd_raw, cmd_raw)
 
         if not self._config.enabled:
             self._record_audit(
@@ -923,6 +1137,35 @@ class FC27DiscordBotService:
                 content=f"Unsupported `/fc27` command. Supported commands: {', '.join(SUPPORTED_DISCORD_SUBCOMMANDS)}.",
             )
 
+        if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
+            caller_role_set = {
+                str(r).strip() for r in (user_role_ids or ()) if str(r).strip().isdecimal()
+            }
+            writer_roles = self._config.match_results_writer_role_ids
+            if not writer_roles or not (caller_role_set & writer_roles):
+                record_unauthorized_write_attempt(
+                    self._resolve_writer_conn_or_uri(required=False),
+                    actor_discord_user_id=uid_str,
+                    command_name=cmd_clean,
+                    discord_guild_id=gid_str,
+                    discord_channel_id=cid_str,
+                    require_dedicated_writer_role=self._require_dedicated_writer_role,
+                )
+                self._record_audit(
+                    guild_id=gid_str,
+                    channel_id=cid_str,
+                    user_id=uid_str,
+                    command=cmd_clean,
+                    outcome_category="REJECTED_WRITE_PERMISSION",
+                    started_mono=started,
+                )
+                return FC27DiscordResponse(
+                    command=cmd_clean,
+                    status="REJECTED_UNAUTHORIZED",
+                    ephemeral=True,
+                    content=PERMISSION_DENIED_MESSAGE,
+                )
+
         is_export = cmd_clean in EXPORT_SUBCOMMANDS
         try:
             self._rate_limiter.check_and_record(
@@ -947,11 +1190,62 @@ class FC27DiscordBotService:
             )
 
         try:
-            resp = self._dispatch_authorized_subcommand(
-                cmd_clean,
-                page=max(1, int(page)),
-                page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, int(page_size))),
-            )
+            if cmd_clean in MATCH_RESULTS_SUBCOMMANDS:
+                try:
+                    resp = self._dispatch_match_results_subcommand(
+                        cmd_clean,
+                        guild_id=gid_str,
+                        channel_id=cid_str,
+                        user_id=uid_str,
+                        page=max(1, int(page)),
+                        page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, int(page_size))),
+                        opponent=opponent,
+                        date_str=date_str,
+                        time_str=time_str,
+                        notes=notes,
+                        match_id=match_id,
+                        our_score=our_score,
+                        opponent_score=opponent_score,
+                        scorers=scorers,
+                        motm=motm,
+                        possession=possession,
+                        shots=shots,
+                        shots_on_target=shots_on_target,
+                        passes=passes,
+                        pass_accuracy=pass_accuracy,
+                        corners=corners,
+                        tackles=tackles,
+                        fouls=fouls,
+                        player_stats=player_stats,
+                        expected_revision=expected_revision,
+                        player_name=player_name,
+                        confirm_delete=confirm_delete,
+                    )
+                except (
+                    MatchResultsValidationError,
+                    MatchResultsNotFoundError,
+                    MatchResultsConcurrencyError,
+                ) as exc:
+                    self._record_audit(
+                        guild_id=gid_str,
+                        channel_id=cid_str,
+                        user_id=uid_str,
+                        command=cmd_clean,
+                        outcome_category="ERROR",
+                        started_mono=started,
+                    )
+                    return FC27DiscordResponse(
+                        command=cmd_clean,
+                        status="ERROR",
+                        ephemeral=True,
+                        content=str(exc),
+                    )
+            else:
+                resp = self._dispatch_authorized_subcommand(
+                    cmd_clean,
+                    page=max(1, int(page)),
+                    page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, int(page_size))),
+                )
             assert_discord_output_sanitized(resp.content, forbidden_tokens=self._secret_tokens)
             for emb in resp.embeds:
                 assert_discord_output_sanitized(emb.title, forbidden_tokens=self._secret_tokens)
@@ -985,6 +1279,319 @@ class FC27DiscordBotService:
         finally:
             if is_export:
                 self._rate_limiter.release_export_slot()
+
+    def _dispatch_match_results_subcommand(
+        self,
+        cmd: str,
+        *,
+        guild_id: str,
+        channel_id: str,
+        user_id: str,
+        page: int,
+        page_size: int,
+        opponent: str | None = None,
+        date_str: str | None = None,
+        time_str: str | None = None,
+        notes: str | None = None,
+        match_id: int | None = None,
+        our_score: int | None = None,
+        opponent_score: int | None = None,
+        scorers: str | None = None,
+        motm: str | None = None,
+        possession: int | None = None,
+        shots: int | None = None,
+        shots_on_target: int | None = None,
+        passes: int | None = None,
+        pass_accuracy: int | None = None,
+        corners: int | None = None,
+        tackles: int | None = None,
+        fouls: int | None = None,
+        player_stats: str | None = None,
+        expected_revision: int | None = None,
+        player_name: str | None = None,
+        confirm_delete: bool = False,
+    ) -> FC27DiscordResponse:
+        if cmd == "matchday":
+            writer_target = self._resolve_writer_conn_or_uri(required=True)
+            match_rec = create_scheduled_match(
+                writer_target,
+                opponent=opponent or "",
+                match_date=date_str or "",
+                match_time=time_str or "",
+                notes=notes,
+                actor_discord_user_id=user_id,
+                discord_guild_id=guild_id,
+                discord_channel_id=self._config.results_channel_id or channel_id,
+                require_dedicated_writer_role=self._require_dedicated_writer_role,
+            )
+            match_rec = self._sync_match_card_with_channel_adapter(
+                match_rec,
+                actor_uid=user_id,
+                guild_id=guild_id,
+                fallback_channel_id=channel_id,
+            )
+            fc27_emb = _discord_embed_to_fc27_embed(render_matchday_embed(match_rec))
+            return FC27DiscordResponse(
+                command="matchday",
+                status="OK",
+                content=(
+                    f"Scheduled Match `#{match_rec.match_id}`: "
+                    f"**{EAST_COASTERS_SHORT_NAME} vs {match_rec.opponent}** "
+                    f"(`{match_rec.match_date} | {match_rec.match_time}`)."
+                ),
+                embeds=(fc27_emb,),
+                row_count=1,
+            )
+
+        if cmd == "result":
+            if our_score is None or opponent_score is None:
+                raise MatchResultsValidationError(
+                    "Both our_score and opponent_score are required for /fc27 result."
+                )
+            writer_target = self._resolve_writer_conn_or_uri(required=True)
+            match_rec = record_match_result(
+                writer_target,
+                opponent=opponent or "",
+                home_score=our_score,
+                away_score=opponent_score,
+                actor_discord_user_id=user_id,
+                scorers=scorers,
+                motm=motm,
+                possession=possession,
+                shots=shots,
+                shots_on_target=shots_on_target,
+                passes=passes,
+                pass_accuracy=pass_accuracy,
+                corners=corners,
+                tackles=tackles,
+                fouls=fouls,
+                player_stats=player_stats,
+                match_id=match_id,
+                discord_guild_id=guild_id,
+                discord_channel_id=self._config.results_channel_id or channel_id,
+                require_dedicated_writer_role=self._require_dedicated_writer_role,
+            )
+            match_rec = self._sync_match_card_with_channel_adapter(
+                match_rec,
+                actor_uid=user_id,
+                guild_id=guild_id,
+                fallback_channel_id=channel_id,
+            )
+            fc27_emb = _discord_embed_to_fc27_embed(render_match_result_embed(match_rec))
+            return FC27DiscordResponse(
+                command="result",
+                status="OK",
+                content=(
+                    f"Full-Time Result Recorded (Match `#{match_rec.match_id}`): "
+                    f"**{EAST_COASTERS_SHORT_NAME} {match_rec.home_score} - {match_rec.away_score} {match_rec.opponent}**."
+                ),
+                embeds=(fc27_emb,),
+                row_count=1,
+            )
+
+        if cmd == "editresult":
+            writer_target = self._resolve_writer_conn_or_uri(required=True)
+            match_rec = edit_match_result(
+                writer_target,
+                actor_discord_user_id=user_id,
+                match_id=match_id,
+                opponent=opponent,
+                home_score=our_score,
+                away_score=opponent_score,
+                scorers=scorers,
+                motm=motm,
+                possession=possession,
+                shots=shots,
+                shots_on_target=shots_on_target,
+                passes=passes,
+                pass_accuracy=pass_accuracy,
+                corners=corners,
+                tackles=tackles,
+                fouls=fouls,
+                player_stats=player_stats,
+                expected_revision=expected_revision,
+                require_dedicated_writer_role=self._require_dedicated_writer_role,
+            )
+            match_rec = self._sync_match_card_with_channel_adapter(
+                match_rec,
+                actor_uid=user_id,
+                guild_id=guild_id,
+                fallback_channel_id=channel_id,
+            )
+            fc27_emb = _discord_embed_to_fc27_embed(render_match_result_embed(match_rec))
+            h_disp = match_rec.home_score if match_rec.home_score is not None else "N/A"
+            a_disp = match_rec.away_score if match_rec.away_score is not None else "N/A"
+            return FC27DiscordResponse(
+                command="editresult",
+                status="OK",
+                content=(
+                    f"Updated Match `#{match_rec.match_id}` (revision `v{match_rec.revision}`): "
+                    f"**{EAST_COASTERS_SHORT_NAME} {h_disp} - {a_disp} {match_rec.opponent}**."
+                ),
+                embeds=(fc27_emb,),
+                row_count=1,
+            )
+
+        if cmd == "deletematch":
+            if match_id is None:
+                raise MatchResultsValidationError("match_id is required for /fc27 deletematch.")
+            if not confirm_delete:
+                own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
+                guarded = self._open_readonly_connection()
+                try:
+                    existing = fetch_manual_match(guarded, match_id=match_id)
+                finally:
+                    if own_conn:
+                        guarded._conn.close()
+                if existing is None:
+                    raise MatchResultsNotFoundError(f"Match #{match_id} was not found.")
+                fc27_emb = _discord_embed_to_fc27_embed(
+                    render_empty_match_results_embed(
+                        "Confirm Match Deletion",
+                        f"Confirm soft deletion of Match `#{existing.match_id}` vs **{existing.opponent}** (`v{existing.revision}`).",
+                    )
+                )
+                return FC27DiscordResponse(
+                    command="deletematch",
+                    status="OK",
+                    ephemeral=True,
+                    content=f"Confirmation required to soft-delete Match #{existing.match_id} vs {existing.opponent}.",
+                    embeds=(fc27_emb,),
+                    row_count=0,
+                )
+
+            writer_target = self._resolve_writer_conn_or_uri(required=True)
+            deleted = soft_delete_match(
+                writer_target,
+                match_id=match_id,
+                actor_discord_user_id=user_id,
+                reason=notes,
+                expected_revision=expected_revision,
+                require_dedicated_writer_role=self._require_dedicated_writer_role,
+            )
+            fc27_emb = _discord_embed_to_fc27_embed(
+                render_empty_match_results_embed(
+                    "Match Soft-Deleted",
+                    f"Match `#{deleted.match_id}` vs **{deleted.opponent}** has been soft-deleted (`v{deleted.revision}`).",
+                )
+            )
+            return FC27DiscordResponse(
+                command="deletematch",
+                status="OK",
+                ephemeral=True,
+                content=f"Match #{deleted.match_id} vs {deleted.opponent} has been soft-deleted.",
+                embeds=(fc27_emb,),
+                row_count=1,
+            )
+
+        own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
+        guarded = self._open_readonly_connection()
+        try:
+            if cmd == "lastresult":
+                latest = fetch_latest_manual_result(guarded)
+                if latest is None:
+                    fc27_emb = _discord_embed_to_fc27_embed(
+                        render_empty_match_results_embed(
+                            "Latest Match Result",
+                            "No manual match results have been recorded yet.",
+                        )
+                    )
+                    return FC27DiscordResponse(
+                        command="lastresult",
+                        status="OK",
+                        content="No manual match results have been recorded yet.",
+                        embeds=(fc27_emb,),
+                        row_count=0,
+                    )
+                fc27_emb = _discord_embed_to_fc27_embed(render_match_result_embed(latest))
+                return FC27DiscordResponse(
+                    command="lastresult",
+                    status="OK",
+                    content=(
+                        f"Latest Result (Match `#{latest.match_id}`): "
+                        f"**{EAST_COASTERS_SHORT_NAME} {latest.home_score} - {latest.away_score} {latest.opponent}**."
+                    ),
+                    embeds=(fc27_emb,),
+                    row_count=1,
+                )
+
+            if cmd == "match":
+                found = fetch_manual_match(guarded, match_id=match_id, opponent=opponent)
+                if found is None:
+                    if match_id is not None:
+                        raise MatchResultsNotFoundError(f"Match #{match_id} was not found.")
+                    raise MatchResultsNotFoundError(
+                        f"No manual match found against '{opponent or ''}'."
+                    )
+                fc27_emb = _discord_embed_to_fc27_embed(render_match_result_embed(found))
+                return FC27DiscordResponse(
+                    command="match",
+                    status="OK",
+                    content=(
+                        f"Match `#{found.match_id}`: "
+                        f"**{EAST_COASTERS_SHORT_NAME} vs {found.opponent}** (`{found.status}`)."
+                    ),
+                    embeds=(fc27_emb,),
+                    row_count=1,
+                )
+
+            if cmd == "results":
+                page_data = fetch_manual_results_page(
+                    guarded, page=page, page_size=page_size
+                )
+                fc27_emb = _discord_embed_to_fc27_embed(render_results_page_embed(page_data))
+                return FC27DiscordResponse(
+                    command="results",
+                    status="OK",
+                    content=(
+                        f"Showing {len(page_data.matches)} of {page_data.total_matches} manual matches "
+                        f"(page {page_data.page}/{page_data.total_pages})."
+                    ),
+                    embeds=(fc27_emb,),
+                    page=page_data.page,
+                    total_pages=page_data.total_pages,
+                    has_next_page=page_data.page < page_data.total_pages,
+                    row_count=len(page_data.matches),
+                )
+
+            if cmd == "topscorers":
+                entries = fetch_manual_top_scorers(guarded, limit=page_size)
+                fc27_emb = _discord_embed_to_fc27_embed(render_top_scorers_embed(entries))
+                return FC27DiscordResponse(
+                    command="topscorers",
+                    status="OK",
+                    content=(
+                        f"{EAST_COASTERS_SHORT_NAME} Top Scorers Leaderboard "
+                        f"(`{len(entries)}` manual players)."
+                    ),
+                    embeds=(fc27_emb,),
+                    row_count=len(entries),
+                )
+
+            if cmd == "playerstats":
+                stats = fetch_manual_player_stats(
+                    guarded, player_query=player_name or ""
+                )
+                if stats is None:
+                    raise MatchResultsNotFoundError(
+                        f"No manual match statistics found for '{player_name or ''}'."
+                    )
+                fc27_emb = _discord_embed_to_fc27_embed(render_player_stats_embed(stats))
+                return FC27DiscordResponse(
+                    command="playerstats",
+                    status="OK",
+                    content=(
+                        f"Manual Player Statistics for **{stats.safe_display_label}**: "
+                        f"`{stats.goals}` Goals, `{stats.assists}` Assists across `{stats.matches_played}` matches."
+                    ),
+                    embeds=(fc27_emb,),
+                    row_count=stats.matches_played,
+                )
+        finally:
+            if own_conn:
+                guarded._conn.close()
+
+        raise FC27DiscordAuthzError(f"Unhandled Match Results subcommand '{cmd}'")
 
     def _load_persisted_match_count(self) -> int:
         own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
@@ -1103,7 +1710,7 @@ class FC27DiscordBotService:
                 status="OK",
                 content=(
                     f"East Coasters (`{TARGET_CLUB_ID}`, `{TARGET_PLATFORM}`, `{TARGET_GAME_VERSION}`) "
-                    "Read-Only Analytics Bot — Supported `/fc27` commands:\n"
+                    "Analytics & Match Results Bot — Supported `/fc27` commands:\n"
                     "- `/fc27 status` — Provider, polling, and database summary\n"
                     "- `/fc27 latest` — Paginated sanitized match summaries\n"
                     "- `/fc27 form` — Team form, sample size, and confidence\n"
@@ -1116,6 +1723,15 @@ class FC27DiscordBotService:
                     "- `/fc27 export-records` — Sanitized JSON records\n"
                     "- `/fc27 export-csv` — Sanitized CSV view\n"
                     "- `/fc27 export-excel` — Sanitized Excel view\n"
+                    "- `/fc27 matchday` — Create a scheduled manual Matchday card (Manager/Captain/Admin)\n"
+                    "- `/fc27 result` — Record a Full-Time manual Match Result (Manager/Captain/Admin)\n"
+                    "- `/fc27 editresult` — Edit a manual Match Result in place (Manager/Captain/Admin)\n"
+                    "- `/fc27 lastresult` — Show the latest Full-Time manual Match Result\n"
+                    "- `/fc27 match` — Look up a manual Match Result by ID or opponent\n"
+                    "- `/fc27 results` — Paginated manual Match Results history\n"
+                    "- `/fc27 topscorers` — Manual Match Results top scorers & assists leaderboard\n"
+                    "- `/fc27 playerstats` — Manual Match Results player career & recent stats\n"
+                    "- `/fc27 deletematch` — Soft-delete a manual match with confirmation (Manager/Captain/Admin)\n"
                     "- `/fc27 help` — Command reference\n"
                     "Governance: `DISCORD_PROVIDER_REQUESTS=0 | RECOMMENDATIONS=DISABLED | APPROVAL=DISABLED | DISPATCH=DISABLED`"
                 ),
@@ -1897,6 +2513,7 @@ __all__ = [
     "DISCORD_BOT_VERSION",
     "DISCORD_DATABASE_WRITE_ACCESS",
     "DISCORD_PROVIDER_REQUESTS",
+    "DISCORD_SUBCOMMAND_ALIASES",
     "EXPORT_SUBCOMMANDS",
     "FC27DiscordAttachment",
     "FC27DiscordAuditEntry",
@@ -1912,6 +2529,9 @@ __all__ = [
     "FC27DiscordWriteAccessDeniedError",
     "FC27DiscordAuthzError",
     "GuardedDiscordReadOnlyConnection",
+    "MATCH_RESULTS_READ_SUBCOMMANDS",
+    "MATCH_RESULTS_SUBCOMMANDS",
+    "MATCH_RESULTS_WRITE_SUBCOMMANDS",
     "MAX_DISCORD_CONTENT_LENGTH",
     "MAX_DISCORD_EMBEDS",
     "MAX_DISCORD_EXPORT_BYTES",

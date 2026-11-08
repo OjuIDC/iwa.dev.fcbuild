@@ -1,4 +1,4 @@
--- grants-policy-version: 14
+-- grants-policy-version: 15
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -295,5 +295,99 @@ BEGIN
             EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_expired_quarantine(timestamptz) FROM fc27_relay';
         END IF;
         GRANT EXECUTE ON FUNCTION public.fc27_purge_expired_quarantine(timestamptz) TO fc27_app;
+    END IF;
+
+    -- =========================================================================
+    -- Migration 0013: Manual Match Results Domain & Dedicated Writer Role
+    -- =========================================================================
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+        EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_match_results_writer';
+        EXECUTE 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fc27_match_results_writer';
+        EXECUTE 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM fc27_match_results_writer';
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO fc27_match_results_writer';
+    END IF;
+
+    IF to_regclass('public.fc27_manual_matches') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_manual_matches FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_manual_matches FROM fc27_relay';
+        END IF;
+        GRANT SELECT ON public.fc27_manual_matches TO fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_manual_matches TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_matches_match_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_manual_matches_match_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_manual_matches_match_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_manual_matches_match_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_players') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_manual_match_players FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_manual_match_players FROM fc27_relay';
+        END IF;
+        GRANT SELECT ON public.fc27_manual_match_players TO fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_manual_match_players TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_players_player_stat_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_manual_match_players_player_stat_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_manual_match_players_player_stat_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_manual_match_players_player_stat_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_events') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_manual_match_events FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_manual_match_events FROM fc27_relay';
+        END IF;
+        GRANT SELECT ON public.fc27_manual_match_events TO fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_manual_match_events TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_events_event_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_manual_match_events_event_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_manual_match_events_event_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_manual_match_events_event_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_audit') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_manual_match_audit FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_manual_match_audit FROM fc27_relay';
+        END IF;
+        GRANT SELECT ON public.fc27_manual_match_audit TO fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_manual_match_audit TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_audit_audit_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_manual_match_audit_audit_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_manual_match_audit_audit_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_manual_match_audit_audit_id_seq TO fc27_match_results_writer';
+        END IF;
     END IF;
 END $$;

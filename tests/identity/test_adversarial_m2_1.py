@@ -639,13 +639,13 @@ def test_adversarial_grants_zero_dispatch_access_on_delegations():
 
 
 def test_adversarial_grants_policy_version_and_digest_sync():
-    """Verify grants.sql version 14 matches db_migrate.py GRANTS_POLICY exactly."""
+    """Verify grants.sql version 15 matches db_migrate.py GRANTS_POLICY exactly."""
     grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
-    assert grants_sql.startswith("-- grants-policy-version: 14"), "grants.sql must specify version 14"
+    assert grants_sql.startswith("-- grants-policy-version: 15"), "grants.sql must specify version 15"
 
     db_migrate_content = (ROOT / "src" / "db_migrate.py").read_text(encoding="utf-8")
-    assert "GRANTS_POLICY = GrantsPolicy(version=14" in db_migrate_content, (
-        "db_migrate.py must be synchronized to GrantsPolicy version 14"
+    assert "GRANTS_POLICY = GrantsPolicy(version=15" in db_migrate_content, (
+        "db_migrate.py must be synchronized to GrantsPolicy version 15"
     )
 
 

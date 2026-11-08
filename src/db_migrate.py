@@ -18,14 +18,14 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 14
+GRANTS_POLICY_VERSION = 15
 
 
 def _compute_grants_sha256() -> str:
     p = MIGRATIONS_DIR / "post" / "grants.sql"
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
-GRANTS_POLICY = GrantsPolicy(version=14, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=15, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -76,6 +76,20 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
             cur.execute("SELECT has_schema_privilege('fc27_relay', 'public', 'CREATE')")
             if cur.fetchone()[0]:
                 violations.append("relay_create_on_public")
+
+        # check fc27_match_results_writer
+        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+        if cur.fetchone():
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+            row = cur.fetchone()
+            if row and row[0]:
+                violations.append("match_results_writer_superuser")
+            cur.execute("SELECT pg_has_role('fc27_match_results_writer', 'fc27_owner', 'MEMBER')")
+            if cur.fetchone()[0]:
+                violations.append("match_results_writer_owner_member")
+            cur.execute("SELECT has_schema_privilege('fc27_match_results_writer', 'public', 'CREATE')")
+            if cur.fetchone()[0]:
+                violations.append("match_results_writer_create_on_public")
 
         # check fc27_dispatch_transition
         cur.execute("""
@@ -187,6 +201,94 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{idx_name}",))
                 if cur.fetchone()[0] is None:
                     violations.append(f"missing_index_{idx_name}")
+
+        # check Migration 0013 tables, indexes, ownership, and least-privilege grants
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version = '0013'")
+            has_0013 = cur.fetchone() is not None
+        else:
+            has_0013 = False
+
+        if has_0013:
+            manual_tables = (
+                "fc27_manual_matches",
+                "fc27_manual_match_players",
+                "fc27_manual_match_events",
+                "fc27_manual_match_audit",
+            )
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+            has_writer_role = cur.fetchone() is not None
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay'")
+            has_relay_role = cur.fetchone() is not None
+
+            for tbl in manual_tables:
+                cur.execute(
+                    """
+                    SELECT c.relowner::regrole::text
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = %s
+                    """,
+                    (tbl,),
+                )
+                t_row = cur.fetchone()
+                if not t_row:
+                    violations.append(f"missing_table_{tbl}")
+                    continue
+                if t_row[0] != "fc27_owner":
+                    violations.append(f"table_owner_{tbl}")
+
+                # fc27_app must have SELECT only (no INSERT, UPDATE, DELETE) on manual tables
+                for priv in ("INSERT", "UPDATE", "DELETE"):
+                    cur.execute("SELECT has_table_privilege('fc27_app', %s, %s)", (f"public.{tbl}", priv))
+                    if cur.fetchone()[0]:
+                        violations.append(f"app_{priv.lower()}_on_{tbl}")
+
+                # fc27_dispatch and fc27_relay must have zero privileges on manual tables
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute("SELECT has_table_privilege('fc27_dispatch', %s, %s)", (f"public.{tbl}", priv))
+                    if cur.fetchone()[0]:
+                        violations.append(f"dispatch_{priv.lower()}_on_{tbl}")
+                    if has_relay_role:
+                        cur.execute("SELECT has_table_privilege('fc27_relay', %s, %s)", (f"public.{tbl}", priv))
+                        if cur.fetchone()[0]:
+                            violations.append(f"relay_{priv.lower()}_on_{tbl}")
+
+            if has_writer_role:
+                # fc27_match_results_writer cannot DELETE from fc27_manual_matches or fc27_manual_match_audit
+                cur.execute("SELECT has_table_privilege('fc27_match_results_writer', 'public.fc27_manual_matches', 'DELETE')")
+                if cur.fetchone()[0]:
+                    violations.append("writer_delete_on_fc27_manual_matches")
+                for priv in ("UPDATE", "DELETE"):
+                    cur.execute("SELECT has_table_privilege('fc27_match_results_writer', 'public.fc27_manual_match_audit', %s)", (priv,))
+                    if cur.fetchone()[0]:
+                        violations.append(f"writer_{priv.lower()}_on_fc27_manual_match_audit")
+
+                # fc27_match_results_writer must have zero privileges on provider/governance/dispatch tables
+                forbidden_writer_tables = (
+                    "fc27_clubs",
+                    "fc27_export_batches",
+                    "fc27_matches",
+                    "fc27_player_match_stats",
+                    "fc27_quarantine_records",
+                    "approval_requests",
+                    "approval_audit",
+                    "dispatches",
+                    "outbox",
+                    "schema_migrations",
+                )
+                for ftbl in forbidden_writer_tables:
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{ftbl}",))
+                    if cur.fetchone()[0] is None:
+                        continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute(
+                            "SELECT has_table_privilege('fc27_match_results_writer', %s, %s)",
+                            (f"public.{ftbl}", priv),
+                        )
+                        if cur.fetchone()[0]:
+                            violations.append(f"writer_{priv.lower()}_on_{ftbl}")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

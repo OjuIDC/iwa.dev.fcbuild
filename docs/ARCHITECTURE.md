@@ -6,7 +6,7 @@
 - **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`), and automated test suites (`tests/`).
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`), and automated test suites (`tests/`).
 
 ## 0. Current Supported Real-Data Operational Path
 
@@ -194,5 +194,5 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 
 ## 7. Deployment-Validation Status
 
-- **Validated in Automated Suites**: Python bytecode compilation, static MatchPulse and preflight boundaries, Docker Compose secret/network/pinning isolation (`tests/test_compose_isolation.py`), and all PostgreSQL 16 schema migrations, role grants (`v14`), transactional approval/identity flows, normalized FC 27 storage, read-only analytics, and safe-adapter contract/cache/rate-limit suites.
+- **Validated in Automated Suites**: Python bytecode compilation, static MatchPulse and preflight boundaries, Docker Compose secret/network/pinning isolation (`tests/test_compose_isolation.py`), and all PostgreSQL 16 schema migrations, role grants (`v15`), transactional approval/identity flows, normalized FC 27 storage, manual Match Results storage (`src/fc27_match_results.py`, `tests/test_fc27_match_results.py`), read-only analytics, and safe-adapter contract/cache/rate-limit suites.
 - **Not Yet Validated on Target Production Host (`IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`)**: Multi-container live Docker stack startup with GPU/CPU Ollama model inference, optional `--profile voice` / `--profile rtsp` hardware capture, optional `--profile langfuse` stack, and live EA provider traffic (blocked pending EA authorization).
