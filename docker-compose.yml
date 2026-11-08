@@ -61,12 +61,14 @@ services:
       FC27_APP_PASSWORD_FILE: /run/secrets/fc27_app_password
       FC27_DISPATCH_PASSWORD_FILE: /run/secrets/fc27_dispatch_password
       FC27_RELAY_PASSWORD_FILE: /run/secrets/fc27_relay_password
+      FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE: /run/secrets/fc27_match_results_writer_password
     secrets:
       - postgres_admin_uri
       - fc27_migrator_password
       - fc27_app_password
       - fc27_dispatch_password
       - fc27_relay_password
+      - fc27_match_results_writer_password
     networks: [fc27_data]
     profiles: [bootstrap]
     restart: "no"
@@ -498,6 +500,8 @@ secrets:
     file: ./secrets/bootstrap_token
   fc27_relay_password:
     file: ./secrets/fc27_relay_password
+  fc27_match_results_writer_password:
+    file: ./secrets/fc27_match_results_writer_password
   fc27_relay_uri:
     file: ./secrets/fc27_relay_uri
   fc27_dispatch_uri:
