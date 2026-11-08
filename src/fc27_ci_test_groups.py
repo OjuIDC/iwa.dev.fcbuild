@@ -733,6 +733,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Optional swarms backend tests manipulating process environment and subprocess working directory.",
         ),
         _entry(
+            "tests/test_visual_studio_project.py",
+            "FILESYSTEM_SERIAL",
+            ("unit", "domain", "serial", "offline"),
+            "unit_domain_serial",
+            "full-unit-domain",
+            ("unit-domain",),
+            "Windows Visual Studio MSBuild integration creates ignored intermediates; skipped when Python tooling is unavailable.",
+        ),
+        _entry(
             "tests/test_adversarial_m2_2.py",
             "UNKNOWN_SERIAL",
             ("security", "serial", "offline"),

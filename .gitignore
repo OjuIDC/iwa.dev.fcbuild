@@ -34,3 +34,6 @@ docker-compose.local.yml
 *.user
 *.userosscache
 *.sln.docstates
+
+# MSBuild intermediate output
+/obj/

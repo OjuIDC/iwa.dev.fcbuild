@@ -2,7 +2,7 @@
 
 ## 1. Overview and Authority
 
-This document is the authoritative test-isolation classification matrix for all `128` test modules (`3,906` collected tests) in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
+This document is the authoritative test-isolation classification matrix for all `129` test modules (`3,925` collected tests) in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
 
 - **Fail-Safe Default**: Any newly added test module not explicitly registered in `TEST_MODULE_MATRIX` defaults automatically to `UNKNOWN_SERIAL` (`serial`, `offline`), ensuring unknown tests are never silently dropped or parallelized unsafely.
 - **Collection Completeness Invariant**:
@@ -21,7 +21,7 @@ This document is the authoritative test-isolation classification matrix for all 
 | `POSTGRES_SERIAL` | `serial` | PostgreSQL tests that mutate cluster-global role membership (`GRANT/REVOKE fc27_owner TO fc27_app`), create cluster roles (`fc27_reader`), execute `pg_dump`/`pg_restore`, or run multi-thread concurrency races. |
 | `DOCKER_SERIAL` | `serial` | Tests invoking `docker` or `docker compose` CLI across profiles (`tests/test_compose_isolation.py`). |
 | `FIXED_PORT_SERIAL` | `serial` | Tests starting local HTTP fixture servers on loopback ports (`tests/test_fc27_demo.py`). |
-| `FILESYSTEM_SERIAL` | `serial` | Tests manipulating working directories or process environment for subprocesses (`tests/test_swarms_backend.py`). |
+| `FILESYSTEM_SERIAL` | `serial` | Tests manipulating working directories or process environment for subprocesses, plus the Visual Studio MSBuild integration that writes ignored intermediates (`tests/test_swarms_backend.py`, `tests/test_visual_studio_project.py`). |
 | `PERFORMANCE_SERIAL` | `serial` | Performance telemetry, latency benchmark, and `EXPLAIN ANALYZE` suites (`tests/test_fc27_performance.py`). |
 | `DOCUMENTATION_PARALLEL_SAFE` | `parallel-xdist` | Read-only or `tmp_path`-isolated documentation consistency, manifest, and workflow policy tests. |
 | `SECURITY_SERIAL` | `serial` | CPU-intensive cryptographic stress tests (`tests/identity/test_crypto_stress.py`) or multi-track adversarial suites (`tests/adversarial/test_adversarial_phase2.py`). |
@@ -57,15 +57,15 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | :--- | :--- | :--- | :--- |
 | `quality` | `full-quality` | `8` | Static gates + `pytest` quality/manifest/workflow/report-sanitization policy modules |
 | `unit_domain_parallel` | `full-unit-domain` | `48` | `pytest -n auto --dist loadfile` (`PARALLEL_RESULT_EQUIVALENCE=PASS`, `0` flakes across 5 runs) |
-| `unit_domain_serial` | `full-unit-domain` | `6` | Serial `pytest` execution after `unit_domain_parallel` |
+| `unit_domain_serial` | `full-unit-domain` | `7` | Serial `pytest` execution after `unit_domain_parallel` |
 | `postgres_parallel_safe` | `full-postgres` | `50` | `pytest -n 4 --dist loadfile` using worker-isolated `fc27_tmpl_<worker>_<uuid>` template DB cloning |
 | `postgres_serial` | `full-postgres` | `15` | Serial `pytest` execution after `postgres_parallel_safe` (cluster role tests, multi-thread race harnesses, backup/restore, performance) |
 | `compose_serial` | `full-compose` | `1` | Isolated `COMPOSE_PROJECT_NAME` profile validation + `tests/test_compose_isolation.py` |
-| **Total** | **All 4 Shards** | **128** | **100% of repository test collection (`3,906` tests)** |
+| **Total** | **All 4 Shards** | **129** | **100% of repository test collection (`3,925` tests)** |
 
 ---
 
-## 5. Complete Module Classification Matrix (128 Modules)
+## 5. Complete Module Classification Matrix (129 Modules)
 
 | Test Module | Classification | Markers | Maintained Group | Full CI Shard | Fast Workflow Groups | Mode |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -136,6 +136,7 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/test_dispatch_transition_probe.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_m2_adversarial_challenger.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_swarms_backend.py` | `FILESYSTEM_SERIAL` | `unit, domain, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
+| `tests/test_visual_studio_project.py` | `FILESYSTEM_SERIAL` | `unit, domain, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/adversarial/test_r3_r4_empirical_challenger.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/adversarial/test_r6_empirical_security_boundary_challenges.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/dispatch/test_outbox_relay.py` | `POSTGRES_SERIAL` | `postgres, domain, serial, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
