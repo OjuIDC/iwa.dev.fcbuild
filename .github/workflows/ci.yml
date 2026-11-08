@@ -352,8 +352,19 @@ jobs:
           pattern: report-ci-*
           path: .ci-reports/downloaded
       - name: Reconcile shard union against full collection and sanitize reports
+        env:
+          FULL_QUALITY_RESULT: ${{ needs.full-quality.result }}
         run: |
-          EXPECTED_TOTAL=$(cat .ci-reports/downloaded/report-ci-full-quality/expected-total.txt)
+          EXPECTED_TOTAL_FILE=.ci-reports/downloaded/report-ci-full-quality/expected-total.txt
+          EXPECTED_TOTAL_ARGS=()
+          if [[ -f "$EXPECTED_TOTAL_FILE" ]]; then
+            EXPECTED_TOTAL_ARGS=(--expected-total-collected "$(cat "$EXPECTED_TOTAL_FILE")")
+          elif [[ "$FULL_QUALITY_RESULT" == "success" ]]; then
+            echo "::error::Full-quality expected collection count is missing despite a successful job"
+            exit 1
+          else
+            echo "::warning::Skipping full-suite collection reconciliation because the full-quality job failed before producing its count"
+          fi
           python scripts/aggregate_test_reports.py \
             --input-dirs .ci-reports/downloaded \
             --out-dir .ci-reports/aggregate \
@@ -366,7 +377,7 @@ jobs:
             --postgres-version "16.15" \
             --browser-preview "${{ needs.full-quality.outputs.browser_preview }}" \
             --pages-security-decision "${{ needs.full-quality.outputs.pages_security_decision }}" \
-            --expected-total-collected "$EXPECTED_TOTAL" \
+            "${EXPECTED_TOTAL_ARGS[@]}" \
             --append-github-step-summary
           python scripts/sanitize_test_report.py .ci-reports/aggregate
       - name: Upload unified full CI browser test report
