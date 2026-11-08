@@ -226,4 +226,3 @@ def test_audit_query_shows_progression_interrupt_and_decision(wired, pg_uri):
     assert "\"signature\"" not in blob and "\"signature_sha256\"" not in blob and "\"dashboard\":" not in blob
     with pytest.raises(ThreadNotFound):
         get_audit(pg_uri, "fc27-330323-run-20200101-999", runner=runner)
-

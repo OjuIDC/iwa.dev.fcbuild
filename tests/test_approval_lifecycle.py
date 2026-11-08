@@ -449,8 +449,8 @@ def test_schema_distinguishes_club_authorization_and_player_consent(pg_uri):
             assert any("REQUEST_REVISION" in r[1] for r in rows)
 
             cur.execute(
-                """SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'approval_audit' 
+                """SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'approval_audit'
                       AND column_name IN ('actor_type', 'actor_id', 'authority_basis', 'decision_scope')"""
             )
             found_cols = {r[0] for r in cur.fetchall()}

@@ -27,24 +27,24 @@ CREATE TABLE IF NOT EXISTS public.fc27_decision_evidence (
 );
 
 -- 2. Performance and Verification Indexes
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_approval_req_idx 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_approval_req_idx
     ON public.fc27_decision_evidence(approval_request_id);
 
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_user_session_idx 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_user_session_idx
     ON public.fc27_decision_evidence(user_id, session_id);
 
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_thread_idx 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_thread_idx
     ON public.fc27_decision_evidence(thread_id);
 
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_package_idx 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_package_idx
     ON public.fc27_decision_evidence(package_id, package_version, package_hash);
 
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_active_idx 
-    ON public.fc27_decision_evidence(evidence_id, expires_at) 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_active_idx
+    ON public.fc27_decision_evidence(evidence_id, expires_at)
     WHERE consumed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS fc27_decision_evidence_cred_idx 
-    ON public.fc27_decision_evidence(webauthn_credential_id) 
+CREATE INDEX IF NOT EXISTS fc27_decision_evidence_cred_idx
+    ON public.fc27_decision_evidence(webauthn_credential_id)
     WHERE webauthn_credential_id IS NOT NULL;
 
 -- 3. Permanent Immutability and Single-Use Consumption Trigger

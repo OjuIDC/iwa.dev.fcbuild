@@ -102,7 +102,7 @@ def bootstrap_secret_status() -> str:
 
 def generate_recovery_codes(count: int = DEFAULT_RECOVERY_CODE_COUNT, prefix: str = "fc27-") -> list[str]:
     """Generates a batch of high-entropy, human-transcribeable recovery codes.
-    
+
     Format: fc27-xxxx-xxxx-xxxx (12 random unconfusable chars in 3 chunks of 4).
     Each code has ~60 bits of entropy.
     """
@@ -184,7 +184,7 @@ class BootstrapService:
         actor: str = "commissioner_bootstrap",
     ) -> BootstrapResult:
         """Executes one-time atomic bootstrap ceremony.
-        
+
         Raises:
             IdentityStoreError(503): If no acceptable bootstrap secret is configured.
             IdentityStoreError(409): If bootstrap is already locked.

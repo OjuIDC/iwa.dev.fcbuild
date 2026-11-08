@@ -222,7 +222,7 @@ def test_empirical_real_pg_action_token_single_use_race(pg_admin_db_uri, pg_uri)
 
 def test_empirical_real_pg_http_router_concurrency_race(pg_admin_db_uri, pg_uri):
     """FastAPI HTTP endpoint: Two concurrent threads submit decisions on the same assignment via HTTP.
-    
+
     Verifies that:
     - Exactly 1 thread receives HTTP 200 OK.
     - Exactly 1 thread receives HTTP 409 Conflict.

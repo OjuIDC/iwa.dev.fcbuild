@@ -524,4 +524,3 @@ def logout(
 
 # Export individual routers for mounting in FastAPI application
 router = sessions_router
-

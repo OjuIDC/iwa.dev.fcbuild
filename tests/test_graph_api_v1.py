@@ -686,11 +686,11 @@ def test_v1_decision_cli_hmac_webauthn_equivalent_fields(client_v1_hmac, pg_uri)
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(ch))
     assert dec_resp.status_code == 200
-    
+
     # Verify all canonical fields are present and match persisted state
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute(
-            """SELECT owner, selection, candidate_id, player_id, decision 
+            """SELECT owner, selection, candidate_id, player_id, decision
                FROM public.approval_audit WHERE thread_id=%s ORDER BY id DESC LIMIT 1""",
             (tid,)
         ).fetchone()
@@ -708,7 +708,7 @@ def test_v1_decision_legacy_compatibility(client_v1_hmac, pg_uri):
     resp = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
-    
+
     # Create legacy hmac payload (proof_type='hmac' instead of 'cli_hmac')
     # The challenge response has all fields needed; add proof_type and sign it
     from tests.helpers import SIGNING_SECRET
@@ -716,7 +716,7 @@ def test_v1_decision_legacy_compatibility(client_v1_hmac, pg_uri):
     legacy_payload = {**ch, "proof_type": "hmac", "hmac_signature": approval.sign(ch, SIGNING_SECRET)}
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=legacy_payload)
     assert dec_resp.status_code == 200
-    
+
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute("SELECT decision, owner, selection, candidate_id, player_id FROM public.approval_audit WHERE thread_id=%s ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
         assert row[0] == "APPROVE"
@@ -733,7 +733,7 @@ def test_v1_decision_cross_thread_candidate_rejected(client_v1_hmac, pg_uri):
     tid1 = resp1.json()["thread_id"]
     resp2 = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid2 = resp2.json()["thread_id"]
-    
+
     # Get challenge for thread 1
     ch1 = client_v1_hmac.post(f"/v1/runs/{tid1}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
     # Try to use thread 1's challenge on thread 2
@@ -751,35 +751,35 @@ def test_v1_decision_cross_thread_candidate_rejected(client_v1_hmac, pg_uri):
 
 def test_v1_decision_cross_package_candidate_rejected(client_v1_hmac, pg_uri):
     """16. Cross-package candidate substitution is rejected.
-    
+
     Create a thread with packages. Submit a decision with the correct owner/selection
     (e.g., coach/best) but with a candidate_id from a different package (e.g., scout-best-p1).
     """
     resp = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
-    
+
     # Use coach's selection but scout's candidate_id - this is cross-package substitution
     cross_package_payload = {**ch, "candidate_id": "scout-best-p1"}
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(cross_package_payload))
-    
+
     # Should be rejected with 409 DecisionConflict
     assert dec_resp.status_code == 409
     assert "match the persisted lead package" in dec_resp.json().get("detail", "")
-    
+
     # Verify thread remains awaiting_approval
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute("SELECT status FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
         assert row[0] == "awaiting_approval"
-        
+
         # No audit row inserted
         audit_count = conn.execute("SELECT count(*) FROM public.approval_audit WHERE thread_id=%s", (tid,)).fetchone()[0]
         assert audit_count == 0
-        
+
         # No dispatch
         dispatch_count = conn.execute("SELECT count(*) FROM public.dispatches WHERE source_thread_id=%s", (tid,)).fetchone()[0]
         assert dispatch_count == 0
-        
+
         # No domain events for this thread
         event_count = conn.execute(
             """SELECT count(*) FROM public.domain_events e
@@ -791,36 +791,36 @@ def test_v1_decision_cross_package_candidate_rejected(client_v1_hmac, pg_uri):
 
 def test_v1_decision_cross_club_player_rejected(client_v1_hmac, pg_uri):
     """17. Player from another club is rejected.
-    
+
     Create a thread for club A. Attempt to submit a decision referencing a player
     that doesn't exist in the current club's packages (simulating cross-club substitution).
     """
     resp = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
-    
+
     # Attempt to use a player_id that doesn't exist in the current club's packages
     # while keeping the correct owner/selection/candidate_id
     cross_club_payload = {**ch, "player_id": "p99"}
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(cross_club_payload))
-    
+
     # Should be rejected with 409 DecisionConflict
     assert dec_resp.status_code == 409
     assert "match the persisted lead package" in dec_resp.json().get("detail", "")
-    
+
     # Verify thread remains awaiting_approval
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute("SELECT status FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
         assert row[0] == "awaiting_approval"
-        
+
         # No audit row inserted
         audit_count = conn.execute("SELECT count(*) FROM public.approval_audit WHERE thread_id=%s", (tid,)).fetchone()[0]
         assert audit_count == 0
-        
+
         # No dispatch
         dispatch_count = conn.execute("SELECT count(*) FROM public.dispatches WHERE source_thread_id=%s", (tid,)).fetchone()[0]
         assert dispatch_count == 0
-        
+
         # No domain events for this thread
         event_count = conn.execute(
             """SELECT count(*) FROM public.domain_events e
@@ -828,7 +828,7 @@ def test_v1_decision_cross_club_player_rejected(client_v1_hmac, pg_uri):
             (tid,)
         ).fetchone()[0]
         assert event_count == 0
-        
+
         # Club remains unchanged
         club_row = conn.execute("SELECT club_id FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
         assert club_row[0] == "330323"
@@ -836,7 +836,7 @@ def test_v1_decision_cross_club_player_rejected(client_v1_hmac, pg_uri):
 
 def test_v1_decision_stale_package_version_rejected(client_v1_hmac, pg_uri):
     """18. Stale package version is rejected.
-    
+
     Submit a decision with an earlier/incorrect package_version.
     The server validates that the signed package_version matches the current
     approval_requests.package_version.
@@ -844,15 +844,15 @@ def test_v1_decision_stale_package_version_rejected(client_v1_hmac, pg_uri):
     resp = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
-    
+
     # Use an earlier/invalid package_version (not the current one)
     stale_version_payload = {**ch, "package_version": "0" * 64}  # Invalid package version
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(stale_version_payload))
-    
+
     # Should be rejected with 409 (conflict with current package version)
     assert dec_resp.status_code == 409
     assert "stale package" in dec_resp.json().get("detail", "").lower() or "package_version" in dec_resp.json().get("detail", "").lower()
-    
+
     # Verify thread remains awaiting_approval
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute("SELECT status FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
@@ -861,7 +861,7 @@ def test_v1_decision_stale_package_version_rejected(client_v1_hmac, pg_uri):
 
 def test_v1_decision_stale_package_hash_rejected(client_v1_hmac, pg_uri):
     """19. Stale package hash is rejected.
-    
+
     The package_version in the database IS the SHA256 hash of the lead_packages.
     Submit a decision with a different valid SHA256 hash (simulating a stale package
     that was superseded by a new pipeline run).
@@ -869,16 +869,16 @@ def test_v1_decision_stale_package_hash_rejected(client_v1_hmac, pg_uri):
     resp = client_v1_hmac.post("/v1/runs", headers=SVC, json={"club_id": "330323"})
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
-    
+
     # Use a different valid SHA256 hash (not the current one)
     # This simulates a stale package that was superseded
     stale_hash_payload = {**ch, "package_version": "1" * 64}  # Different valid SHA256
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(stale_hash_payload))
-    
+
     # Should be rejected with 409 (conflict with current package hash)
     assert dec_resp.status_code == 409
     assert "stale package" in dec_resp.json().get("detail", "").lower() or "package" in dec_resp.json().get("detail", "").lower()
-    
+
     # Verify thread remains awaiting_approval
     with psycopg.connect(pg_uri) as conn:
         row = conn.execute("SELECT status FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
@@ -887,7 +887,7 @@ def test_v1_decision_stale_package_hash_rejected(client_v1_hmac, pg_uri):
 
 def test_v1_decision_authoritative_mismatch_no_evidence_consumed(client_v1_hmac, pg_admin_db_uri):
     """20. Authoritative-state mismatch does not consume evidence or nonce.
-    
+
     Submit a decision with modified candidate_id that conflicts with persisted state.
     Verify no side effects are persisted.
     """
@@ -895,7 +895,7 @@ def test_v1_decision_authoritative_mismatch_no_evidence_consumed(client_v1_hmac,
     tid = resp.json()["thread_id"]
     ch = client_v1_hmac.post(f"/v1/runs/{tid}/decision-challenge", headers=COM, json=APPROVE_INTENT).json()
     nonce = ch["nonce"]
-    
+
     # Get the pre-state for all durable checks
     with psycopg.connect(pg_admin_db_uri) as conn:
         pre_nonce = conn.execute("SELECT consumed_at FROM public.approval_nonces WHERE nonce=%s", (nonce,)).fetchone()
@@ -913,32 +913,32 @@ def test_v1_decision_authoritative_mismatch_no_evidence_consumed(client_v1_hmac,
                WHERE e.entity_id = %s""",
             (tid,)
         ).fetchone()[0]
-    
+
     # Submit with modified candidate (will be rejected)
     ch_modified = {**ch, "candidate_id": "coach-best-p2"}
     dec_resp = client_v1_hmac.post(f"/v1/runs/{tid}/decision", headers=COM, json=signed_cli_hmac(ch_modified))
     assert dec_resp.status_code == 409
-    
+
     # Verify no durable state changes using a separate connection
     with psycopg.connect(pg_admin_db_uri) as conn:
         # Nonce remains unconsumed
         post_nonce = conn.execute("SELECT consumed_at FROM public.approval_nonces WHERE nonce=%s", (nonce,)).fetchone()
         assert post_nonce[0] is None, "Nonce should not be consumed on authoritative mismatch"
         assert post_nonce[0] == pre_nonce[0]
-        
+
         # Thread status unchanged
         post_thread_status = conn.execute("SELECT status FROM public.graph_threads WHERE thread_id=%s", (tid,)).fetchone()
         assert post_thread_status[0] == "awaiting_approval"
         assert post_thread_status[0] == pre_thread_status[0]
-        
+
         # No audit row added
         post_audit_count = conn.execute("SELECT count(*) FROM public.approval_audit WHERE thread_id=%s", (tid,)).fetchone()[0]
         assert post_audit_count == pre_audit_count
-        
+
         # No dispatch
         post_dispatch_count = conn.execute("SELECT count(*) FROM public.dispatches WHERE source_thread_id=%s", (tid,)).fetchone()[0]
         assert post_dispatch_count == pre_dispatch_count
-        
+
         # No domain events
         post_event_count = conn.execute(
             """SELECT count(*) FROM public.domain_events e
@@ -946,7 +946,7 @@ def test_v1_decision_authoritative_mismatch_no_evidence_consumed(client_v1_hmac,
             (tid,)
         ).fetchone()[0]
         assert post_event_count == pre_event_count
-        
+
         # No outbox entries
         post_outbox_count = conn.execute(
             """SELECT count(*) FROM public.outbox o
@@ -1374,7 +1374,7 @@ def test_adversarial_readiness_fails_closed_on_inconsistency_view(pg_admin_db_ur
         with psycopg.connect(pg_admin_db_uri) as conn:
             conn.execute("ALTER TABLE public.graph_threads DISABLE TRIGGER fc27_graph_threads_pair_check")
             conn.execute(
-                """INSERT INTO public.graph_threads 
+                """INSERT INTO public.graph_threads
                    (thread_id, club_id, status, package_version, approval_request_id, state)
                    VALUES (%s, '330323', 'awaiting_approval', %s, NULL, '{}'::jsonb)""",
                 (test_tid, 'a' * 64),
@@ -1639,8 +1639,8 @@ def test_adversarial_fc27_check_approval_pair_trigger_guards(pg_uri):
         with pytest.raises(psycopg.errors.CheckViolation, match="approval pair: status mismatch"):
             with conn.transaction():
                 conn.execute(
-                    """UPDATE public.graph_threads 
-                          SET status = 'approved', approved_by = 'batmanL8', approved_at = now(), decision_payload = '{}'::jsonb 
+                    """UPDATE public.graph_threads
+                          SET status = 'approved', approved_by = 'batmanL8', approved_at = now(), decision_payload = '{}'::jsonb
                         WHERE thread_id = %s""",
                     (tid,),
                 )
@@ -1736,5 +1736,3 @@ def test_adversarial_concurrent_decisions_preserve_trigger_integrity(client_v1, 
             "SELECT count(*) FROM public.fc27_approval_inconsistencies WHERE kind <> 'legacy_unlinked'"
         ).fetchone()[0]
         assert inconsistencies == 0, f"Detected {inconsistencies} approval inconsistencies!"
-
-

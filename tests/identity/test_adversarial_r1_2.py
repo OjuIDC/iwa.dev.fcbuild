@@ -385,7 +385,7 @@ class TestR12ParameterInjectionAttacks:
         model_fields = set(model_cls.model_fields.keys())
         injected_keys = set(injection.keys())
         extra_keys = injected_keys - model_fields
-        
+
         # Check if model has mode="before" validators that might handle extra keys
         # (e.g., SessionRotateRequest remaps auth_level -> new_auth_level)
         has_before_validator = False
@@ -409,7 +409,7 @@ class TestR12ParameterInjectionAttacks:
         except ValidationError as exc_info:
             errors = exc_info.errors()
             has_extra_forbidden = any(err.get("type") == "extra_forbidden" for err in errors)
-            
+
             if requires_extra_forbidden:
                 # There were extra keys not in model fields - they MUST be rejected with extra_forbidden
                 assert has_extra_forbidden, (

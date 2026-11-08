@@ -119,7 +119,7 @@ class TestUsersRolesAndBootstrapFeatures:
         # First bootstrap should succeed
         res = client.post("/v1/auth/bootstrap", json=boot_req)
         assert res.status_code in (200, 201, 409)
-        
+
         # Second bootstrap with different user should fail
         boot_req2 = {
             "login_identifier": "commissioner.attacker@fc27.club",
