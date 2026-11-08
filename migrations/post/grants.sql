@@ -154,7 +154,7 @@ BEGIN
     -- Function Execution Grants
     IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_dispatch_transition') THEN
         REVOKE ALL ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) FROM PUBLIC;
-        GRANT EXECUTE ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb)
+        GRANT EXECUTE ON FUNCTION public.fc27_dispatch_transition(uuid, text, integer, text, text, uuid, jsonb) 
             TO fc27_app, fc27_dispatch;
     END IF;
 
