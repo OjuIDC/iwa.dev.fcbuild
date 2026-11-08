@@ -1,6 +1,8 @@
 # Phase 1: Dispatch Data Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Recovered historical plan — reference only. Do not execute against the current checkout.** Migration 0003 is already present; do not rewrite applied migrations. Paths and instructions below describe the original baseline. See the [current migration guide](../../MIGRATION_GUIDE.md), [current dispatch activation rules](../DISPATCH_ACTIVATION.md), and [recovered v2.1 specification](player-dispatch-spec-v2.1.md).
+>
+> **Original agentic-worker instruction (historical):** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the PostgreSQL foundation for approved-recommendation dispatch. It covers:
 - least-privilege DB roles;
