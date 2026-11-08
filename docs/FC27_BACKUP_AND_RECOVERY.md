@@ -110,4 +110,3 @@ docker run --rm --network fc27-full-stack_fc27_data `
   fc27-full-stack-db-migrate:latest `
   python scripts/fc27_backup.py --backup-dir /app/.local-data/backups --retention-count 7
 ```
-
