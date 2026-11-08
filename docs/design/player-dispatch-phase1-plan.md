@@ -21,14 +21,13 @@ It adds no UI, identity or worker code.
 - PostgreSQL 16, LangGraph 1.2.12 with `langgraph-checkpoint-postgres` 3.1.2
 - Docker Compose
 
-**Spec:** `docs/superpowers/specs/2026-10-02-player-dispatch-design.md` (v2.1). Executors read the spec sections cited by each task.
+**Spec:** `docs/design/player-dispatch-spec-v2.1.md`. Executors read the spec sections cited by each task.
 
 ## Global Constraints
 
 **Scope**
 - Every audit and event row carries `fc_version = '27'` and `platform = 'common-gen5'`. CHECK constraints enforce this on `dispatches` and `players`.
-- Phase 1 MUST NOT add these paths (AC-58):
-  - `src/dashboard/`
+- Phase 1 MUST NOT add the dashboard source tree (AC-58):
   - `src/identity/`
   - `src/dispatch/worker.py`
   - any WebAuthn, personalization, outbox-relay or tracking code
@@ -62,7 +61,7 @@ It adds no UI, identity or worker code.
 - Use Conventional Commits.
 - End every commit message with:
   ```
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5.5 <commissioner@example.invalid>
   Claude-Session: https://claude.ai/code/session_01CCvif9mP4DdAPQ8kvTRrpT
   ```
 
@@ -78,7 +77,7 @@ It adds no UI, identity or worker code.
 
 ## Prerequisites (before Task 1)
 
-1. Merge the spec branch `docs/player-dispatch-spec` into `main` through a PR. It contains spec commits only.
+1. Review and merge `docs/design/player-dispatch-spec-v2.1.md` into `main` through a PR. It contains spec commits only.
 2. Create a worktree and branch: `feat/phase1-dispatch-foundation` from the updated `main` (superpowers:using-git-worktrees).
 3. Start test PostgreSQL with `eval "$(scripts/test_postgres.sh)"`, or use an existing `TEST_POSTGRES_URI`.
 4. Confirm the baseline: `python -m pytest -o addopts="" -q -rs` passes.
@@ -569,7 +568,7 @@ def test_inconsistent_thread_blocks_decision(client, pg_admin_db_uri) # admin di
 
 **Test changes.**
 - Change `tests/test_langgraph_flow.py::test_langgraph_interrupt_cannot_be_bypassed`: `runner.resume(tid)` no longer raises. Assert that it returns and that `graph_next == ["approval"]` (AM-4 behaviour change). Keep the `pytest.raises(ApprovalNotCommitted)` on the direct `invoke`.
-- `tests/helpers.settings()` gains `dispatch_enabled=False` and `cli_hmac_enabled=True`.
+- The settings helper in `tests/helpers.py` gains `dispatch_enabled=False` and `cli_hmac_enabled=True`.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1007,7 +1006,7 @@ Expected: all PASS. The Compose tests need the docker CLI and skip with a reason
 ### Task 10: Phase 1 verification and acceptance trace
 
 **Files:**
-- Modify: `TEST_RESULTS.md`, `SECURITY_CHANGES.md`
+- Modify: `TEST_RESULTS.md`, `docs/design/player-dispatch-security-changes.md`
 
 - [ ] **Step 1: Run the full suite twice**, the second time with `-p no:randomly` if the plugin is installed.
 
@@ -1026,7 +1025,7 @@ Expected: 0 failures. Skips only for docker, Redis or optional extras, each with
 
 - [ ] **Step 3: Write the AC trace** in `TEST_RESULTS.md`, under "Phase 1 acceptance trace". Write one row per AC listed for Phase 1 in spec §31.1, with the proving test node ID and its result.
 
-- [ ] **Step 4: Update `SECURITY_CHANGES.md`** with these items:
+- [ ] **Step 4: Update `docs/design/player-dispatch-security-changes.md`** with these items:
   - role separation
   - the SECURITY DEFINER hardening
   - approval expiry semantics
