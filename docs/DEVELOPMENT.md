@@ -19,12 +19,9 @@ This guide covers setting up a local development environment for `iwa.dev.fcbuil
   .\.venv\Scripts\pip.exe install -r requirements.txt -r requirements-dev.txt
   ```
 
-### Optional Dependency Groups
+### Dependency Files
 - `requirements.txt` — Core runtime dependencies (pinned identically in `pyproject.toml`, enforced by `tests/test_packaging.py`).
 - `requirements-dev.txt` — Test and static validation tools (`pytest`, `httpx`, `pyyaml`, etc.).
-- `requirements-swarms.txt` — Optional `swarms==15.0.3` multi-agent adapter dependencies (installed in `Dockerfile.graph`).
-- `requirements-langfuse.txt` — Optional `langfuse` tracing SDK dependencies.
-- `host_agent/requirements_windows.txt` — Optional Windows HUD capture dependencies (`pytesseract`, `mss`, `redis`, etc.).
 
 > **Packaging Rule**: If you modify `requirements.txt`, you must update `[project].dependencies` in `pyproject.toml` to match (`tests/test_packaging.py` enforces exact equality).
 

@@ -175,7 +175,8 @@ Do **not** configure Visual Studio startup properties, launch profiles, `.runset
   ```powershell
   docker compose -f docker-compose.yml config
   docker compose -f docker-compose.yml --profile bootstrap config
-  docker compose -f docker-compose.yml -f docker-compose.langfuse.yml --profile langfuse config
+  docker compose -f docker-compose.yml -f docker-compose.community-worker.yml --profile fc27-polling config
+  docker compose -f docker-compose.yml -f docker-compose.discord.yml --profile fc27-discord config
   ```
 
 ---

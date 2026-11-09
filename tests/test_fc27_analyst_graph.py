@@ -17,7 +17,7 @@ import psycopg
 from psycopg import conninfo, sql
 import pytest
 
-from src import approval_store, events, fc27_community_provider, graph, roles, swarms_backend
+from src import approval_store, events, fc27_community_provider, graph, roles
 from src.db_migrate import migrate
 from src.db_roles import bootstrap_cluster, bootstrap_database
 from src.fc27_analyst import (
@@ -242,14 +242,13 @@ def test_118_no_lm_studio_call(monkeypatch: pytest.MonkeyPatch) -> None:
     assert update["analyst_report"] is not None
 
 
-def test_119_no_swarms_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_swarms(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("Swarms call attempted in analyst_evidence_node")
+def test_119_no_swarms_call() -> None:
+    import sys
 
-    monkeypatch.setattr(swarms_backend, "run_role_swarms", _forbid_swarms)
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert update["analyst_report"] is not None
+    assert "src.swarms_backend" not in sys.modules
 
 
 def test_120_no_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:

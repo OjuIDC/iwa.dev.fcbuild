@@ -56,7 +56,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      SWARMS_TELEMETRY_ON: "false"
       FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -74,7 +73,7 @@ jobs:
           pip check
       - name: Compile and static boundary gates
         run: |
-          python -m compileall -q src scripts tests host_agent voice
+          python -m compileall -q src scripts tests
           python scripts/check_documentation_consistency.py --check --strict
           python scripts/check_matchpulse_boundary.py
       - name: Run quality and policy test group
@@ -122,7 +121,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
-      SWARMS_TELEMETRY_ON: "false"
       FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -133,12 +131,10 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             requirements*.txt
-      - name: System packages for TTS and OCR unit tests
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends espeak-ng tesseract-ocr
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt -r requirements-swarms.txt -r requirements-langfuse.txt
+          pip install -r requirements-dev.txt
           pip check
       - name: Run parallel-safe and serial unit-domain tests
         run: |
@@ -204,7 +200,6 @@ jobs:
     env:
       TEST_POSTGRES_URI: postgresql://fc27test@127.0.0.1:55432/postgres
       TEST_POSTGRES_ADMIN_URI: postgresql://fc27test@127.0.0.1:55432/postgres
-      SWARMS_TELEMETRY_ON: "false"
       FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -218,7 +213,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt -r requirements-langfuse.txt
+          pip install -r requirements-dev.txt
           pip check
       - name: Run focused PostgreSQL integration tests
         run: |
@@ -266,7 +261,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
-      SWARMS_TELEMETRY_ON: "false"
       COMPOSE_PROJECT_NAME: fc27-ci-${{ github.run_id }}-${{ github.run_attempt }}
       FC27_PR_NUMBER: ${{ github.event.pull_request.number || 'N/A' }}
     steps:
@@ -288,10 +282,7 @@ jobs:
           mkdir -p .ci-reports/docker-compose-focused
           sed -E 's/=replace_with_[A-Za-z0-9_-]+/=placeholder_ci_only_0123456789abcdef0123456789abcdef/' config.example.env > /tmp/ci.env
           docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env config --quiet
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.cpu.yml config --quiet
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env --profile voice --profile rtsp config --quiet
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.langfuse.yml --profile langfuse config --quiet
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file /tmp/ci.env -f docker-compose.yml -f docker-compose.community-worker.yml -f docker-compose.discord.yml -f docker-compose.ghcr.yml --profile fc27-polling --profile fc27-discord config --quiet
           python -m pytest -o addopts="" -q -rs \
             --durations=10 \
             --junitxml=.ci-reports/docker-compose-focused/raw-junit.xml \

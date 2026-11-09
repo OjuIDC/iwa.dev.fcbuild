@@ -82,6 +82,9 @@ When disabled:
 5. Pending, unconsumed decision nonces signed with the prior secret will fail signature validation (HTTP 403) and must be re-requested via challenge.
 
 ## Flow
+New run creation (`POST /v1/runs` and the legacy `POST /run`) is disabled unless the application is constructed with an explicitly configured pipeline or graph runner. The default deployment has no supported dashboard/model runtime, so these endpoints return HTTP 503 rather than creating failed runs or calling the retired MCP service. Existing persisted approval decisions remain available through the decision endpoints.
+
+When an explicitly configured runtime is supplied:
 1. `POST /run` (service) creates a thread with id `fc27-<clubId>-run-<YYYYMMDD>-<seq>`. The graph runs search → scout → analyst → coach → tactics → director → prepare_approval, then stops at `interrupt()` in the `approval` node. The thread becomes `awaiting_approval`, with a `package_version` (the SHA-256 of the lead packages).
 2. `POST /threads/{id}/decision-challenge` (commissioner) with `{decision, owner, selection, candidate_id, player_id, notes}`. The server checks the candidate against the persisted package and stores a single-use nonce in `approval_nonces`. The nonce is bound to the thread, the SHA-256 of the exact payload and the package version, and expires after `APPROVAL_TTL_SECONDS`, 120 by default and capped at 300. The server returns the payload to sign.
 3. The Commissioner signs the payload with HMAC-SHA256 using `APPROVAL_SIGNING_SECRET` and sends it with `signature` to `POST /threads/{id}/decision`.
@@ -94,7 +97,7 @@ When disabled:
    6. Insert into `approval_audit`, where a unique index allows one decision per thread.
 
    If any step fails, the whole transaction rolls back.
-5. After commit, the API resumes the LangGraph thread. The `approval` node re-reads the committed decision from PostgreSQL and refuses to continue without one, so forged resume values or edited state cannot approve. If the resume fails, it is retried at the next startup.
+5. After commit, the API resumes the LangGraph thread when a runner is configured. The `approval` node re-reads the committed decision from PostgreSQL and refuses to continue without one, so forged resume values or edited state cannot approve. If the resume fails, it is retried at the next startup.
 
 `scripts/commissioner_decide.py` performs steps 2–3 interactively:
 ```bash

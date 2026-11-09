@@ -2,7 +2,7 @@
 
 ## 1. Overview and Authority
 
-This document is the authoritative test-isolation classification matrix for all `125` test modules in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
+This document is the authoritative test-isolation classification matrix for all `116` test modules in `iwa.dev.fcbuild`. It is backed in code by `src/fc27_ci_test_groups.py`, enforced dynamically during pytest collection by `tests/conftest.py` (`pytest_collection_modifyitems`), and verified in CI by `tests/test_github_workflows.py` (`test_collection_consistency_and_shard_disjointness`).
 
 - **Fail-Safe Default**: Any newly added test module not explicitly registered in `TEST_MODULE_MATRIX` defaults automatically to `UNKNOWN_SERIAL` (`serial`, `offline`), ensuring unknown tests are never silently dropped or parallelized unsafely.
 - **Collection Completeness Invariant**:
@@ -21,7 +21,7 @@ This document is the authoritative test-isolation classification matrix for all 
 | `POSTGRES_SERIAL` | `serial` | PostgreSQL tests that mutate cluster-global role membership (`GRANT/REVOKE fc27_owner TO fc27_app`), create cluster roles (`fc27_reader`), execute `pg_dump`/`pg_restore`, or run multi-thread concurrency races. |
 | `DOCKER_SERIAL` | `serial` | Tests invoking `docker` or `docker compose` CLI across profiles (`tests/test_compose_isolation.py`). |
 | `FIXED_PORT_SERIAL` | `serial` | Tests starting local HTTP fixture servers on loopback ports (`tests/test_fc27_demo.py`). |
-| `FILESYSTEM_SERIAL` | `serial` | Tests manipulating working directories or process environment for subprocesses, plus the Visual Studio MSBuild integration that writes ignored intermediates (`tests/test_swarms_backend.py`, `tests/test_visual_studio_project.py`). |
+| `FILESYSTEM_SERIAL` | `serial` | Tests manipulating working directories or process environment for subprocesses, plus the Visual Studio MSBuild integration that writes ignored intermediates (`tests/test_visual_studio_project.py`). |
 | `PERFORMANCE_SERIAL` | `serial` | Performance telemetry, latency benchmark, and `EXPLAIN ANALYZE` suites (`tests/test_fc27_performance.py`). |
 | `DOCUMENTATION_PARALLEL_SAFE` | `parallel-xdist` | Read-only or `tmp_path`-isolated documentation consistency, manifest, and workflow policy tests. |
 | `SECURITY_SERIAL` | `serial` | CPU-intensive cryptographic stress tests (`tests/identity/test_crypto_stress.py`) or multi-track adversarial suites (`tests/adversarial/test_adversarial_phase2.py`). |
@@ -56,16 +56,16 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | Maintained Group | Full CI Shard | Module Count | Execution Strategy |
 | :--- | :--- | :--- | :--- |
 | `quality` | `full-quality` | `7` | Static gates + `pytest` quality/manifest/workflow/report-sanitization policy modules |
-| `unit_domain_parallel` | `full-unit-domain` | `45` | `pytest -n auto --dist loadfile` (`PARALLEL_RESULT_EQUIVALENCE=PASS`, `0` flakes across 5 runs) |
-| `unit_domain_serial` | `full-unit-domain` | `7` | Serial `pytest` execution after `unit_domain_parallel` |
-| `postgres_parallel_safe` | `full-postgres` | `50` | `pytest -n 4 --dist loadfile` using worker-isolated `fc27_tmpl_<worker>_<uuid>` template DB cloning |
+| `unit_domain_parallel` | `full-unit-domain` | `38` | `pytest -n auto --dist loadfile` (`PARALLEL_RESULT_EQUIVALENCE=PASS`, `0` flakes across 5 runs) |
+| `unit_domain_serial` | `full-unit-domain` | `6` | Serial `pytest` execution after `unit_domain_parallel` |
+| `postgres_parallel_safe` | `full-postgres` | `49` | `pytest -n 4 --dist loadfile` using worker-isolated `fc27_tmpl_<worker>_<uuid>` template DB cloning |
 | `postgres_serial` | `full-postgres` | `15` | Serial `pytest` execution after `postgres_parallel_safe` (cluster role tests, multi-thread race harnesses, backup/restore, performance) |
 | `compose_serial` | `full-compose` | `1` | Isolated `COMPOSE_PROJECT_NAME` profile validation + `tests/test_compose_isolation.py` |
-| **Total** | **All 4 Shards** | **125** | **100% of repository test collection** |
+| **Total** | **All 4 Shards** | **116** | **100% of repository test collection** |
 
 ---
 
-## 5. Complete Module Classification Matrix (125 Modules)
+## 5. Complete Module Classification Matrix (116 Modules)
 
 | Test Module | Classification | Markers | Maintained Group | Full CI Shard | Fast Workflow Groups | Mode |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -93,7 +93,6 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/identity/test_services.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/identity/test_totp.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/identity/test_webauthn.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_end_to_end.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_fc27_advisory_cache.py` | `POSTGRES_SERIAL` | `postgres, domain, performance, serial, offline, network_forbidden` | `postgres_serial` | `full-postgres` | `postgres-focused` | `serial` |
 | `tests/test_fc27_analyst.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_fc27_api_cache.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
@@ -109,29 +108,17 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/test_fc27_tactics.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_fc27_user_export.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, security, offline, network_forbidden` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_identifiers_and_tts.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_installer_static.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_integrated_services.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_m1_phase2_adversarial.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_m2_phase2_adversarial.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_m4_phase2_adversarial.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_mcp_http_server.py` | `OFFLINE_DOMAIN_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_mcp_retry_and_tools.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_model_selection.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_ocr_parsing.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_phase1_scope.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, security, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_roles.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_rundown_match_and_prompt.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_typed_graph_voice.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_voice_gateway_api.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_watcher_processing.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/test_workflow.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
-| `tests/test_ws_server.py` | `PURE_UNIT_PARALLEL_SAFE` | `unit, domain, offline` | `unit_domain_parallel` | `full-unit-domain` | `unit-domain` | `parallel-xdist` |
 | `tests/identity/test_crypto_stress.py` | `SECURITY_SERIAL` | `unit, security, serial, slow, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_adversarial_m2_2.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_adversarial_m2_it2_2.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_dispatch_transition_probe.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_m2_adversarial_challenger.py` | `UNKNOWN_SERIAL` | `security, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
-| `tests/test_swarms_backend.py` | `FILESYSTEM_SERIAL` | `unit, domain, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/test_visual_studio_project.py` | `FILESYSTEM_SERIAL` | `unit, domain, serial, offline` | `unit_domain_serial` | `full-unit-domain` | `unit-domain` | `serial` |
 | `tests/adversarial/test_r3_r4_empirical_challenger.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/adversarial/test_r6_empirical_security_boundary_challenges.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
@@ -185,7 +172,6 @@ All markers below are registered in `pyproject.toml` (`[tool.pytest.ini_options]
 | `tests/test_langgraph_flow.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/test_m1_adversarial_challenger.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, security, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/test_migration_0003.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
-| `tests/test_tracing.py` | `POSTGRES_PARALLEL_SAFE` | `postgres, domain, offline` | `postgres_parallel_safe` | `full-postgres` | — | `parallel-xdist` |
 | `tests/adversarial/test_adversarial_phase2.py` | `SECURITY_SERIAL` | `postgres, security, serial, slow, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
 | `tests/adversarial/test_r3_it3_stress_harness.py` | `POSTGRES_SERIAL` | `postgres, security, serial, slow, offline` | `postgres_serial` | `full-postgres` | — | `serial` |
 | `tests/adversarial/test_r4_empirical_concurrency_race.py` | `POSTGRES_SERIAL` | `postgres, security, serial, offline` | `postgres_serial` | `full-postgres` | — | `serial` |

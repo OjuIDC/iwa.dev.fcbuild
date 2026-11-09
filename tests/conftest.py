@@ -160,7 +160,7 @@ def wired(pg_uri):
                 raise ConnectionError("mcp down")
             return dash if dash is not None else dashboard()
 
-        runner = GraphRunner.from_conninfo(pg_uri, GraphDeps(mcp=mcp, role_runner=roles or FakeRoles(),
+        runner = GraphRunner.from_conninfo(pg_uri, GraphDeps(dashboard_reader=mcp, role_runner=roles or FakeRoles(),
                                                             registry_factory=lambda: None, decision_reader=store.load))
         from src.graph_api import create_app
         events = []
@@ -381,7 +381,7 @@ def wired_restart(pg_uri):
             return dash if dash is not None else dashboard()
 
         deps = GraphDeps(
-            mcp=mcp,
+            dashboard_reader=mcp,
             role_runner=roles or FakeRoles(),
             registry_factory=lambda: None,
             decision_reader=store.load,

@@ -111,12 +111,12 @@ def _service_secrets(svc: dict) -> set[str]:
 @pytest.fixture(scope="module")
 def model(tmp_path_factory):
     env = _env_file(tmp_path_factory.mktemp("env"))
-    out = _config(env, "--profile", "voice", "--profile", "rtsp", "--profile", "bootstrap")
+    out = _config(env, "--profile", "bootstrap")
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
 
-def test_signing_secret_only_in_graph_api(model, lf_model):
+def test_signing_secret_only_in_graph_api(model):
     for name, svc in model["services"].items():
         env = svc.get("environment") or {}
         assert "POSTGRES_URI" not in env, f"{name} has literal POSTGRES_URI in env"
@@ -130,13 +130,6 @@ def test_signing_secret_only_in_graph_api(model, lf_model):
             assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env, f"{name} receives GRAPH_COMMISSIONER_TOKEN_SHA256"
             assert "GRAPH_COMMISSIONER_TOKEN" not in env
             assert "GRAPH_API_TOKEN" not in env
-
-    for name, svc in lf_model["services"].items():
-        env = svc.get("environment") or {}
-        assert "POSTGRES_URI" not in env, f"{name} has literal POSTGRES_URI in env in lf_model"
-        if name != "graph-api":
-            assert "APPROVAL_SIGNING_SECRET" not in env
-            assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env
 
 
 def test_db_secret_mounts_per_service(model):
@@ -220,9 +213,8 @@ def test_graph_api_uses_app_role(model):
     assert "POSTGRES_URI" not in env
 
 
-def test_dispatch_disabled_by_default(model, lf_model):
+def test_dispatch_disabled_by_default(model):
     assert model["services"]["graph-api"]["environment"].get("DISPATCH_ENABLED") == "false"
-    assert lf_model["services"]["graph-api"]["environment"].get("DISPATCH_ENABLED") == "false"
     if "dispatch-worker" in model["services"]:
         assert model["services"]["dispatch-worker"]["environment"].get("DISPATCH_ENABLED") == "false"
 
@@ -273,7 +265,7 @@ def test_postgres_and_redis_runtime_controls(model):
 
 
 @pytest.mark.parametrize("missing", ["GRAPH_SERVICE_TOKEN", "GRAPH_COMMISSIONER_TOKEN_SHA256", "APPROVAL_SIGNING_SECRET",
-                                      "COMMISSIONER_ID", "MCP_API_TOKEN", "WS_AUTH_TOKEN", "REDIS_PASSWORD"])
+                                      "COMMISSIONER_ID", "REDIS_PASSWORD"])
 def test_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)))
     assert out.returncode != 0 and missing in out.stderr
@@ -295,9 +287,6 @@ OPERATIONAL_PYTHON_DOCKERFILES = (
     "Dockerfile.community-worker",
     "Dockerfile.discord",
     "Dockerfile.community-eval",
-    "Dockerfile.mcp",
-    "Dockerfile.stt",
-    "Dockerfile.tts",
 )
 
 
@@ -328,8 +317,6 @@ def test_dockerfiles_pin_base_images(model):
             user_val = uline.split(None, 1)[1].strip()
             assert user_val not in ("root", "0", "0:0"), f"{path.name} must not run as root ({uline})"
 
-    # Verify model-health in docker-compose.yml uses the same approved Python 3.11 digest
-    assert model["services"]["model-health"]["image"] == APPROVED_PYTHON_311_BASE
     compose_raw = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert not re.search(r"python:3\.(?:1[2-9]|[2-9]\d)", compose_raw)
 
@@ -384,42 +371,6 @@ def test_match_results_writer_secret_wired_only_to_db_bootstrap(model, tmp_path,
     )
     with pytest.raises(settings.ConfigError):
         settings.read_secret("FC27_MATCH_RESULTS_WRITER_PASSWORD")
-
-
-@pytest.fixture(scope="module")
-def lf_model(tmp_path_factory):
-    env = _env_file(tmp_path_factory.mktemp("lfenv"))
-    out = _config(env, "-f", "docker-compose.yml", "-f", "docker-compose.langfuse.yml", "--profile", "langfuse", "--profile", "bootstrap")
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout)
-
-
-def test_langfuse_disabled_without_overlay(model):
-    env = model["services"]["graph-api"]["environment"]
-    assert env["LANGFUSE_ENABLED"] == "false" and "LANGFUSE_SECRET_KEY" not in env
-    assert not any(n.startswith("langfuse") for n in model["services"])
-
-
-def test_langfuse_profile_isolation_and_pinning(lf_model):
-    services = lf_model["services"]
-    assert services["graph-api"]["environment"]["LANGFUSE_ENABLED"] == "true"
-    assert lf_model["networks"]["fc27_obs"].get("internal") is True
-    for name, svc in services.items():
-        for port in svc.get("ports") or []:
-            assert port.get("host_ip") == "127.0.0.1", f"{name} publishes {port}"
-        if name.startswith("langfuse"):
-            assert "@sha256:" in svc["image"]
-            assert not ({"GRAPH_SERVICE_TOKEN", "APPROVAL_SIGNING_SECRET", "POSTGRES_URI"} & set(svc.get("environment") or {}))
-        elif name != "graph-api":
-            assert "LANGFUSE_SECRET_KEY" not in (svc.get("environment") or {})
-    assert services["langfuse-web"]["environment"]["TELEMETRY_ENABLED"] == "false"
-
-
-@pytest.mark.parametrize("missing", ["LANGFUSE_SECRET_KEY", "LANGFUSE_ENCRYPTION_KEY", "LANGFUSE_DB_PASSWORD"])
-def test_langfuse_missing_secret_fails_closed(tmp_path, missing):
-    out = _config(_env_file(tmp_path, drop=(missing,)), "-f", "docker-compose.yml", "-f", "docker-compose.langfuse.yml",
-                  "--profile", "langfuse", "--profile", "bootstrap")
-    assert out.returncode != 0 and missing in out.stderr
 
 
 EXPECTED_GHCR_WORKER_IMAGE = (
@@ -534,32 +485,6 @@ def test_ghcr_runtime_promotion_documentation():
     assert "replicas=1" in text
     assert "fc27-rollback/" in text
     assert "Local-Build Mode" in text
-
-
-REMOTE_OLLAMA = "http://araba.ojuidc.olutech.systems:11434"
-
-
-def test_no_local_ollama_container_by_default(model):
-    services = model["services"]
-    assert "ollama" not in services and "ollama-init" not in services
-    assert "depends_on" not in services["model-health"] or "ollama-init" not in services["model-health"]["depends_on"]
-    assert services["model-health"]["environment"]["OLLAMA_URL"] == REMOTE_OLLAMA
-    assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == REMOTE_OLLAMA
-    assert "ollama_data" not in {v.get("source") for s in services.values() for v in s.get("volumes", [])}
-
-
-@pytest.mark.parametrize("overlay", ["docker-compose.gpu.yml", "docker-compose.cpu.yml"])
-def test_local_ollama_profile_still_resolves(tmp_path, overlay):
-    env = _env_file(tmp_path)
-    with env.open("a", encoding="utf-8") as fh:
-        fh.write("OLLAMA_BASE_URL=http://ollama:11434\n")
-    out = _config(env, "-f", "docker-compose.yml", "-f", overlay, "--profile", "local-ollama")
-    assert out.returncode == 0, out.stderr
-    services = json.loads(out.stdout)["services"]
-    assert {"ollama", "ollama-init"} <= services.keys()
-    assert "ports" not in services["ollama"]
-    assert services["model-health"]["environment"]["OLLAMA_URL"] == "http://ollama:11434"
-    assert services["graph-api"]["environment"]["OLLAMA_BASE_URL"] == "http://ollama:11434"
 
 
 def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_path):

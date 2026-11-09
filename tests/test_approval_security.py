@@ -131,12 +131,9 @@ def test_approver_identity_comes_from_credential(client_v1_hmac, pg_uri):
 
 
 def test_voice_cannot_access_decision_route(client_v1_hmac):
-    # The voice gateway holds only the service token; it is refused by role.
+    # A service token caller is refused by role on the decision route.
     tid = start(client_v1_hmac)
     assert decide(client_v1_hmac, tid, headers=SVC).status_code == 403
-    from pathlib import Path
-    source = Path("src/voice_gateway.py").read_text()
-    assert "/decision" not in source and "COMMISSIONER" not in source and "APPROVAL_SIGNING_SECRET" not in source
 
 
 # -------------------------------------------------------------- nonces/signing

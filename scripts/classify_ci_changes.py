@@ -41,8 +41,6 @@ BROAD_COVERAGE_TRIGGER_FILES: Final[frozenset[str]] = frozenset(
         "pyproject.toml",
         "requirements.txt",
         "requirements-dev.txt",
-        "requirements-langfuse.txt",
-        "requirements-swarms.txt",
         "config.example.env",
     }
 )
@@ -92,7 +90,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
     if (
         norm.startswith("Dockerfile")
         or norm.startswith("docker-compose")
-        or norm in {".dockerignore", "tests/test_compose_isolation.py", "scripts/ollama-init.sh"}
+        or norm in {".dockerignore", "tests/test_compose_isolation.py"}
     ):
         cats.add("compose")
 
@@ -193,8 +191,6 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
     # 11. Python runtime / application code & tests
     if (
         norm.startswith("src/")
-        or norm.startswith("voice/")
-        or norm.startswith("host_agent/")
         or (
             norm.startswith("scripts/")
             and not norm.endswith(".md")

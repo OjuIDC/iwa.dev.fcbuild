@@ -292,12 +292,19 @@ def create_app(
     settings = settings or ApiSettings.from_env()
     store = ApprovalStore(settings.postgres_uri)
     publish = publisher or _redis_publisher(settings.redis_url)
-    graph = {"runner": runner}
+    graph = {"runner": runner, "run_enabled": runner is not None or pipeline is not None}
 
     def run_pipeline(state: dict[str, Any]) -> dict[str, Any]:
         if pipeline is not None:
             return pipeline(state)
         return graph["runner"].start(state)
+
+    def require_run_runtime() -> None:
+        if not graph["run_enabled"]:
+            raise HTTPException(
+                status_code=503,
+                detail="graph run workflow is disabled: no dashboard/model runtime configured",
+            )
 
     def resume_graph(thread_id: str) -> str:
         if graph["runner"] is None:
@@ -321,13 +328,12 @@ def create_app(
                     raise ConfigError(f"database role posture violation: {violations}")
 
         if graph["runner"] is None and pipeline is None:
-            from .graph import GraphDeps, GraphRunner
+            from .graph import GraphDeps, GraphRunner, NullTracer
             from .roles import get_role_runner
-            from .tracing import tracer_from_env
 
             graph["runner"] = GraphRunner.from_conninfo(
                 settings.postgres_uri,
-                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=tracer_from_env()),
+                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=NullTracer()),
                 setup=settings.checkpoint_setup,
             )
             graph["owned"] = True
@@ -723,6 +729,7 @@ def create_app(
     # Core Graph Run Endpoints (POST /v1/runs, POST /run)
     # --------------------------------------------------------------------------
     def create_run_internal(req: RunRequest) -> dict:
+        require_run_runtime()
         try:
             state = store.create_run(
                 club_id=req.club_id,

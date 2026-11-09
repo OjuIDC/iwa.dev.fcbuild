@@ -2,13 +2,13 @@
 > **Archived: historical reference only.**
 > This document is non-authoritative and must not be used as current operational
 > guidance.
-> Replacement: `docs/VOICE_CAPABILITIES.md`.
-> Archive reason: Historical voice audit snapshot superseded by current voice capabilities doc
+> Replacement: `docs/FC27_COMPONENT_STATUS.md`.
+> Archive reason: Historical voice audit snapshot superseded by current component status doc
 > Operational status: DO NOT USE
 > Original path: audit/historical/TYPED_GRAPH_VOICE_AUDIT.md
 > Archived on: 2026-10-29
-> Superseded by: docs/VOICE_CAPABILITIES.md
-> Reason: Historical voice audit snapshot superseded by current voice capabilities doc
+> Superseded by: docs/FC27_COMPONENT_STATUS.md
+> Reason: Historical voice audit snapshot superseded by current component status doc
 > Warning: Do not execute commands in this archived document.
 
 > **HISTORICAL. Superseded on 2026-10-01** by IMPLEMENTATION_REPORT.md and SECURITY_CHANGES.md at the repository root.

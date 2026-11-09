@@ -25,17 +25,12 @@ jobs:
       - name: Bandit (SAST) - full report
         run: |
           mkdir -p reports
-          bandit -r src voice host_agent scripts -f sarif -o reports/bandit.sarif --exit-zero
-          bandit -r src voice host_agent scripts -f txt -o reports/bandit.txt --exit-zero
+          bandit -r src scripts -f sarif -o reports/bandit.sarif --exit-zero
+          bandit -r src scripts -f txt -o reports/bandit.txt --exit-zero
       - name: Bandit gate - fail on high severity + high confidence
-        run: bandit -r src voice host_agent scripts --severity-level high --confidence-level high -q
+        run: bandit -r src scripts --severity-level high --confidence-level high -q
       - name: pip-audit gate - runtime dependencies (fail on any known vulnerability)
         run: pip-audit -r requirements.txt --progress-spinner off --format json --output reports/pip-audit-runtime.json --desc on
-      - name: pip-audit report - optional extras (report only, see SECURITY_CHANGES.md)
-        if: always()
-        run: |
-          pip-audit -r requirements-swarms.txt --progress-spinner off --format json --output reports/pip-audit-swarms.json --desc on || true
-          pip-audit -r requirements-langfuse.txt --progress-spinner off --format json --output reports/pip-audit-langfuse.json --desc on || true
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

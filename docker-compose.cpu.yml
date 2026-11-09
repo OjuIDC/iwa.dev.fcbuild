@@ -1,5 +1,0 @@
-services:
-  ollama:
-    environment:
-      OLLAMA_NUM_PARALLEL: ${OLLAMA_CPU_NUM_PARALLEL:-1}
-      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_CPU_MAX_LOADED_MODELS:-1}

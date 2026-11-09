@@ -373,15 +373,23 @@ PATH_PREFIXES = (
     "docs/",
     "migrations/",
     "config/",
-    "host_agent/",
 )
 ROOT_FILE_NAMES = frozenset(
     {
         "docker-compose.yml",
+        "docker-compose.community-eval.yml",
+        "docker-compose.community-worker.yml",
+        "docker-compose.discord.yml",
+        "docker-compose.ghcr.yml",
         "docker-compose.cpu.yml",
         "docker-compose.gpu.yml",
         "docker-compose.langfuse.yml",
         "docker-compose.voice-gpu.yml",
+        "requirements-swarms.txt",
+        "requirements-langfuse.txt",
+        "Dockerfile.mcp",
+        "Dockerfile.stt",
+        "Dockerfile.tts",
         "config.example.env",
         "README.md",
         "MIGRATION_GUIDE.md",
@@ -391,12 +399,10 @@ ROOT_FILE_NAMES = frozenset(
         "pyproject.toml",
         "requirements.txt",
         "requirements-dev.txt",
-        "requirements-swarms.txt",
-        "requirements-langfuse.txt",
+        "Dockerfile.community-eval",
+        "Dockerfile.community-worker",
+        "Dockerfile.discord",
         "Dockerfile.graph",
-        "Dockerfile.mcp",
-        "Dockerfile.stt",
-        "Dockerfile.tts",
         "iwa.dev.fcbuild.sln",
         "iwa.dev.fcbuild.pyproj",
     }
@@ -468,10 +474,10 @@ def _parse_compose_inventory(repo_root: Path) -> dict[str, Any]:
     profiles: set[str] = set()
     compose_files = [
         "docker-compose.yml",
-        "docker-compose.cpu.yml",
-        "docker-compose.gpu.yml",
-        "docker-compose.langfuse.yml",
-        "docker-compose.voice-gpu.yml",
+        "docker-compose.community-eval.yml",
+        "docker-compose.community-worker.yml",
+        "docker-compose.discord.yml",
+        "docker-compose.ghcr.yml",
     ]
     for cf in compose_files:
         p = repo_root / cf
@@ -573,9 +579,6 @@ def _parse_endpoints_inventory(repo_root: Path) -> set[str]:
         "/v1/runs/{id}/decision",
         "/v1/approval-requests/{id}",
         "/v1/approval-requests/{id}/decisions",
-        "/mcp",
-        "/tools",
-        "/sse",
     }
     graph_api_path = repo_root / "src" / "graph_api.py"
     if graph_api_path.is_file():

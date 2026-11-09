@@ -3,10 +3,10 @@
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `tests/`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`), and automated test suites (`tests/`).
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`), and automated test suites (`tests/`).
 
 ## 0. Current Supported Real-Data Operational Path
 
@@ -30,7 +30,7 @@ See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALU
 
 Every subsystem in this document is labeled with one of five explicit states:
 - `CURRENT` — Implemented in active source code and verified by automated tests.
-- `OPTIONAL` — Implemented behind an opt-in Docker Compose profile or feature flag (`voice`, `rtsp`, `langfuse`, `LM_STUDIO_FALLBACK_ENABLED`).
+- `OPTIONAL` — Implemented behind an opt-in Docker Compose profile or feature flag (`voice`, `rtsp`, `LM_STUDIO_FALLBACK_ENABLED`).
 - `PROPOSED` — Planned for a subsequent roadmap phase (such as normalized `Coach`, `Tactics`, and `Director` synthesis phases).
 - `DEFERRED` — Intentionally gated off or postponed (`DISPATCH_ENABLED=false`, `FC27_RECOMMENDATIONS_ENABLED=false`, `Windhover` mobile view).
 - `REJECTED` — Evaluated and permanently prohibited (`Impit`/Chromium TLS impersonation sidecar, SQLite persistence, raw payload retention, cookie/session scraping).
@@ -73,7 +73,7 @@ flowchart TD
 
 ## 3. Component & Network-Boundary Diagram
 
-Docker Compose (`docker-compose.yml` and `docker-compose.langfuse.yml`) partitions containers across isolated bridge networks (`fc27_data`, `fc27_net`, plus optional `fc27_obs` and `fc27_obs_edge`):
+Docker Compose (`docker-compose.yml`) partitions containers across isolated bridge networks (`fc27_data` and `fc27_net`):
 
 ```mermaid
 flowchart LR
@@ -124,8 +124,7 @@ flowchart LR
 ### Network Boundary Invariants (Enforced by `tests/test_compose_isolation.py`)
 1. **`fc27_data` (`internal: true`)**: Joined **only** by `postgres`, `db-bootstrap`, `db-migrate`, `graph-api`, `outbox-relay`, and `dispatch-worker`. `fc27-mcp`, `live-watcher`, `post-match-rundown`, `ws-server`, `ollama`, `voice-gateway`, `stt`, `tts`, and `rtsp-analyzer` have **zero** network route to PostgreSQL.
 2. **`fc27_net` (`bridge`)**: Shared application network for `redis`, `fc27-mcp`, `model-health`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, and optional `--profile voice` / `--profile rtsp` / `--profile local-ollama` (`ollama`, `ollama-init`) services. `graph-api` and `model-health` reach the default remote Ollama server (`OLLAMA_BASE_URL`, `http://araba.ojuidc.olutech.systems:11434`) through this network's outbound NAT; access to that server is restricted by its host firewall to named client addresses.
-3. **`fc27_obs` (`internal: true` in `docker-compose.langfuse.yml`)**: Isolates optional `--profile langfuse` datastores (`langfuse-postgres`, `langfuse-clickhouse`, `langfuse-minio`, `langfuse-redis`, `langfuse-worker`), joined only by `graph-api` and `langfuse-web` (`127.0.0.1:3000` via `fc27_obs_edge`).
-4. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`, `3000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
+3. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
 
 ---
 
@@ -171,7 +170,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 - **Dispatch Boundary**: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are enforced at startup and in `/health/ready`.
 
 ### 5.4 Observability & Sibling-Repo Boundaries
-- **Observability (`src/tracing.py`, `src/correlation.py`, `src/fc27_performance.py`)**: Every request carries a validated UUID `X-Correlation-Id`. Optional Langfuse tracing (`docker-compose.langfuse.yml`) redacts secrets before export and omits prompt/candidate content unless `LANGFUSE_CAPTURE_CONTENT=true`. Bounded local performance telemetry (`src/fc27_performance.py`, [`docs/FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md)) is disabled by default (`FC27_PERFORMANCE_TELEMETRY_ENABLED=false`) and writes sanitized aggregate metrics only to `.local-artifacts/performance/`. Any future local inference runtime (`ONNX Runtime`, `CTranslate2`, `llama.cpp`, `Ollama`) is strictly isolated behind a non-authoritative read-only sidecar boundary ([`docs/FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md), [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md)). Windhover mobile integration remains `DEFERRED`/`UNVERIFIED` ([`docs/FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)).
+- **Observability (`src/correlation.py`, `src/fc27_performance.py`, `src/graph.py`)**: Every request carries a validated UUID `X-Correlation-Id`, and `NullTracer` in `src/graph.py` provides a no-op tracing surface. Bounded local performance telemetry (`src/fc27_performance.py`, [`docs/FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md)) is disabled by default (`FC27_PERFORMANCE_TELEMETRY_ENABLED=false`) and writes sanitized aggregate metrics only to `.local-artifacts/performance/`. Any future local inference runtime (`ONNX Runtime`, `CTranslate2`, `llama.cpp`, `Ollama`) is strictly isolated behind a non-authoritative read-only sidecar boundary ([`docs/FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md), [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md)). Windhover mobile integration remains `DEFERRED`/`UNVERIFIED` ([`docs/FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)).
 - **MatchPulse Live Isolation (`docs/MATCHPULSE_INTEGRATION_BOUNDARY.md`)**: Product development for MatchPulse belongs exclusively in `..\matchpulse-live-public`. `iwa.dev.fcbuild` never imports MatchPulse Python code, shares datastores, or treats MatchPulse output as authorization.
 
 ---
@@ -195,4 +194,4 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 ## 7. Deployment-Validation Status
 
 - **Validated in Automated Suites**: Python bytecode compilation, static MatchPulse and preflight boundaries, Docker Compose secret/network/pinning isolation (`tests/test_compose_isolation.py`), and all PostgreSQL 16 schema migrations, role grants (`v15`), transactional approval/identity flows, normalized FC 27 storage, manual Match Results storage (`src/fc27_match_results.py`, `tests/test_fc27_match_results.py`), read-only analytics, and safe-adapter contract/cache/rate-limit suites.
-- **Not Yet Validated on Target Production Host (`IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`)**: Multi-container live Docker stack startup with GPU/CPU Ollama model inference, optional `--profile voice` / `--profile rtsp` hardware capture, optional `--profile langfuse` stack, and live EA provider traffic (blocked pending EA authorization).
+- **Not Yet Validated on Target Production Host (`IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`)**: Multi-container live Docker stack startup with GPU/CPU Ollama model inference, optional `--profile voice` / `--profile rtsp` hardware capture, and live EA provider traffic (blocked pending EA authorization).

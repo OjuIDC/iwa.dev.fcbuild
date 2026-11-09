@@ -42,8 +42,6 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`fc27_user_export_import.py`](fc27_user_export_import.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Export/Capture Import) | `NONE` |
 | [`fc27_capture_preflight.py`](fc27_capture_preflight.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Capture Preflight) | `NONE` |
 | [`commissioner_decide.py`](commissioner_decide.py) | `CURRENT_OPERATOR_COMMAND` | Active (Commissioner Approval CLI) | `NONE` |
-| [`model_health.py`](model_health.py) | `CURRENT_OPERATOR_COMMAND` | Active (Local Ollama Health Check) | `NONE` |
-| [`ollama-init.sh`](ollama-init.sh) | `CURRENT_OPERATOR_COMMAND` | Active (Compose Model Bootstrap) | `NONE` |
 | [`test_postgres.sh`](test_postgres.sh) | `TEST_HELPER` | Active (Disposable PostgreSQL Test Runner) | `NONE` |
 | [`archive/experiments/matchpulse_conformance.py`](archive/experiments/matchpulse_conformance.py) | `SUPERSEDED` | Archived (`DO_NOT_USE`) | `scripts/check_matchpulse_boundary.py` |
 
@@ -168,32 +166,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Teardown**: Stateless CLI process.
 - **Replacement Status**: Current supporting governance CLI (`NONE`).
 
-### 10. `scripts/model_health.py`
-- **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: Verifies connectivity and loaded model availability against the configured Ollama server (`OLLAMA_URL`, falling back to `OLLAMA_BASE_URL`; default `http://araba.ojuidc.olutech.systems:11434`) for the optional LangGraph runtime.
-- **Safe Invocation**:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/model_health.py --help
-  ```
-- **Required Feature Flags**: Uses `OLLAMA_URL` / `OLLAMA_BASE_URL` (defaults to the remote lab Ollama server).
-- **Network Behavior**: Queries only the configured Ollama HTTP tags and generate endpoints.
-- **Database Behavior**: Zero database access.
-- **Expected Output**: Model availability status and exit code `0` when healthy.
-- **Teardown**: Stateless CLI process.
-- **Replacement Status**: Current supporting model health CLI (`NONE`).
-
-### 11. `scripts/ollama-init.sh`
-- **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: Container initialization shell script referenced by `docker-compose.yml` (`ollama-init` service) to pull configured models into the bundled Ollama container. Runs only with `--profile local-ollama`; the default remote server is provisioned by its owner.
-- **Safe Invocation**: Invoked inside the `ollama-init` container via `docker compose --profile local-ollama up`.
-- **Required Feature Flags**: None.
-- **Network Behavior**: Connects to the internal `ollama` service container (`http://ollama:11434`).
-- **Database Behavior**: Zero database access.
-- **Expected Output**: Ollama model pull progress logs.
-- **Teardown**: One-shot init container exits upon completion.
-- **Replacement Status**: Current Compose init script (`NONE`).
-
-### 12. `scripts/test_postgres.sh`
+### 10. `scripts/test_postgres.sh`
 - **Classification**: `TEST_HELPER`
 - **Purpose**: Starts a disposable `postgres:16` Docker container, runs database bootstrap/migrations (`python -m src.db_roles` and `python -m src.db_migrate`) and `pytest`, and tears down the container on exit.
 - **Safe Invocation**:

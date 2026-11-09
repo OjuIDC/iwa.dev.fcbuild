@@ -1,6 +1,0 @@
-services:
-  stt:
-    gpus: ${STT_GPUS:-all}
-    environment:
-      STT_DEVICE: cuda
-      STT_COMPUTE_TYPE: ${STT_GPU_COMPUTE_TYPE:-float16}

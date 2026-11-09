@@ -165,7 +165,7 @@ See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`]
 
 ### 8.2 Connection & Log Redaction
 - `src/db_roles.py` provides `redact_conninfo` for PostgreSQL connection-string handling. `src/fc27_community_provider.py` does not provide general password, bearer-token, API-key, or sensitive-query redaction; do not assume its exception messages are sanitized.
-- Langfuse tracing (`src/tracing.py`) defaults to `LANGFUSE_ENABLED=false` and `LANGFUSE_CAPTURE_CONTENT=false` (metadata-only).
+- Graph execution uses the no-op `NullTracer` in `src/graph.py` with zero external telemetry export.
 
 ### 8.3 Backup and Quarantine Retention
 - **PostgreSQL Backups**: Back up PostgreSQL 16 using `pg_dump -Fc` over the internal container context. Ensure backup archives are encrypted at rest because `PostgresSaver` checkpoints contain serialized graph state.

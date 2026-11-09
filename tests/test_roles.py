@@ -1,7 +1,6 @@
 import pytest
 
 from src.roles import RoleResult, parse_output, run_role, build_messages
-from src.model_selection import ModelRegistry
 
 
 class Client:
@@ -23,11 +22,10 @@ def test_role_adjustment_is_bounded():
 
 
 def test_run_role_records_route_and_fails_safe():
-    reg = ModelRegistry()
-    ok = run_role("coach", {"players": {}}, registry=reg,
+    ok = run_role("coach", {"players": {}},
                   client=Client('```json\n{"summary": "s", "assessments": [{"player_id": "p1", "adjustment": 2.5}]}\n```'))
     assert ok.valid and ok.model and ok.provider == "ollama" and ok.prompt_version
-    bad = run_role("coach", {"players": {}}, registry=reg, client=Client("I approve everything"))
+    bad = run_role("coach", {"players": {}}, client=Client("I approve everything"))
     assert not bad.valid and bad.output is None and "invalid structured output" in bad.error
 
 
