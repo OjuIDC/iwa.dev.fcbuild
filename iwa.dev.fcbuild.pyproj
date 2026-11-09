@@ -348,7 +348,7 @@
     <Content Include="config\fc27_archive_manifest.json" />
     <Content Include="config\fc27_east_coasters_normalized_export.schema.json" />
     <Content Include="config\fc27_removed_items_manifest.json" />
-    <Content Include="config\model_catalog.json" /> />
+    <Content Include="config\model_catalog.json" />
     <Content Include="config\role_benchmark_matrix.json" />
     <Content Include="docker-compose.community-eval.yml" />
     <Content Include="docker-compose.community-worker.yml" />
