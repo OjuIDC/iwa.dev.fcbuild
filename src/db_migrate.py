@@ -310,7 +310,7 @@ def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
 
 from src.db_roles import redact_conninfo
 
-def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | None = None, checkpoint_setup: bool = True) -> list[str]:
+def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | None = None, checkpoint_setup: bool = False) -> list[str]:
     applied_now: list[str] = []
 
     with psycopg.connect(conninfo, autocommit=True, connect_timeout=3) as conn:
@@ -362,12 +362,9 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
                         )
                     applied_now.append(path.name)
 
-                if checkpoint_setup:
-                    with psycopg.connect(conninfo, autocommit=True, row_factory=psycopg.rows.dict_row) as check_conn:
-                        with check_conn.cursor() as check_cur:
-                            check_cur.execute("SET ROLE fc27_owner")
-                        from langgraph.checkpoint.postgres import PostgresSaver
-                        PostgresSaver(check_conn).setup()
+                # checkpoint_setup is retained only as an optional no-op parameter
+                # after Stage B3 removed the legacy LangGraph runtime.
+                _ = checkpoint_setup
 
                 # Execute grants
                 grants_path = directory / "post" / "grants.sql"

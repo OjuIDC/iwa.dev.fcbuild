@@ -41,7 +41,6 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`check_matchpulse_boundary.py`](check_matchpulse_boundary.py) | `CURRENT_SECURITY_COMMAND` | Active (CI & Security Gate) | `NONE` |
 | [`fc27_user_export_import.py`](fc27_user_export_import.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Export/Capture Import) | `NONE` |
 | [`fc27_capture_preflight.py`](fc27_capture_preflight.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Capture Preflight) | `NONE` |
-| [`commissioner_decide.py`](commissioner_decide.py) | `CURRENT_OPERATOR_COMMAND` | Active (Commissioner Approval CLI) | `NONE` |
 | [`test_postgres.sh`](test_postgres.sh) | `TEST_HELPER` | Active (Disposable PostgreSQL Test Runner) | `NONE` |
 | [`archive/experiments/matchpulse_conformance.py`](archive/experiments/matchpulse_conformance.py) | `SUPERSEDED` | Archived (`DO_NOT_USE`) | `scripts/check_matchpulse_boundary.py` |
 
@@ -152,19 +151,8 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Teardown**: Stateless CLI process.
 - **Replacement Status**: Current supporting capture preflight CLI (`NONE`).
 
-### 9. `scripts/commissioner_decide.py`
-- **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: CLI utility for recording or inspecting human Commissioner approval decisions signed with the symmetric shared secret `APPROVAL_SIGNING_SECRET`.
-- **Safe Invocation**:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/commissioner_decide.py --help
-  ```
-- **Required Feature Flags**: Requires PostgreSQL connection and `APPROVAL_SIGNING_SECRET_FILE` when recording decisions.
-- **Network Behavior**: Connects only to local PostgreSQL / Graph API when invoked operationally.
-- **Database Behavior**: Reads/writes `approval_requests`, `approval_nonces`, `approval_audit`, and `domain_events`.
-- **Expected Output**: CLI status / decision confirmation.
-- **Teardown**: Stateless CLI process.
-- **Replacement Status**: Current supporting governance CLI (`NONE`).
+### 9. Historical `scripts/commissioner_decide.py` (Removed in Stage B3)
+- **Classification**: `SUPERSEDED` (historical Commissioner approval CLI removed in Stage B3; registered in `config/fc27_removed_items_manifest.json`).
 
 ### 10. `scripts/test_postgres.sh`
 - **Classification**: `TEST_HELPER`

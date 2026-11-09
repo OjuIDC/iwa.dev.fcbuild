@@ -946,8 +946,8 @@ def test_comm_59_postgres_persistence_idempotency_conflict_and_persisted_read(
             assert cur.fetchone()[0] == 6
             cur.execute("SELECT goals_for FROM public.fc27_matches WHERE external_match_id = '990001'")
             assert cur.fetchone()[0] == 2
-            cur.execute("SELECT COUNT(*) FROM public.checkpoints")
-            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT to_regclass('public.checkpoints')")
+            assert cur.fetchone()[0] is None
             cur.execute("SELECT COUNT(*) FROM public.approval_requests")
             assert cur.fetchone()[0] == 0
             cur.execute("SELECT COUNT(*) FROM public.dispatches")

@@ -579,6 +579,9 @@ def _parse_endpoints_inventory(repo_root: Path) -> set[str]:
         "/v1/runs/{id}/decision",
         "/v1/approval-requests/{id}",
         "/v1/approval-requests/{id}/decisions",
+        "/v1/config/dispatch",
+        "/v1/activation-gates/{gate_id}",
+        "/v1/activation-gates/{gate_id}/challenge",
     }
     graph_api_path = repo_root / "src" / "graph_api.py"
     if graph_api_path.is_file():
@@ -1050,12 +1053,15 @@ def validate_repository(
                     arch_json_rel,
                 )
 
+    removed_manifest_paths: set[str] = set()
     rem_json_rel = policy.get("removed_items_manifest_json")
     if rem_json_rel and (resolved_root / rem_json_rel).is_file():
         rem_json_data = json.loads((resolved_root / rem_json_rel).read_text(encoding="utf-8"))
         for ritem in rem_json_data.get("removed_items", []):
             rpath = ritem.get("path", "")
             rrepl = ritem.get("replacement", "NONE")
+            if rpath:
+                removed_manifest_paths.add(rpath)
             if rpath and (resolved_root / rpath).exists():
                 add_finding(
                     "ARCHIVE_INTEGRITY",
@@ -2543,6 +2549,17 @@ def validate_repository(
                         or (
                             doc_rel == "docs/FC27_DOCUMENTATION_TRUTH_TABLE.md"
                             and ("instead of" in lower_line or "referenced" in lower_line)
+                        )
+                        or (
+                            doc_rel.startswith("docs/design/")
+                            and (
+                                clean_tok.rstrip("/") in removed_manifest_paths
+                                or any(
+                                    rp.startswith(f"{clean_tok.rstrip('/')}/")
+                                    or clean_tok.rstrip("/").startswith(f"{rp}/")
+                                    for rp in removed_manifest_paths
+                                )
+                            )
                         )
                     ):
                         continue

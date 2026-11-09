@@ -1201,7 +1201,7 @@ def test_65_conflicting_persistence_rolls_back(pg_db_migrated) -> None:
 
 
 def test_66_postgressaver_unchanged(pg_db_migrated) -> None:
-    """66. PostgresSaver checkpoint tables remain untouched by demo persistence."""
+    """66. PostgresSaver checkpoint tables remain absent/untouched by demo persistence."""
     run_fc27_demo_ingestion(
         source="fixture",
         operation="full-demo",
@@ -1214,12 +1214,9 @@ def test_66_postgressaver_unchanged(pg_db_migrated) -> None:
     )
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM public.checkpoints")
-            assert cur.fetchone()[0] == 0
-            cur.execute("SELECT COUNT(*) FROM public.checkpoint_blobs")
-            assert cur.fetchone()[0] == 0
-            cur.execute("SELECT COUNT(*) FROM public.checkpoint_writes")
-            assert cur.fetchone()[0] == 0
+            for tbl in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+                cur.execute("SELECT to_regclass(%s)", (f"public.{tbl}",))
+                assert cur.fetchone()[0] is None
 
 
 def test_67_approval_tables_unchanged(pg_db_migrated) -> None:

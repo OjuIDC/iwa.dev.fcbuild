@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Platform Operators, Commissioners, Security Engineers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `src/settings.py`, `src/db_roles.py`, `src/db_migrate.py`, `src/graph_api.py`, `migrations/post/grants.sql`, `docker-compose.yml`, `config.example.env`
+- **Source of truth**: `src/settings.py`, `src/db_roles.py`, `src/db_migrate.py`, `migrations/post/grants.sql`, `docker-compose.yml`, `config.example.env`
 - **Supersedes**: `docs/archive/architecture/PHASE2_RUNBOOKS.md`
 
 > **Deployment Readiness Classification**: `IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`
@@ -39,7 +39,7 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 | `./secrets/fc27_relay_uri` | `POSTGRES_URI_FILE` | `outbox-relay` | Connection URI for `fc27_relay` |
 | `./secrets/fc27_dispatch_uri` | `POSTGRES_URI_FILE` | `dispatch-worker` | Connection URI for `fc27_dispatch` |
 | `./secrets/bff_service_token` | `BFF_SERVICE_TOKEN_FILE` | `graph-api` | Machine service token for BFF authentication |
-| `./secrets/identity_encryption_key` | `IDENTITY_ENCRYPTION_KEY_FILE` | `graph-api` | Fernet key(s) (`src/identity/crypto.py`) for TOTP/identity encryption |
+| `./secrets/identity_encryption_key` | `IDENTITY_ENCRYPTION_KEY_FILE` | `graph-api` (historical) | Fernet key(s) (historical `src/identity/crypto.py` superseded in Stage B3) for TOTP/identity encryption |
 | `./secrets/bootstrap_token` | `BOOTSTRAP_TOKEN_FILE` | `graph-api` | One-time Commissioner bootstrap secret |
 
 ---
@@ -86,24 +86,24 @@ PostgreSQL 16 separates schema ownership from runtime execution across six roles
 
 ---
 
-## 4. Commissioner WebAuthn Bootstrap Ceremony
+## 4. Commissioner WebAuthn Bootstrap Ceremony (Historical Control-Plane Stack Superseded in Stage B3)
 
-Commissioner authentication uses FIDO2/WebAuthn passkeys (`require_user_verification=True` in `src/identity/webauthn.py`) as the primary human authority:
+Commissioner authentication in the historical Phase 2 control-plane stack used FIDO2/WebAuthn passkeys (`require_user_verification=True` in historical `src/identity/webauthn.py`, superseded in Stage B3) as the primary human authority:
 
 1. Provision `./secrets/bootstrap_token` (`BOOTSTRAP_TOKEN_FILE`) for one-time initial Commissioner enrollment.
-2. Complete passkey registration via the identity passkey and recovery routes (`src/identity/routers/passkeys.py`, `src/identity/routers/recovery.py`), which persist the credential in `fc27_webauthn_credentials` and generate single-use Argon2id-hashed recovery codes (`fc27_recovery_codes`).
-3. Subsequent Commissioner step-up decisions require a fresh single-use challenge (`src/identity/routers/step_up.py`, `fc27_challenges`) bound to the 14-field `fc27_decision_evidence` payload (`src/approval_store.py`).
+2. Complete passkey registration via the historical identity passkey and recovery routes (`src/identity/routers/passkeys.py`, `src/identity/routers/recovery.py`, superseded in Stage B3), which persisted the credential in `fc27_webauthn_credentials` and generated single-use Argon2id-hashed recovery codes (`fc27_recovery_codes`).
+3. Subsequent Commissioner step-up decisions required a fresh single-use challenge (historical `src/identity/routers/step_up.py`, `fc27_challenges`, superseded in Stage B3) bound to the 14-field `fc27_decision_evidence` payload (historical `src/approval_store.py`, superseded in Stage B3).
 
 ---
 
 ## 5. Key Rotation Procedures
 
-### 5.1 Rotating `IDENTITY_ENCRYPTION_KEY` (`src/identity/crypto.py`)
+### 5.1 Rotating `IDENTITY_ENCRYPTION_KEY` (Historical `src/identity/crypto.py` Superseded in Stage B3)
 1. Generate a new 44-character URL-safe base64 Fernet key and update `./secrets/identity_encryption_key`.
 2. Re-encrypt stored TOTP ciphertexts (`fc27_totp_enrollments`) within a maintenance transaction and restart `graph-api`.
 
 ### 5.2 Rotating `APPROVAL_SIGNING_SECRET` (Symmetric HMAC)
-`APPROVAL_SIGNING_SECRET` is a symmetric shared secret (`>= 32` characters) used by `src/approval.py` and `scripts/commissioner_decide.py`:
+`APPROVAL_SIGNING_SECRET` is a symmetric shared secret (`>= 32` characters) used by historical `src/approval.py` and `scripts/commissioner_decide.py` (superseded in Stage B3):
 1. Ensure no pending CLI approval nonces (`approval_nonces`) are in flight.
 2. Write a new secret to `./secrets/approval_signing_secret` (or `APPROVAL_SIGNING_SECRET` in `.env` for local lab testing).
 3. Restart `graph-api` and distribute the updated shared secret to the Commissioner CLI environment.
@@ -112,7 +112,7 @@ Commissioner authentication uses FIDO2/WebAuthn passkeys (`require_user_verifica
 
 ## 6. Health Checks & Readiness Probes
 
-`graph-api` (`127.0.0.1:8001` in `src/graph_api.py`) exposes:
+Historical `graph-api` (`127.0.0.1:8001` in historical `src/graph_api.py`, superseded in Stage B3) exposed:
 
 - **`GET /health/live`**: Liveness check returning `{"status": "ok"}`.
 - **`GET /health/ready`** and **`GET /health`**: Readiness check verifying:
@@ -151,7 +151,7 @@ All external provider, persistence, analytics, recommendation, and dispatch capa
 - `FC27_PERFORMANCE_TELEMETRY_ENABLED=false`
 - `DISPATCH_ENABLED=false`
 - `DISPATCH_WORKER_ENABLED=false`
-- `APPROVAL_CLI_HMAC_ENABLED=false` (Python default in `src/graph_api.py`)
+- `APPROVAL_CLI_HMAC_ENABLED=false` (Python default in `src/settings.py`; historical `src/graph_api.py` superseded in Stage B3)
 
 See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), and [`docs/FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md) for the complete dependency matrix, CLI (`scripts/fc27_polling_worker.py --status | --once | --worker`, `python -m src.fc27_performance`), Docker Compose overlay (`docker-compose.community-worker.yml`, profile `fc27-polling`), and fail-closed rules.
 
@@ -165,7 +165,7 @@ See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`]
 
 ### 8.2 Connection & Log Redaction
 - `src/db_roles.py` provides `redact_conninfo` for PostgreSQL connection-string handling. `src/fc27_community_provider.py` does not provide general password, bearer-token, API-key, or sensitive-query redaction; do not assume its exception messages are sanitized.
-- Graph execution uses the no-op `NullTracer` in `src/graph.py` with zero external telemetry export.
+- Historical graph execution used the no-op `NullTracer` in `src/graph.py` (superseded in Stage B3) with zero external telemetry export.
 
 ### 8.3 Backup and Quarantine Retention
 - **PostgreSQL Backups**: Back up PostgreSQL 16 using `pg_dump -Fc` over the internal container context. Ensure backup archives are encrypted at rest because `PostgresSaver` checkpoints contain serialized graph state.

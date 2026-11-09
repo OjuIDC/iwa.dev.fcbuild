@@ -270,7 +270,7 @@ Decide which row is authoritative, and export the others for your records. Delet
 - graph-api starts with `uvicorn src.graph_api:create_app --factory`.
 - `POST /run` returns **201** (it returned 202 before).
 - The `thread_id` field is optional. When given, it must match `fc27-<clubId>-run-<YYYYMMDD>-<seq>` and must not already exist, otherwise the call returns 409.
-- `POST /threads/{id}/decision` with a plain body no longer works. Use `scripts/commissioner_decide.py`, or call `/decision-challenge`, sign the payload and post it (see `docs/APPROVAL_SECURITY.md`).
+- `POST /threads/{id}/decision` with a plain body no longer works. Use the historical `scripts/commissioner_decide.py` CLI (superseded in Stage B3), or call `/decision-challenge`, sign the payload and post it (see `docs/APPROVAL_SECURITY.md`).
 - MCP calls need `Authorization: Bearer $MCP_API_TOKEN`.
 - WebSocket clients need the token and an allowed Origin.
 - Watcher, voice gateway and rundown now read `GRAPH_SERVICE_TOKEN`, `MCP_API_TOKEN` and `COMMISSIONER_ID`.

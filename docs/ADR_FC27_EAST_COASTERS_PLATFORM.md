@@ -35,7 +35,7 @@ The platform addresses this challenge by synthesizing:
   Fail-closed schema validation rejects unknown positions, roles, playstyles, or invalid attribute values without silent coercion.
 - **Provider Layer (`src/fc27_provider.py`)**:
   Abstracts raw data ingestion behind normalized envelopes. Ingestion from external streams (such as MatchPulse) is fully decoupled. The platform operates self-sufficiently with fixture-backed synthetic providers.
-- **Coaching Engine (`src/fc27_coaching.py`)**:
+- **Coaching Engine (`src/fc27_coach.py`; historical `src/fc27_coaching.py` superseded in Stage B3)**:
   A deterministic, rule-grounded coaching layer that synthesizes analytical findings into structured recommendations for the East Coasters.
   Recommendations are categorized into tactical, build, lineup, role, or behavioral guidance, backed by explicit empirical evidence and sample-size confidence tiers.
 
@@ -524,9 +524,9 @@ search -> scout -> analyst -> coach -> tactics -> director
   -> [invalid or review_required]            -> finalize_decision (status="failed") -> END
 ```
 Defense-in-depth enforcement is also applied in:
-1. `ApprovalStore.complete_run` (`src/approval_store.py`): Re-validates `lead_packages` and `package_version` before inserting into `public.approval_requests`. If validation fails or `review_required=True`, the thread is persisted as `status = 'failed'` with `package_version = NULL` and zero `public.approval_requests` rows.
-2. `ApprovalStore.issue_challenge` (`src/approval_store.py`): Rejects challenge nonce issuance (`409 pre_approval_validation_failed`) if `pre_approval_validation` indicates failure or `review_required=True`.
-3. `approval` node (`src/graph.py`): Raises `ApprovalNotCommitted` before `interrupt()` if invoked without a passing `pre_approval_validation` state.
+1. `ApprovalStore.complete_run` (historical `src/approval_store.py` superseded in Stage B3): Re-validates `lead_packages` and `package_version` before inserting into `public.approval_requests`. If validation fails or `review_required=True`, the thread is persisted as `status = 'failed'` with `package_version = NULL` and zero `public.approval_requests` rows.
+2. `ApprovalStore.issue_challenge` (historical `src/approval_store.py` superseded in Stage B3): Rejects challenge nonce issuance (`409 pre_approval_validation_failed`) if `pre_approval_validation` indicates failure or `review_required=True`.
+3. `approval` node (historical `src/graph.py` superseded in Stage B3): Raises `ApprovalNotCommitted` before `interrupt()` if invoked without a passing `pre_approval_validation` state.
 
 ### 17.2 `PreApprovalValidationResult` Contract (`src/schemas.py`)
 `PreApprovalValidationResult` is a frozen Pydantic model (`ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)`) with policy version `PRE_APPROVAL_POLICY_VERSION = "fc27-preapproval-v1"` containing:
@@ -538,7 +538,7 @@ Defense-in-depth enforcement is also applied in:
 
 ### 17.3 Package Integrity, Objective Bounds, Formation Registry, & Sample Policy
 - **Package Integrity**: Verifies non-empty `lead_packages` (`EMPTY_LEAD_PACKAGES`), schema validity (`PACKAGE_SCHEMA_INVALID`), 64-hex SHA-256 `package_version` presence (`PACKAGE_HASH_MISSING`), format (`PACKAGE_HASH_INVALID`), and canonical recomputation via `src.decision.package_version` (`PACKAGE_HASH_MISMATCH`), candidate consistency against `candidates` (`CANDIDATE_ID_MISMATCH`), and duplicate role/candidate/player detection (`DUPLICATE_CANDIDATE_PACKAGE`).
-- **Objective Bounds Reuse**: Reuses `METRIC_BOUNDS` and `validate_metric_bounds` from `src/dispatch/objective.py` and `Objective` from `src/schemas.py` (`OBJECTIVE_METRIC_UNSUPPORTED`, `OBJECTIVE_BOUND_VIOLATION`, `OBJECTIVE_VALUE_NONFINITE` for `NaN`, `+Inf`, `-Inf`).
+- **Objective Bounds Reuse**: Reuses `METRIC_BOUNDS` and `validate_metric_bounds` from `src/schemas.py` (historical `src/dispatch/objective.py` superseded in Stage B3) and `Objective` from `src/schemas.py` (`OBJECTIVE_METRIC_UNSUPPORTED`, `OBJECTIVE_BOUND_VIOLATION`, `OBJECTIVE_VALUE_NONFINITE` for `NaN`, `+Inf`, `-Inf`).
 - **Formation & Assignment Registry Reuse**: Reuses `VALID_FC27_FORMATIONS`, `VALID_FC27_POSITIONS`, and `VALID_FC27_ROLES` from `src/schemas.py` (`FORMATION_UNSUPPORTED`, `ROLE_ASSIGNMENT_INVALID`, `DUPLICATE_PLAYER_ASSIGNMENT`, `ROSTER_SIZE_INVALID`). When current role-ranking packages do not carry formation/lineup structures, `formation_registry_version` is reported truthfully as `"NOT_APPLICABLE"` rather than fabricating formation metadata; when present, it reports `"fc27-formations-v1"`.
 - **Confidence & Sample Policy**: Reuses `FORMULA_VERSION = "fc27-v1.0"` and `determine_sample_size_tier` from `src/fc27_analytics.py` (`CONFIDENCE_METADATA_MISSING`, `FORMULA_VERSION_UNSUPPORTED`, `INSUFFICIENT_SAMPLE`, `INSUFFICIENT_DATA`, `REVIEW_REQUIRED`).
 - **Recommendation Gate**: Reuses `is_fc27_recommendations_enabled()` (`FC27_RECOMMENDATIONS_ENABLED=false` by default). Any recommendation object or marker when disabled fails closed with `RECOMMENDATION_DISABLED`.
@@ -546,7 +546,7 @@ Defense-in-depth enforcement is also applied in:
 ### 17.4 Metadata-Only Tracing, `PostgresSaver` Non-Modification, & Rollback
 - **Metadata-Only Tracing (`emit_pre_approval_validation_trace`)**: Emits `preapproval.validation.passed`, `preapproval.validation.failed`, or `preapproval.validation.review_required` via the existing tracer abstraction with safe metadata only (`thread_id`, `club_id`, `package_version`, `policy_version`, `package_count`, `reason_codes`, `confidence_tier`, `formula_version`, `timestamp`). Never emits player aliases, raw payloads, candidate bodies, prompts, or connection strings.
 - **Database & `PostgresSaver` Non-Modification**: No database migration is added in this phase (`migrations/0001_initial.sql` through `migrations/0012_fc27_performance_and_quarantine.sql` are unchanged), `PostgresSaver` internal tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) are untouched, and `GRAPH_THREAD_DB_CONSTRAINT` remains `DEFERRED`.
-- **Rollback Procedure**: Revert the pure code changes in `src/schemas.py`, `src/lead_packages.py`, `src/graph.py`, `src/approval_store.py`, and `tests/test_fc27_preapproval_validator.py`; no database schema rollback is required.
+- **Rollback Procedure**: Revert the pure code changes in `src/schemas.py` (and historical `src/lead_packages.py`, `src/graph.py`, `src/approval_store.py`, `tests/test_fc27_preapproval_validator.py` superseded in Stage B3); no database schema rollback is required.
 
 ---
 

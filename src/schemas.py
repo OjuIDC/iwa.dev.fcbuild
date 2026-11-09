@@ -1,9 +1,48 @@
 from __future__ import annotations
+import math
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from src.dispatch.objective import METRIC_BOUNDS, validate_metric_bounds
+
+PHYSICAL_RANGE: dict[str, tuple[float, float]] = {
+    "pass_accuracy": (0.0, 100.0),
+    "shot_accuracy": (0.0, 100.0),
+    "tackle_success": (0.0, 100.0),
+    "rating": (0.0, 10.0),
+    "goals": (0.0, 10.0),
+    "assists": (0.0, 10.0),
+}
+
+METRIC_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "fc27-objective-bounds-v1": {
+        "pass_accuracy": (1.0, 25.0),
+        "rating": (0.1, 2.0),
+        "goals": (1.0, 5.0),
+        "assists": (1.0, 5.0),
+        "tackle_success": (1.0, 25.0),
+        "shot_accuracy": (1.0, 25.0),
+    },
+}
+
+
+def validate_metric_bounds(metric: str, target_delta: float, policy_version: str) -> None:
+    if isinstance(target_delta, bool) or not isinstance(target_delta, (int, float)):
+        raise ValueError(f"target_delta must be a finite number for metric {metric}")
+    if not math.isfinite(target_delta):
+        raise ValueError(f"target_delta must be finite for metric {metric}")
+    policy = METRIC_BOUNDS.get(policy_version)
+    if policy is None:
+        raise ValueError(f"unknown objective bounds policy: {policy_version}")
+    bounds = policy.get(metric)
+    if bounds is None:
+        raise ValueError(f"unknown metric for policy {policy_version}: {metric}")
+    low, high = bounds
+    if not (low <= target_delta <= high):
+        raise ValueError(
+            f"target_delta {target_delta} out of bounds [{low}, {high}] for {metric} under {policy_version}"
+        )
+
 
 class Objective(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True, populate_by_name=True)

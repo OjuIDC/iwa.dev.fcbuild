@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Operators, Developers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/settings.py`, `src/graph_api.py`, `config.example.env`, `docker-compose.yml`
+- **Source of truth**: `src/settings.py`, `config.example.env`, `docker-compose.yml`
 - **Supersedes**: `NONE`
 
 Every network, ingestion, persistence, analytical, recommendation, authentication-fallback, observability, and outbound dispatch capability in `iwa.dev.fcbuild` is governed by explicit fail-closed feature flags defined in [`src/settings.py`](../src/settings.py) and [`config.example.env`](../config.example.env).
@@ -27,7 +27,7 @@ Every network, ingestion, persistence, analytical, recommendation, authenticatio
 | `FC27_ANALYTICS_ENABLED` | `false` | `true`, `false` | Keeps runtime dashboard/analytics endpoints gated (`FC27AnalyticsDisabledError`) | Reads only from normalized `fc27_*` tables | Read-only analytics; no DB writes, no recs, no dispatch | Platform Operator | [`FC27_ANALYTICS.md`](FC27_ANALYTICS.md) |
 | `FC27_RECOMMENDATIONS_ENABLED` | `false` | `true`, `false` | Blocks coaching recommendation generation/submission (`FC27RecommendationsDisabledError`) | Requires `FC27_ANALYTICS_ENABLED=true` and `validate_coaching_recommendation` pass | Permits coaching package creation only; never approves or dispatches | Commissioner / Platform Operator | [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) |
 | `DISPATCH_ENABLED` | `false` | `true`, `false` | Hard-blocks outbound player dispatch (`Phase 1 safety invariant violation` if enabled without gates) | Requires all 6 gates in `docs/DISPATCH_ACTIVATION.md` (`G-MIGRATION`..`G-OUTBOX`) | Outbound dispatch prohibited while `false` | Commissioner + Security Owner | [`DISPATCH_ACTIVATION.md`](DISPATCH_ACTIVATION.md) |
-| `DISPATCH_WORKER_ENABLED` | `false` | `true`, `false` | Prevents `src/dispatch/worker.py` from polling `dispatch_outbox` (`RuntimeError`) | Requires `DISPATCH_ENABLED=true` and Compose `--profile dispatch` | Outbound worker execution | Platform Operator | [`DISPATCH_ACTIVATION.md`](DISPATCH_ACTIVATION.md) |
+| `DISPATCH_WORKER_ENABLED` | `false` | `true`, `false` | Prevents historical `src/dispatch/worker.py` (superseded in Stage B3) from polling `dispatch_outbox` (`RuntimeError`) | Requires `DISPATCH_ENABLED=true` and Compose `--profile dispatch` | Outbound worker execution | Platform Operator | [`DISPATCH_ACTIVATION.md`](DISPATCH_ACTIVATION.md) |
 | `APPROVAL_CLI_HMAC_ENABLED` | `false` | `true`, `false` | Rejects symmetric HMAC CLI decisions; enforces WebAuthn passkey step-up only | Requires `APPROVAL_SIGNING_SECRET` (`>= 32` bytes) | Emergency Commissioner CLI step-up only | Commissioner | [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md) |
 
 ---

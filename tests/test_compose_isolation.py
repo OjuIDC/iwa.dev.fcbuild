@@ -31,7 +31,7 @@ ALL_DB_SECRETS = {
     "fc27_match_results_writer_password",
     "fc27_migrator_uri",
     "fc27_app_uri",
-    "fc27_relay_uri",
+    "discord_bot_token",
     "postgres_password",
     "redis_password",
 }
@@ -116,20 +116,15 @@ def model(tmp_path_factory):
     return json.loads(out.stdout)
 
 
-def test_signing_secret_only_in_graph_api(model):
+def test_no_legacy_control_plane_secrets_or_services_in_base_compose(model):
+    assert set(model["services"].keys()) == {"db-bootstrap", "db-migrate", "postgres", "redis"}
     for name, svc in model["services"].items():
         env = svc.get("environment") or {}
         assert "POSTGRES_URI" not in env, f"{name} has literal POSTGRES_URI in env"
-        if name == "graph-api":
-            assert "APPROVAL_SIGNING_SECRET" in env
-            assert "GRAPH_COMMISSIONER_TOKEN_SHA256" in env
-            assert "GRAPH_COMMISSIONER_TOKEN" not in env
-            assert "GRAPH_API_TOKEN" not in env
-        else:
-            assert "APPROVAL_SIGNING_SECRET" not in env, f"{name} receives APPROVAL_SIGNING_SECRET"
-            assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env, f"{name} receives GRAPH_COMMISSIONER_TOKEN_SHA256"
-            assert "GRAPH_COMMISSIONER_TOKEN" not in env
-            assert "GRAPH_API_TOKEN" not in env
+        assert "APPROVAL_SIGNING_SECRET" not in env, f"{name} receives APPROVAL_SIGNING_SECRET"
+        assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env, f"{name} receives GRAPH_COMMISSIONER_TOKEN_SHA256"
+        assert "GRAPH_COMMISSIONER_TOKEN" not in env
+        assert "GRAPH_API_TOKEN" not in env
 
 
 def test_db_secret_mounts_per_service(model):
@@ -146,24 +141,6 @@ def test_db_secret_mounts_per_service(model):
             }
         elif name == "db-migrate":
             assert mounted == {"fc27_migrator_uri"}
-        elif name == "outbox-relay":
-            assert mounted == {"fc27_relay_uri"}
-        elif name == "dispatch-worker":
-            assert mounted == {"fc27_dispatch_uri"}
-        elif name == "graph-api":
-            assert "fc27_app_uri" in mounted
-            assert not (mounted & {
-                "postgres_admin_uri",
-                "fc27_migrator_password",
-                "fc27_app_password",
-                "fc27_dispatch_password",
-                "fc27_relay_password",
-                "fc27_match_results_writer_password",
-                "fc27_migrator_uri",
-                "fc27_relay_uri",
-                "postgres_password",
-                "redis_password",
-            })
         elif name == "postgres":
             assert mounted == {"postgres_password"}
         elif name == "redis":
@@ -205,20 +182,6 @@ def test_secrets_dir_is_gitignored():
         assert res.returncode == 0, "git check-ignore secrets/test_secret must exit with 0"
 
 
-def test_graph_api_uses_app_role(model):
-    env = model["services"]["graph-api"]["environment"]
-    assert env.get("POSTGRES_URI_FILE") == "/run/secrets/fc27_app_uri"
-    assert env.get("GRAPH_RUN_MIGRATIONS") == "false"
-    assert env.get("GRAPH_CHECKPOINT_SETUP") == "false"
-    assert "POSTGRES_URI" not in env
-
-
-def test_dispatch_disabled_by_default(model):
-    assert model["services"]["graph-api"]["environment"].get("DISPATCH_ENABLED") == "false"
-    if "dispatch-worker" in model["services"]:
-        assert model["services"]["dispatch-worker"]["environment"].get("DISPATCH_ENABLED") == "false"
-
-
 def test_db_migrate_has_no_other_secrets(model):
     env = model["services"]["db-migrate"]["environment"]
     allowed = {"POSTGRES_URI_FILE", "PYTHONUNBUFFERED"}
@@ -226,9 +189,9 @@ def test_db_migrate_has_no_other_secrets(model):
     assert env.get("POSTGRES_URI_FILE") == "/run/secrets/fc27_migrator_uri"
 
 
-def test_only_graph_api_can_reach_postgres(model):
+def test_only_db_services_can_reach_postgres_in_base_compose(model):
     on_data = sorted(n for n, s in model["services"].items() if "fc27_data" in (s.get("networks") or {}))
-    assert on_data == ["db-bootstrap", "db-migrate", "dispatch-worker", "graph-api", "outbox-relay", "postgres"]
+    assert on_data == ["db-bootstrap", "db-migrate", "postgres"]
     assert model["networks"]["fc27_data"].get("internal") is True
 
 
@@ -264,8 +227,7 @@ def test_postgres_and_redis_runtime_controls(model):
     assert redis["logging"]["driver"] == "json-file"
 
 
-@pytest.mark.parametrize("missing", ["GRAPH_SERVICE_TOKEN", "GRAPH_COMMISSIONER_TOKEN_SHA256", "APPROVAL_SIGNING_SECRET",
-                                      "COMMISSIONER_ID", "REDIS_PASSWORD"])
+@pytest.mark.parametrize("missing", ["REDIS_PASSWORD"])
 def test_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)))
     assert out.returncode != 0 and missing in out.stderr
@@ -514,11 +476,8 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
     assert on_data == [
         "db-bootstrap",
         "db-migrate",
-        "dispatch-worker",
         "fc27-community-worker",
         "fc27-discord-bot",
-        "graph-api",
-        "outbox-relay",
         "postgres",
     ]
 

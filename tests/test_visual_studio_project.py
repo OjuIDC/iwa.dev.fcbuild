@@ -159,6 +159,22 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
         r"docs\VOICE_CAPABILITIES.md",
         r"docs\MODEL_SELECTION.md",
         r"docs\ROLE_MODEL_BENCHMARK_MATRIX.md",
+        r"src\approval.py",
+        r"src\approval_store.py",
+        r"src\audit_query.py",
+        r"src\correlation.py",
+        r"src\decision.py",
+        r"src\dispatch\worker.py",
+        r"src\dispatch\outbox_relay.py",
+        r"src\fc27_coaching.py",
+        r"src\graph.py",
+        r"src\graph_api.py",
+        r"src\hierarchy.py",
+        r"src\identity\webauthn.py",
+        r"src\lead_packages.py",
+        r"src\roles.py",
+        r"src\thread_ids.py",
+        r"scripts\commissioner_decide.py",
     }
     assert removed_b1_and_b2.isdisjoint(included_paths)
 

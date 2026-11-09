@@ -945,14 +945,11 @@ def test_067_deterministic_template_output() -> None:
 
 
 def test_068_no_free_form_llm_use(monkeypatch: pytest.MonkeyPatch) -> None:
-    from src import roles
+    import sys
 
-    def _forbid_llm(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("LLM role invocation is strictly forbidden")
-
-    monkeypatch.setattr(roles, "run_role", _forbid_llm)
     exps = generate_competing_explanations("FORMATION_ASSOCIATION", "formation:4-3-3(2)")
     assert len(exps) == 4
+    assert "src.roles" not in sys.modules
 
 
 # ==============================================================================

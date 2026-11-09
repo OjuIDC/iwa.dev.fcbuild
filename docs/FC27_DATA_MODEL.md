@@ -14,7 +14,7 @@ This document specifies the normalized PostgreSQL 16 schema for East Coasters (`
 
 - **Normalized FC 27 Provider/Import Domain Tables (`migrations/0012_fc27_performance_and_quarantine.sql`)**: `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records`.
 - **Manual Match Results Domain Tables (`migrations/0013_fc27_manual_match_results.sql`)**: `fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, and `fc27_manual_match_audit` (`source_classification = 'MANUAL_MATCH_RESULT'`). Kept strictly separate from `fc27_matches` and `fc27_player_match_stats`.
-- **LangGraph `PostgresSaver` Tables**: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, and `checkpoint_migrations` are managed exclusively by `langgraph.checkpoint.postgres.PostgresSaver` (`src/graph.py`, `src/db_migrate.py`) for workflow thread durability.
+- **LangGraph `PostgresSaver` Tables**: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, and `checkpoint_migrations` were managed by historical `langgraph.checkpoint.postgres.PostgresSaver` (`src/db_migrate.py`; historical `src/graph.py` superseded in Stage B3) for workflow thread durability.
 - **Strict Boundary**: `src/fc27_repository.py`, `src/fc27_match_results.py`, `src/fc27_analytics.py`, and `src/fc27_dashboard_queries.py` **never** read or write `PostgresSaver` tables, and `PostgresSaver` checkpoint blobs are **never** treated as normalized FC 27 domain records.
 
 ---

@@ -5,24 +5,20 @@ volumes:
   redis_data:
 
 networks:
-  # Shared application network (Redis event bus, Graph API).
+  # Shared application network (Redis event bus, optional worker/Discord overlays).
   fc27_net:
     driver: bridge
   # Internal PostgreSQL data network (fc27_data). Bounded database-role services
-  # join this network: postgres, db-bootstrap, db-migrate, graph-api, outbox-relay,
-  # and dispatch-worker (plus optional overlays fc27-community-worker and
-  # fc27-discord-bot when their profiles are explicitly enabled).
+  # join this network: postgres, db-bootstrap, and db-migrate (plus optional
+  # overlays fc27-community-worker and fc27-discord-bot when their profiles are
+  # explicitly enabled).
   fc27_data:
     driver: bridge
     internal: true
 
-# Non-secret settings shared by application services. Deliberately contains NO
-# approval/commissioner/signing secrets or database URIs: approval signing secrets
-# are given only to graph-api, and database URIs are mounted as per-service files.
 x-common: &common
   FC27_CLUB_ID: ${FC27_CLUB_ID:-330323}
   FC_PLATFORM: ${FC_PLATFORM:-common-gen5}
-  GRAPH_URL: http://graph-api:8001
   REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
 
 x-app-security: &app-security
@@ -136,115 +132,6 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  graph-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["uvicorn", "src.graph_api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
-    environment:
-      <<: *common
-      # Only graph-api receives database access and approval-verification material.
-      POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
-      GRAPH_RUN_MIGRATIONS: "false"
-      GRAPH_CHECKPOINT_SETUP: "false"
-      DISPATCH_ENABLED: "false"
-      APPROVAL_REQUEST_TTL_HOURS: ${APPROVAL_REQUEST_TTL_HOURS:-72}
-      APPROVAL_CLI_HMAC_ENABLED: ${APPROVAL_CLI_HMAC_ENABLED:-true}
-      FC27_CODE_REVISION: ${FC27_CODE_REVISION:-}
-      FC27_DEPLOYMENT_ID: ${FC27_DEPLOYMENT_ID:-}
-      GRAPH_SERVICE_TOKEN: ${GRAPH_SERVICE_TOKEN:?Set GRAPH_SERVICE_TOKEN in .env}
-      GRAPH_COMMISSIONER_TOKEN_SHA256: ${GRAPH_COMMISSIONER_TOKEN_SHA256:?Set GRAPH_COMMISSIONER_TOKEN_SHA256 in .env}
-      COMMISSIONER_ID: ${COMMISSIONER_ID:?Set COMMISSIONER_ID in .env}
-      APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:?Set APPROVAL_SIGNING_SECRET in .env}
-      APPROVAL_TTL_SECONDS: ${APPROVAL_TTL_SECONDS:-120}
-      LANGSMITH_TRACING: "false"
-      LANGCHAIN_TRACING_V2: "false"
-      # Phase 2 identity secrets: file-based, mounted into graph-api ONLY.
-      # BFF_SERVICE_TOKEN authenticates the BFF; it must differ from GRAPH_SERVICE_TOKEN.
-      BFF_SERVICE_TOKEN_FILE: /run/secrets/bff_service_token
-      # Fernet key (44-char urlsafe base64) for TOTP seed encryption at rest.
-      IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/identity_encryption_key
-      # One-time commissioner bootstrap secret. There is NO fallback: if this file
-      # is empty/placeholder/weak, bootstrap is disabled (fail closed).
-      BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
-    secrets:
-      - fc27_app_uri
-      - bff_service_token
-      - identity_encryption_key
-      - bootstrap_token
-    volumes:
-      - ./reports:/app/reports:ro
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks: [fc27_net, fc27_data]
-    ports:
-      - "127.0.0.1:${GRAPH_HOST_PORT:-8001}:8001"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8001/health"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  outbox-relay:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.dispatch.outbox_relay"]
-    environment:
-      <<: *common
-      POSTGRES_URI_FILE: /run/secrets/fc27_relay_uri
-      OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-50}
-      OUTBOX_RELAY_POLL_INTERVAL: ${OUTBOX_RELAY_POLL_INTERVAL:-1.0}
-    secrets:
-      - fc27_relay_uri
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
-    networks: [fc27_net, fc27_data]
-    restart: unless-stopped
-
-  dispatch-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.dispatch.worker"]
-    environment:
-      <<: *common
-      POSTGRES_URI_FILE: /run/secrets/fc27_dispatch_uri
-      DISPATCH_ENABLED: ${DISPATCH_ENABLED:-false}
-      WORKER_HEARTBEAT_INTERVAL: ${WORKER_HEARTBEAT_INTERVAL:-15.0}
-      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-1.0}
-    secrets:
-      - fc27_dispatch_uri
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "python", "-m", "src.dispatch.worker", "--health-check"]
-      timeout: 5s
-      interval: 10s
-      retries: 3
-      start_period: 15s
-    networks: [fc27_net, fc27_data]
-    restart: unless-stopped
-
 secrets:
   postgres_admin_uri:
     file: ./secrets/postgres_admin_uri
@@ -256,22 +143,10 @@ secrets:
     file: ./secrets/fc27_dispatch_password
   fc27_migrator_uri:
     file: ./secrets/fc27_migrator_uri
-  fc27_app_uri:
-    file: ./secrets/fc27_app_uri
-  bff_service_token:
-    file: ./secrets/bff_service_token
-  identity_encryption_key:
-    file: ./secrets/identity_encryption_key
-  bootstrap_token:
-    file: ./secrets/bootstrap_token
   fc27_relay_password:
     file: ./secrets/fc27_relay_password
   fc27_match_results_writer_password:
     file: ./secrets/fc27_match_results_writer_password
-  fc27_relay_uri:
-    file: ./secrets/fc27_relay_uri
-  fc27_dispatch_uri:
-    file: ./secrets/fc27_dispatch_uri
   postgres_password:
     file: ./secrets/postgres_password
   redis_password:

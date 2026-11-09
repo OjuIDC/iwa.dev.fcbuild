@@ -406,7 +406,7 @@ def test_08_required_check_constraints_exist_and_enforced(pg_uri) -> None:
 
 
 def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
-    """9. PostgresSaver internal tables remain unmodified and have zero custom triggers."""
+    """9. PostgresSaver internal tables are not created by default after Stage B3."""
     saver_tables = (
         "checkpoints",
         "checkpoint_blobs",
@@ -417,18 +417,7 @@ def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
         with conn.cursor() as cur:
             for tbl in saver_tables:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{tbl}",))
-                assert cur.fetchone()[0] is not None
-                cur.execute(
-                    """
-                    SELECT tgname
-                    FROM pg_trigger t
-                    JOIN pg_class c ON c.oid = t.tgrelid
-                    JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE n.nspname = 'public' AND c.relname = %s AND NOT t.tgisinternal
-                    """,
-                    (tbl,),
-                )
-                assert cur.fetchall() == [], f"unexpected custom trigger on {tbl}"
+                assert cur.fetchone()[0] is None
 
 
 def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:

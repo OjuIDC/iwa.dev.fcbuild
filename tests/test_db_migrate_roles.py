@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 import psycopg
 
-from src.db_migrate import migrate, migration_files, MigrationError, GRANTS_POLICY, verify_postconditions
+from src.db_migrate import (
+    GRANTS_POLICY,
+    MigrationError,
+    check_runtime_posture,
+    migrate,
+    migration_files,
+    verify_postconditions,
+)
 
 PINNED_APPLIED_MIGRATION_SHA256 = {
     "0001_initial.sql": "692e05d98453eb8a4c87016ad6b13cdb805bb68476b00fd8cb9df60811e88094",
@@ -64,23 +71,6 @@ def test_app_cannot_run_ddl(pg_uri):
         with psycopg.connect(pg_uri, autocommit=True) as conn:
             conn.execute("CREATE TABLE x()")
 
-def test_checkpoint_setup_requires_owner(pg_uri):
-    from langgraph.checkpoint.postgres import PostgresSaver
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        with psycopg.connect(pg_uri, autocommit=True) as conn:
-            PostgresSaver(conn).setup()
-
-def test_app_can_use_checkpointer(pg_uri):
-    from src.graph import GraphDeps, GraphRunner
-    from src.approval_store import ApprovalStore
-
-    store = ApprovalStore(pg_uri)
-    deps = GraphDeps(dashboard_reader=lambda t, a: {}, role_runner=lambda r, d, reg: None, registry_factory=lambda: None, decision_reader=store.load)
-
-    runner = GraphRunner.from_conninfo(pg_uri, deps, setup=False)
-    # the thread inspector read works
-    assert list(runner.history("test")) == []
-
 def test_tamper_check_still_applies(pg_db_migrated, tmp_path):
     import src.db_migrate as db_migrate
     mig_dir = tmp_path / "migrations"
@@ -122,41 +112,30 @@ def test_db_migrate_cli_exit_code(pg_db_migrated):
     assert proc.returncode != 0
     assert "create_on_public" in proc.stderr
 
-def test_graph_api_refuses_owner_member_or_create(pg_db_migrated):
-    from src.graph_api import create_app
-    from src.settings import ConfigError
-    from tests.helpers import settings
-    from fastapi.testclient import TestClient
+def test_runtime_posture_refuses_owner_member_or_create(pg_db_migrated):
+    with psycopg.connect(pg_db_migrated.app) as app_conn:
+        assert check_runtime_posture(app_conn) == []
 
-    # GRANT CREATE
     with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
         conn.execute("GRANT CREATE ON SCHEMA public TO fc27_app")
 
-    app = create_app(settings(pg_db_migrated.app, enforce_db_posture=True))
-    with pytest.raises(ConfigError, match="create_on_public"):
-        with TestClient(app): pass
+    with psycopg.connect(pg_db_migrated.app) as app_conn:
+        assert "create_on_public" in check_runtime_posture(app_conn)
 
     with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
         conn.execute("REVOKE CREATE ON SCHEMA public FROM fc27_app")
         conn.execute("GRANT fc27_owner TO fc27_app")
 
-    app = create_app(settings(pg_db_migrated.app, enforce_db_posture=True))
     try:
-        with pytest.raises(ConfigError, match="owner_member"):
-            with TestClient(app): pass
+        with psycopg.connect(pg_db_migrated.app) as app_conn:
+            assert "owner_member" in check_runtime_posture(app_conn)
     finally:
         with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
             conn.execute("REVOKE fc27_owner FROM fc27_app")
 
-def test_graph_api_refuses_privileged_role(pg_admin_db_uri):
-    from src.graph_api import create_app
-    from src.settings import ConfigError
-    from tests.helpers import settings
-    from fastapi.testclient import TestClient
-
-    app = create_app(settings(pg_admin_db_uri, enforce_db_posture=True))
-    with pytest.raises(ConfigError, match="superuser"):
-        with TestClient(app): pass
+def test_runtime_posture_refuses_privileged_role(pg_admin_db_uri):
+    with psycopg.connect(pg_admin_db_uri) as admin_conn:
+        assert "superuser" in check_runtime_posture(admin_conn)
 
 def test_grants_policy_constant_matches_file():
     import src.db_migrate as db_migrate
@@ -208,18 +187,6 @@ def test_migrate_errors_redact_password(pg_db):
         assert False, "Should raise"
     except Exception as e:
         assert 's3cret' not in str(e)
-
-
-def test_identity_store_zero_runtime_ddl():
-    """Asserts that src/identity/store.py contains zero runtime DDL statements (R10)."""
-    store_path = Path(__file__).resolve().parents[1] / "src" / "identity" / "store.py"
-    code = store_path.read_text(encoding="utf-8")
-    assert "CREATE TABLE" not in code, "store.py must not contain runtime CREATE TABLE statements"
-    assert "DROP TABLE" not in code, "store.py must not contain runtime DROP TABLE statements"
-    assert "ALTER TABLE" not in code, "store.py must not contain runtime ALTER TABLE statements"
-    assert "_ensure_bootstrap_lock_table" not in code
-    assert "_ensure_decision_evidence_table" not in code
-    assert "_ensure_player_tables" not in code
 
 
 def test_fc27_decision_evidence_least_privilege(pg_uri):

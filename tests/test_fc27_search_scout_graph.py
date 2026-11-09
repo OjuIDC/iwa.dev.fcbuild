@@ -16,7 +16,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from src import events, roles, settings
+from src import events, settings
 from src.db_migrate import migrate
 from src.db_roles import bootstrap_cluster, bootstrap_database
 from src.fc27_repository import apply_export_plan, insert_quarantine_record
@@ -257,16 +257,15 @@ def test_97_no_dns_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sc_update["analysis_confidence"] == "EXPLORATORY"
 
 
-def test_98_no_llm_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_llm(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("LLM call attempted in Search or Scout")
+def test_98_no_llm_calls() -> None:
+    import sys
 
-    monkeypatch.setattr(roles, "run_role", _forbid_llm)
     reader = InMemoryFC27AnalyticsReader(matches=_make_synthetic_matches(4))
     state = _initial_graph_state()
     s_update = search_node(state, reader=reader, analysis_generated_at=REF_NOW)
     sc_update = scout_node({**state, **s_update})
     assert sc_update["scout_report"] is not None
+    assert "src.roles" not in sys.modules
 
 
 def test_99_no_approval_interaction() -> None:
