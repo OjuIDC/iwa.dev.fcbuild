@@ -16,12 +16,12 @@ PHYSICAL_RANGE: dict[str, tuple[float, float]] = {
 
 METRIC_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "fc27-objective-bounds-v1": {
-        "pass_accuracy": (0.1, 25.0),
-        "rating": (0.1, 3.0),
-        "goals": (0.1, 2.0),
-        "assists": (0.1, 2.0),
-        "tackle_success": (0.1, 25.0),
-        "shot_accuracy": (0.1, 25.0),
+        "pass_accuracy": (1.0, 25.0),
+        "rating": (0.1, 2.0),
+        "goals": (1.0, 5.0),
+        "assists": (1.0, 5.0),
+        "tackle_success": (1.0, 25.0),
+        "shot_accuracy": (1.0, 25.0),
     },
 }
 
