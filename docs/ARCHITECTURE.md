@@ -73,7 +73,7 @@ flowchart TD
 
 ## 3. Component & Network-Boundary Diagram
 
-Docker Compose (`docker-compose.yml` and `docker-compose.langfuse.yml`) partitions containers across isolated bridge networks (`fc27_data`, `fc27_net`, plus optional `fc27_obs` and `fc27_obs_edge`):
+Docker Compose (`docker-compose.yml`) partitions containers across isolated bridge networks (`fc27_data` and `fc27_net`):
 
 ```mermaid
 flowchart LR
@@ -124,8 +124,7 @@ flowchart LR
 ### Network Boundary Invariants (Enforced by `tests/test_compose_isolation.py`)
 1. **`fc27_data` (`internal: true`)**: Joined **only** by `postgres`, `db-bootstrap`, `db-migrate`, `graph-api`, `outbox-relay`, and `dispatch-worker`. `fc27-mcp`, `live-watcher`, `post-match-rundown`, `ws-server`, `ollama`, `voice-gateway`, `stt`, `tts`, and `rtsp-analyzer` have **zero** network route to PostgreSQL.
 2. **`fc27_net` (`bridge`)**: Shared application network for `redis`, `fc27-mcp`, `model-health`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, and optional `--profile voice` / `--profile rtsp` / `--profile local-ollama` (`ollama`, `ollama-init`) services. `graph-api` and `model-health` reach the default remote Ollama server (`OLLAMA_BASE_URL`, `http://araba.ojuidc.olutech.systems:11434`) through this network's outbound NAT; access to that server is restricted by its host firewall to named client addresses.
-3. **`fc27_obs` (`internal: true` in `docker-compose.langfuse.yml`)**: Isolates optional `--profile langfuse` datastores (`langfuse-postgres`, `langfuse-clickhouse`, `langfuse-minio`, `langfuse-redis`, `langfuse-worker`), joined only by `graph-api` and `langfuse-web` (`127.0.0.1:3000` via `fc27_obs_edge`).
-4. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`, `3000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
+3. **Loopback Host Bindings (`127.0.0.1`)**: Every host-published port (`8001`, `8765`, `8766`, `6379`, `9000`) binds strictly to `127.0.0.1`. `postgres`, `ollama`, and `fc27-mcp` publish no host ports.
 
 ---
 
