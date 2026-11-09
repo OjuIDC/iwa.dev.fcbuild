@@ -2553,8 +2553,12 @@ def validate_repository(
                         or (
                             doc_rel.startswith("docs/design/")
                             and (
-                                clean_tok in removed_manifest_paths
-                                or any(clean_tok.startswith(f"{rp}/") for rp in removed_manifest_paths)
+                                clean_tok.rstrip("/") in removed_manifest_paths
+                                or any(
+                                    rp.startswith(f"{clean_tok.rstrip('/')}/")
+                                    or clean_tok.rstrip("/").startswith(f"{rp}/")
+                                    for rp in removed_manifest_paths
+                                )
                             )
                         )
                     ):
