@@ -3,11 +3,9 @@ name: fc27-full-stack
 volumes:
   postgres_data:
   redis_data:
-  ollama_data:
-  stt_cache:
 
 networks:
-  # Shared application network (Redis event bus, MCP, Ollama, Graph API).
+  # Shared application network (Redis event bus, Graph API).
   fc27_net:
     driver: bridge
   # Internal PostgreSQL data network (fc27_data). Bounded database-role services
@@ -24,7 +22,6 @@ networks:
 x-common: &common
   FC27_CLUB_ID: ${FC27_CLUB_ID:-330323}
   FC_PLATFORM: ${FC_PLATFORM:-common-gen5}
-  FC27_MCP_URL: http://fc27-mcp:8000
   GRAPH_URL: http://graph-api:8001
   REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
 
@@ -139,103 +136,10 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Model inference runs on the shared lab Ollama server (OLLAMA_BASE_URL,
-  # default http://araba.ojuidc.olutech.systems:11434). The bundled Ollama
-  # container is NOT started by default; it starts only with
-  # `--profile local-ollama` (then also set OLLAMA_BASE_URL=http://ollama:11434).
-  ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761}
-    profiles: [local-ollama]
-    volumes:
-      - ollama_data:/root/.ollama
-    networks: [fc27_net]
-    expose: ["11434"]
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
-      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
-      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
-      OLLAMA_MAX_QUEUE: ${OLLAMA_MAX_QUEUE:-64}
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
-
-  ollama-init:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761}
-    profiles: [local-ollama]
-    depends_on:
-      ollama:
-        condition: service_healthy
-    networks: [fc27_net]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      REQUIRED_MODELS: ${REQUIRED_MODELS:-llama3.2:3b qwen2.5:7b}
-    volumes:
-      - ollama_data:/root/.ollama
-      - ./scripts/ollama-init.sh:/init.sh:ro
-    entrypoint: ["/bin/sh", "/init.sh"]
-    restart: "no"
-
-  model-health:
-    image: ${PYTHON_IMAGE:-python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545}
-    <<: *app-security
-    # No dependency on ollama-init: the default model server is remote and
-    # models are provisioned there. The watcher retries every 30 s, so with
-    # --profile local-ollama it turns healthy once ollama-init has pulled them.
-    networks: [fc27_net]
-    environment:
-      OLLAMA_URL: ${OLLAMA_BASE_URL:-http://araba.ojuidc.olutech.systems:11434}
-      REQUIRED_MODELS: ${REQUIRED_MODELS:-llama3.2:3b qwen2.5:7b}
-    volumes:
-      - ./scripts/model_health.py:/app/model_health.py:ro
-    command: ["python", "/app/model_health.py", "--watch"]
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/models-healthy"]
-      interval: 20s
-      timeout: 5s
-      retries: 3
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,noexec,nosuid
-    restart: unless-stopped
-
-  fc27-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp
-    <<: *app-security
-    environment:
-      FC27_CLUB_ID: ${FC27_CLUB_ID:-330323}
-      FC_PLATFORM: ${FC_PLATFORM:-common-gen5}
-      MCP_PORT: "8000"
-      # Listen on all interfaces INSIDE the container so Compose peers
-      # (graph-api, live-watcher, post-match-rundown) can reach it. The port is
-      # NOT published to the host; bearer auth stays mandatory.
-      MCP_HOST: "0.0.0.0"
-      MCP_ALLOWED_ORIGIN: ${MCP_ALLOWED_ORIGIN:-http://localhost}
-      MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN in .env}
-    networks: [fc27_net]
-    expose: ["8000"]
-    healthcheck:
-      # Probes the container's own Compose-network address (never loopback), i.e.
-      # the same listener peers use. Fails if MCP is bound to 127.0.0.1.
-      test: ["CMD", "python", "-m", "src.mcp_healthcheck"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   graph-api:
     build:
       context: .
       dockerfile: Dockerfile.graph
-      args:
-        WITH_SWARMS: "true"
-        WITH_LANGFUSE: "true"
     <<: *app-security
     command: ["uvicorn", "src.graph_api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
     environment:
@@ -254,18 +158,8 @@ services:
       COMMISSIONER_ID: ${COMMISSIONER_ID:?Set COMMISSIONER_ID in .env}
       APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:?Set APPROVAL_SIGNING_SECRET in .env}
       APPROVAL_TTL_SECONDS: ${APPROVAL_TTL_SECONDS:-120}
-      MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN in .env}
-      MODEL_CATALOG: /app/config/model_catalog.json
-      MODEL_BENCHMARK_MATRIX: /app/config/role_benchmark_matrix.json
-      MODEL_BENCHMARK_RESULTS: /app/reports/model_benchmark_results.json
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://araba.ojuidc.olutech.systems:11434}
-      LM_STUDIO_FALLBACK_ENABLED: ${LM_STUDIO_FALLBACK_ENABLED:-false}
-      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
-      ROLE_BACKEND: ${ROLE_BACKEND:-swarms}
-      SWARMS_TELEMETRY_ON: "false"
       LANGSMITH_TRACING: "false"
       LANGCHAIN_TRACING_V2: "false"
-      LANGFUSE_ENABLED: "false"
       # Phase 2 identity secrets: file-based, mounted into graph-api ONLY.
       # BFF_SERVICE_TOKEN authenticates the BFF; it must differ from GRAPH_SERVICE_TOKEN.
       BFF_SERVICE_TOKEN_FILE: /run/secrets/bff_service_token
@@ -279,8 +173,6 @@ services:
       - bff_service_token
       - identity_encryption_key
       - bootstrap_token
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./reports:/app/reports:ro
     depends_on:
@@ -290,10 +182,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      fc27-mcp:
-        condition: service_healthy
-      model-health:
-        condition: service_healthy
     networks: [fc27_net, fc27_data]
     ports:
       - "127.0.0.1:${GRAPH_HOST_PORT:-8001}:8001"
@@ -302,42 +190,6 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
-
-  live-watcher:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.live_match_watcher"]
-    environment:
-      <<: *common
-      POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-30}
-      TILT_THRESHOLD: ${TILT_THRESHOLD:-3}
-      GRAPH_SERVICE_TOKEN: ${GRAPH_SERVICE_TOKEN:?Set GRAPH_SERVICE_TOKEN in .env}
-      MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN in .env}
-    depends_on:
-      graph-api:
-        condition: service_healthy
-    networks: [fc27_net]
-    restart: unless-stopped
-
-  post-match-rundown:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.post_match_rundown"]
-    environment:
-      <<: *common
-      COMMISSIONER_ID: ${COMMISSIONER_ID:?Set COMMISSIONER_ID in .env}
-      MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN in .env}
-    depends_on:
-      redis:
-        condition: service_healthy
-      fc27-mcp:
-        condition: service_healthy
-    networks: [fc27_net]
     restart: unless-stopped
 
   outbox-relay:
@@ -391,92 +243,6 @@ services:
       retries: 3
       start_period: 15s
     networks: [fc27_net, fc27_data]
-    restart: unless-stopped
-
-  ws-server:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.live_ws_server"]
-    environment:
-      <<: *common
-      WS_HOST: 0.0.0.0
-      WS_PORT: "8765"
-      WS_AUTH_TOKEN: ${WS_AUTH_TOKEN:?Set WS_AUTH_TOKEN in .env}
-      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks: [fc27_net]
-    ports:
-      - "127.0.0.1:${WS_HOST_PORT:-8765}:8765"
-      - "127.0.0.1:${WS_HEALTH_HOST_PORT:-8766}:8766"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8766/health"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  rtsp-analyzer:
-    build:
-      context: .
-      dockerfile: Dockerfile.graph
-    <<: *app-security
-    command: ["python", "-m", "src.rtsp_frame_analyzer"]
-    environment:
-      <<: *common
-      XBOX_IP: ${XBOX_IP:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks: [fc27_net]
-    profiles: [rtsp]
-    restart: unless-stopped
-
-  stt:
-    <<: *app-security
-    build: {context: ., dockerfile: Dockerfile.stt}
-    profiles: [voice]
-    networks: [fc27_net]
-    environment:
-      STT_MODEL: ${STT_MODEL:-small.en}
-      STT_DEVICE: ${STT_DEVICE:-cpu}
-      STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8}
-    # The image runs as user "voice" with HOME=/home/voice; the model cache must live there.
-    volumes: [stt_cache:/home/voice/.cache]
-    expose: ["9001"]
-    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"], interval: 30s, timeout: 10s, retries: 10, start_period: 300s}
-    restart: unless-stopped
-  tts:
-    <<: *app-security
-    build: {context: ., dockerfile: Dockerfile.tts}
-    profiles: [voice]
-    networks: [fc27_net]
-    expose: ["9002"]
-    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/health')"], interval: 20s, timeout: 5s, retries: 5}
-    restart: unless-stopped
-  voice-gateway:
-    <<: *app-security
-    build: {context: ., dockerfile: Dockerfile.graph}
-    command: ["uvicorn", "src.voice_gateway:app", "--host", "0.0.0.0", "--port", "9000"]
-    healthcheck: {test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health"], interval: 20s, timeout: 5s, retries: 5}
-    profiles: [voice]
-    networks: [fc27_net]
-    environment:
-      GRAPH_URL: http://graph-api:8001
-      # Read-only service role. Voice holds no commissioner or signing material.
-      GRAPH_SERVICE_TOKEN: ${GRAPH_SERVICE_TOKEN:?Set GRAPH_SERVICE_TOKEN}
-      VOICE_API_TOKEN: ${VOICE_API_TOKEN:?Set VOICE_API_TOKEN}
-      STT_URL: http://stt:9001
-      TTS_URL: http://tts:9002
-      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
-    depends_on:
-      graph-api: {condition: service_healthy}
-      stt: {condition: service_healthy}
-      tts: {condition: service_healthy}
-    ports: ["127.0.0.1:${VOICE_HOST_PORT:-9000}:9000"]
     restart: unless-stopped
 
 secrets:

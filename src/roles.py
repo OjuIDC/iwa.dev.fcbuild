@@ -12,20 +12,26 @@ Every role call goes through :func:`run_role`, which
 
 Roles have no approval authority. Their only effect is a bounded score
 adjustment per player, applied by the explicit policy in ``lead_packages``.
-The orchestration layer depends only on :func:`get_role_runner`; the backend
-is chosen by ROLE_BACKEND (``native`` or ``swarms``, see src/swarms_backend.py).
+The orchestration layer depends only on :func:`get_role_runner`.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .model_selection import ModelRegistry, OpenAICompatibleClient, invoke_role
-
 PROMPT_VERSION = "fc27-roles-v1"
+
+
+@dataclass(frozen=True)
+class _Route:
+    role: str
+    provider: str = "ollama"
+    model: str = "stub-model"
+    fallback: tuple[tuple[str, str], ...] = ()
 MAX_ADJUSTMENT = 10.0
 ROLE_FOCUS = {
     "scout": "Identify which players' recent evidence most supports selection or development.",
@@ -97,16 +103,26 @@ def parse_output(text: str) -> RoleOutput:
     return RoleOutput.model_validate_json(cleaned)
 
 
-def run_role(role: str, data: dict[str, Any], *, registry: ModelRegistry | None = None,
-             client: OpenAICompatibleClient | None = None) -> RoleResult:
+def run_role(role: str, data: dict[str, Any], *, registry: Any = None,
+             client: Any = None) -> RoleResult:
+    messages = build_messages(role, data)
+    route = _Route(role=role)
+    if client is None:
+        return RoleResult(
+            role=role,
+            valid=False,
+            provider="disabled",
+            model="disabled",
+            prompt_version=PROMPT_VERSION,
+            error="model runtime disabled",
+        )
     try:
-        response = invoke_role(role, build_messages(role, data), registry or ModelRegistry(), client)
+        content = client.invoke(route, messages)
     except Exception as exc:
         return RoleResult(role=role, valid=False, error=f"model call failed: {type(exc).__name__}")
-    route = response["route"]
-    meta = dict(provider=route.provider, model=route.model, fallback_used=response["fallback_used"])
+    meta = dict(provider=route.provider, model=route.model, fallback_used=False)
     try:
-        output = parse_output(response["content"])
+        output = parse_output(content)
     except (ValidationError, ValueError) as exc:
         return RoleResult(role=role, valid=False, error=f"invalid structured output: {type(exc).__name__}", **meta)
     return RoleResult(role=role, valid=True, output=output, **meta)
@@ -119,11 +135,6 @@ def get_role_runner():
     backend = os.getenv("ROLE_BACKEND", "native").strip().lower()
     if backend == "native":
         return run_role
-    if backend == "swarms":
-        from .swarms_backend import _swarms, run_role_swarms
-
-        _swarms()  # fail fast if the package is missing, wrong version or telemetry is on
-        return run_role_swarms
     from .settings import ConfigError
 
-    raise ConfigError("ROLE_BACKEND must be 'native' or 'swarms'")
+    raise ConfigError("ROLE_BACKEND must be 'native'")

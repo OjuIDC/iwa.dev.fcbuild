@@ -1,17 +1,12 @@
 FROM python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr curl && rm -rf /var/lib/apt/lists/* && useradd -r -u 10001 app
-COPY requirements.txt requirements-swarms.txt requirements-langfuse.txt /app/
-ARG WITH_SWARMS=false
-ARG WITH_LANGFUSE=false
-RUN pip install --no-cache-dir -r requirements.txt \
- && if [ "$WITH_SWARMS" = "true" ]; then pip install --no-cache-dir -r requirements-swarms.txt; fi \
- && if [ "$WITH_LANGFUSE" = "true" ]; then pip install --no-cache-dir -r requirements-langfuse.txt; fi
-ENV SWARMS_TELEMETRY_ON=false
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && useradd -r -u 10001 app
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 COPY src /app/src
 COPY config /app/config
 COPY migrations /app/migrations
 USER app
-EXPOSE 8001 8765 8766
+EXPOSE 8001
 CMD ["uvicorn","src.graph_api:create_app","--factory","--host","0.0.0.0","--port","8001"]

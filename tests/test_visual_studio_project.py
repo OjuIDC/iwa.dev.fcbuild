@@ -111,7 +111,7 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
                 rel = Path(inc.replace("\\", "/"))
                 assert (REPO_ROOT / rel).is_file(), f"Missing file in .pyproj {tag}: {inc}"
 
-    removed_b1 = {
+    removed_b1_and_b2 = {
         r"src\fc27_authorized_provider.py",
         r"src\fc27_authorized_transport.py",
         r"src\fc27_authorized_api.py",
@@ -124,8 +124,43 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
         r"tests\test_fc27_api_ingestion.py",
         r"tests\test_fc27_clubs_compatibility.py",
         r"tests\test_fc27_safe_adapter_bundle_manifest.py",
+        r"src\voice_gateway.py",
+        r"voice\__init__.py",
+        r"voice\stt_service.py",
+        r"voice\tts_service.py",
+        r"src\rtsp_frame_analyzer.py",
+        r"src\ocr_parsing.py",
+        r"host_agent\capture_agent.py",
+        r"host_agent\install.ps1",
+        r"host_agent\requirements_windows.txt",
+        r"src\live_match_watcher.py",
+        r"src\post_match_rundown.py",
+        r"src\live_ws_server.py",
+        r"src\fc27_mcp_server.py",
+        r"src\mcp_retry.py",
+        r"src\mcp_healthcheck.py",
+        r"src\swarms_backend.py",
+        r"src\model_selection.py",
+        r"src\benchmark.py",
+        r"src\tracing.py",
+        r"scripts\model_health.py",
+        r"scripts\ollama-init.sh",
+        r"config\model_catalog.json",
+        r"config\role_benchmark_matrix.json",
+        r"Dockerfile.mcp",
+        r"Dockerfile.stt",
+        r"Dockerfile.tts",
+        r"docker-compose.cpu.yml",
+        r"docker-compose.gpu.yml",
+        r"docker-compose.langfuse.yml",
+        r"docker-compose.voice-gpu.yml",
+        r"requirements-langfuse.txt",
+        r"requirements-swarms.txt",
+        r"docs\VOICE_CAPABILITIES.md",
+        r"docs\MODEL_SELECTION.md",
+        r"docs\ROLE_MODEL_BENCHMARK_MATRIX.md",
     }
-    assert removed_b1.isdisjoint(included_paths)
+    assert removed_b1_and_b2.isdisjoint(included_paths)
 
 
 def _find_visual_studio_msbuild() -> Path:

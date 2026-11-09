@@ -1,7 +1,7 @@
 {
   "manifest_version": "fc27-removed-items-manifest-v1",
   "generated_on": "2026-11-08",
-  "deleted_in_current_phase_count": 12,
+  "deleted_in_current_phase_count": 49,
   "removed_items": [
     {
       "path": "src/agency_org.py",
@@ -51,7 +51,7 @@
     {
       "path": "src/fc27_authorized_provider.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero active runtime, polling worker, Discord bot, or repository dependencies; superseded by src/fc27_community_provider.py (fc-clubs-api-community-v1).",
       "replacement": "src/fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -68,7 +68,7 @@
     {
       "path": "src/fc27_authorized_transport.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "General-purpose helpers (parse_json_strict_no_duplicates, PROHIBITED_HEADER_NAMES) moved to src/fc27_clubs_api_contracts.py; standards-HTTP transport removed with zero active callers.",
       "replacement": "src/fc27_clubs_api_contracts.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -83,7 +83,7 @@
     {
       "path": "src/fc27_authorized_api.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero active runtime callers outside deleted authorized-provider modules and their exclusive tests.",
       "replacement": "src/fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -97,7 +97,7 @@
     {
       "path": "src/fc27_provider_contract.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero active runtime callers; endpoint contracts and normalization reside in src/fc27_clubs_api_contracts.py.",
       "replacement": "src/fc27_clubs_api_contracts.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -111,7 +111,7 @@
     {
       "path": "src/fc27_clubs.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero active runtime callers; club lookup and match normalization handled by src/fc27_community_provider.py and src/fc27_clubs_api_contracts.py.",
       "replacement": "src/fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -125,7 +125,7 @@
     {
       "path": "scripts/fc27_club_lookup.py",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero Dockerfile, Compose, workflow, or runtime references; superseded by scripts/fc27_community_eval.py and scripts/fc27_polling_worker.py.",
       "replacement": "scripts/fc27_community_eval.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -139,7 +139,7 @@
     {
       "path": "config/fc27_safe_adapter_bundle_manifest.json",
       "classification": "CANDIDATE_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Zero runtime references; tracked SHA-256 digests of removed authorized-provider modules.",
       "replacement": "NONE",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -153,7 +153,7 @@
     {
       "path": "tests/test_fc27_authorized_provider.py",
       "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Exclusively tested removed src/fc27_authorized_provider.py and src/fc27_authorized_transport.py.",
       "replacement": "tests/test_fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -167,7 +167,7 @@
     {
       "path": "tests/test_fc27_authorized_api.py",
       "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Exclusively tested removed src/fc27_authorized_api.py and src/fc27_provider_contract.py.",
       "replacement": "tests/test_fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -180,7 +180,7 @@
     {
       "path": "tests/test_fc27_api_ingestion.py",
       "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Exclusively tested removed authorized-provider ingestion wrapper; community provider persistence is tested in tests/test_fc27_community_provider.py and tests/test_fc27_polling_worker.py.",
       "replacement": "tests/test_fc27_community_provider.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -194,7 +194,7 @@
     {
       "path": "tests/test_fc27_clubs_compatibility.py",
       "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Exclusively tested removed src/fc27_clubs.py.",
       "replacement": "tests/test_fc27_clubs_api_contracts.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -207,7 +207,7 @@
     {
       "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",
       "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
-      "deleted_in_current_phase": true,
+      "deleted_in_current_phase": false,
       "proof_summary": "Exclusively tested removed config/fc27_safe_adapter_bundle_manifest.json.",
       "replacement": "tests/test_fc27_clubs_api_contracts.py",
       "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
@@ -216,6 +216,741 @@
         "tests/test_fc27_clubs_api_contracts.py"
       ],
       "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_safe_adapter_bundle_manifest.py"
+    },
+    {
+      "path": "src/voice_gateway.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy voice gateway removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/voice_gateway.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/voice_gateway.py"
+    },
+    {
+      "path": "voice/__init__.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy voice package removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (voice/__init__.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- voice/__init__.py"
+    },
+    {
+      "path": "voice/stt_service.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy STT service removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (voice/stt_service.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- voice/stt_service.py"
+    },
+    {
+      "path": "voice/tts_service.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy TTS service removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (voice/tts_service.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- voice/tts_service.py"
+    },
+    {
+      "path": "src/rtsp_frame_analyzer.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy RTSP analyzer removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/rtsp_frame_analyzer.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/rtsp_frame_analyzer.py"
+    },
+    {
+      "path": "src/ocr_parsing.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy OCR parser removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/ocr_parsing.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/ocr_parsing.py"
+    },
+    {
+      "path": "host_agent/capture_agent.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Windows host capture agent removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (host_agent/capture_agent.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- host_agent/capture_agent.py"
+    },
+    {
+      "path": "host_agent/install.ps1",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Windows host agent installer removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (host_agent/install.ps1).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- host_agent/install.ps1"
+    },
+    {
+      "path": "host_agent/requirements_windows.txt",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Windows host agent requirements removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (host_agent/requirements_windows.txt).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- host_agent/requirements_windows.txt"
+    },
+    {
+      "path": "src/live_match_watcher.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; superseded by src/fc27_polling_worker.py.",
+      "replacement": "src/fc27_polling_worker.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/live_match_watcher.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/live_match_watcher.py"
+    },
+    {
+      "path": "src/post_match_rundown.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; superseded by src/fc27_match_results.py and src/fc27_discord_bot.py.",
+      "replacement": "src/fc27_match_results.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/post_match_rundown.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/post_match_rundown.py"
+    },
+    {
+      "path": "src/live_ws_server.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy WebSocket broadcast server removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/live_ws_server.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/live_ws_server.py"
+    },
+    {
+      "path": "src/fc27_mcp_server.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy MCP server removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/fc27_mcp_server.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/fc27_mcp_server.py"
+    },
+    {
+      "path": "src/mcp_retry.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy MCP retry policy removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/mcp_retry.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/mcp_retry.py"
+    },
+    {
+      "path": "src/mcp_healthcheck.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy MCP healthcheck removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/mcp_healthcheck.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/mcp_healthcheck.py"
+    },
+    {
+      "path": "src/swarms_backend.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Swarms backend removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/swarms_backend.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/swarms_backend.py"
+    },
+    {
+      "path": "src/model_selection.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy model selection registry removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/model_selection.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/model_selection.py"
+    },
+    {
+      "path": "src/benchmark.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy benchmark harness removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/benchmark.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/benchmark.py"
+    },
+    {
+      "path": "src/tracing.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; NullTracer moved to src/graph.py and Langfuse tracing removed.",
+      "replacement": "src/graph.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (src/tracing.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- src/tracing.py"
+    },
+    {
+      "path": "scripts/model_health.py",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy model healthcheck CLI removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (scripts/model_health.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- scripts/model_health.py"
+    },
+    {
+      "path": "scripts/ollama-init.sh",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Ollama init script removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (scripts/ollama-init.sh).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- scripts/ollama-init.sh"
+    },
+    {
+      "path": "config/model_catalog.json",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy model catalog removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (config/model_catalog.json).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- config/model_catalog.json"
+    },
+    {
+      "path": "config/role_benchmark_matrix.json",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy role benchmark matrix removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (config/role_benchmark_matrix.json).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- config/role_benchmark_matrix.json"
+    },
+    {
+      "path": "Dockerfile.mcp",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy MCP Dockerfile removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (Dockerfile.mcp).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- Dockerfile.mcp"
+    },
+    {
+      "path": "Dockerfile.stt",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy STT Dockerfile removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (Dockerfile.stt).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- Dockerfile.stt"
+    },
+    {
+      "path": "Dockerfile.tts",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy TTS Dockerfile removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (Dockerfile.tts).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- Dockerfile.tts"
+    },
+    {
+      "path": "docker-compose.cpu.yml",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy CPU Ollama Compose overlay removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docker-compose.cpu.yml).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docker-compose.cpu.yml"
+    },
+    {
+      "path": "docker-compose.gpu.yml",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy GPU Ollama Compose overlay removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docker-compose.gpu.yml).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docker-compose.gpu.yml"
+    },
+    {
+      "path": "docker-compose.langfuse.yml",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Langfuse Compose overlay removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docker-compose.langfuse.yml).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docker-compose.langfuse.yml"
+    },
+    {
+      "path": "docker-compose.voice-gpu.yml",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy GPU Voice Compose overlay removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docker-compose.voice-gpu.yml).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docker-compose.voice-gpu.yml"
+    },
+    {
+      "path": "requirements-langfuse.txt",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Langfuse requirements removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (requirements-langfuse.txt).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- requirements-langfuse.txt"
+    },
+    {
+      "path": "requirements-swarms.txt",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active FC27 Discord product dependencies; legacy Swarms requirements removed.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (requirements-swarms.txt).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- requirements-swarms.txt"
+    },
+    {
+      "path": "tests/test_voice_gateway_api.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/voice_gateway.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_voice_gateway_api.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_voice_gateway_api.py"
+    },
+    {
+      "path": "tests/test_typed_graph_voice.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed voice gateway and TTS integration.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_typed_graph_voice.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_typed_graph_voice.py"
+    },
+    {
+      "path": "tests/test_ocr_parsing.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/ocr_parsing.py and src/rtsp_frame_analyzer.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_ocr_parsing.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_ocr_parsing.py"
+    },
+    {
+      "path": "tests/test_installer_static.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed host_agent/install.ps1 and host_agent/capture_agent.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_installer_static.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_installer_static.py"
+    },
+    {
+      "path": "tests/test_watcher_processing.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/live_match_watcher.py.",
+      "replacement": "tests/test_fc27_polling_worker.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_watcher_processing.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_watcher_processing.py"
+    },
+    {
+      "path": "tests/test_rundown_match_and_prompt.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/post_match_rundown.py.",
+      "replacement": "tests/test_fc27_match_results.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_rundown_match_and_prompt.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_rundown_match_and_prompt.py"
+    },
+    {
+      "path": "tests/test_integrated_services.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed legacy watcher, rundown, MCP, and WebSocket services.",
+      "replacement": "tests/test_fc27_polling_worker.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_integrated_services.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_integrated_services.py"
+    },
+    {
+      "path": "tests/test_ws_server.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/live_ws_server.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_ws_server.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_ws_server.py"
+    },
+    {
+      "path": "tests/test_mcp_http_server.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/fc27_mcp_server.py and src/mcp_healthcheck.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_mcp_http_server.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_mcp_http_server.py"
+    },
+    {
+      "path": "tests/test_mcp_retry_and_tools.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/mcp_retry.py and src/fc27_mcp_server.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_mcp_retry_and_tools.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_mcp_retry_and_tools.py"
+    },
+    {
+      "path": "tests/test_swarms_backend.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/swarms_backend.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_swarms_backend.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_swarms_backend.py"
+    },
+    {
+      "path": "tests/test_model_selection.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/model_selection.py and src/benchmark.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_model_selection.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_model_selection.py"
+    },
+    {
+      "path": "tests/test_end_to_end.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed model_selection, benchmark, and legacy end-to-end stubs.",
+      "replacement": "tests/test_fc27_advisory_pipeline_e2e.py",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_end_to_end.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_end_to_end.py"
+    },
+    {
+      "path": "tests/test_tracing.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/tracing.py.",
+      "replacement": "NONE",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (tests/test_tracing.py).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- tests/test_tracing.py"
+    },
+    {
+      "path": "docs/VOICE_CAPABILITIES.md",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Documented removed voice subsystem; component status recorded in docs/FC27_COMPONENT_STATUS.md.",
+      "replacement": "docs/FC27_COMPONENT_STATUS.md",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docs/VOICE_CAPABILITIES.md).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docs/VOICE_CAPABILITIES.md"
+    },
+    {
+      "path": "docs/MODEL_SELECTION.md",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Documented removed model selection subsystem; inference boundary recorded in docs/FC27_LOCAL_INFERENCE_BOUNDARY.md.",
+      "replacement": "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docs/MODEL_SELECTION.md).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docs/MODEL_SELECTION.md"
+    },
+    {
+      "path": "docs/ROLE_MODEL_BENCHMARK_MATRIX.md",
+      "classification": "CANDIDATE_DELETED_IN_B2",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Documented removed role model benchmark matrix; inference boundary recorded in docs/FC27_LOCAL_INFERENCE_BOUNDARY.md.",
+      "replacement": "docs/FC27_LOCAL_INFERENCE_BOUNDARY.md",
+      "last_commit": "7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f",
+      "reason": "Stage B2 removal of legacy runtime service/module (docs/ROLE_MODEL_BENCHMARK_MATRIX.md).",
+      "tests_run": [
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 7c3e2878a1dfdbbf79bd291b5205a2498c68bc7f -- docs/ROLE_MODEL_BENCHMARK_MATRIX.md"
     }
   ]
 }

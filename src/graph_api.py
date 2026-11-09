@@ -321,13 +321,12 @@ def create_app(
                     raise ConfigError(f"database role posture violation: {violations}")
 
         if graph["runner"] is None and pipeline is None:
-            from .graph import GraphDeps, GraphRunner
+            from .graph import GraphDeps, GraphRunner, NullTracer
             from .roles import get_role_runner
-            from .tracing import tracer_from_env
 
             graph["runner"] = GraphRunner.from_conninfo(
                 settings.postgres_uri,
-                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=tracer_from_env()),
+                GraphDeps(role_runner=get_role_runner(), decision_reader=store.load, tracer=NullTracer()),
                 setup=settings.checkpoint_setup,
             )
             graph["owned"] = True

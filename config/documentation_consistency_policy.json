@@ -49,25 +49,19 @@
     "scripts/fc27_demo_fixture_server.py",
     "scripts/fc27_demo_ingest.py",
     "scripts/fc27_user_export_import.py",
-    "scripts/model_health.py",
-    "scripts/ollama-init.sh",
     "scripts/sanitize_test_report.py",
     "scripts/test_postgres.sh"
   ],
   "required_docker_compose_files": [
     "Dockerfile.community-eval",
     "Dockerfile.community-worker",
+    "Dockerfile.discord",
     "Dockerfile.graph",
-    "Dockerfile.mcp",
-    "Dockerfile.stt",
-    "Dockerfile.tts",
     "docker-compose.yml",
-    "docker-compose.cpu.yml",
-    "docker-compose.gpu.yml",
-    "docker-compose.langfuse.yml",
-    "docker-compose.voice-gpu.yml",
     "docker-compose.community-eval.yml",
-    "docker-compose.community-worker.yml"
+    "docker-compose.community-worker.yml",
+    "docker-compose.discord.yml",
+    "docker-compose.ghcr.yml"
   ],
   "archive_index_files": [
     "docs/archive/README.md",
@@ -134,9 +128,6 @@
     "DISPATCH_ACTIVATION.md",
     "EA_PLAYER_IDENTITY_VERIFICATION.md",
     "MATCHPULSE_INTEGRATION_BOUNDARY.md",
-    "MODEL_SELECTION.md",
-    "ROLE_MODEL_BENCHMARK_MATRIX.md",
-    "VOICE_CAPABILITIES.md",
     "archive/README.md",
     "archive/ARCHIVE_MANIFEST.md"
   ],
@@ -155,10 +146,7 @@
     "FC27_RECOMMENDATIONS_ENABLED": "false",
     "DISPATCH_ENABLED": "false",
     "DISPATCH_WORKER_ENABLED": "false",
-    "APPROVAL_CLI_HMAC_ENABLED": "false",
-    "LM_STUDIO_FALLBACK_ENABLED": "false",
-    "LANGFUSE_ENABLED": "false",
-    "LANGFUSE_CAPTURE_CONTENT": "false"
+    "APPROVAL_CLI_HMAC_ENABLED": "false"
   },
   "allowed_component_statuses": [
     "IMPLEMENTED",

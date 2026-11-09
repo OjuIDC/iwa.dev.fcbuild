@@ -171,19 +171,13 @@ def test_40_no_orphan_current_script() -> None:
 def test_41_no_orphan_current_docker_service() -> None:
     arch_doc = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     dev_doc = (REPO_ROOT / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
-    voice_doc = (REPO_ROOT / "docs" / "VOICE_CAPABILITIES.md").read_text(encoding="utf-8")
     prov_doc = (REPO_ROOT / "docs" / "FC27_PROVIDER_INTEGRATION.md").read_text(encoding="utf-8")
     eval_doc = (REPO_ROOT / "docs" / "FC27_COMMUNITY_PROVIDER_EVALUATION.md").read_text(encoding="utf-8")
-    combined = arch_doc + "\n" + dev_doc + "\n" + voice_doc + "\n" + prov_doc + "\n" + eval_doc
+    combined = arch_doc + "\n" + dev_doc + "\n" + prov_doc + "\n" + eval_doc
     for service_name in [
         "postgres",
         "redis",
-        "fc27-mcp",
         "graph-api",
-        "ollama",
-        "ollama-init",
-        "stt",
-        "tts",
         "fc27-community-client-evaluation",
     ]:
         assert service_name in combined, f"Service {service_name} not documented"
@@ -330,7 +324,7 @@ def test_48_current_startup_commands_resolve() -> None:
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 18
+    assert len(py_scripts) == 17
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))
@@ -339,10 +333,7 @@ def test_49_current_cli_entrypoints_import() -> None:
 
 def test_50_current_docker_entrypoints_import() -> None:
     docker_targets = [
-        "src/fc27_mcp_server.py",
         "src/graph_api.py",
-        "voice/stt_service.py",
-        "voice/tts_service.py",
         "scripts/fc27_community_eval.py",
         "scripts/fc27_polling_worker.py",
         "scripts/fc27_discord_bot.py",

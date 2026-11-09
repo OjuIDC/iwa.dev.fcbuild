@@ -1,10 +1,9 @@
 # Deployment and security hardening
 
-> **Reconciliation Note (`PARTIALLY_SUPERSEDED`)**: This document has been reconciled against the live repository inventory (`27` unique services, `33` service declarations across `9` Compose files: `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml`, `docker-compose.voice-gpu.yml`, `docker-compose.langfuse.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, and `docker-compose.community-eval.yml`) and the separate PostgreSQL databases (`fc27` on PostgreSQL 16 in schema `public`, plus the optional `langfuse` database on PostgreSQL 17 on internal network `fc27_obs`). For the authoritative runtime operations runbook, least-privilege role bootstrap (`fc27_owner`, `fc27_migrator`, `fc27_app`, `fc27_dispatch`, `fc27_relay`), and security invariants, see [`OPERATIONS.md`](OPERATIONS.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md). The approval model is covered in [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`APPROVAL_SECURITY.md`](APPROVAL_SECURITY.md). Live FC 27 provider calls are disabled by default (`FC27_PROVIDER_ENABLED=false`; see [`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)).
+> **Reconciliation Note (`PARTIALLY_SUPERSEDED`)**: This document has been reconciled against the live repository inventory (`12` service declarations across `5` Compose files: `docker-compose.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, and `docker-compose.community-eval.yml`) and the PostgreSQL 16 database (`fc27` in schema `public`). For the authoritative runtime operations runbook, least-privilege role bootstrap (`fc27_owner`, `fc27_migrator`, `fc27_app`, `fc27_match_results_writer`, `fc27_dispatch`, `fc27_relay`), and security invariants, see [`OPERATIONS.md`](OPERATIONS.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md). The approval model is covered in [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`APPROVAL_SECURITY.md`](APPROVAL_SECURITY.md). Live FC 27 provider calls are disabled by default (`FC27_PROVIDER_ENABLED=false`; see [`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)).
 
 ## 1. Host preparation (Repository-wide vs. Subsystem-specific)
 1. **Repository-wide**: Update the OS, Docker Engine/Desktop, the Compose v2 plugin, and the container runtime. Keep the host firewall enabled; every host-published port across all Compose files binds to `127.0.0.1` (enforced by `tests/test_compose_isolation.py`).
-2. **Subsystem-specific (optional GPU profiles)**: For NVIDIA GPUs (`docker-compose.gpu.yml`, `docker-compose.voice-gpu.yml`, `--profile local-ollama`), install the NVIDIA Container Toolkit and validate it with `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
 
 ## 2. Secrets and credential delivery
 1. Copy `config.example.env` to `.env` and replace every `replace_with_*` value with an independently generated random value.
@@ -63,9 +62,7 @@ PostgreSQL (`postgres`) sits on the internal `fc27_data` bridge network (`intern
 ```bash
 cp config.example.env .env   # then fill in every value and populate ./secrets/*
 docker compose --env-file .env config --quiet
-docker compose --env-file .env up -d --build   # uses the remote Ollama at OLLAMA_BASE_URL (araba)
-# Bundled Ollama instead (set OLLAMA_BASE_URL=http://ollama:11434 first):
-# docker compose --env-file .env -f docker-compose.yml -f docker-compose.gpu.yml --profile local-ollama up -d --build   # or docker-compose.cpu.yml
+docker compose --env-file .env up -d --build
 docker compose --env-file .env ps
 curl -fsS http://127.0.0.1:8001/health
 ```

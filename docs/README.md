@@ -75,8 +75,6 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **[`FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)** — Thread-safe single-flight immutable advisory-report cache (`src/fc27_advisory_cache.py`, `tests/test_fc27_advisory_cache.py`), batch-digest invalidation, internal validation deduplication, and measured before/after latency reductions
 - **[`FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md)** — Evidence-based multi-language decision matrix (`KEEP_PYTHON` default) evaluating SQL, Python, Polars, ONNX Runtime, CTranslate2, `llama.cpp`/Ollama, Go, Rust, C#/.NET, and C/C++
 - **[`FC27_LOCAL_INFERENCE_BOUNDARY.md`](FC27_LOCAL_INFERENCE_BOUNDARY.md)** — Design-only read-only local inference sidecar boundary (`FC27_LOCAL_INFERENCE_ENABLED=false`, `NON_AUTHORITATIVE_SIDECAR_SUMMARY`)
-- **[`MODEL_SELECTION.md`](MODEL_SELECTION.md)** — Local LLM model catalog and configuration for the optional LangGraph runtime
-- **[`ROLE_MODEL_BENCHMARK_MATRIX.md`](ROLE_MODEL_BENCHMARK_MATRIX.md)** — Role model evaluation and benchmark matrix
 
 ---
 
@@ -117,7 +115,6 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **[`FC27_GHCR_RUNTIME_PROMOTION.md`](FC27_GHCR_RUNTIME_PROMOTION.md)** — Digest-pinned private GHCR runtime promotion overlay (`docker-compose.ghcr.yml`), Cosign/SLSA/SBOM verification, sequential one-service-at-a-time promotion, and rollback runbook
 - **[`DEVELOPMENT.md`](DEVELOPMENT.md)** — Local development setup, virtual environment, and contributor workflow
 - **[`VISUAL_STUDIO_SETUP.md`](VISUAL_STUDIO_SETUP.md)** — Visual Studio Enterprise 2026, verified MSBuild solution/project builds, existing `.venv` integration, Test Explorer pytest discovery, and safe startup
-- **[`VOICE_CAPABILITIES.md`](VOICE_CAPABILITIES.md)** — Optional local Discord/voice subsystem boundary (non-primary)
 
 ---
 

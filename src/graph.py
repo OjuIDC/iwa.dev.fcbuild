@@ -17,13 +17,14 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import operator
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Callable, TypedDict, cast
+from typing import Annotated, Any, Callable, Generator, TypedDict, cast
 from uuid import uuid4
 
 import httpx
@@ -38,11 +39,23 @@ from .lead_packages import (
     players_from_dashboard,
     validate_pre_approval_packages,
 )
-from .model_selection import ModelRegistry
 from .roles import PROMPT_VERSION, RoleResult, run_role
 from .settings import DEFAULT_PLATFORM, FC_VERSION
 from .thread_ids import parse_thread_id
-from .tracing import NullTracer
+
+
+class NullTracer:
+    enabled = False
+
+    @contextlib.contextmanager
+    def span(self, name: str, thread_id: str, metadata: dict | None = None, as_type: str = "span") -> Generator[None, None, None]:
+        yield None
+
+    def event(self, name: str, thread_id: str, metadata: dict | None = None, level: str = "DEFAULT") -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
 
 log = logging.getLogger("fc27.graph")
 ROLE_NODES = ("scout", "analyst", "coach", "tactics", "director")
@@ -130,7 +143,7 @@ def mcp_call(tool: str, args: dict) -> dict:
 class GraphDeps:
     mcp: Callable[[str, dict], dict] = mcp_call
     role_runner: Callable[..., RoleResult] = run_role
-    registry_factory: Callable[[], ModelRegistry] = ModelRegistry
+    registry_factory: Callable[[], Any] = lambda: None
     # Returns the committed DB row for a thread: {"status", "approved_by", "approved_at", "decision_payload"}.
     decision_reader: Callable[[str], dict | None] = field(default=lambda thread_id: None)
     tracer: Any = field(default_factory=NullTracer)

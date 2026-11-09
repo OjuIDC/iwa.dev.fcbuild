@@ -58,7 +58,7 @@ Point-in-time audit and release gate reports:
 - [`docs/archive/reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md`](reports/PHASE2_LOCAL_MERGE_GATE_REPORT.md) — Superseded by [`docs/TESTING.md`](../TESTING.md).
 - [`docs/archive/reports/PHASE2_REMEDIATION_REPORT.md`](reports/PHASE2_REMEDIATION_REPORT.md) — Superseded by [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md).
 - [`docs/archive/reports/SECURITY_CHANGES.md`](reports/SECURITY_CHANGES.md) — Superseded by [`docs/SECURITY_BOUNDARIES.md`](../SECURITY_BOUNDARIES.md).
-- [`docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md`](reports/TYPED_GRAPH_VOICE_AUDIT.md) — Superseded by [`docs/VOICE_CAPABILITIES.md`](../VOICE_CAPABILITIES.md).
+- [`docs/archive/reports/TYPED_GRAPH_VOICE_AUDIT.md`](reports/TYPED_GRAPH_VOICE_AUDIT.md) — Superseded by [`docs/FC27_COMPONENT_STATUS.md`](../FC27_COMPONENT_STATUS.md).
 
 ### 8. Test Results (`docs/archive/test-results/`)
 Historical test-execution snapshots and traceability matrices:

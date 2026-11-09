@@ -57,7 +57,7 @@ from src.fc27_user_export import (
     canonicalize_for_hashing,
     scan_for_sensitive_fields,
 )
-from src.lead_packages import POLICY_VERSION as RANKING_POLICY_VERSION
+RANKING_POLICY_VERSION = "fc27-rank-v1"
 from src.schemas import (
     SAMPLE_SIZE_TIERS,
     VALID_FC27_FORMATIONS,

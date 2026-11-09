@@ -77,7 +77,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_platform.py` — Offline export validation, CSV formula-injection defense, operator capture normalization, and ADR/pilot-package compatibility checks.
 
 ### 4.3 Graph, Approval Security, & Database Role Suites
-- `tests/test_graph_persistence.py`, `tests/test_langgraph_flow.py`, `tests/test_graph_api_v1.py`, `tests/test_end_to_end.py` — LangGraph single `interrupt()`, `PostgresSaver` checkpoint recovery, `/v1/*` routes, and `ApprovalNotCommitted` resume protection.
+- `tests/test_graph_persistence.py`, `tests/test_langgraph_flow.py`, `tests/test_graph_api_v1.py`, `tests/test_fc27_advisory_pipeline_e2e.py` — LangGraph single `interrupt()`, `PostgresSaver` checkpoint recovery, `/v1/*` routes, and `ApprovalNotCommitted` resume protection.
 - `tests/test_approval_security.py`, `tests/test_approval_lifecycle.py`, `tests/test_commissioner_cli.py`, `tests/test_events_outbox.py` — Nonce binding, HMAC-SHA256 verification, 72h request expiry, append-only triggers, and sourced domain events.
 - `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py`, `tests/test_migration_0003.py` — Role bootstrap, migration checksums, Grants Policy Version `15`, and runtime role posture checks.
 

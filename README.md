@@ -172,13 +172,12 @@ All external networking, persistence writes, analytics execution, recommendation
 ## 12. Docker Compose Status
 
 - **Compose Files**:
-  - `docker-compose.yml` — Base topology (`postgres`, `redis`, `db-bootstrap`, `db-migrate`, `model-health`, `fc27-mcp`, `graph-api`, `live-watcher`, `post-match-rundown`, `ws-server`, plus optional `--profile rtsp` and `--profile voice` services documented in `docs/VOICE_CAPABILITIES.md`, and `--profile local-ollama` for the bundled `ollama` and `ollama-init` containers). By default model inference uses the remote Ollama server at `OLLAMA_BASE_URL` (`http://araba.ojuidc.olutech.systems:11434`); no Ollama container is started.
-  - `docker-compose.gpu.yml` — NVIDIA GPU reservation overlay for the bundled `ollama` (only with `--profile local-ollama`).
-  - `docker-compose.cpu.yml` — CPU-only overlay for the bundled `ollama` (only with `--profile local-ollama`).
-  - `docker-compose.langfuse.yml` — Optional self-hosted Langfuse observability overlay (`--profile langfuse`).
-  - `docker-compose.voice-gpu.yml` — Optional GPU overlay for Faster Whisper STT (`--profile voice`).
+  - `docker-compose.yml` — Base topology (`postgres`, `redis`, `db-bootstrap`, `db-migrate`, `graph-api`, `outbox-relay`, and `dispatch-worker`).
+  - `docker-compose.community-eval.yml` — One-shot isolated evaluation container (`fc27-community-client-evaluation`).
+  - `docker-compose.community-worker.yml` — Disabled-by-default 12-hour polling worker overlay (`fc27-community-worker`, `--profile fc27-polling`).
+  - `docker-compose.discord.yml` — Disabled-by-default East Coasters Discord analytics and Match Results bot overlay (`fc27-discord-bot`, `--profile fc27-discord`).
   - `docker-compose.ghcr.yml` — Optional digest-pinned private GHCR deployment overlay for `fc27-community-worker` and `fc27-discord-bot` (documented in [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md)).
-- **Deployment Validation Status**: Static Compose model resolution and secret/network isolation are verified via `tests/test_compose_isolation.py`, and database migrations/stores are verified against live PostgreSQL 16 containers. Full multi-container target-host deployment (`ollama`, `fc27-mcp`, `live-watcher`, `ws-server`, `voice`) is `IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`.
+- **Deployment Validation Status**: Static Compose model resolution and secret/network isolation are verified via `tests/test_compose_isolation.py`, and database migrations/stores are verified against live PostgreSQL 16 containers.
 
 ## 13. Feature Flags
 
@@ -198,7 +197,6 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 | `FC27_PERFORMANCE_TELEMETRY_ENABLED` | `false` | Gate for local performance telemetry file retention (`.local-artifacts/performance/`) |
 | `DISPATCH_ENABLED` | `false` | Master gate for player dispatch creation (must remain `false`) |
 | `DISPATCH_WORKER_ENABLED` | `false` | Master gate for background dispatch worker (must remain `false`) |
-| `LANGFUSE_CAPTURE_CONTENT` | `false` | Controls whether Langfuse traces capture prompt/candidate text |
 
 ## 14. Human Approval Model
 
@@ -216,7 +214,7 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 - **Development, Testing, & Operations**: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`docs/VISUAL_STUDIO_SETUP.md`](docs/VISUAL_STUDIO_SETUP.md), [`docs/TESTING.md`](docs/TESTING.md), [`docs/FC27_CI_TEST_STRATEGY.md`](docs/FC27_CI_TEST_STRATEGY.md), [`docs/FC27_TEST_ISOLATION_MATRIX.md`](docs/FC27_TEST_ISOLATION_MATRIX.md), [`docs/FC27_CI_BROWSER_REPORTS.md`](docs/FC27_CI_BROWSER_REPORTS.md), [`docs/FC27_CONTAINER_PUBLISHING.md`](docs/FC27_CONTAINER_PUBLISHING.md), [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md), [`TEST_RESULTS.md`](TEST_RESULTS.md)
 - **Security & Feature Flags**: [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md), [`docs/FEATURE_FLAGS.md`](docs/FEATURE_FLAGS.md), [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md), [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md), [`SECURITY.md`](SECURITY.md)
 - **Provider, Data Model, Analytics, Demo, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_DEMO.md`](docs/FC27_DEMO.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
-- **Dispatch, Offline Export, Voice, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md), [`docs/VOICE_CAPABILITIES.md`](docs/VOICE_CAPABILITIES.md), [`docs/archive/README.md`](docs/archive/README.md)
+- **Dispatch, Offline Export, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md), [`docs/archive/README.md`](docs/archive/README.md)
 
 ## 16. Current Limitations
 
