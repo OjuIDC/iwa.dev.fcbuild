@@ -552,7 +552,7 @@ Defense-in-depth enforcement is also applied in:
 
 ## 18. East Coasters FC 27 API Acquisition, Transport Policy, and Stage 4 Exception Gate
 
-### 18.1 Operator Club-Authority & Member-Consent Attestation (`src/fc27_clubs_api_contracts.py`)
+### 18.1 Historical Operator Club-Authority & Member-Consent Attestation (Removed in Stage B1)
 - **Attestation Record (`EAST_COASTERS_API_AUTHORITY_ATTESTATION`)**:
   - `attestation_reference = "api-east-coasters-authority-2026-10"`
   - `club_id = "330323"`, `club_name = "East Coasters"`, `platform = "common-gen5"`, `game_version = "FC27"`
