@@ -26,7 +26,6 @@ import psycopg
 import psycopg.errors
 import pytest
 
-from scripts.fc27_user_export_import import main as cli_main
 from src import settings
 from src.db_migrate import (
     GRANTS_POLICY,
@@ -37,28 +36,28 @@ from src.db_migrate import (
     migrate,
     verify_postconditions,
 )
+from src.fc27_privacy import (
+    EAST_COASTERS_CLUB_ID,
+    EAST_COASTERS_CLUB_NAME,
+    EAST_COASTERS_GAME_VERSION,
+    EAST_COASTERS_PLATFORM,
+    compute_match_hash,
+    compute_payload_sha256,
+)
 from src.fc27_provider import FC27TransportClient
 from src.fc27_repository import (
     FC27PostureViolationError,
     FC27RepositoryError,
     apply_export_plan,
+    apply_fc27_user_export_plan,
     fetch_export_batch_status,
     insert_quarantine_record,
     load_existing_match_hashes,
     load_import_state,
-    purge_expired_quarantine_records,
-    review_quarantine_record,
-)
-from src.fc27_user_export import (
-    EAST_COASTERS_CLUB_ID,
-    EAST_COASTERS_CLUB_NAME,
-    EAST_COASTERS_GAME_VERSION,
-    EAST_COASTERS_PLATFORM,
-    apply_fc27_user_export_plan,
-    compute_match_hash,
-    compute_payload_sha256,
     parse_fc27_user_export_json,
     plan_fc27_user_export_import,
+    purge_expired_quarantine_records,
+    review_quarantine_record,
 )
 from src.schemas import ClubIdentityState
 
@@ -1140,250 +1139,6 @@ def test_43_audit_metadata_excludes_aliases_by_default(pg_uri) -> None:
             row = cur.fetchone()
             assert row is not None
             assert secret_alias not in " ".join(str(x) for x in row if x)
-
-
-# ==============================================================================
-# OPERATOR CLI TESTS (44-54)
-# ==============================================================================
-
-def test_44_cli_validate_remains_default(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    """44. CLI defaults to validate mode and performs zero persistence."""
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main(["--input", str(export_file), "--format", "json"])
-    assert code == 0
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: VALIDATED" in out
-    assert "MODE: VALIDATE" in out
-    assert "PERSISTENCE_APPLIED: NO" in out
-
-
-def test_45_cli_dry_run_performs_zero_writes(
-    pg_uri, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """45. CLI --dry-run performs zero database writes even if FC27_PERSISTENCE_ENABLED=true."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", pg_uri)
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main(["--input", str(export_file), "--format", "json", "--dry-run"])
-    assert code == 0
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: DRY_RUN" in out
-    assert "PERSISTENCE_APPLIED: NO" in out
-
-    with psycopg.connect(pg_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.fc27_matches")
-            assert cur.fetchone()[0] == 0
-
-
-def test_46_cli_apply_without_confirmation_rejected(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    """46. CLI --apply without --confirm-apply is rejected with exit code 2."""
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main(["--input", str(export_file), "--format", "json", "--apply"])
-    assert code == 2
-    err = capsys.readouterr().err
-    assert "--apply mode requires --confirm-apply" in err
-
-
-def test_47_cli_apply_while_feature_disabled_returns_deferred(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """47. CLI --apply --confirm-apply while FC27_PERSISTENCE_ENABLED=false returns DEFERRED and exit code 1."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "false")
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main([
-        "--input", str(export_file),
-        "--format", "json",
-        "--apply",
-        "--confirm-apply",
-    ])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: DEFERRED" in out
-    assert "PERSISTENCE_APPLIED: NO" in out
-    assert "FC27_PERSISTENCE_ENABLED: NO" in out
-    assert "HUMAN_REVIEW_REQUIRED: YES" in out
-
-
-def test_48_cli_apply_without_postgresql_configuration_fails_closed(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """48. CLI --apply --confirm-apply with FC27_PERSISTENCE_ENABLED=true but missing POSTGRES_URI fails closed."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.delenv("POSTGRES_URI", raising=False)
-    monkeypatch.delenv("POSTGRES_URI_FILE", raising=False)
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main([
-        "--input", str(export_file),
-        "--format", "json",
-        "--apply",
-        "--confirm-apply",
-    ])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: REJECTED" in out
-    assert "PERSISTENCE_APPLIED: NO" in out
-
-
-def test_49_cli_apply_with_identity_conflict_rejected(
-    pg_uri, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """49. CLI --apply --confirm-apply with conflicting club identity is rejected with zero writes."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", pg_uri)
-    export_file = tmp_path / "conflict_club.json"
-    export_file.write_text(
-        json.dumps(make_synthetic_export_dict(club_id="999999", club_name="Wrong Club")),
-        encoding="utf-8",
-    )
-
-    code = cli_main([
-        "--input", str(export_file),
-        "--format", "json",
-        "--apply",
-        "--confirm-apply",
-    ])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: REJECTED" in out
-    assert "CLUB_IDENTITY_DECISION: CONFLICTED" in out
-    assert "PERSISTENCE_APPLIED: NO" in out
-
-
-def test_50_cli_apply_with_replay_conflict_rejected(
-    pg_uri, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """50. CLI --apply --confirm-apply with a replay conflict blocks batch apply and quarantines the conflict."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", pg_uri)
-
-    f1 = tmp_path / "batch1.json"
-    f1.write_text(
-        json.dumps(make_synthetic_export_dict(export_id="cli-exp-1", external_match_id="cli-m-1", goals_for=2)),
-        encoding="utf-8",
-    )
-    assert cli_main(["--input", str(f1), "--format", "json", "--apply", "--confirm-apply"]) == 0
-    _ = capsys.readouterr()
-
-    f2 = tmp_path / "batch2.json"
-    f2.write_text(
-        json.dumps(make_synthetic_export_dict(export_id="cli-exp-2", external_match_id="cli-m-1", goals_for=5)),
-        encoding="utf-8",
-    )
-    code2 = cli_main(["--input", str(f2), "--format", "json", "--apply", "--confirm-apply"])
-    assert code2 == 1
-    out2 = capsys.readouterr().out
-    assert "IMPORT_STATUS: REJECTED" in out2
-    assert "PERSISTENCE_APPLIED: NO" in out2
-    assert "QUARANTINED_RECORDS: 1" in out2
-
-
-def test_51_cli_successful_synthetic_apply_reports_metadata_only(
-    pg_uri, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """51. Successful synthetic CLI apply outputs all required metadata lines and excludes player aliases by default."""
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", pg_uri)
-    export_file = tmp_path / "apply_ok.json"
-    export_file.write_text(
-        json.dumps(make_synthetic_export_dict(export_id="cli-apply-ok-01", display_alias="HiddenAlias777")),
-        encoding="utf-8",
-    )
-
-    code = cli_main([
-        "--input", str(export_file),
-        "--format", "json",
-        "--apply",
-        "--confirm-apply",
-    ])
-    assert code == 0
-    out = capsys.readouterr().out
-    assert "IMPORT_STATUS: APPLIED" in out
-    assert "PERSISTENCE_APPLIED: YES" in out
-    assert "EXPORT_ID: cli-apply-ok-01" in out
-    assert "ACCEPTED_RECORDS: 1" in out
-    assert "DUPLICATE_RECORDS: 0" in out
-    assert "QUARANTINED_RECORDS: 0" in out
-    assert "RAW_UPLOAD_RETAINED: NO" in out
-    assert "RECOMMENDATIONS_GENERATED: 0" in out
-    assert "DISPATCH_EXECUTED: NO" in out
-    assert "HiddenAlias777" not in out
-
-
-def test_52_cli_no_database_credentials_printed(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """52. CLI never prints database passwords or unredacted connection strings on connection failure."""
-    secret_pw = "SuperSecretDbPasswordDoNotLeak987"
-    bad_uri = f"postgresql://fc27_app:{secret_pw}@127.0.0.1:59999/nonexistent_db"
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", bad_uri)
-
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    code = cli_main([
-        "--input", str(export_file),
-        "--format", "json",
-        "--apply",
-        "--confirm-apply",
-    ])
-    assert code == 1
-    captured = capsys.readouterr()
-    assert secret_pw not in captured.out
-    assert secret_pw not in captured.err
-
-
-def test_53_cli_no_raw_input_printed(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    """53. CLI never prints raw JSON/CSV input contents when rejecting malformed input."""
-    raw_marker = "RAW_UNSANITIZED_PAYLOAD_MARKER_991122"
-    bad_file = tmp_path / "malformed.json"
-    bad_file.write_text(f'{{"broken": "{raw_marker}"', encoding="utf-8")
-
-    code = cli_main(["--input", str(bad_file), "--format", "json"])
-    assert code == 1
-    captured = capsys.readouterr()
-    assert raw_marker not in captured.out
-    assert raw_marker not in captured.err
-
-
-def test_54_cli_raw_upload_retained_remains_no(
-    pg_uri, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """54. RAW_UPLOAD_RETAINED: NO is reported across validate, dry-run, deferred, and applied runs."""
-    export_file = tmp_path / "synth_export.json"
-    export_file.write_text(json.dumps(make_synthetic_export_dict()), encoding="utf-8")
-
-    for argv in (
-        ["--input", str(export_file), "--format", "json"],
-        ["--input", str(export_file), "--format", "json", "--dry-run"],
-        ["--input", str(export_file), "--format", "json", "--apply", "--confirm-apply"],
-    ):
-        cli_main(argv)
-        out = capsys.readouterr().out
-        assert "RAW_UPLOAD_RETAINED: NO" in out
-
-    monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
-    monkeypatch.setenv("POSTGRES_URI", pg_uri)
-    cli_main(["--input", str(export_file), "--format", "json", "--apply", "--confirm-apply"])
-    out_applied = capsys.readouterr().out
-    assert "RAW_UPLOAD_RETAINED: NO" in out_applied
 
 
 # ==============================================================================

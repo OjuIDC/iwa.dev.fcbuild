@@ -13,7 +13,7 @@ from src.fc27_community_provider import (
     FC27CommunityProviderDeclaration,
     persist_community_provider_batch,
 )
-from src.fc27_demo_api import create_demo_app
+from src.fc27_discord_bot import FC27DiscordBotConfig, FC27DiscordBotService
 from src.fc27_repository import apply_export_plan
 from src.fc27_search_scout import build_fc27_scout_report, build_fc27_search_context
 
@@ -249,15 +249,22 @@ def test_20_current_community_provider_bounded() -> None:
     assert decl.maximum_matches <= 10
 
 
-def test_21_current_dashboard_present() -> None:
-    from fastapi.testclient import TestClient
-
-    app = create_demo_app(demo_mode_override=False)
-    with TestClient(app) as client:
-        for path in ("/demo", "/demo/status", "/demo/matches", "/demo/analysis"):
-            resp = client.get(path)
-            assert resp.status_code == 403
-            assert resp.json()["detail"]["error"] == "FC27_DEMO_MODE_DISABLED"
+def test_21_current_discord_readback_present() -> None:
+    svc = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        )
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    assert resp.status == "OK"
+    assert len(resp.embeds) >= 1
+    assert svc.provider_requests_executed == 0
 
 
 def test_22_search_present() -> None:

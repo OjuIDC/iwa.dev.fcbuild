@@ -62,25 +62,21 @@ docker rm -f fc27-test-postgres
   tests/test_fc27_community_provider.py `
   tests/test_fc27_polling_worker.py -q
 
-# FC 27 Search, Scout, Analyst, and One-Shot Ingestion Demo
+# FC 27 Search, Scout, Analyst, and Discord Bot
 .\.venv\Scripts\pytest.exe tests/test_fc27_search.py `
   tests/test_fc27_scout.py `
   tests/test_fc27_search_scout_graph.py `
   tests/test_fc27_analyst.py `
   tests/test_fc27_analyst_graph.py `
-  tests/test_fc27_demo.py -q
+  tests/test_fc27_discord_bot.py -q
 
-# Start the local loopback Demo API (requires FC27_DEMO_MODE=true; canonical factory create_demo_app)
-$env:FC27_DEMO_MODE = "true"
-.\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app `
-  --factory `
-  --host 127.0.0.1 `
-  --port 8001
+# Inspect the Discord Bot and Polling Worker status (offline, zero network requests)
+.\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
+.\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
 
-# Coach, operator capture, and user export
+# Coach, privacy boundary, and platform invariants
 .\.venv\Scripts\pytest.exe tests/test_fc27_coach.py `
-  tests/test_fc27_operator_capture.py `
-  tests/test_fc27_user_export.py `
+  tests/test_fc27_privacy.py `
   tests/test_fc27_platform.py -q
 
 # Documentation, packaging, workflow, and archive integrity
@@ -108,9 +104,9 @@ Before staging any commit, run all static verification gates:
 # 2. MatchPulse sibling repository boundary check
 .\.venv\Scripts\python.exe scripts/check_matchpulse_boundary.py
 
-# 3. FC 27 offline capture preflight (default blocked-safe + mock validation)
-.\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py
-.\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --mock
+# 3. FC 27 offline status checks (default blocked-safe, zero network calls)
+.\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
+.\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
 
 # 4. Deterministic documentation consistency gate (standard and strict release mode)
 .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check
@@ -161,7 +157,7 @@ Remove-Item -Recurse -Force $dockerCfgDir
 ### Files Requiring Special Governance / Avoid Modifying Unnecessarily
 - **Immutable Applied Migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`)**: Applied migrations are SHA-256 checksummed by `src/db_migrate.py`. Never edit an existing migration; new schema changes require a new numbered migration (`0014_*.sql`) and a bumped `-- grants-policy-version:` in `migrations/post/grants.sql` + `src/db_migrate.py`.
 - **Approval & Security Core (`src/security.py`, `src/db_roles.py`; historical `src/approval.py`, `src/approval_store.py`, `src/identity/webauthn.py`, `src/identity/policy.py`, `src/dispatch/gates.py` superseded in Stage B3)**: Governed by strict Phase 1/2 security invariants and concurrency lock hierarchies.
-- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_fc27_platform.py` (historical `tests/test_phase1_scope.py` superseded in Stage B3).
+- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`)**: Enforced by `tests/test_fc27_platform.py` (historical `tests/test_phase1_scope.py` superseded in Stage B3).
 - **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories. Any local bundle archive (`.local-artifacts/iwa.dev.fcbuild-safe-adapter-verified.zip`) or extracted inspection workspace (`.local-artifacts/safe-adapter-inspection-eb9c42745f99`) is strictly git-ignored, never required by CI, and never imported at runtime; the tracked source of truth is `src/fc27_clubs_api_contracts.py` and `THIRD_PARTY_NOTICES.md`.
 
 ---

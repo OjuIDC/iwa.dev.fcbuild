@@ -12,7 +12,6 @@ import threading
 import time
 from typing import Any
 
-from fastapi.testclient import TestClient
 import psycopg
 from pydantic import ValidationError
 import pytest
@@ -53,12 +52,6 @@ from src.fc27_community_provider import (
     normalize_community_match_records,
     persist_community_provider_batch,
 )
-from src.fc27_demo import (
-    FC27DemoStateStore,
-    _build_export_envelope_for_persistence,
-    _supplied_matches_to_search_candidates,
-)
-from src.fc27_demo_api import create_demo_app
 from src.fc27_director import (
     DIRECTOR_VERSION,
     FC27DirectorInput,
@@ -75,6 +68,16 @@ from src.fc27_performance import (
     disposable_postgres_benchmark_db,
 )
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
+from src.fc27_privacy import (
+    FC27SensitiveFieldDetectedError,
+    is_sensitive_key as _is_sensitive_key,
+    scan_for_sensitive_fields,
+)
+from src.fc27_repository import (
+    _build_export_envelope_for_persistence,
+    _supplied_matches_to_search_candidates,
+    plan_fc27_user_export_import,
+)
 from src.fc27_search_scout import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
@@ -93,12 +96,6 @@ from src.fc27_tactics import (
     TACTICS_VERSION,
     FC27TacticsInput,
     build_fc27_tactics_report,
-)
-from src.fc27_user_export import (
-    FC27SensitiveFieldDetectedError,
-    _is_sensitive_key,
-    plan_fc27_user_export_import,
-    scan_for_sensitive_fields,
 )
 
 FIXED_TS = "2026-11-03T12:00:00Z"
@@ -772,26 +769,31 @@ def test_35_to_40_discord_commands_use_advisory_cache_and_status_polling_skip_re
             assert svc.advisory_cache.stats().hits > hits_before
 
 
-def test_41_dashboard_advisory_endpoints_use_cached_advisory_bundle() -> None:
-    store = FC27DemoStateStore()
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    with TestClient(app) as client:
-        r1 = client.get("/demo/analysis")
-        assert r1.status_code == 200
-        builds_after_cold = store.advisory_cache.stats().builds
-        assert builds_after_cold == 1
+def test_41_serialized_advisory_projections_use_cached_advisory_bundle() -> None:
+    cache = FC27AdvisoryCache()
+    cands = _sample_candidates(10)
+    key = build_advisory_cache_key_from_matches(cands, latest_export_batch_id="batch-proj-41")
+    entry = build_full_advisory_bundle_from_candidates(
+        cands,
+        analysis_generated_at=FIXED_TS,
+        cache=cache,
+        cache_key=key,
+    )
+    assert cache.stats().builds == 1
 
-        for path in (
-            "/demo/analysis",
-            "/api/fc27/demo/coach",
-            "/api/fc27/demo/tactics",
-            "/api/fc27/demo/director",
-        ):
-            hits_before = store.advisory_cache.stats().hits
-            resp = client.get(path)
-            assert resp.status_code == 200
-            assert store.advisory_cache.stats().builds == 1
-            assert store.advisory_cache.stats().hits > hits_before
+    for proj_name, builder in (
+        ("analysis", lambda: entry.analyst_report.model_dump(mode="json")),
+        ("coach", lambda: entry.coach_report.model_dump(mode="json")),
+        ("tactics", lambda: entry.tactics_report.model_dump(mode="json")),
+        ("director", lambda: entry.director_report.model_dump(mode="json")),
+    ):
+        first = cache.get_or_build_serialized_projection(key, proj_name, builder)
+        hits_before = cache.stats().hits
+        second = cache.get_or_build_serialized_projection(key, proj_name, builder)
+        assert first == second
+        assert cache.stats().builds == 1
+        assert cache.stats().hits > hits_before
+
 
 
 # ==============================================================================

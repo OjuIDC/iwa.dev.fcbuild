@@ -79,14 +79,16 @@ from src.fc27_provider import (
     FC27ProviderError,
     FC27TransportError,
 )
-from src.fc27_repository import FC27ReplayConflictError, apply_export_plan, load_import_state
-from src.fc27_search_scout import FC27PrivacyViolationError
-from src.fc27_user_export import (
-    FC27SensitiveFieldDetectedError,
+from src.fc27_privacy import FC27SensitiveFieldDetectedError
+from src.fc27_repository import (
+    FC27ReplayConflictError,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
+    apply_export_plan,
+    load_import_state,
     plan_fc27_user_export_import,
 )
+from src.fc27_search_scout import FC27PrivacyViolationError
 from src.settings import (
     ConfigError,
     get_fc27_community_poll_interval_seconds,
@@ -1163,7 +1165,7 @@ def persist_polled_match_envelope(
                     postgres_conn_or_uri.commit()
                 return summary
 
-            from src.fc27_demo import _build_export_envelope_for_persistence
+            from src.fc27_repository import _build_export_envelope_for_persistence
 
             eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
             export_env = _build_export_envelope_for_persistence(

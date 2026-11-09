@@ -73,7 +73,7 @@ from src.fc27_tactics import (
     FC27TacticsReport,
     build_fc27_tactics_report,
 )
-from src.fc27_user_export import scan_for_sensitive_fields
+from src.fc27_privacy import scan_for_sensitive_fields
 
 PRIVACY_POLICY_VERSION: Final[str] = "fc27_privacy_policy_v1.0"  # type: ignore[name-defined]
 DEFAULT_ADVISORY_CACHE_MAX_ENTRIES = 16

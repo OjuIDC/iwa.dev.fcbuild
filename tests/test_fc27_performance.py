@@ -635,7 +635,7 @@ def test_34_threshold_evaluation_deterministic() -> None:
     t1 = evaluate_decision_thresholds(
         postgres_benchmarks={"explain_analyze_buffers": {"q1": {"planning_time_ms": 0.2, "execution_time_ms": 1.1}}},
         operation_results=(sample_res,),
-        dashboard_benchmarks={"/demo/status": {"warm_p95_ms": 8.5}},
+        dashboard_benchmarks={"status": {"warm_p95_ms": 8.5}},
         discord_benchmarks={"status": {"p95_ms": 15.0}},
         container_benchmarks=(
             FC27ResourceSample(
@@ -650,7 +650,7 @@ def test_34_threshold_evaluation_deterministic() -> None:
     t2 = evaluate_decision_thresholds(
         postgres_benchmarks={"explain_analyze_buffers": {"q1": {"planning_time_ms": 0.2, "execution_time_ms": 1.1}}},
         operation_results=(sample_res,),
-        dashboard_benchmarks={"/demo/status": {"warm_p95_ms": 8.5}},
+        dashboard_benchmarks={"status": {"warm_p95_ms": 8.5}},
         discord_benchmarks={"status": {"p95_ms": 15.0}},
         container_benchmarks=(
             FC27ResourceSample(
@@ -732,12 +732,12 @@ def test_38_recommendations_disabled() -> None:
     dash_details, _ = run_dashboard_benchmarks(warmup_iterations=1, measured_iterations=1)
     assert len(dash_details) == 6
     for ep in (
-        "/demo/status",
-        "/demo/matches",
-        "/demo/analysis",
-        "/api/fc27/demo/coach",
-        "/api/fc27/demo/tactics",
-        "/api/fc27/demo/director",
+        "status",
+        "matches",
+        "analysis",
+        "coach",
+        "tactics",
+        "director",
     ):
         assert ep in dash_details
         assert dash_details[ep]["status_code"] == 200

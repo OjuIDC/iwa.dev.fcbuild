@@ -316,12 +316,8 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 - **20+ Matches**: `HIGH_CONFIDENCE`
 - **Coaching Recommendations**: Remain strictly disabled (`COACHING_READINESS: NO`).
 
-### 12.9 Operator Runbook & File Custody
-- **Tool**: `scripts/fc27_user_export_import.py`
-  - Validation: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --validate`
-  - Dry-Run: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --dry-run`
-  - Apply: `python scripts/fc27_user_export_import.py --input <path> --format <json|csv> --apply --confirm-apply`
-- **Storage Boundary**: Persistence is reported as `DEFERRED` pending dedicated relational migrations. Raw uploads are never stored.
+### 12.9 Operator Runbook & File Custody (Superseded in Stage B4)
+- **Persistence Boundary**: Normalized persistence primitives (`parse_fc27_user_export_json`, `plan_fc27_user_export_import`, `apply_fc27_user_export_plan`) are retained in `src/fc27_repository.py`. Raw uploads are never stored.
 - **File Deletion**: Operators are instructed to delete or archive local export source files once validated.
 
 ### 12.10 Current Platform Status (Maintained)
@@ -370,7 +366,7 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 | `src/fc_clubs_api/client.py:get_json` | `REJECTED` | Rejected unguarded arbitrary endpoint caller. |
 | `src/fc_clubs_api/client.py:find_club_id` | `REJECTED` | Rejected automatic single-result selection on club search; explicit human club ID confirmation is mandatory. |
 | `src/fc_clubs_api/_output.py` | `REJECTED` | Rejected `pandas` DataFrame output layer and raw JSON pass-through. |
-| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with explicitly gated one-shot `scripts/fc27_community_eval.py`; live requests require `FC27_COMMUNITY_PROVIDER_ENABLED=true` and `--confirm`, and persistence is separately gated. |
+| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with explicitly gated community provider and polling worker (`src/fc27_community_provider.py`, `src/fc27_polling_worker.py`); live requests require `FC27_COMMUNITY_PROVIDER_ENABLED=true`, and persistence is separately gated. |
 | `Interactive-63/eafc-pro-clubs-api-research` | `CONCEPT_ONLY` | Unlicensed upstream research repository cited as conceptual provenance only; zero code copied. |
 
 ### 13.4 Separation of Concerns: Authentication, Authorization, Membership, and Manager Authority
@@ -455,8 +451,8 @@ To corroborate club identity claims without executing automated requests against
 
 Each template includes `attestation_timestamp`, `expires_at`, `evidence_references`, `reviewer_reference`, `review_decision`, `review_reason`, and `manager_authority_status="UNVERIFIED"`. Personal email addresses (`@`), tokens, passwords, and session identifiers are rejected fail-closed.
 
-### 14.4 Consented User-Export Pilot Sequence
-The later user-export pilot follows an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`), documented in full in `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`:
+### 14.4 Consented User-Export Pilot Sequence (Historical — Superseded in Stage B4)
+The historical user-export pilot followed an explicit 8-step sequence (`USER_EXPORT_PILOT_SEQUENCE`):
 1. Authorized supplier provides local export outside repository
 2. Consent scopes reviewed
 3. `--validate`
@@ -622,22 +618,8 @@ Both community repositories are third-party client implementations for EA's unde
   - Unknown optional player statistics remain `null` (`None`) in domain validation and are never silently substituted with `0`.
   - `normalize_operator_displayed_capture` reads input into a bounded mutable `bytearray` and overwrites every byte with `0` in `finally` before releasing the buffer (`RAW_INPUT_RETAINED_BY_APPLICATION=NO`).
 
-### 19.2 JSON Schema, Synthetic Template, and CLI Commands
-- **JSON Schema (Draft 2020-12)**: [`config/fc27_east_coasters_normalized_export.schema.json`](../config/fc27_east_coasters_normalized_export.schema.json)
-- **Synthetic Test Template**: [`tests/synthetic_fc27_east_coasters_normalized_template.json`](../tests/synthetic_fc27_east_coasters_normalized_template.json) (`data_classification="SYNTHETIC"`, `real_player_data=false`, `safe_for_tests=true`)
-- **CLI Commands (`scripts/fc27_user_export_import.py`)**:
-  - **Validate (default safe mode, zero DB connections)**:
-    ```powershell
-    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --validate
-    ```
-  - **Dry-Run (zero write transactions)**:
-    ```powershell
-    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --dry-run
-    ```
-  - **Apply (separately gated by `FC27_PERSISTENCE_ENABLED=true` and `--confirm-apply`)**:
-    ```powershell
-    .\.venv\Scripts\python.exe scripts/fc27_user_export_import.py --input .local-data/east-coasters-fc27-normalized.json --format json --operator-displayed --apply --confirm-apply
-    ```
+### 19.2 Historical Schema, Synthetic Template, and CLI Commands (Superseded in Stage B4)
+- The standalone JSON schema, synthetic export templates, and operator CLI script were retired in Stage B4; neutral persistence contracts (`FC27OperatorCaptureAttestation`, `FC27UserExportEnvelope`, `plan_fc27_user_export_import`, `apply_fc27_user_export_plan`) remain in `src/fc27_repository.py`.
 
 ### 19.3 Product-Supported Export Availability Assessment
 The operator checked official EA SPORTS FC product surfaces and documentation for supported club data export mechanisms:

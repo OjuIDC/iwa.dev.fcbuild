@@ -474,7 +474,6 @@ def _parse_compose_inventory(repo_root: Path) -> dict[str, Any]:
     profiles: set[str] = set()
     compose_files = [
         "docker-compose.yml",
-        "docker-compose.community-eval.yml",
         "docker-compose.community-worker.yml",
         "docker-compose.discord.yml",
         "docker-compose.ghcr.yml",
@@ -1528,7 +1527,7 @@ def validate_repository(
                 "Include NETWORK_REQUESTS_EXECUTED=0 and EA_DNS_RESOLUTIONS_EXECUTED=0",
                 tr_rel,
             )
-        if "check_matchpulse_boundary.py" not in tr_text or "fc27_capture_preflight.py" not in tr_text:
+        if "check_matchpulse_boundary.py" not in tr_text:
             add_finding(
                 "TEST_REFERENCE",
                 "TEST_REPORT_BOUNDARY_RESULT_MISSING",
@@ -1536,8 +1535,8 @@ def validate_repository(
                 tr_rel,
                 1,
                 "Boundary & Preflight",
-                "TEST_RESULTS.md is missing MatchPulse boundary or preflight verification result",
-                "Include check_matchpulse_boundary.py and fc27_capture_preflight.py results",
+                "TEST_RESULTS.md is missing MatchPulse boundary verification result",
+                "Include check_matchpulse_boundary.py result",
                 tr_rel,
             )
 

@@ -77,6 +77,12 @@ from src.fc27_clubs_api_contracts import (
     normalize_matches_payload,
     parse_json_strict_no_duplicates,
 )
+from src.fc27_privacy import (
+    FC27SensitiveFieldDetectedError,
+    canonicalize_for_hashing,
+    compute_match_hash,
+    scan_for_sensitive_fields,
+)
 from src.fc27_provider import (
     FC27AuthenticationError,
     FC27LiveAccessBlockedError,
@@ -84,7 +90,17 @@ from src.fc27_provider import (
     FC27ProviderError,
     FC27TransportError,
 )
-from src.fc27_repository import FC27ReplayConflictError, apply_export_plan, load_import_state
+from src.fc27_repository import (
+    FC27ReplayConflictError,
+    FC27SuppliedMatch,
+    FC27SuppliedPlayerPerformance,
+    _build_export_envelope_for_persistence,
+    _default_build_for_position,
+    _default_role_for_position,
+    apply_export_plan,
+    load_import_state,
+    plan_fc27_user_export_import,
+)
 from src.fc27_search_scout import (
     FC27AnalysisIdentity,
     FC27PrivacyViolationError,
@@ -93,15 +109,6 @@ from src.fc27_search_scout import (
     FC27SearchInput,
     build_fc27_scout_report,
     build_fc27_search_context,
-)
-from src.fc27_user_export import (
-    FC27SensitiveFieldDetectedError,
-    FC27SuppliedMatch,
-    FC27SuppliedPlayerPerformance,
-    canonicalize_for_hashing,
-    compute_match_hash,
-    plan_fc27_user_export_import,
-    scan_for_sensitive_fields,
 )
 
 MAX_LIVE_RESPONSE_BYTES: Final[int] = 524_288
@@ -1835,8 +1842,6 @@ def build_community_persistence_preview(
     conf_plan = 0
 
     if postgres_conn_or_uri is not None and match_envelopes:
-        from src.fc27_demo import _build_export_envelope_for_persistence
-
         gen_dt = generated_at or datetime.now(timezone.utc)
         supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
         export_env = _build_export_envelope_for_persistence(
@@ -1912,8 +1917,6 @@ def persist_community_provider_batch(
     if postgres_conn_or_uri is None:
         raise FC27LiveProbeBlockedError("PostgreSQL connection or URI is required for persistence")
 
-    from src.fc27_demo import _build_export_envelope_for_persistence
-
     gen_dt = generated_at or datetime.now(timezone.utc)
     eff_export_id = export_id or f"comm_eval_{match_envelope.payload_hash[:16]}"
     supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
@@ -1966,7 +1969,6 @@ def run_analytics_from_persisted_community_records(
     analytics_enabled_override: bool = True,
 ) -> Tuple[FC27SearchContext, FC27ScoutReport, FC27AnalystReport]:
     """Reads persisted East Coasters records from PostgreSQL and executes `Search -> Scout -> Analyst` (`PART M`)."""
-    from src.fc27_demo import _default_build_for_position, _default_role_for_position
     from src.fc27_search_scout import PostgresFC27AnalyticsReader
 
     gen_dt = analysis_generated_at or datetime.now(timezone.utc)
@@ -2306,263 +2308,3 @@ def ingest_community_provider_envelope(
         dispatch_enabled="NO",
     )
     return summary, search_ctx, scout_rep, analyst_rep
-
-
-def build_demo_session_artifacts_from_community_envelope(
-    match_envelope: FC27CommunityProviderEnvelope,
-    *,
-    match_envelopes: Optional[Sequence[Any]] = None,
-    request_count: int = 2,
-    circuit_state: str = "CLOSED",
-    persistence_status: str = "SKIPPED_BY_DEFAULT",
-    analysis_generated_at: Optional[datetime] = None,
-) -> Any:
-    """Builds `FC27DemoSessionArtifacts` labeled `LIVE_EA_CLUBS_COMMUNITY_CLIENT` for `/demo*` (`PART Q`)."""
-    from src.fc27_demo import (
-        FC27DemoMatchSummary,
-        FC27DemoResult,
-        FC27DemoSessionArtifacts,
-        _pseudonymize_match_ref,
-    )
-
-    summary, search_ctx, scout_rep, analyst_rep = ingest_community_provider_envelope(
-        match_envelope,
-        match_envelopes=match_envelopes,
-        persist=False,
-        analysis_generated_at=analysis_generated_at,
-    )
-    gen_iso = search_ctx.analysis_generated_at
-    coach_rep = build_fc27_coach_report(
-        FC27CoachInput(
-            search_context=search_ctx,
-            scout_report=scout_rep,
-            analyst_report=analyst_rep,
-            coach_generated_at=gen_iso,
-        )
-    )
-    tactics_rep = build_fc27_tactics_report(
-        FC27TacticsInput(
-            search_context=search_ctx,
-            scout_report=scout_rep,
-            analyst_report=analyst_rep,
-            coach_report=coach_rep,
-            tactics_generated_at=gen_iso,
-        )
-    )
-    director_rep = build_fc27_director_report(
-        FC27DirectorInput(
-            search_context=search_ctx,
-            scout_report=scout_rep,
-            analyst_report=analyst_rep,
-            coach_report=coach_rep,
-            tactics_report=tactics_rep,
-            director_generated_at=gen_iso,
-        )
-    )
-    match_summaries: List[FC27DemoMatchSummary] = []
-    player_stat_total = 0
-    for rec in match_envelope.normalized_records:
-        p_stats = rec.get("player_statistics", [])
-        player_stat_total += len(p_stats)
-        p_refs = tuple(str(p["player_ref"]) for p in p_stats if "player_ref" in p)
-        match_summaries.append(
-            FC27DemoMatchSummary(
-                pseudonymous_match_ref=_pseudonymize_match_ref(rec["match_id"]),
-                match_hash=rec["match_hash"],
-                played_timestamp=rec["played_at"],
-                match_type=rec["match_type"],
-                formation=rec.get("formation") or "UNKNOWN",
-                result=rec["result"],  # type: ignore[arg-type]
-                goals_for=rec["goals_for"],
-                goals_against=rec["goals_against"],
-                safe_opponent_label=rec.get("opponent_name") or "Opponent Club",
-                data_quality_status="VERIFIED",
-                player_count=len(p_stats),
-                pseudonymous_player_refs=p_refs,
-            )
-        )
-
-    exec_payload = json.dumps(
-        {
-            "source_mode": LIVE_EA_CLUBS_COMMUNITY_CLIENT,
-            "payload_hash": match_envelope.payload_hash,
-            "search": search_ctx.context_hash,
-            "scout": scout_rep.report_hash,
-            "analyst": analyst_rep.report_hash,
-            "coach": coach_rep.report_hash,
-            "tactics": tactics_rep.report_hash,
-            "director": director_rep.report_hash,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    exec_hash = hashlib.sha256(exec_payload).hexdigest()
-
-    demo_res = FC27DemoResult(
-        demo_mode=True,
-        source_mode=LIVE_EA_CLUBS_COMMUNITY_CLIENT,  # type: ignore[arg-type]
-        identity=dict(match_envelope.identity),
-        request_count=min(4, max(0, request_count)),
-        cache_hits=0,
-        cache_misses=request_count,
-        rate_limit_status="COMMUNITY_ONE_SHOT",
-        request_budget_status="WITHIN_BUDGET",
-        circuit_state=circuit_state,
-        validation_status="PASS",
-        normalized_counts={
-            "clubs": 1,
-            "matches": len(match_summaries),
-            "player_match_stats": player_stat_total,
-        },
-        accepted_count=match_envelope.accepted_record_count,
-        duplicate_count=match_envelope.rejected_record_count,
-        conflict_count=0,
-        persistence_status=persistence_status,
-        search_context_hash=search_ctx.context_hash,
-        scout_report_hash=scout_rep.report_hash,
-        analyst_report_hash=analyst_rep.report_hash,
-        coach_report_hash=coach_rep.report_hash,
-        tactics_report_hash=tactics_rep.report_hash,
-        director_report_hash=director_rep.report_hash,
-        confidence=analyst_rep.overall_confidence,
-        finding_count=summary.finding_count,
-        data_gap_count=summary.data_gap_count,
-        limitations=tuple(analyst_rep.limitations),
-        execution_hash=exec_hash,
-    )
-    return FC27DemoSessionArtifacts(
-        last_operation="community-eval",
-        scenario="community_one_shot",
-        result=demo_res,
-        matches=tuple(match_summaries),
-        search_context=search_ctx,
-        scout_report=scout_rep,
-        analyst_report=analyst_rep,
-        coach_report=coach_rep,
-        tactics_report=tactics_rep,
-        director_report=director_rep,
-    )
-
-
-def build_demo_session_artifacts_from_persisted_records(
-    postgres_conn_or_uri: Any,
-    *,
-    payload_sha256: Optional[str] = None,
-    request_count: int = 2,
-    circuit_state: str = "CLOSED",
-    persistence_status: str = "APPLIED",
-    analysis_generated_at: Optional[datetime] = None,
-) -> Any:
-    """Builds `FC27DemoSessionArtifacts` labeled `LIVE_EA_CLUBS_COMMUNITY_CLIENT` directly from
-    persisted normalized PostgreSQL records (`PART M` & `PART N`).
-    """
-    from src.fc27_demo import (
-        FC27DemoMatchSummary,
-        FC27DemoResult,
-        FC27DemoSessionArtifacts,
-        _pseudonymize_match_ref,
-    )
-
-    (
-        search_ctx,
-        scout_rep,
-        analyst_rep,
-        coach_rep,
-        tactics_rep,
-        director_rep,
-    ) = run_advisory_pipeline_from_persisted_community_records(
-        postgres_conn_or_uri,
-        payload_sha256=payload_sha256,
-        analysis_generated_at=analysis_generated_at,
-    )
-    match_summaries: List[FC27DemoMatchSummary] = []
-    player_stat_total = 0
-    for m_rec in search_ctx.baseline_matches:
-        p_apps = m_rec.player_appearances
-        player_stat_total += len(p_apps)
-        p_refs = tuple(str(a.player_ref) for a in p_apps)
-        match_summaries.append(
-            FC27DemoMatchSummary(
-                pseudonymous_match_ref=_pseudonymize_match_ref(m_rec.match_id),
-                match_hash=m_rec.match_hash,
-                played_timestamp=m_rec.played_at,
-                match_type=m_rec.match_type,
-                formation=m_rec.formation or "UNKNOWN",
-                result=m_rec.result,  # type: ignore[arg-type]
-                goals_for=m_rec.goals_for,
-                goals_against=m_rec.goals_against,
-                safe_opponent_label=m_rec.opponent_name or "Opponent Club",
-                data_quality_status=m_rec.data_quality_status,
-                player_count=len(p_apps),
-                pseudonymous_player_refs=p_refs,
-            )
-        )
-
-    eff_payload_hash = payload_sha256 or (
-        search_ctx.payload_hashes[0] if search_ctx.payload_hashes else search_ctx.context_hash
-    )
-    exec_payload = json.dumps(
-        {
-            "source_mode": LIVE_EA_CLUBS_COMMUNITY_CLIENT,
-            "payload_hash": eff_payload_hash,
-            "search": search_ctx.context_hash,
-            "scout": scout_rep.report_hash,
-            "analyst": analyst_rep.report_hash,
-            "coach": coach_rep.report_hash,
-            "tactics": tactics_rep.report_hash,
-            "director": director_rep.report_hash,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    exec_hash = hashlib.sha256(exec_payload).hexdigest()
-
-    demo_res = FC27DemoResult(
-        demo_mode=True,
-        source_mode=LIVE_EA_CLUBS_COMMUNITY_CLIENT,  # type: ignore[arg-type]
-        identity={
-            "club_id": TARGET_CLUB_ID,
-            "club_name": TARGET_CLUB_NAME,
-            "platform": TARGET_PLATFORM,
-            "game_version": TARGET_GAME_VERSION,
-        },
-        request_count=min(4, max(0, request_count)),
-        cache_hits=0,
-        cache_misses=request_count,
-        rate_limit_status="COMMUNITY_ONE_SHOT",
-        request_budget_status="WITHIN_BUDGET",
-        circuit_state=circuit_state,
-        validation_status="PASS",
-        normalized_counts={
-            "clubs": 1,
-            "matches": len(match_summaries),
-            "player_match_stats": player_stat_total,
-        },
-        accepted_count=len(match_summaries),
-        duplicate_count=search_ctx.exclusion_summary.excluded_duplicates,
-        conflict_count=search_ctx.exclusion_summary.excluded_conflicts,
-        persistence_status=persistence_status,
-        search_context_hash=search_ctx.context_hash,
-        scout_report_hash=scout_rep.report_hash,
-        analyst_report_hash=analyst_rep.report_hash,
-        coach_report_hash=coach_rep.report_hash,
-        tactics_report_hash=tactics_rep.report_hash,
-        director_report_hash=director_rep.report_hash,
-        confidence=analyst_rep.overall_confidence,
-        finding_count=len(analyst_rep.findings),
-        data_gap_count=len(analyst_rep.data_gaps),
-        limitations=tuple(analyst_rep.limitations),
-        execution_hash=exec_hash,
-    )
-    return FC27DemoSessionArtifacts(
-        last_operation="community-persisted-read",
-        scenario="community_persisted_batch",
-        result=demo_res,
-        matches=tuple(match_summaries),
-        search_context=search_ctx,
-        scout_report=scout_rep,
-        analyst_report=analyst_rep,
-        coach_report=coach_rep,
-        tactics_report=tactics_rep,
-        director_report=director_rep,
-    )

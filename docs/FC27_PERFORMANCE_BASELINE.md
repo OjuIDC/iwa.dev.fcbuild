@@ -105,16 +105,16 @@ All PostgreSQL benchmarks execute against a disposable database (`fc27_perf_<id>
 
 - **Index Proposal**: `NONE_REQUIRED_AT_OPERATIONAL_SCALE`. Existing indexes in [`migrations/0012_fc27_performance_and_quarantine.sql`](../migrations/0012_fc27_performance_and_quarantine.sql) keep all operational read queries under `0.4 ms` execution time (`2.764 ms` combined planning + execution).
 
-### 4.3 Loopback Dashboard Endpoints (`src/fc27_demo_api.py`)
+### 4.3 Serialized Advisory Projection Benchmarks (`src/fc27_advisory_cache.py`)
 
-| Endpoint | Operation | Cold (ms) | Warm Median (ms) | Warm P95 (ms) | Serialization Median (ms) | Response Bytes | Privacy Scan |
+| Projection | Operation | Cold (ms) | Warm Median (ms) | Warm P95 (ms) | Serialization Median (ms) | Response Bytes | Privacy Scan |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `GET /demo/status` | `dashboard_status` | `2373.715` | `3.904` | `6.388` | `0.219` | `2,465` | `PASS` |
-| `GET /demo/matches` | `dashboard_matches` | `5.203` | `4.730` | `5.077` | `0.212` | `3,335` | `PASS` |
-| `GET /demo/analysis` | `dashboard_analysis` | `61.962` | `56.790` | `57.125` | `57.327` | `2,976,833` | `PASS` |
-| `GET /api/fc27/demo/coach` | `dashboard_coach` | `29.892` | `29.433` | `32.364` | `24.423` | `1,005,844` | `PASS` |
-| `GET /api/fc27/demo/tactics` | `dashboard_tactics` | `68.904` | `26.836` | `27.202` | `11.680` | `706,494` | `PASS` |
-| `GET /api/fc27/demo/director` | `dashboard_director` | `22.879` | `23.175` | `24.706` | `3.354` | `138,175` | `PASS` |
+| `status_projection` | `dashboard_status` | `2373.715` | `3.904` | `6.388` | `0.219` | `2,465` | `PASS` |
+| `matches_projection` | `dashboard_matches` | `5.203` | `4.730` | `5.077` | `0.212` | `3,335` | `PASS` |
+| `analysis_projection` | `dashboard_analysis` | `61.962` | `56.790` | `57.125` | `57.327` | `2,976,833` | `PASS` |
+| `coach_projection` | `dashboard_coach` | `29.892` | `29.433` | `32.364` | `24.423` | `1,005,844` | `PASS` |
+| `tactics_projection` | `dashboard_tactics` | `68.904` | `26.836` | `27.202` | `11.680` | `706,494` | `PASS` |
+| `director_projection` | `dashboard_director` | `22.879` | `23.175` | `24.706` | `3.354` | `138,175` | `PASS` |
 
 ### 4.4 Offline Read-Only Discord Slash-Command Handlers (`src/fc27_discord_bot.py`)
 
@@ -155,7 +155,7 @@ Profiling the `LARGE` (`1,000` matches / `6,000` player rows) advisory chain wit
 | Boundary | Classification | Rationale |
 | :--- | :--- | :--- |
 | `src/fc27_clubs_api_contracts.py:validate_matches_payload` | `TRUST_BOUNDARY_REQUIRED` | Untrusted community provider / fixture JSON boundary; strict Pydantic + duplicate-key and sensitive-field checks must never be weakened. |
-| `src/fc27_user_export.py:plan_fc27_user_export_import` | `TRUST_BOUNDARY_REQUIRED` | Pre-persistence envelope hash and pseudonym verification before PostgreSQL writes. |
+| `src/fc27_repository.py:plan_fc27_user_export_import` | `TRUST_BOUNDARY_REQUIRED` | Pre-persistence envelope hash and pseudonym verification before PostgreSQL writes. |
 | `src/fc27_discord_bot.py:assert_sql_is_readonly_fc27_select & assert_discord_output_sanitized` | `TRUST_BOUNDARY_REQUIRED` | Read-only SQL guard and outbound Discord privacy filter. |
 | `src/fc27_search_scout.py:FC27SearchContext & FC27ScoutReport Pydantic construction` | `INTERNAL_REVALIDATION_REQUIRED` | Enforces sample-size confidence tiers and non-recommendation invariants between Search and Scout. |
 | `src/fc27_analyst.py / src/fc27_coach.py / src/fc27_tactics.py / src/fc27_director.py report-hash canonicalization` | `INTERNAL_REVALIDATION_CANDIDATE_FOR_REVIEW` | Repeated `model_dump(mode='json')` + `json.dumps` sorting and redundant recursive `scan_for_sensitive_fields` across already-validated frozen internal objects; prime candidate for memoized digest/privacy-verified flag in a dedicated Python optimization pass. |
@@ -191,7 +191,7 @@ Profiling the `LARGE` (`1,000` matches / `6,000` player rows) advisory chain wit
 
 1. **PostgreSQL 16 is sub-millisecond**: Operational read queries execute in `0.157 ms`–`0.352 ms` (`2.764 ms` with planning).
 2. **Warm cached endpoints are sub-60 ms**: The dashboard serves cached `/demo/status` in `3.904 ms` median (`6.388 ms` p95) and `/api/fc27/demo/director` in `23.175 ms` median (`24.706 ms` p95).
-3. **Every exceeded threshold is caused by uncached recomputation and redundant recursive `scan_for_sensitive_fields` calls inside Python**: Memoizing the read-only advisory report bundle in [`src/fc27_discord_bot.py`](../src/fc27_discord_bot.py) (matching [`src/fc27_demo_api.py`](../src/fc27_demo_api.py)) and skipping redundant recursive `scan_for_sensitive_fields` re-scans on already-validated frozen internal models (`INTERNAL_REVALIDATION_CANDIDATE_FOR_REVIEW`) resolves all three exceeded thresholds entirely within Python without introducing Go, Rust, C#/.NET, or C/C++.
+3. **Every exceeded threshold is caused by uncached recomputation and redundant recursive `scan_for_sensitive_fields` calls inside Python**: Memoizing the read-only advisory report bundle in [`src/fc27_discord_bot.py`](../src/fc27_discord_bot.py) via [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py) and skipping redundant recursive `scan_for_sensitive_fields` re-scans on already-validated frozen internal models (`INTERNAL_REVALIDATION_CANDIDATE_FOR_REVIEW`) resolves all three exceeded thresholds entirely within Python without introducing Go, Rust, C#/.NET, or C/C++.
 
 ### Post-Optimization Verification (`src/fc27_advisory_cache.py`)
 

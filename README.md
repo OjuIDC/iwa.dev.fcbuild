@@ -21,34 +21,32 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
   -> Coach observational hypotheses (src/fc27_coach.py)
   -> Tactics experimental candidates (src/fc27_tactics.py)
   -> Director evidence reconciliation (src/fc27_director.py)
-  -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app) + optional read-only Discord bot (src/fc27_discord_bot.py)
+  -> Discord slash-command analytics & manual Match Results bot (src/fc27_discord_bot.py, src/fc27_match_results.py)
 ```
 
-1. **Working Provider & How to Run It (`scripts/fc27_community_eval.py`)**:
-   - Provider ID: `fc-clubs-api-community-v1` (`LIVE_EA_CLUBS_COMMUNITY_CLIENT`, documented in [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md)).
-   - Run deterministic offline verification (zero network requests):
+1. **Working Polling Worker & Status Check (`scripts/fc27_polling_worker.py`)**:
+   - Provider ID: `fc-clubs-api-community-v1` (`LIVE_EA_CLUBS_COMMUNITY_CLIENT`, documented in [`docs/FC27_POLLING_WORKER.md`](docs/FC27_POLLING_WORKER.md)).
+   - Run deterministic offline status check (zero network requests):
      ```powershell
-     .\.venv\Scripts\python.exe scripts/fc27_community_eval.py --operation mock-eval
+     .\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
      ```
 2. **Start Disposable PostgreSQL 16 & Run Persistence / Analytics (`Search -> Scout -> Analyst`)**:
    ```powershell
    docker run -d --name fc27-test-postgres -e POSTGRES_USER=fc27test -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:16 -c max_connections=300
    $env:TEST_POSTGRES_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
    $env:TEST_POSTGRES_ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
-   .\.venv\Scripts\python.exe scripts/fc27_demo_ingest.py --source fixture --operation full-demo --scenario valid
+   .\.venv\Scripts\pytest.exe tests/test_fc27_persistence_and_queries.py -q
    ```
-3. **Start the Existing Local Dashboard (`src.fc27_demo_api:create_demo_app`)**:
+3. **Inspect Discord Bot & Polling Status (`scripts/fc27_discord_bot.py`)**:
    ```powershell
-   $env:FC27_DEMO_MODE = "true"
-   .\.venv\Scripts\uvicorn.exe src.fc27_demo_api:create_demo_app --factory --host 127.0.0.1 --port 8001
-   # Open http://127.0.0.1:8001/demo , /demo/status , /demo/matches , /demo/analysis
+   .\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
    ```
 4. **Run Tests**:
    ```powershell
-   .\.venv\Scripts\pytest.exe tests/test_fc27_community_provider.py tests/test_fc27_pandas_view.py tests/test_fc27_demo.py -q
+   .\.venv\Scripts\pytest.exe tests/test_fc27_community_provider.py tests/test_fc27_pandas_view.py tests/test_fc27_privacy.py tests/test_fc27_discord_bot.py -q
    ```
 5. **Disabled Features & Historical Material**:
-   - Continuous polling, browser scraping, raw response storage, player aliases/handles, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and player dispatch (`DISPATCH_ENABLED=false`) remain **disabled**.
+   - Continuous unthrottled polling, browser scraping, raw response storage, player aliases/handles, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and player dispatch (`DISPATCH_ENABLED=false`) remain **disabled**.
    - Historical and superseded documents/scripts live in [`docs/archive/README.md`](docs/archive/README.md), [`docs/archive/ARCHIVE_MANIFEST.md`](docs/archive/ARCHIVE_MANIFEST.md), and `scripts/archive/` (indexed in [`scripts/README.md`](scripts/README.md)).
 
 ## 1. Project Purpose
@@ -57,8 +55,8 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 ## 2. Current Supported Use Case
 
-- **Primary Architecture (Community Provider & Endpoint Contract Boundary)**: Fixed FC 27 endpoint contracts (`src/fc27_clubs_api_contracts.py`), normalized-object caching (`src/fc27_api_cache.py`), conservative rate/budget/circuit-breaker controls (`src/fc27_api_rate_limit.py`), and the bounded community provider adapter (`src/fc27_community_provider.py`, `src/fc27_polling_worker.py`) are implemented and verified against hermetic mocks and disposable PostgreSQL 16 databases.
-- **Secondary Offline Fallback**: Consented user-export (`USER_SUPPLIED_EXPORT`) and operator-captured displayed data (`OPERATOR_CAPTURED_DISPLAYED_DATA`) validation and dry-run workflows (`src/fc27_user_export.py`, `src/fc27_capture.py`) are available for offline validation, but manual JSON/CSV files are **not** the primary long-term architecture.
+- **Primary Architecture (Community Provider & Endpoint Contract Boundary)**: Fixed FC 27 endpoint contracts (`src/fc27_clubs_api_contracts.py`), normalized-object caching (`src/fc27_api_cache.py`), conservative rate/budget/circuit-breaker controls (`src/fc27_api_rate_limit.py`), privacy and pseudonymization boundary (`src/fc27_privacy.py`), and the bounded community provider adapter (`src/fc27_community_provider.py`, `src/fc27_polling_worker.py`) are implemented and verified against hermetic mocks and disposable PostgreSQL 16 databases.
+- **Manual Match Results & Discord Surface**: Role-ID-gated manual Match Results (`src/fc27_match_results.py`) and read-only analytics slash commands (`src/fc27_discord_bot.py`) provide club operators and members with structured match logging and `/fc27 status` operational readback inside Discord.
 - **PostgreSQL 16 Governance & Audit Foundation**: Role-separated PostgreSQL 16 storage (`migrations/0001_initial.sql`–`migrations/0013_fc27_manual_match_results.sql`, Grants Policy Version `15`), deterministic observational Coach/Tactics/Director advisory engines (`src/fc27_coach.py`, `src/fc27_tactics.py`, `src/fc27_director.py`), and historical Phase 1/2 LangGraph/WebAuthn/HMAC control-plane schemas (superseded runtime modules `src/graph.py`, `src/fc27_coaching.py`, `src/identity/`, `src/approval_store.py` removed in Stage B3) are verified against local PostgreSQL 16.
 
 ## 3. East Coasters Identity
@@ -85,10 +83,10 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 3. **Human Identity, WebAuthn Step-Up, & CLI HMAC Verification (Historical Control-Plane Schema)**: Phase 2 user/session/passkey/TOTP/delegation schema tables, 14-field bound `fc27_decision_evidence` with mandatory WebAuthn User Verification (`require_user_verification=True`), and constant-time symmetric HMAC-SHA256 verification (historical runtime modules `src/identity/`, `src/approval.py`, `scripts/commissioner_decide.py` superseded and removed in Stage B3).
 4. **FC 27 Safe Provider Adapter & Contracts**: 11 fixed endpoint operations, 13 strict response schemas, match event bitmap (`ev`) decoder, `plr_ecf_<12-hex>` pseudonymization with collision detection (`PSEUDONYM_COLLISION`), `FC27SourceProvenance`, bounded normalized cache, token-bucket rate limiter, request budget, circuit breaker, and pure retry classifier.
 5. **Normalized Performance Storage, Read-Only Analytics, Search/Scout Foundation, & Analyst Evidence Synthesis**: Repository persistence (`src/fc27_repository.py`), pure deterministic analytics (`src/fc27_analytics.py`, `FORMULA_VERSION = "fc27-v1.0"`), deterministic Search context assembly and Scout evidence/hypothesis synthesis (`src/fc27_search_scout.py`, `FC27AnalyticsReader`, `search_node`, `scout_node`), deterministic Analyst evidence validation, clustering, counter-evidence, confounder/uncertainty analysis, and bounded observational finding synthesis (`src/fc27_analyst.py`, `analyst_evidence_node`), read-only PostgreSQL dashboard queries (`src/fc27_dashboard_queries.py`, `READ ONLY`, `5000ms` statement timeout), and deterministic pre-approval validation contracts (`src/schemas.py`, `src/fc27_coach.py`; historical `src/fc27_coaching.py` superseded in Stage B3).
-6. **Local FC 27 One-Shot Ingestion & Analytics Demo**: Loopback synthetic FC 27 fixture server (`scripts/fc27_demo_fixture_server.py`), one-shot ingestion CLI (`scripts/fc27_demo_ingest.py`), vertical demo pipeline (`src/fc27_demo.py`), and loopback-only Demo API & self-contained HTML inspection view (`src/fc27_demo_api.py`, canonical ASGI factory `src.fc27_demo_api:create_demo_app`, gated by `FC27_DEMO_MODE=false` by default; documented in [`docs/FC27_DEMO.md`](docs/FC27_DEMO.md)).
+6. **FC 27 Privacy, Pseudonymization, & Sanitization Boundary (`src/fc27_privacy.py`)**: Centralized deterministic pseudonymization (`plr_ecf_<12-hex>`), sensitive-field rejection (`SENSITIVE_KEYS_LOWER`), canonical SHA-256 hashing (`canonical_json_sha256`), Discord mention suppression (`suppress_discord_mentions`), CSV formula escaping (`escape_csv_formula_cell`), URL validation (`reject_external_urls`), and secret/DSN redaction (`sanitize_log_text`). (Historical loopback demo/export/capture paths `src/fc27_demo.py`, `src/fc27_demo_api.py`, `src/fc27_user_export.py`, `src/fc27_capture.py` removed in Stage B4; polling and repository status exposed via Discord `/fc27 status`.)
 7. **Disabled-by-Default FC 27 Community Polling Worker (`fc27-community-worker`)**: Production-shaped background polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`; documented in [`docs/FC27_POLLING_WORKER.md`](docs/FC27_POLLING_WORKER.md) and [`docs/FC27_DAILY_POLLING_OPERATIONS.md`](docs/FC27_DAILY_POLLING_OPERATIONS.md)) with single-flight PostgreSQL advisory locking, 12-hour intervals (`POLL_INTERVAL_SECONDS=43200`, `ONCE_EVERY_12_HOURS`, max 2 requests/24h), 1-request/0-retry budgets, transactional persistence before analytics, provider window continuity tracking, and full advisory analytics (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`) on new matches only (`FC27_COMMUNITY_POLLING_ENABLED=false` by default).
 8. **Local Database Backup & Restore Verification (`src/fc27_backup_restore.py`)**: Custom-format `pg_dump -Fc` domain backups (`scripts/fc27_backup.py`), 7-backup retention, SHA-256 manifest verification, and disposable temporary-database restore verification (`scripts/fc27_restore_verify.py`; documented in [`docs/FC27_BACKUP_AND_RECOVERY.md`](docs/FC27_BACKUP_AND_RECOVERY.md)).
-9. **East Coasters Discord Analytics & Manual Match Results Bot (`src/fc27_discord_bot.py`, `src/fc27_match_results.py`)**: Disabled-by-default (`FC27_DISCORD_BOT_ENABLED=false`), slash-command-only bot (`scripts/fc27_discord_bot.py`, `Dockerfile.discord`, `docker-compose.discord.yml`; documented in [`docs/FC27_DISCORD_BOT.md`](docs/FC27_DISCORD_BOT.md)) with zero provider authority (`DISCORD_PROVIDER_REQUESTS=0`), read-only analytics access, role-ID-gated manual Match Results commands (`matchday`, `result`, `editresult`, `lastresult`, `match`, `results`, `topscorers`, `playerstats`, `deletematch`) via `fc27_match_results_writer`, and guild/channel allowlists.
+9. **East Coasters Discord Analytics & Manual Match Results Bot (`src/fc27_discord_bot.py`, `src/fc27_match_results.py`)**: Disabled-by-default (`FC27_DISCORD_BOT_ENABLED=false`), slash-command-only bot (`scripts/fc27_discord_bot.py`, `Dockerfile.discord`, `docker-compose.discord.yml`; documented in [`docs/FC27_DISCORD_BOT.md`](docs/FC27_DISCORD_BOT.md)) with zero provider authority (`DISCORD_PROVIDER_REQUESTS=0`), read-only analytics access, `/fc27 status` polling/continuity/repository status inspection, role-ID-gated manual Match Results commands (`matchday`, `result`, `editresult`, `lastresult`, `match`, `results`, `topscorers`, `playerstats`, `deletematch`) via `fc27_match_results_writer`, and guild/channel allowlists.
 10. **Deterministic Read-Only Advisory Pipeline (`Coach -> Tactics -> Director`)**: Observational coaching hypotheses (`src/fc27_coach.py`, [`docs/FC27_COACH_HYPOTHESIS_ENGINE.md`](docs/FC27_COACH_HYPOTHESIS_ENGINE.md)), single-variable experimental tactical candidates (`src/fc27_tactics.py`, [`docs/FC27_TACTICS_CANDIDATE_ENGINE.md`](docs/FC27_TACTICS_CANDIDATE_ENGINE.md)), and non-overlapping experiment sequencing (`src/fc27_director.py`, [`docs/FC27_DIRECTOR_RECONCILIATION.md`](docs/FC27_DIRECTOR_RECONCILIATION.md)) with `recommendation=False`, `approvable=False`, and `dispatchable=False`.
 11. **Bounded Performance Telemetry, Optimization Baseline, & Immutable Advisory-Report Cache (`src/fc27_performance.py`, `src/fc27_advisory_cache.py`)**: Disabled-by-default (`FC27_PERFORMANCE_TELEMETRY_ENABLED=false`) privacy-safe telemetry, deterministic multi-scale benchmark scenarios (`SMALL_10_MATCHES`, `MEDIUM_100_MATCHES`, `LARGE_1000_MATCHES`, `STRESS_10000_MATCHES`), disposable PostgreSQL `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` inspection, Python stdlib profiling (`cProfile`, `pstats`, `tracemalloc`), Polars comparison (`NOT_JUSTIFIED`), thread-safe single-flight immutable six-report advisory bundle caching (`FC27AdvisoryCache`), internal validation deduplication on verified frozen models, language decision matrix (`KEEP_PYTHON` default), and local inference boundary specification (documented in [`docs/FC27_PERFORMANCE_BASELINE.md`](docs/FC27_PERFORMANCE_BASELINE.md), [`docs/FC27_ADVISORY_CACHE.md`](docs/FC27_ADVISORY_CACHE.md), [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](docs/FC27_LANGUAGE_DECISION_MATRIX.md), and [`docs/FC27_LOCAL_INFERENCE_BOUNDARY.md`](docs/FC27_LOCAL_INFERENCE_BOUNDARY.md)).
 
@@ -148,14 +146,14 @@ All external networking, persistence writes, analytics execution, recommendation
    ```powershell
    .\.venv\Scripts\python.exe -m compileall -q src scripts tests
    .\.venv\Scripts\python.exe scripts/check_matchpulse_boundary.py
-   .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py
+   .\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
    ```
 
 ## 10. Testing
 
-- **Focused FC 27 Contracts, Cache, Rate-Limit, Community Provider, Search/Scout, Analyst, & Demo Tests (No DB required)**:
+- **Focused FC 27 Contracts, Cache, Rate-Limit, Community Provider, Search/Scout, Analyst, Privacy, & Discord Tests (No DB required)**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_community_provider.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_demo.py -q
+  .\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_community_provider.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_privacy.py tests/test_fc27_discord_bot.py -q
   ```
 - **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
   ```powershell
@@ -173,7 +171,6 @@ All external networking, persistence writes, analytics execution, recommendation
 
 - **Compose Files**:
   - `docker-compose.yml` — Base topology (`postgres`, `redis`, `db-bootstrap`, and `db-migrate`).
-  - `docker-compose.community-eval.yml` — One-shot isolated evaluation container (`fc27-community-client-evaluation`).
   - `docker-compose.community-worker.yml` — Disabled-by-default 12-hour polling worker overlay (`fc27-community-worker`, `--profile fc27-polling`).
   - `docker-compose.discord.yml` — Disabled-by-default East Coasters Discord analytics and Match Results bot overlay (`fc27-discord-bot`, `--profile fc27-discord`).
   - `docker-compose.ghcr.yml` — Optional digest-pinned private GHCR deployment overlay for `fc27-community-worker` and `fc27-discord-bot` (documented in [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md)).
@@ -213,8 +210,8 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 - **Architecture & Status**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/FC27_COMPONENT_STATUS.md`](docs/FC27_COMPONENT_STATUS.md), [`docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`](docs/ADR_FC27_EAST_COASTERS_PLATFORM.md)
 - **Development, Testing, & Operations**: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`docs/VISUAL_STUDIO_SETUP.md`](docs/VISUAL_STUDIO_SETUP.md), [`docs/TESTING.md`](docs/TESTING.md), [`docs/FC27_CI_TEST_STRATEGY.md`](docs/FC27_CI_TEST_STRATEGY.md), [`docs/FC27_TEST_ISOLATION_MATRIX.md`](docs/FC27_TEST_ISOLATION_MATRIX.md), [`docs/FC27_CI_BROWSER_REPORTS.md`](docs/FC27_CI_BROWSER_REPORTS.md), [`docs/FC27_CONTAINER_PUBLISHING.md`](docs/FC27_CONTAINER_PUBLISHING.md), [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md), [`TEST_RESULTS.md`](TEST_RESULTS.md)
 - **Security & Feature Flags**: [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md), [`docs/FEATURE_FLAGS.md`](docs/FEATURE_FLAGS.md), [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md), [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md), [`SECURITY.md`](SECURITY.md)
-- **Provider, Data Model, Analytics, Demo, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_DEMO.md`](docs/FC27_DEMO.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
-- **Dispatch, Offline Export, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md), [`docs/archive/README.md`](docs/archive/README.md)
+- **Provider, Data Model, Analytics, Polling, Discord, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_POLLING_WORKER.md`](docs/FC27_POLLING_WORKER.md), [`docs/FC27_DAILY_POLLING_OPERATIONS.md`](docs/FC27_DAILY_POLLING_OPERATIONS.md), [`docs/FC27_DISCORD_BOT.md`](docs/FC27_DISCORD_BOT.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
+- **Dispatch, Player Identity, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/archive/README.md`](docs/archive/README.md)
 
 ## 16. Current Limitations
 

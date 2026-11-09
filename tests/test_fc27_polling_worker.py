@@ -32,7 +32,6 @@ from typing import Any
 import psycopg
 import pytest
 import yaml
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from scripts.fc27_polling_worker import main as polling_cli_main
@@ -48,8 +47,8 @@ from src.fc27_community_provider import (
     normalize_community_match_records,
     run_analytics_from_persisted_community_records,
 )
-from src.fc27_demo import FC27DemoStateStore, _pseudonymize_match_ref
-from src.fc27_demo_api import create_demo_app
+from src.fc27_discord_bot import FC27DiscordBotConfig, FC27DiscordBotService
+from src.fc27_privacy import pseudonymize_match_ref as _pseudonymize_match_ref
 from src.fc27_polling_worker import (
     POLL_NORMALIZATION_VERSION,
     POLL_OPERATION_NAME,
@@ -2066,40 +2065,62 @@ def test_098_worker_database_role_cannot_run_ddl(pg_db_migrated) -> None:
         conn.rollback()
 
 
-def test_099_demo_status_exposes_polling_health_metadata_disabled_by_default() -> None:
-    """99. GET /demo/status exposes polling health metadata with polling_enabled=false by default."""
-    store = FC27DemoStateStore()
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    with TestClient(app) as client:
-        resp = client.get("/demo/status")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["polling_enabled"] is False
-        assert body["worker_running"] is False
-        assert body["last_status"] == "DISABLED"
-        assert body["consecutive_failures"] == 0
-        assert body["total_matches_inserted"] == 0
-        assert body["total_duplicates_ignored"] == 0
-        assert body["total_replay_conflicts"] == 0
-        assert "last_attempt_at" in body
-        assert "last_success_at" in body
-        assert "last_new_match_at" in body
-        assert "next_eligible_at" in body
+def test_099_discord_status_exposes_polling_health_metadata_disabled_by_default() -> None:
+    """99. /fc27 status exposes polling health metadata with worker_enabled=false by default."""
+    rt = FC27PollingRuntime()
+    health = rt.snapshot_health()
+    assert health.worker_enabled is False
+    assert health.worker_running is False
+    assert health.last_status == "DISABLED"
+    assert health.consecutive_failures == 0
+    assert health.total_matches_inserted == 0
+    assert health.total_duplicates_ignored == 0
+    assert health.total_replay_conflicts == 0
+
+    svc = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        polling_runtime=rt,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    assert resp.status == "OK"
+    fields = {k: v for emb in resp.embeds for k, v in emb.fields.items()}
+    assert fields["worker_enabled"] == "false"
+    assert fields["worker_running"] == "false"
+    assert fields["poll_status"] == "DISABLED"
+    assert fields["consecutive_failures"] == "0"
+    assert fields["matches_inserted"] == "0"
+    assert fields["duplicates_ignored"] == "0"
+    assert fields["replay_conflicts"] == "0"
 
 
-def test_100_dashboard_renders_polling_disabled_and_has_no_button_to_enable_live_polling() -> None:
-    """100. Dashboard renders Polling Disabled when polling is disabled and has no button to enable live polling."""
-    store = FC27DemoStateStore()
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    with TestClient(app) as client:
-        resp = client.get("/demo")
-        assert resp.status_code == 200
-        html_text = resp.text
-        assert "Polling Disabled" in html_text
-        assert "Polling Worker Health (Read-Only)" in html_text
-        assert "enable-polling" not in html_text.lower()
-        assert "start-polling" not in html_text.lower()
-        assert "/demo/poll" not in html_text.lower()
+def test_100_discord_polling_status_remains_read_only_with_zero_provider_calls() -> None:
+    """100. Discord /fc27 status is read-only and never triggers live polling."""
+    rt = FC27PollingRuntime()
+    svc = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        polling_runtime=rt,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    assert resp.status == "OK"
+    assert resp.provider_requests_executed == 0
+    assert svc.config.database_write_access is False
+
 
 
 def test_101_zero_external_network_calls_occur_during_entire_offline_test_suite() -> None:

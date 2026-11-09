@@ -23,6 +23,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import re
 import threading
 import time
@@ -98,12 +99,18 @@ from src.fc27_pandas_view import (
     RECENT_MATCHES_COLUMNS,
 )
 from src.fc27_polling_worker import (
+    FIXED_MATCH_TYPE,
     FC27PollingRuntime,
     MAX_PROVIDER_REQUESTS_PER_24_HOURS as SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS,
     POLL_FREQUENCY_LITERAL as POLLING_FREQUENCY_12H,
     POLL_INTERVAL_SECONDS as SUPPORTED_POLL_INTERVAL_SECONDS,
     get_default_polling_runtime,
     recover_polling_state_from_postgres,
+)
+from src.fc27_privacy import (
+    contains_discord_mention,
+    redact_sensitive_text,
+    suppress_discord_mentions,
 )
 from src.fc27_search_scout import FC27ScoutReport, FC27SearchContext
 from src.fc27_tactics import FC27TacticsInput, build_fc27_tactics_report
@@ -166,6 +173,9 @@ DISCORD_DATABASE_WRITE_ACCESS: Final[bool] = False
 NOT_AVAILABLE_NOT_IMPLEMENTED: Final[str] = "NOT_AVAILABLE_NOT_IMPLEMENTED"
 
 MAX_DISCORD_EMBEDS: Final[int] = 3
+MAX_DISCORD_EMBED_FIELDS: Final[int] = 25
+MAX_DISCORD_FIELD_NAME_LENGTH: Final[int] = 256
+MAX_DISCORD_FIELD_VALUE_LENGTH: Final[int] = 1024
 MAX_DISCORD_ROWS_PER_PAGE: Final[int] = 10
 DEFAULT_DISCORD_PAGE_SIZE: Final[int] = 5
 MAX_DISCORD_CONTENT_LENGTH: Final[int] = 1900
@@ -464,6 +474,44 @@ class FC27DiscordEmbed(BaseModel):
     description: str = Field(min_length=1, max_length=1800)
     fields: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _validate_embed_bounds(self) -> FC27DiscordEmbed:
+        if len(self.fields) > MAX_DISCORD_EMBED_FIELDS:
+            raise FC27DiscordError(
+                f"Embed field count {len(self.fields)} exceeds {MAX_DISCORD_EMBED_FIELDS}"
+            )
+        for k, v in self.fields.items():
+            if not k or len(k) > MAX_DISCORD_FIELD_NAME_LENGTH:
+                raise FC27DiscordError(
+                    f"Embed field name length must be 1..{MAX_DISCORD_FIELD_NAME_LENGTH}"
+                )
+            if not v or len(v) > MAX_DISCORD_FIELD_VALUE_LENGTH:
+                raise FC27DiscordError(
+                    f"Embed field value length for '{k}' must be 1..{MAX_DISCORD_FIELD_VALUE_LENGTH}"
+                )
+        return self
+
+
+def _format_safe_status_value(value: Any, *, default: str = "N/A") -> str:
+    """Format an optional status value safely, rendering missing/null/NaN values as `N/A` and suppressing mentions."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, datetime):
+        dt_utc = (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
+        )
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return default
+    cleaned = suppress_discord_mentions(redact_sensitive_text(str(value))).strip()
+    if not cleaned or cleaned.lower() in {"none", "null", "undefined", "nan"}:
+        return default
+    return cleaned[:MAX_DISCORD_FIELD_VALUE_LENGTH]
+
 
 class FC27DiscordAttachment(BaseModel):
     """Bounded sanitized export attachment for `/fc27 export-*` commands."""
@@ -638,7 +686,11 @@ def assert_discord_output_sanitized(
     *,
     forbidden_tokens: Sequence[str] = (),
 ) -> None:
-    """Ensure a Discord output string or export contains no PII, raw event strings, or secrets."""
+    """Ensure a Discord output string or export contains no PII, raw event strings, mentions, or secrets."""
+    if contains_discord_mention(text_value):
+        raise FC27DiscordPrivacyError(
+            "Discord output contains unsuppressed mention token (@everyone, @here, or snowflake mention)"
+        )
     for pattern in FORBIDDEN_OUTPUT_PATTERNS:
         if pattern.search(text_value):
             raise FC27DiscordPrivacyError(
@@ -1625,6 +1677,63 @@ class FC27DiscordBotService:
             if own_conn:
                 guarded._conn.close()
 
+    def _load_status_repository_summary(self) -> tuple[str, int, str, str]:
+        """Safely inspect read-only database availability, persisted match count, latest stored match time, and manual Match Results availability."""
+        has_writer_roles = bool(self._config.match_results_writer_role_ids)
+        has_writer_conn = False
+        try:
+            has_writer_conn = bool(self._resolve_writer_conn_or_uri(required=False))
+        except Exception:
+            has_writer_conn = False
+
+        own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
+        try:
+            guarded = self._open_readonly_connection()
+        except FC27DiscordWriteAccessDeniedError:
+            raise
+        except Exception:
+            return ("UNAVAILABLE", 0, "N/A", "UNAVAILABLE")
+
+        try:
+            row = guarded.execute(
+                "SELECT COUNT(*), MAX(played_at) FROM public.fc27_matches WHERE club_id = %s AND platform = %s AND game_version = %s",
+                (TARGET_CLUB_ID, TARGET_PLATFORM, TARGET_GAME_VERSION),
+            ).fetchone()
+            match_count = int(row[0]) if row and row[0] is not None else 0
+            latest_match_at = (
+                _format_safe_status_value(row[1], default="N/A")
+                if row and len(row) > 1
+                else "N/A"
+            )
+            manual_availability = "UNAVAILABLE"
+            try:
+                m_row = guarded.execute(
+                    "SELECT COUNT(*) FROM public.fc27_manual_matches WHERE club_id = %s AND platform = %s AND game_version = %s AND deleted_at IS NULL",
+                    (TARGET_CLUB_ID, TARGET_PLATFORM, TARGET_GAME_VERSION),
+                ).fetchone()
+                manual_count = int(m_row[0]) if m_row and m_row[0] is not None else 0
+                mode_label = (
+                    "AVAILABLE"
+                    if (has_writer_roles and has_writer_conn)
+                    else "READ_ONLY"
+                )
+                manual_availability = f"{mode_label} (manual_matches={manual_count})"
+            except FC27DiscordWriteAccessDeniedError:
+                raise
+            except Exception:
+                manual_availability = "UNAVAILABLE"
+            return ("AVAILABLE", match_count, latest_match_at, manual_availability)
+        except FC27DiscordWriteAccessDeniedError:
+            raise
+        except Exception:
+            return ("UNAVAILABLE", 0, "N/A", "UNAVAILABLE")
+        finally:
+            if own_conn:
+                try:
+                    guarded._conn.close()
+                except Exception:
+                    pass
+
     def _load_or_build_advisory_entry(
         self,
     ) -> tuple[
@@ -1759,21 +1868,136 @@ class FC27DiscordBotService:
         snap = self._polling_runtime.snapshot_health()
 
         if cmd == "status":
-            match_count = self._load_persisted_match_count()
-            embed = FC27DiscordEmbed(
-                title=f"East Coasters ({TARGET_CLUB_ID}) — Platform Status",
+            (
+                db_availability,
+                match_count,
+                latest_match_at,
+                manual_results_availability,
+            ) = self._load_status_repository_summary()
+            worker_enabled_str = _format_safe_status_value(
+                getattr(snap, "worker_enabled", None), default="false"
+            )
+            worker_running_str = _format_safe_status_value(
+                getattr(snap, "worker_running", None), default="false"
+            )
+            poll_status_str = _format_safe_status_value(
+                getattr(snap, "last_status", None), default="N/A"
+            )
+            circuit_state_str = _format_safe_status_value(
+                getattr(snap, "circuit_state", None), default="N/A"
+            )
+            consecutive_failures_str = _format_safe_status_value(
+                getattr(snap, "consecutive_failures", None), default="N/A"
+            )
+            total_cycles_str = _format_safe_status_value(
+                getattr(snap, "total_cycles", None), default="N/A"
+            )
+            provider_requests_str = _format_safe_status_value(
+                getattr(snap, "total_provider_requests", None), default="N/A"
+            )
+            matches_inserted_str = _format_safe_status_value(
+                getattr(snap, "total_matches_inserted", None), default="N/A"
+            )
+            duplicates_ignored_str = _format_safe_status_value(
+                getattr(snap, "total_duplicates_ignored", None), default="N/A"
+            )
+            replay_conflicts_str = _format_safe_status_value(
+                getattr(snap, "total_replay_conflicts", None), default="N/A"
+            )
+            schedule_lag_str = _format_safe_status_value(
+                getattr(snap, "schedule_lag_seconds", None), default="N/A"
+            )
+            missed_intervals_str = _format_safe_status_value(
+                getattr(snap, "missed_intervals", None), default="N/A"
+            )
+            history_gap_str = _format_safe_status_value(
+                getattr(snap, "possible_history_gap", None), default="N/A"
+            )
+            continuity_verified_str = _format_safe_status_value(
+                getattr(snap, "continuity_last_verified_at", None), default="N/A"
+            )
+            last_attempt_str = _format_safe_status_value(
+                getattr(snap, "last_attempt_at", None), default="N/A"
+            )
+            last_success_str = _format_safe_status_value(
+                getattr(snap, "last_success_at", None), default="N/A"
+            )
+            next_eligible_str = _format_safe_status_value(
+                getattr(snap, "next_eligible_at", None), default="N/A"
+            )
+
+            status_embed = FC27DiscordEmbed(
+                title=f"East Coasters ({TARGET_CLUB_ID}) — Platform & Polling Status",
                 description=(
-                    f"Source: `{LIVE_EA_CLUBS_COMMUNITY_CLIENT}` (`{COMMUNITY_PROVIDER_ID}`)\n"
-                    f"Database Persisted Matches: `{match_count}`\n"
-                    f"Polling Frequency: `{POLLING_FREQUENCY_12H}` (`{SUPPORTED_POLL_INTERVAL_SECONDS}s`)"
+                    f"Provider: `{COMMUNITY_PROVIDER_ID}` (`{LIVE_EA_CLUBS_COMMUNITY_CLIENT}`)\n"
+                    f"Club: `{TARGET_CLUB_NAME}` (`{TARGET_CLUB_ID}`) | Platform: `{TARGET_PLATFORM}` | "
+                    f"Game: `{TARGET_GAME_VERSION}` | Match Type: `{FIXED_MATCH_TYPE}`\n"
+                    f"Polling Schedule: `{POLLING_FREQUENCY_12H}` (`{SUPPORTED_POLL_INTERVAL_SECONDS}` seconds) | "
+                    f"Daily Limit: `{SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS}` requests/24h | "
+                    f"Max Requests/Cycle: `1` | Max Retries: `0` | Single-Flight: `true`\n"
+                    f"Database: `{db_availability}` (`{match_count}` matches, latest=`{latest_match_at}`) | "
+                    f"Manual Match Results: `{manual_results_availability}`"
                 ),
                 fields={
-                    "polling_enabled": str(snap.worker_enabled).lower(),
-                    "last_attempt_at": str(snap.last_attempt_at or "NONE"),
-                    "last_success_at": str(snap.last_success_at or "NONE"),
-                    "next_eligible_at": str(snap.next_eligible_at or "IMMEDIATE"),
-                    "circuit_state": str(snap.circuit_state),
+                    "provider_id": COMMUNITY_PROVIDER_ID,
+                    "source_classification": LIVE_EA_CLUBS_COMMUNITY_CLIENT,
+                    "club_scope": (
+                        f"{TARGET_CLUB_NAME} ({TARGET_CLUB_ID}) | {TARGET_PLATFORM} | "
+                        f"{TARGET_GAME_VERSION} | {FIXED_MATCH_TYPE}"
+                    ),
+                    "poll_interval": f"{SUPPORTED_POLL_INTERVAL_SECONDS}s ({POLLING_FREQUENCY_12H})",
+                    "request_limits": (
+                        f"daily_limit={SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS}/24h | "
+                        "max_requests_per_cycle=1 | max_retries=0"
+                    ),
+                    "single_flight_enabled": "true",
+                    "polling_enabled": worker_enabled_str,
+                    "worker_running": worker_running_str,
+                    "poll_status": poll_status_str,
+                    "circuit_state": circuit_state_str,
+                    "consecutive_failures": consecutive_failures_str,
+                    "total_cycles": total_cycles_str,
+                    "provider_request_count": provider_requests_str,
+                    "matches_inserted": matches_inserted_str,
+                    "duplicates_ignored": duplicates_ignored_str,
+                    "replay_conflicts": replay_conflicts_str,
+                    "schedule_lag_seconds": schedule_lag_str,
+                    "missed_intervals": missed_intervals_str,
+                    "possible_history_gap": history_gap_str,
+                    "continuity_last_verified_at": continuity_verified_str,
+                    "last_attempt_at": last_attempt_str,
+                    "last_success_at": last_success_str,
+                    "next_eligible_at": next_eligible_str,
+                    "database_status": (
+                        f"availability={db_availability} | matches={match_count} | "
+                        f"latest_match_at={latest_match_at}"
+                    ),
+                    "manual_match_results": (
+                        f"{manual_results_availability} | "
+                        "RECOMMENDATIONS=DISABLED | APPROVAL=DISABLED | DISPATCH=DISABLED"
+                    ),
+                },
+            )
+            policy_embed = FC27DiscordEmbed(
+                title="East Coasters — Polling Policy & Repository Details",
+                description=(
+                    "Read-only status summary (`DISCORD_PROVIDER_REQUESTS=0`, "
+                    "`DISCORD_DATABASE_WRITE_ACCESS=False`)."
+                ),
+                fields={
+                    "club_name": TARGET_CLUB_NAME,
+                    "platform": TARGET_PLATFORM,
+                    "game_version": TARGET_GAME_VERSION,
+                    "match_type": FIXED_MATCH_TYPE,
+                    "poll_interval_seconds": str(SUPPORTED_POLL_INTERVAL_SECONDS),
+                    "daily_request_limit": str(SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS),
+                    "maximum_requests_per_cycle": "1",
+                    "maximum_retries": "0",
+                    "worker_enabled": worker_enabled_str,
+                    "database_availability": db_availability,
                     "database_match_count": str(match_count),
+                    "latest_stored_match_time": latest_match_at,
+                    "manual_match_results_availability": manual_results_availability,
                     "governance": "RECOMMENDATIONS=DISABLED | APPROVAL=DISABLED | DISPATCH=DISABLED",
                 },
             )
@@ -1781,10 +2005,13 @@ class FC27DiscordBotService:
                 command="status",
                 status="OK",
                 content=(
-                    f"East Coasters (`{TARGET_CLUB_ID}`) status: `{match_count}` persisted matches | "
-                    f"circuit `{snap.circuit_state}` | polling `{POLLING_FREQUENCY_12H}` (`43200s`)."
+                    f"East Coasters (`{TARGET_CLUB_ID}`) status: db=`{db_availability}` "
+                    f"(`{match_count}` matches, latest=`{latest_match_at}`) | "
+                    f"worker_enabled=`{worker_enabled_str}` | worker_running=`{worker_running_str}` | "
+                    f"poll_status=`{poll_status_str}` | circuit=`{circuit_state_str}` | "
+                    f"polling=`{POLLING_FREQUENCY_12H}` (`43200s`, `2/24h`)."
                 ),
-                embeds=(embed,),
+                embeds=(status_embed, policy_embed),
                 row_count=match_count,
             )
 

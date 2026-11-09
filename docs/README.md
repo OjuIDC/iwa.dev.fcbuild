@@ -6,10 +6,9 @@
 - **Scope**: East Coasters (`club_id = 330323`, `platform = common-gen5`, `game_version = FC27`)
 - **Last Verified Against Repo State**: `2026-10-31`
 - **Current Supported Acquisition Paths**:
-  1. **Primary Real-Data Path**: Bounded one-shot community client provider (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`, documented in `docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`)
-  2. **Deterministic Local Loopback Demo**: Synthetic fixture source (`DEMO_FIXTURE_LOOPBACK`, documented in `docs/FC27_DEMO.md`)
-  3. **Offline User-Export / Operator-Capture Import**: Validated local JSON envelopes (`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)
-- **Non-Goals and Disabled Features**: Continuous live EA polling, browser scraping/WAF bypass, player alias/handle retention, raw provider payload storage, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and autonomous player dispatch (`DISPATCH_ENABLED=false`).
+  1. **Primary Real-Data Path**: Bounded community polling worker (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`, documented in `docs/FC27_POLLING_WORKER.md` and `docs/FC27_DAILY_POLLING_OPERATIONS.md`)
+  2. **Discord Manual Match Results**: Role-ID-gated Discord slash commands (`src/fc27_match_results.py`, documented in `docs/FC27_DISCORD_BOT.md`)
+- **Non-Goals and Disabled Features**: Unthrottled live EA polling, browser scraping/WAF bypass, player alias/handle retention, raw provider payload storage, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and autonomous player dispatch (`DISPATCH_ENABLED=false`).
 
 ---
 
@@ -20,7 +19,7 @@ New developers and operators can identify and run the complete current system fr
 - **[`FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)** — Component-by-component operational status matrix (`CURRENT`, `DISABLED`, `DEFERRED`, `REJECTED`)
 - **[`FC27_DOCUMENTATION_TRUTH_TABLE.md`](FC27_DOCUMENTATION_TRUTH_TABLE.md)** — Canonical source-of-truth mapping across code, configuration, tests, and documentation
 - **[`repository_inventory.json`](repository_inventory.json)** — Machine-readable inventory of all tracked files in the repository
-- **[`../scripts/README.md`](../scripts/README.md)** — Complete index of current operator, provider, migration, demo, and CI scripts
+- **[`../scripts/README.md`](../scripts/README.md)** — Complete index of current operator, provider, migration, and CI scripts
 
 ---
 
@@ -31,12 +30,12 @@ The current supported real-data pipeline for **East Coasters (`club_id=330323`, 
 ```text
 pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUNITY_CLIENT)
   -> repository endpoint contracts & schema validation (src/fc27_clubs_api_contracts.py)
-  -> normalization, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
-  -> optional single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
+  -> normalization, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization (src/fc27_privacy.py)
+  -> single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
   -> Search context assembly (src/fc27_search_scout.py)
   -> Scout evidence synthesis (src/fc27_search_scout.py)
   -> Analyst evidence synthesis (src/fc27_analyst.py)
-  -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app)
+  -> Discord slash-command readback & /fc27 status (src/fc27_discord_bot.py)
 ```
 
 - **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — System architecture, runtime topology, trust zones, and `PostgresSaver` vs. domain table separation
@@ -46,13 +45,10 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 ## 3. Provider and Ingestion
 
-- **[`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md)** — Current operational community-client provider (`fc-clubs-api-community-v1`, `LIVE_EA_CLUBS_COMMUNITY_CLIENT`, `src/fc27_community_provider.py`, `scripts/fc27_community_eval.py`, `Dockerfile.community-eval`, `docker-compose.community-eval.yml`) and optional sanitized pandas view (`src/fc27_pandas_view.py`)
 - **[`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md)** — Disabled-by-default single-flight polling worker (`fc27-community-worker`, `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `FC27_COMMUNITY_POLLING_ENABLED=false`)
 - **[`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md)** — 12-hour polling operations (`ONCE_EVERY_12_HOURS`, `43200s`), provider window continuity (`MAX_RESULTS=10`), and container recovery
 - **[`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)** — Local PostgreSQL backup creation (`scripts/fc27_backup.py`), 7-backup retention, and disposable restore verification (`scripts/fc27_restore_verify.py`)
-- **[`FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md)** — Read-only East Coasters Discord analytics bot (`src/fc27_discord_bot.py`, `scripts/fc27_discord_bot.py`, `Dockerfile.discord`, `docker-compose.discord.yml`, `FC27_DISCORD_BOT_ENABLED=false`)
 - **[`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)** — Provider contract governance, historical transport findings (standards-client HTTP `403` and headless Chromium HTTP/2 diagnostic records), and rate/cache controls
-- **[`FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)** — Secondary offline user-export and operator-capture ingestion specification (`scripts/fc27_user_export_import.py`)
 - **[`EA_PLAYER_IDENTITY_VERIFICATION.md`](EA_PLAYER_IDENTITY_VERIFICATION.md)** — Pseudonymization (`plr_ecf_<12-hex>`) and strict prohibition on raw EA persona/blaze IDs and player handles
 
 ---
@@ -78,9 +74,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 ---
 
-## 6. Dashboard
+## 6. Discord Operational Surface
 
-- **[`FC27_DEMO.md`](FC27_DEMO.md)** — Local loopback dashboard (`src.fc27_demo_api:create_demo_app` on `http://127.0.0.1:8001/demo`), browser-readable JSON endpoints (`/demo/status`, `/demo/matches`, `/demo/analysis`), source-classification banners (`LIVE_EA_CLUBS_COMMUNITY_CLIENT` vs. `SYNTHETIC_FIXTURE`), and synthetic fixture demo CLI (`scripts/fc27_demo_ingest.py`)
+- **[`FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md)** — Discord slash-command analytics and operational status surface (`/fc27 status`, `/fc27 club`, `/fc27 matches`, `/fc27 scout`, `/fc27 analyst`, `/fc27 coach`, `/fc27 tactics`, `/fc27 director`, `/fc27 help`, plus manual Match Results commands)
 
 ---
 

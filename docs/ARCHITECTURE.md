@@ -3,10 +3,10 @@
 - **Status**: Current
 - **Audience**: Architects, Developers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, `tests/`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, `tests/`
 - **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
 
-This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.community-eval.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`), and automated test suites (`tests/`).
+This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml` defining `postgres`, `redis`, `db-bootstrap`, `db-migrate`, `fc27-community-worker`, and `fc27-discord-bot`), and automated test suites (`tests/`).
 
 ## 0. Current Supported Real-Data Operational Path
 
@@ -14,17 +14,17 @@ For **East Coasters (`club_id="330323"`, `platform="common-gen5"`, `game_version
 
 ```text
 pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUNITY_CLIENT)
-  -> one-shot CLI (`scripts/fc27_community_eval.py`) OR disabled-by-default polling worker (`src/fc27_polling_worker.py` / `fc27-community-worker`)
+  -> disabled-by-default polling worker (`src/fc27_polling_worker.py` / `fc27-community-worker`)
   -> repository endpoint contracts & response schema validation (src/fc27_clubs_api_contracts.py)
-  -> normalization, recursive sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
-  -> optional single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
+  -> normalization, recursive sensitive-field rejection & plr_ecf_<12-hex> pseudonymization (src/fc27_privacy.py)
+  -> single-transaction PostgreSQL 16 persistence (src/fc27_repository.py)
   -> Search context assembly (src/fc27_search_scout.py)
   -> Scout evidence synthesis (src/fc27_search_scout.py)
   -> Analyst evidence synthesis (src/fc27_analyst.py)
-  -> existing local dashboard & JSON API (src/fc27_demo_api.py:create_demo_app)
+  -> Discord slash-command readback & /fc27 status (`src/fc27_discord_bot.py` / `fc27-discord-bot`)
 ```
 
-See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md), [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), and [`docs/FC27_DEMO.md`](FC27_DEMO.md) for exact execution commands.
+See [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), [`docs/FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md), and [`docs/FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md) for exact execution commands.
 
 ## 1. Architectural Status Classifications
 
@@ -136,12 +136,12 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 2. **Bounded Provider Execution (`src/fc27_community_provider.py`, `src/fc27_polling_worker.py`)**: Gated fail-closed (`FC27_COMMUNITY_PROVIDER_ENABLED=false`, `FC27_COMMUNITY_POLLING_ENABLED=false`) with single-flight advisory locks, 1-request/0-retry budgets, and prohibited header enforcement (`PROHIBITED_HEADER_NAMES` in `src/fc27_clubs_api_contracts.py`).
 3. **Endpoint Contract (`src/fc27_clubs_api_contracts.py`)**: Restricts requests to the `11` fixed `FC27ClubsEndpointOperation` descriptors pinned to East Coasters (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`, `maxResultCount<=10`).
 4. **Response Validation (`src/fc27_clubs_api_contracts.py`)**: Validates HTTP `200`, `application/json` content-type, UTF-8 decoding, and strict Pydantic models (`ALL_RESPONSE_SCHEMA_MODELS`), quarantining unknown schema drift paths as metadata only.
-5. **Sensitive-Field Scan (`src/fc27_user_export.py`, `src/fc27_clubs_api_contracts.py`)**: Recursively scans keys and values for prohibited personal/session/account identifiers (`email`, `password`, `token`, `cookie`, `account_id`, `persona_id`, `nucleus_id`, `gamer_tag`, `psn_id`, `xbox_id`) and fails closed before normalization.
+5. **Sensitive-Field Scan (`src/fc27_privacy.py`, `src/fc27_clubs_api_contracts.py`)**: Recursively scans keys and values for prohibited personal/session/account identifiers (`email`, `password`, `token`, `cookie`, `account_id`, `persona_id`, `nucleus_id`, `gamer_tag`, `psn_id`, `xbox_id`) and fails closed before normalization.
 6. **Normalization (`src/fc27_clubs_api_contracts.py`)**: Normalizes club identity, club statistics, match records, 23-bit match event bitmaps (`ev`), member/career statistics, and playoff achievements, then discards the raw response buffer (`raw_response_retained=False`).
-7. **Pseudonymization & Collision Check (`src/fc27_clubs_api_contracts.py`)**: Maps external member/player keys to `plr_ecf_<12-hex>` via SHA-256 and checks `FC27PseudonymCollisionDetector` (`PSEUDONYM_COLLISION` on distinct-digest collision); sets `display_alias=None`.
+7. **Pseudonymization & Collision Check (`src/fc27_privacy.py`, `src/fc27_clubs_api_contracts.py`)**: Maps external member/player keys to `plr_ecf_<12-hex>` via SHA-256 and checks `FC27PseudonymCollisionDetector` (`PSEUDONYM_COLLISION` on distinct-digest collision); sets `display_alias=None`.
 8. **Cache & Rate Controls (`src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`)**: Bounded normalized-object cache (`FC27BoundedNormalizedCache`, default `disabled`, `max_entries=128`, `max_value_bytes=262144`) and provider token-bucket limiter (`FC27ProviderTokenBucketLimiter`, default `disabled`, `1` token / `300s` mock default, `max_queue_depth=0`).
 9. **Request Budget & Circuit Breaker (`src/fc27_api_rate_limit.py`)**: `FC27RequestBudget` (`max_attempts=1`, `max_retries=0`, `max_elapsed_seconds=10.0`, requires `authorization_reference`) and `FC27AdapterCircuitBreaker` (`FC27_API_CIRCUIT_BREAKER_ENABLED=true`, defaults to `OPEN` when no approved provider is selected; trips on `401`/`403`/redirect/CAPTCHA/drift).
-10. **Replay & Idempotency Planning (`src/fc27_repository.py`, `src/fc27_user_export.py`)**: Computes deterministic `payload_sha256` and `match_hash`; skips identical replays idempotently and rejects changed-hash conflicts (`REPLAY_CONFLICT`).
+10. **Replay & Idempotency Planning (`src/fc27_repository.py`)**: Computes deterministic `payload_sha256` and `match_hash`; skips identical replays idempotently and rejects changed-hash conflicts (`REPLAY_CONFLICT`).
 11. **Separately Gated PostgreSQL Persistence (`src/fc27_repository.py`, `migrations/0012_fc27_performance_and_quarantine.sql`)**: Requires `FC27_PERSISTENCE_ENABLED=true` plus explicit `--apply --confirm-apply`; writes normalized records to `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under `pg_advisory_xact_lock`.
 12. **Separately Gated Read-Only Analytics, Search/Scout Foundation, & Analyst Evidence Synthesis (`src/fc27_analytics.py`, `src/fc27_dashboard_queries.py`, `src/fc27_search_scout.py`, `src/fc27_analyst.py`)**: Pure Search context assembly (`build_fc27_search_context`), Scout evidence/hypothesis synthesis (`build_fc27_scout_report`), and Analyst evidence validation, clustering, counter-evidence, confounder/uncertainty analysis, and bounded observational finding synthesis (`build_fc27_analyst_report`) operate deterministically over normalized East Coasters records (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`, `FORMULA_VERSION="fc27-v1.0"`). PostgreSQL reads (`PostgresFC27AnalyticsReader`) require `FC27_ANALYTICS_ENABLED=true`, run inside PostgreSQL `READ ONLY` transactions (`5000ms` timeout) over `COMPLETED` matches only, suppress display aliases (`include_aliases=False`), and emit bounded `FC27SearchScoutStateUpdate` and `FC27AnalystStateUpdate` dictionaries via `search_node`, `scout_node`, and `analyst_evidence_node` without changing graph topology or executing LLM calls.
 13. **Separately Gated Recommendation Generation (`src/settings.py`; historical `src/fc27_coaching.py`, `src/graph.py` superseded in Stage B3)**: Requires `FC27_RECOMMENDATIONS_ENABLED=true`; role agents (`Scout`, `Analyst`, `Coach`, `Tactics`, `Director`) produce bounded `RoleOutput` adjustments (`±10`) reduced into immutable `LeadPackageSet` (`package_version` SHA-256).
@@ -165,7 +165,7 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 
 ### 5.3 Provider, Analytics, Recommendation, & Dispatch Boundaries
 - **Provider Boundary**: No browser/TLS impersonation sidecar is part of the production architecture. The experimental `feature/fc27-proclubs-sdk-sidecar` branch was evaluated and **rejected** for merge to `main`. The verified safe-adapter bundle (`iwa.dev.fcbuild-safe-adapter-verified.zip`, SHA-256 `eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`) is integrated strictly as tracked repository-native Python modules (`src/fc27_*.py`) governed by `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`) and `THIRD_PARTY_NOTICES.md`, while any local ZIP archive or inspection workspace under `.local-artifacts/` remains git-ignored, unreferenced at runtime, and never required by CI.
-- **Analytics Boundary**: Pure deterministic calculations (`src/fc27_analytics.py`), Search/Scout foundation (`src/fc27_search_scout.py`), Analyst evidence synthesis (`src/fc27_analyst.py`), Coach/Tactics/Director advisory pipeline (`src/fc27_coach.py`, `src/fc27_tactics.py`, `src/fc27_director.py`), immutable advisory-report caching (`src/fc27_advisory_cache.py`; documented in [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)), read-only SQL queries (`src/fc27_dashboard_queries.py`), and the local loopback-only one-shot ingestion and analytics demo (`src/fc27_demo.py`, `src/fc27_demo_api.py`, `scripts/fc27_demo_fixture_server.py`, `scripts/fc27_demo_ingest.py`; documented in [`docs/FC27_DEMO.md`](FC27_DEMO.md)) cannot mutate database state unless both `--persist` and `FC27_PERSISTENCE_ENABLED=true` are enabled, and never enable recommendations, approvals, or dispatch.
+- **Analytics Boundary**: Pure deterministic calculations (`src/fc27_analytics.py`), Search/Scout foundation (`src/fc27_search_scout.py`), Analyst evidence synthesis (`src/fc27_analyst.py`), Coach/Tactics/Director advisory pipeline (`src/fc27_coach.py`, `src/fc27_tactics.py`, `src/fc27_director.py`), immutable advisory-report caching (`src/fc27_advisory_cache.py`; documented in [`docs/FC27_ADVISORY_CACHE.md`](FC27_ADVISORY_CACHE.md)), read-only SQL queries (`src/fc27_dashboard_queries.py`), and the Discord slash-command analytics and status surface (`src/fc27_discord_bot.py`, `/fc27 status`; documented in [`docs/FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md)) cannot mutate provider database state, and never enable recommendations, approvals, or dispatch.
 - **Recommendation & Tactical Hypothesis Boundary**: External FC 27 formations (`4-2-1-3`, `4-1-2-1-2 Narrow`), player roles, attribute thresholds, PlayStyle+ claims, and tactics codes are cataloged as `EXTERNAL_TACTICAL_HYPOTHESIS` (`NOT_APPROVABLE`) in [`docs/FC27_TACTICAL_HYPOTHESES.md`](FC27_TACTICAL_HYPOTHESES.md).
 - **Dispatch Boundary**: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` are enforced at startup and in `/health/ready`.
 

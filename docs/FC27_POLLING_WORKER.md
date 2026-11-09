@@ -3,11 +3,11 @@
 - **Status**: Current
 - **Audience**: Platform Operators, Developers, Security Reviewers
 - **Last verified commit**: `bbb28b44774a89dbb40c252f53c500e51d7a0acc`
-- **Source of truth**: `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `src/settings.py`, `src/fc27_demo_api.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `tests/test_fc27_polling_worker.py`
+- **Source of truth**: `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `src/settings.py`, `src/fc27_discord_bot.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `tests/test_fc27_polling_worker.py`
 
 > **Default Runtime Posture**: **DISABLED BY DEFAULT** (`FC27_COMMUNITY_POLLING_ENABLED=false`, `IMPLEMENTED_AND_TESTED_DISABLED_BY_DEFAULT`, schedule `ONCE_EVERY_12_HOURS` / `43200s`, max `2` requests per 24 hours, recommendations `DISABLED`, dispatch `DISABLED`)
 >
-> Continuous polling never starts during `pytest`, `uvicorn src.fc27_demo_api:create_demo_app`, module imports, or default `docker compose up`. Live polling requires explicit operator activation across four independent fail-closed gates (`FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`). See also [`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md).
+> Continuous polling never starts during `pytest`, module imports, or default `docker compose up`. Live polling requires explicit operator activation across four independent fail-closed gates (`FC27_COMMUNITY_POLLING_ENABLED=true`, `FC27_COMMUNITY_PROVIDER_ENABLED=true`, `FC27_PERSISTENCE_ENABLED=true`, and `--confirm-live-polling`). See also [`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md).
 
 ---
 
@@ -25,7 +25,7 @@ fc-clubs-api-community-v1 (LIVE_EA_CLUBS_COMMUNITY_CLIENT)
   -> Repository validation, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
   -> Transactional PostgreSQL 16 persistence via fc27_app BEFORE analytics (persist_polled_match_envelope)
   -> Conditional read-only advisory pipeline ONLY when inserted_match_count > 0 (Search -> Scout -> Analyst -> Coach -> Tactics -> Director)
-  -> Read-only dashboard status card (GET /demo/status, GET /demo)
+  -> Read-only Discord status card (/fc27 status in src/fc27_discord_bot.py)
 ```
 
 ---
@@ -110,10 +110,8 @@ docker compose -f docker-compose.yml -f docker-compose.community-worker.yml `
 
 ---
 
-## 6. Read-Only Dashboard Status Integration
+## 6. Read-Only Discord `/fc27 status` Integration
 
-`GET /demo/status` and `GET /demo` (`src/fc27_demo_api.py`) expose read-only polling health metadata (`polling_enabled`, `worker_running`, `last_attempt_at`, `last_success_at`, `last_new_match_at`, `last_status`, `consecutive_failures`, `circuit_state`, `next_eligible_at`, `total_matches_inserted`, `total_duplicates_ignored`, `total_replay_conflicts`). When `FC27_COMMUNITY_POLLING_ENABLED=false`, the dashboard displays:
+`/fc27 status` (`src/fc27_discord_bot.py`) exposes read-only polling health and repository metadata (`polling_enabled`, `worker_running`, `last_attempt_at`, `last_success_at`, `last_new_match_at`, `last_status`, `consecutive_failures`, `circuit_state`, `next_eligible_at`, `total_matches_inserted`, `total_duplicates_ignored`, `total_replay_conflicts`, `continuity_status`, `database_available`, `persisted_match_count`, `latest_match_timestamp`, `manual_match_results_available`).
 
-`Polling Disabled (FC27_COMMUNITY_POLLING_ENABLED=false)`
-
-The dashboard provides no button, form, or endpoint to trigger live polling.
+The Discord bot provides no command or button to trigger live polling (`DISCORD_PROVIDER_REQUESTS=0`).

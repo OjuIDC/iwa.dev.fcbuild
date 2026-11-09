@@ -26,6 +26,13 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.fc27_privacy import (
+    FC27ContractError,
+    FC27PseudonymCollisionDetector,
+    FC27PseudonymCollisionError,
+    FC27SchemaValidationError,
+    pseudonymize_east_coasters_identifier,
+)
 from src.fc27_provider import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
@@ -34,7 +41,7 @@ from src.fc27_provider import (
     FC27TransportError,
     create_provisional_club_identity,
 )
-from src.fc27_user_export import (
+from src.fc27_repository import (
     FC27SuppliedClubStatistics,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
@@ -62,18 +69,6 @@ TARGET_CLUB_ID: str = EAST_COASTERS_CLUB_ID
 TARGET_CLUB_NAME: str = EAST_COASTERS_CLUB_NAME
 TARGET_PLATFORM: str = "common-gen5"
 TARGET_GAME_VERSION: str = "FC27"
-
-
-class FC27ContractError(FC27ProviderError):
-    """Raised when an operation or query parameter violates fixed FC 27 endpoint contracts."""
-
-
-class FC27SchemaValidationError(FC27TransportError):
-    """Raised when an upstream response fails strict schema validation (never embeds raw payload)."""
-
-
-class FC27PseudonymCollisionError(FC27ProviderError):
-    """Raised when two distinct player identifiers collide to the same East Coasters pseudonym."""
 
 
 PROHIBITED_HEADER_NAMES: frozenset[str] = frozenset(
@@ -873,41 +868,8 @@ def validate_aggregate_event_counts(
 # ==============================================================================
 # Part H & Part L: East Coasters Pseudonymization & Collision Detection
 # ==============================================================================
-
-def pseudonymize_east_coasters_identifier(raw_identifier: Any, *, club_id: str = TARGET_CLUB_ID) -> str:
-    """Generates a deterministic `plr_ecf_<12-lowercase-hex>` pseudonym without embedding raw IDs."""
-    if club_id != TARGET_CLUB_ID:
-        raise FC27ContractError("Pseudonymization is scoped exclusively to East Coasters (330323)")
-    cleaned = str(raw_identifier if raw_identifier is not None else "").strip()
-    if not cleaned:
-        raise FC27SchemaValidationError("Player source identifier cannot be empty")
-    if re.fullmatch(r"plr_ecf_[0-9a-f]{12}", cleaned):
-        return cleaned
-    domain_bytes = f"fc27-ecf-{TARGET_CLUB_ID}-player-v1:{cleaned}".encode("utf-8")
-    digest12 = hashlib.sha256(domain_bytes).hexdigest()[:12]
-    return f"plr_ecf_{digest12}"
-
-
-class FC27PseudonymCollisionDetector:
-    """Detects if two distinct source identifiers map to the same `plr_ecf_<12-hex>` reference."""
-
-    def __init__(self, *, preseeded_reverse_digests: Optional[Mapping[str, str]] = None) -> None:
-        # Maps pseudonym -> SHA-256 of raw source identifier (never stores plaintext source ID)
-        self._pseudonym_to_source_sha256: Dict[str, str] = (
-            dict(preseeded_reverse_digests) if preseeded_reverse_digests else {}
-        )
-
-    def resolve(self, raw_identifier: Any) -> str:
-        cleaned = str(raw_identifier if raw_identifier is not None else "").strip()
-        if not cleaned:
-            raise FC27SchemaValidationError("Player source identifier cannot be empty")
-        source_sha = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
-        pseudonym = pseudonymize_east_coasters_identifier(cleaned)
-        existing_sha = self._pseudonym_to_source_sha256.get(pseudonym)
-        if existing_sha is not None and existing_sha != source_sha:
-            raise FC27PseudonymCollisionError("PSEUDONYM_COLLISION: batch rejected for human review")
-        self._pseudonym_to_source_sha256[pseudonym] = source_sha
-        return pseudonym
+# Authoritative implementations (`pseudonymize_east_coasters_identifier` and
+# `FC27PseudonymCollisionDetector`) are imported from `src.fc27_privacy`.
 
 
 # ==============================================================================

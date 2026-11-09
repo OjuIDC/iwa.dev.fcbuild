@@ -159,10 +159,10 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "src/approval.py",
             "src/fc27_clubs_api_contracts.py",
             "src/fc27_community_provider.py",
-            "src/fc27_user_export.py",
-            "src/fc27_capture.py",
+            "src/fc27_privacy.py",
             "scripts/check_matchpulse_boundary.py",
             "tests/test_approval_security.py",
+            "tests/test_fc27_privacy.py",
         }
     ):
         cats.add("security")
