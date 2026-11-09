@@ -1,6 +1,6 @@
 # Commissioner approval: how it works
 
-> **Reconciliation Note**: For the current unified approval architecture—covering WebAuthn passkeys (`src/identity/webauthn.py`) as the primary Commissioner authority, 14-field `fc27_decision_evidence` single-transaction binding (`src/approval_store.py`), pre-approval coaching validation (`src/fc27_coaching.py`), and symmetric HMAC-SHA256 shared-secret CLI fallback (`APPROVAL_CLI_HMAC_ENABLED=false` by default in `src/approval.py`)—see [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md).
+> **Reconciliation Note**: For the unified approval architecture—covering historical WebAuthn passkeys (`src/identity/webauthn.py`, superseded in Stage B3) as the primary Commissioner authority, 14-field `fc27_decision_evidence` single-transaction binding (`src/approval_store.py`, superseded in Stage B3), pre-approval coaching validation (`src/fc27_coaching.py`, superseded in Stage B3), and symmetric HMAC-SHA256 shared-secret CLI fallback (`APPROVAL_CLI_HMAC_ENABLED=false` by default in `src/settings.py` and historical `src/approval.py`)—see [`FC27_APPROVAL_FLOW.md`](FC27_APPROVAL_FLOW.md) and [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md).
 
 ## Roles
 The `X-API-Key` header selects the role:
@@ -99,12 +99,13 @@ When an explicitly configured runtime is supplied:
    If any step fails, the whole transaction rolls back.
 5. After commit, the API resumes the LangGraph thread when a runner is configured. The `approval` node re-reads the committed decision from PostgreSQL and refuses to continue without one, so forged resume values or edited state cannot approve. If the resume fails, it is retried at the next startup.
 
-`scripts/commissioner_decide.py` performs steps 2–3 interactively:
-```bash
+Historical CLI `scripts/commissioner_decide.py` (superseded and removed in Stage B3) performed steps 2–3 interactively:
+```text
 export FC27_GRAPH_URL=http://127.0.0.1:8001 GRAPH_SERVICE_TOKEN_FILE=… GRAPH_COMMISSIONER_TOKEN_FILE=… APPROVAL_SIGNING_SECRET_FILE=…
-python scripts/commissioner_decide.py show    fc27-330323-run-20261001-001
-python scripts/commissioner_decide.py approve fc27-330323-run-20261001-001 coach best --notes "reviewed"
-python scripts/commissioner_decide.py reject  fc27-330323-run-20261001-001
+# historical CLI (superseded in Stage B3):
+commissioner_decide show    fc27-330323-run-20261001-001
+commissioner_decide approve fc27-330323-run-20261001-001 coach best --notes "reviewed"
+commissioner_decide reject  fc27-330323-run-20261001-001
 ```
 
 ## Irreversibility

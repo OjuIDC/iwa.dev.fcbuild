@@ -77,8 +77,8 @@ $env:FC27_DEMO_MODE = "true"
   --host 127.0.0.1 `
   --port 8001
 
-# Pre-approval validator, operator capture, and user export
-.\.venv\Scripts\pytest.exe tests/test_fc27_preapproval_validator.py `
+# Coach, operator capture, and user export
+.\.venv\Scripts\pytest.exe tests/test_fc27_coach.py `
   tests/test_fc27_operator_capture.py `
   tests/test_fc27_user_export.py `
   tests/test_fc27_platform.py -q
@@ -86,7 +86,7 @@ $env:FC27_DEMO_MODE = "true"
 # Documentation, packaging, workflow, and archive integrity
 .\.venv\Scripts\pytest.exe tests/test_documentation_consistency.py `
   tests/test_packaging.py `
-  tests/test_workflow.py `
+  tests/test_github_workflows.py `
   tests/test_archive_integrity.py -q
 ```
 
@@ -160,8 +160,8 @@ Remove-Item -Recurse -Force $dockerCfgDir
 
 ### Files Requiring Special Governance / Avoid Modifying Unnecessarily
 - **Immutable Applied Migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`)**: Applied migrations are SHA-256 checksummed by `src/db_migrate.py`. Never edit an existing migration; new schema changes require a new numbered migration (`0014_*.sql`) and a bumped `-- grants-policy-version:` in `migrations/post/grants.sql` + `src/db_migrate.py`.
-- **Approval & Security Core (`src/approval.py`, `src/approval_store.py`, `src/identity/webauthn.py`, `src/identity/policy.py`, `src/dispatch/gates.py`)**: Governed by strict Phase 1/2 security invariants and concurrency lock hierarchies.
-- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_phase1_scope.py` and `tests/test_fc27_platform.py`.
+- **Approval & Security Core (`src/security.py`, `src/db_roles.py`; historical `src/approval.py`, `src/approval_store.py`, `src/identity/webauthn.py`, `src/identity/policy.py`, `src/dispatch/gates.py` superseded in Stage B3)**: Governed by strict Phase 1/2 security invariants and concurrency lock hierarchies.
+- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_fc27_platform.py` (historical `tests/test_phase1_scope.py` superseded in Stage B3).
 - **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories. Any local bundle archive (`.local-artifacts/iwa.dev.fcbuild-safe-adapter-verified.zip`) or extracted inspection workspace (`.local-artifacts/safe-adapter-inspection-eb9c42745f99`) is strictly git-ignored, never required by CI, and never imported at runtime; the tracked source of truth is `src/fc27_clubs_api_contracts.py` and `THIRD_PARTY_NOTICES.md`.
 
 ---

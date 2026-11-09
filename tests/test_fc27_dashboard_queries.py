@@ -1059,18 +1059,20 @@ def test_41_reader_role_least_privilege_posture(
             cur.execute("SELECT has_schema_privilege('fc27_reader', 'public', 'CREATE')")
             assert cur.fetchone()[0] is False
 
-            # No access to PostgresSaver internal tables
+            # No access to PostgresSaver internal tables (or tables absent after Stage B3)
             for ps_tbl in (
                 "checkpoints",
                 "checkpoint_blobs",
                 "checkpoint_writes",
                 "checkpoint_migrations",
             ):
-                cur.execute(
-                    "SELECT has_table_privilege('fc27_reader', %s, 'SELECT')",
-                    (f"public.{ps_tbl}",),
-                )
-                assert cur.fetchone()[0] is False
+                cur.execute("SELECT to_regclass(%s)", (f"public.{ps_tbl}",))
+                if cur.fetchone()[0] is not None:
+                    cur.execute(
+                        "SELECT has_table_privilege('fc27_reader', %s, 'SELECT')",
+                        (f"public.{ps_tbl}",),
+                    )
+                    assert cur.fetchone()[0] is False
 
             # Cannot execute mutating functions
             with pytest.raises(psycopg.errors.InsufficientPrivilege):

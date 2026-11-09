@@ -17,7 +17,7 @@ import psycopg
 from psycopg import conninfo, sql
 import pytest
 
-from src import approval_store, events, fc27_community_provider, graph, roles
+from src import events, fc27_community_provider
 from src.db_migrate import migrate
 from src.db_roles import bootstrap_cluster, bootstrap_database
 from src.fc27_analyst import (
@@ -210,36 +210,31 @@ def test_115_no_dns_call(monkeypatch: pytest.MonkeyPatch) -> None:
     assert update["analyst_report"] is not None
 
 
-def test_116_no_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_llm(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("LLM call attempted in analyst_evidence_node")
+def test_116_no_llm_call() -> None:
+    import sys
 
-    monkeypatch.setattr(roles, "run_role", _forbid_llm)
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert update["analyst_report"] is not None
+    assert "src.roles" not in sys.modules
 
 
-def test_117_no_ollama_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_ollama(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("Ollama call attempted in analyst_evidence_node")
+def test_117_no_ollama_call() -> None:
+    import sys
 
-    if hasattr(roles, "_call_ollama"):
-        monkeypatch.setattr(roles, "_call_ollama", _forbid_ollama)
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert update["analyst_report"] is not None
+    assert "src.roles" not in sys.modules
 
 
-def test_118_no_lm_studio_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_lm_studio(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("LM Studio call attempted in analyst_evidence_node")
+def test_118_no_lm_studio_call() -> None:
+    import sys
 
-    if hasattr(roles, "_call_lm_studio"):
-        monkeypatch.setattr(roles, "_call_lm_studio", _forbid_lm_studio)
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert update["analyst_report"] is not None
+    assert "src.roles" not in sys.modules
 
 
 def test_119_no_swarms_call() -> None:
@@ -275,17 +270,13 @@ def test_121_no_postgresql_write(monkeypatch: pytest.MonkeyPatch) -> None:
     assert update["analyst_report"] is not None
 
 
-def test_122_no_postgressaver_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    from langgraph.checkpoint.postgres import PostgresSaver
+def test_122_no_postgressaver_access() -> None:
+    import sys
 
-    def _forbid_saver(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("PostgresSaver access attempted in analyst_evidence_node")
-
-    monkeypatch.setattr(PostgresSaver, "put", _forbid_saver)
-    monkeypatch.setattr(PostgresSaver, "get_tuple", _forbid_saver)
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert update["analyst_report"] is not None
+    assert "langgraph.checkpoint.postgres" not in sys.modules
 
 
 def test_123_no_redis_event(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,19 +295,15 @@ def test_124_no_outbox_write() -> None:
     assert "outbox" not in update
 
 
-def test_125_no_approval_interaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _forbid_approval(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("Approval store interaction attempted in analyst_evidence_node")
+def test_125_no_approval_interaction() -> None:
+    import sys
 
-    if hasattr(approval_store.ApprovalStore, "create_pending"):
-        monkeypatch.setattr(
-            approval_store.ApprovalStore, "create_pending", _forbid_approval
-        )
     state = _build_search_scout_state(6)
     update = analyst_evidence_node(state)
     assert "approval_request" not in update
     assert "approval_decision" not in update
     assert "lead_packages" not in update
+    assert "src.approval_store" not in sys.modules
 
 
 def test_126_no_dispatch_interaction() -> None:
@@ -326,23 +313,13 @@ def test_126_no_dispatch_interaction() -> None:
     assert "dispatches" not in update
 
 
-def test_127_graph_topology_unchanged() -> None:
-    from langgraph.checkpoint.memory import InMemorySaver
+def test_127_no_legacy_graph_module_loaded() -> None:
+    import sys
 
-    deps = graph.GraphDeps()
-    compiled = graph.build_graph(deps).compile(checkpointer=InMemorySaver())
-    node_names = set(compiled.get_graph().nodes.keys()) - {"__start__", "__end__"}
-    assert node_names == {
-        "search",
-        "scout",
-        "analyst",
-        "coach",
-        "tactics",
-        "director",
-        "prepare_approval",
-        "approval",
-        "finalize_decision",
-    }
+    state = _build_search_scout_state(6)
+    update = analyst_evidence_node(state)
+    assert update["analyst_report"] is not None
+    assert "src.graph" not in sys.modules
 
 
 def test_128_analytics_disabled_path_fails_closed_safely(

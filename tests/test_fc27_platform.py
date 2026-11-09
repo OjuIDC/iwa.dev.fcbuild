@@ -43,10 +43,6 @@ from src.fc27_analytics import (
     get_metric_compatibility_matrix,
     validate_analytics_readiness,
 )
-from src.fc27_coaching import (
-    generate_coaching_recommendations,
-    is_recommendations_enabled,
-)
 from src.fc27_provider import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
@@ -380,39 +376,8 @@ def test_team_snapshot_generation():
 
 
 # ==============================================================================
-# Phase 6: East Coasters Coaching Engine Tests
+# Phase 6: Recommendations Feature Flag Tests
 # ==============================================================================
-
-def test_coaching_recommendations_generation(monkeypatch):
-    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
-    provider = FC27SyntheticProvider()
-    matches = provider.get_season_fixtures(count=8)
-    builds = {
-        "p_striker99": PlayerBuild(
-            build_id="b_st", player_id="p_striker99", position="ST", primary_role="Advanced Forward",
-            height_cm=182, weight_kg=76, archetype="Finisher",
-            attributes={"pace": 86, "shooting": 88, "dribbling": 80, "physical": 72},
-            playstyles=["Finesse Shot"],
-        )
-    }
-    recs = generate_coaching_recommendations(matches, builds)
-    assert len(recs) >= 2
-    for r in recs:
-        assert r.club_id == "330323"
-        assert len(r.empirical_observations) >= 1
-        assert len(r.heuristics) >= 1
-        assert r.confidence in ("PROVISIONAL", "EXPLORATORY", "LOW", "MODERATE", "HIGH")
-        assert r.formula_version == "fc27-v1.0"
-
-
-def test_coaching_recommendations_empty_matches_fails_safe(monkeypatch):
-    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
-    recs = generate_coaching_recommendations([])
-    assert len(recs) == 1
-    assert recs[0].confidence == "PROVISIONAL"
-    assert recs[0].minimum_sample_met is False
-    assert "at least 3 to 5 matches" in recs[0].recommendation
-
 
 @pytest.mark.parametrize(
     "env_val,expected",
@@ -439,29 +404,14 @@ def test_coaching_recommendations_kill_switch_matrix(monkeypatch, env_val, expec
         monkeypatch.delenv("FC27_RECOMMENDATIONS_ENABLED", raising=False)
     else:
         monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", env_val)
-    assert is_recommendations_enabled() is expected
-
-
-def test_coaching_kill_switch_prevents_generation_by_default(monkeypatch):
-    # 10. Disabling recommendations (by default without env var) prevents recommendation generation
-    monkeypatch.delenv("FC27_RECOMMENDATIONS_ENABLED", raising=False)
-    assert is_recommendations_enabled() is False
-    provider = FC27SyntheticProvider()
-    matches = provider.get_season_fixtures(count=5)
-    recs_default = generate_coaching_recommendations(matches)
-    assert recs_default == []
-
-    # Disabling recommendations explicitly also prevents generation
-    monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "false")
-    recs_explicit = generate_coaching_recommendations(matches)
-    assert recs_explicit == []
+    assert is_fc27_recommendations_enabled() is expected
 
 
 def test_coaching_enabled_does_not_enable_prohibited_actions(monkeypatch):
     import os
 
     monkeypatch.setenv("FC27_RECOMMENDATIONS_ENABLED", "true")
-    assert is_recommendations_enabled() is True
+    assert is_fc27_recommendations_enabled() is True
 
     # Enabling recommendations must not enable live ingestion, dispatch, or worker
     assert os.getenv("FC27_LIVE_INGESTION_ENABLED", "false").lower() in ("false", "0", "no", "")

@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Commissioners, Developers, Security Reviewers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `src/graph.py`, `src/graph_api.py`, `src/approval.py`, `src/approval_store.py`, `src/fc27_coaching.py`, `src/hierarchy.py`, `src/lead_packages.py`, `src/identity/webauthn.py`, `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`
+- **Source of truth**: `src/settings.py`, `src/schemas.py`, `src/fc27_coach.py`, `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`, `config/fc27_removed_items_manifest.json`
 - **Supersedes**: `docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md`, `docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md`
 
 This document specifies the end-to-end lifecycle of a lead/coaching package in `iwa.dev.fcbuild`, from deterministic ranking and pre-approval validation through the single LangGraph `interrupt()`, cryptographic Commissioner decision binding, and non-dispatched finalization.
@@ -43,17 +43,17 @@ This document specifies the end-to-end lifecycle of a lead/coaching package in `
 
 ---
 
-## 2. Deterministic Package Construction & `package_version` (`src/lead_packages.py`)
+## 2. Deterministic Package Construction & `package_version` (Historical `src/lead_packages.py` Superseded in Stage B3)
 
-- **Deterministic Ranking (`src/hierarchy.py`)**: Reduces role candidate tiers (`best`, `middle`, `lowest`) into a deterministic `LeadPackage` (`lead_package`).
-- **Canonical Version Hash (`src/lead_packages.py`)**: Serializes the canonical package set and computes a deterministic SHA-256 hex digest (`package_version`).
-- Any mutation to the package after creation alters `package_version` and causes `src/approval_store.py` to reject the decision (`409 Conflict`).
+- **Deterministic Ranking (Historical `src/hierarchy.py` Superseded in Stage B3)**: Reduces role candidate tiers (`best`, `middle`, `lowest`) into a deterministic `LeadPackage` (`lead_package`).
+- **Canonical Version Hash (Historical `src/lead_packages.py` Superseded in Stage B3)**: Serializes the canonical package set and computes a deterministic SHA-256 hex digest (`package_version`).
+- Any mutation to the package after creation alters `package_version` and caused historical `src/approval_store.py` (superseded in Stage B3) to reject the decision (`409 Conflict`).
 
 ---
 
-## 3. Pre-Approval Coaching Validation (`src/fc27_coaching.py`)
+## 3. Pre-Approval Coaching Validation (Historical `src/fc27_coaching.py` Superseded in Stage B3)
 
-Before any FC 27 tactical or coaching recommendation can enter the approval queue, `src/fc27_coaching.py` enforces deterministic fail-closed gates (`FC27_RECOMMENDATIONS_ENABLED=false` by default):
+Before any FC 27 tactical or coaching recommendation could enter the approval queue, historical `src/fc27_coaching.py` (superseded in Stage B3; contracts retained in `src/schemas.py` and `src/fc27_coach.py`) enforced deterministic fail-closed gates (`FC27_RECOMMENDATIONS_ENABLED=false` by default):
 
 1. **Identity Verified**: Club identity must be verified for East Coasters (`330323`).
 2. **Sample-Size Minimum**: Snapshot tier must meet minimum completed match thresholds (`>= 10` completed matches for `PROVISIONAL_TRENDS` / `HIGH_SAMPLE_READINESS`).
@@ -63,24 +63,24 @@ Before any FC 27 tactical or coaching recommendation can enter the approval queu
 
 ---
 
-## 4. Single LangGraph `interrupt()` & Resume Non-Authority (`src/graph.py`)
+## 4. Single LangGraph `interrupt()` & Resume Non-Authority (Historical `src/graph.py` Superseded in Stage B3)
 
-- `src/graph.py` compiles the `StateGraph` backed by `PostgresSaver`.
-- Inside the `approval` node, the graph persists the pending request in `approval_requests` (`status = 'awaiting_approval'`) and calls `interrupt(...)` **once**.
-- When `POST /v1/runs/{id}/resume` is called on `src/graph_api.py`, the `approval` node re-reads the committed decision from PostgreSQL via `src/approval_store.py`.
+- Historical `src/graph.py` (superseded in Stage B3) compiled the `StateGraph` backed by `PostgresSaver`.
+- Inside the `approval` node, the graph persisted the pending request in `approval_requests` (`status = 'awaiting_approval'`) and called `interrupt(...)` **once**.
+- When `POST /v1/runs/{id}/resume` was called on historical `src/graph_api.py` (superseded in Stage B3), the `approval` node re-read the committed decision from PostgreSQL via historical `src/approval_store.py`.
 - **Resume Payload Non-Authority**: Caller-supplied `Command(resume=...)` data is never authoritative. If no committed decision with matching `package_version` exists in PostgreSQL, the `approval` node raises `ApprovalNotCommitted` (HTTP 409).
 
 ---
 
 ## 5. Commissioner Step-Up Verification & Single-Use Nonces
 
-### 5.1 Primary Path: WebAuthn Passkey (`src/identity/webauthn.py`, `src/identity/routers/step_up.py`)
+### 5.1 Primary Path: WebAuthn Passkey (Historical `src/identity/webauthn.py`, `src/identity/routers/step_up.py` Superseded in Stage B3)
 1. Commissioner requests a step-up challenge (`fc27_challenges`), bound to the canonical decision payload hash (`bound_payload_hash`).
 2. Commissioner signs the challenge with a registered passkey (`require_user_verification=True`).
-3. `src/approval_store.py` atomically consumes the challenge, verifies the sign counter, locks and consumes the 14-field `fc27_decision_evidence` record, locks `approval_requests` and `graph_threads` in strict hierarchy (`fc27_decision_evidence` -> `approval_requests` -> `graph_threads`), updates status, and appends to `approval_audit` and `domain_events`.
+3. Historical `src/approval_store.py` (superseded in Stage B3) atomically consumed the challenge, verified the sign counter, locked and consumed the 14-field `fc27_decision_evidence` record, locked `approval_requests` and `graph_threads` in strict hierarchy (`fc27_decision_evidence` -> `approval_requests` -> `graph_threads`), updated status, and appended to `approval_audit` and `domain_events`.
 
-### 5.2 Emergency CLI Fallback: Symmetric HMAC-SHA256 (`src/approval.py`, `scripts/commissioner_decide.py`)
-- Controlled by `APPROVAL_CLI_HMAC_ENABLED` (`False` by default in `ApiSettings` in `src/graph_api.py`).
+### 5.2 Emergency CLI Fallback: Symmetric HMAC-SHA256 (Historical `src/approval.py`, `scripts/commissioner_decide.py` Superseded in Stage B3)
+- Controlled by `APPROVAL_CLI_HMAC_ENABLED` (`False` by default in `src/settings.py` and historical `src/graph_api.py`).
 - Uses symmetric HMAC-SHA256 with the shared secret `APPROVAL_SIGNING_SECRET` (**never** a public key).
 - Enforces single-use nonces in `approval_nonces` (`POST /v1/runs/{id}/decision-challenge` and `POST /v1/runs/{id}/decision`, with legacy aliases `/threads/{id}/decision-challenge` and `/threads/{id}/decision`).
 

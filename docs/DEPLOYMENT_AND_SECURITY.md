@@ -31,7 +31,7 @@
 | `fc27_relay_uri` (`POSTGRES_URI_FILE`) | File secret (`/run/secrets/fc27_relay_uri`) | `outbox-relay` only |
 | `fc27_dispatch_uri` (`POSTGRES_URI_FILE`) | File secret (`/run/secrets/fc27_dispatch_uri`) | `dispatch-worker` only |
 | `GRAPH_COMMISSIONER_TOKEN_SHA256`, `APPROVAL_SIGNING_SECRET`, `bff_service_token`, `identity_encryption_key`, `bootstrap_token` | Env + file secrets | `graph-api` only |
-| Commissioner token (plaintext), `APPROVAL_SIGNING_SECRET` | Operator workstation | the Commissioner's workstation (`scripts/commissioner_decide.py`) |
+| Commissioner token (plaintext), `APPROVAL_SIGNING_SECRET` | Operator workstation | the Commissioner's workstation (historical `scripts/commissioner_decide.py` superseded in Stage B3) |
 | `GRAPH_SERVICE_TOKEN` | Environment | `graph-api` (to verify it), `live-watcher`, `voice-gateway` |
 | `MCP_API_TOKEN` | Environment | `fc27-mcp`, `graph-api`, `live-watcher`, `post-match-rundown` |
 | `WS_AUTH_TOKEN` | Environment | `ws-server` and its clients |
@@ -40,7 +40,7 @@
 
 ### 3.2 Bounded `fc27_data` network memberships
 PostgreSQL (`postgres`) sits on the internal `fc27_data` bridge network (`internal: true`). `graph-api` is **not** the only service on `fc27_data`; the bounded services that join `fc27_data` are:
-- **Base `docker-compose.yml`**: `postgres`, `db-bootstrap` (`--profile bootstrap`), `db-migrate`, `graph-api`, `outbox-relay`, and `dispatch-worker`.
+- **Base `docker-compose.yml`**: `postgres`, `db-bootstrap` (`--profile bootstrap`), and `db-migrate` (historical `graph-api`, `outbox-relay`, and `dispatch-worker` services were removed in Stage B3).
 - **Optional profile overlays**: `fc27-community-worker` (`docker-compose.community-worker.yml`, `--profile fc27-polling`) and `fc27-discord-bot` (`docker-compose.discord.yml`, `--profile fc27-discord`).
 - All other services (`redis`, `fc27-mcp`, `model-health`, `live-watcher`, `post-match-rundown`, `ws-server`, `rtsp-analyzer`, `stt`, `tts`, `voice-gateway`, `ollama`, `ollama-init`, `fc27-community-client-evaluation`, and `langfuse-*`) are excluded from `fc27_data`.
 

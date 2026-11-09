@@ -42,7 +42,6 @@
     "scripts/check_documentation_consistency.py",
     "scripts/check_matchpulse_boundary.py",
     "scripts/classify_ci_changes.py",
-    "scripts/commissioner_decide.py",
     "scripts/fc27_capture_preflight.py",
     "scripts/fc27_community_eval.py",
     "scripts/fc27_polling_worker.py",

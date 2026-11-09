@@ -12,7 +12,6 @@ from src import (
     fc27_community_provider,
     fc27_demo_api,
     fc27_pandas_view,
-    graph_api,
     settings,
 )
 from src.fc27_pandas_view import _PROHIBITED_VIEW_KEYS
@@ -177,7 +176,7 @@ def test_41_no_orphan_current_docker_service() -> None:
     for service_name in [
         "postgres",
         "redis",
-        "graph-api",
+        "db-migrate",
         "fc27-community-client-evaluation",
     ]:
         assert service_name in combined, f"Service {service_name} not documented"
@@ -319,12 +318,11 @@ def test_47_documentation_strict_validation_passes() -> None:
 
 def test_48_current_startup_commands_resolve() -> None:
     assert callable(fc27_demo_api.create_demo_app)
-    assert callable(graph_api.create_app)
 
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 17
+    assert len(py_scripts) == 16
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))
@@ -333,7 +331,8 @@ def test_49_current_cli_entrypoints_import() -> None:
 
 def test_50_current_docker_entrypoints_import() -> None:
     docker_targets = [
-        "src/graph_api.py",
+        "src/db_migrate.py",
+        "src/db_roles.py",
         "scripts/fc27_community_eval.py",
         "scripts/fc27_polling_worker.py",
         "scripts/fc27_discord_bot.py",

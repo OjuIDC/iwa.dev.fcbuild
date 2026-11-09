@@ -20,9 +20,10 @@ def test_test_tools_are_not_runtime_dependencies():
     assert any(r.startswith("pytest") for r in _reqs("requirements-dev.txt"))
 
 
-def test_langgraph_is_pinned_exactly():
-    pins = {r.split("==")[0]: r for r in _reqs("requirements.txt") if "==" in r}
-    assert "langgraph" in pins and "langgraph-checkpoint-postgres" in pins
+def test_all_requirements_are_upper_bounded():
+    for req in _reqs("requirements.txt"):
+        base = req.split(";")[0].strip()
+        assert "==" in base or "<" in base, f"Unbounded dependency in requirements.txt: {req}"
 
 
 def test_applied_migrations_0001_to_0012_checksums_pinned():
