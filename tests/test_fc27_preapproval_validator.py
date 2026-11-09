@@ -501,7 +501,7 @@ def test_31_unapproved_recommendation_payload_fails_with_recommendation_disabled
 def test_32_failed_pre_approval_validation_never_calls_interrupt() -> None:
     roles = FakeRoles()
     deps = GraphDeps(
-        mcp=lambda tool, args: dashboard(),
+        dashboard_reader=lambda tool, args: dashboard(),
         role_runner=lambda r, d, registry=None: roles(r, d),
     )
     app = build_graph(deps).compile(checkpointer=InMemorySaver())
@@ -669,7 +669,7 @@ def test_39_and_40_trace_metadata_emits_only_safe_fields_and_no_sensitive_conten
 def test_41_adversarial_caller_controlled_resume_cannot_bypass_failed_pre_approval() -> None:
     roles = FakeRoles()
     deps = GraphDeps(
-        mcp=lambda tool, args: dashboard(),
+        dashboard_reader=lambda tool, args: dashboard(),
         role_runner=lambda r, d, registry=None: roles(r, d),
     )
     app = build_graph(deps).compile(checkpointer=InMemorySaver())

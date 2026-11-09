@@ -381,7 +381,7 @@ def wired_restart(pg_uri):
             return dash if dash is not None else dashboard()
 
         deps = GraphDeps(
-            mcp=mcp,
+            dashboard_reader=mcp,
             role_runner=roles or FakeRoles(),
             registry_factory=lambda: None,
             decision_reader=store.load,
