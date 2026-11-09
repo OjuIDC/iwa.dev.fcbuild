@@ -370,7 +370,7 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 | `src/fc_clubs_api/client.py:get_json` | `REJECTED` | Rejected unguarded arbitrary endpoint caller. |
 | `src/fc_clubs_api/client.py:find_club_id` | `REJECTED` | Rejected automatic single-result selection on club search; explicit human club ID confirmation is mandatory. |
 | `src/fc_clubs_api/_output.py` | `REJECTED` | Rejected `pandas` DataFrame output layer and raw JSON pass-through. |
-| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with dry-run-only `scripts/fc27_community_eval.py`. |
+| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with explicitly gated one-shot `scripts/fc27_community_eval.py`; live requests require `FC27_COMMUNITY_PROVIDER_ENABLED=true` and `--confirm`, and persistence is separately gated. |
 | `Interactive-63/eafc-pro-clubs-api-research` | `CONCEPT_ONLY` | Unlicensed upstream research repository cited as conceptual provenance only; zero code copied. |
 
 ### 13.4 Separation of Concerns: Authentication, Authorization, Membership, and Manager Authority
