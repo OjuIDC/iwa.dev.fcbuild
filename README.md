@@ -57,7 +57,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 
 ## 2. Current Supported Use Case
 
-- **Primary Architecture (API-First Provider Boundary)**: Provider-neutral FC 27 endpoint contracts (`src/fc27_clubs_api_contracts.py`), normalized-object caching (`src/fc27_api_cache.py`), conservative rate/budget/circuit-breaker controls (`src/fc27_api_rate_limit.py`), and the 18-step `FC27AuthorizedProviderAdapter` pipeline (`src/fc27_authorized_provider.py`) are implemented and verified against hermetic mocks, ready for a compliant authorized API provider.
+- **Primary Architecture (Community Provider & Endpoint Contract Boundary)**: Fixed FC 27 endpoint contracts (`src/fc27_clubs_api_contracts.py`), normalized-object caching (`src/fc27_api_cache.py`), conservative rate/budget/circuit-breaker controls (`src/fc27_api_rate_limit.py`), and the bounded community provider adapter (`src/fc27_community_provider.py`, `src/fc27_polling_worker.py`) are implemented and verified against hermetic mocks and disposable PostgreSQL 16 databases.
 - **Secondary Offline Fallback**: Consented user-export (`USER_SUPPLIED_EXPORT`) and operator-captured displayed data (`OPERATOR_CAPTURED_DISPLAYED_DATA`) validation and dry-run workflows (`src/fc27_user_export.py`, `src/fc27_capture.py`) are available for offline validation, but manual JSON/CSV files are **not** the primary long-term architecture.
 - **PostgreSQL 16 Governance & Audit Foundation**: Role-separated PostgreSQL 16 storage (`migrations/0001_initial.sql`–`migrations/0013_fc27_manual_match_results.sql`, Grants Policy Version `15`), LangGraph `StateGraph` orchestration with single `interrupt()` approval boundaries, deterministic pre-approval validation (`src/fc27_coaching.py`), and Phase 2 WebAuthn/HMAC identity and evidence binding (`src/identity/`, `src/approval_store.py`) are implemented and verified against local PostgreSQL 16.
 
@@ -76,7 +76,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **`graph-api` (`src/graph_api.py`, `src/graph.py`)**: FastAPI HTTP boundary and LangGraph `StateGraph` (`search` -> `scout` -> `analyst` -> `coach` -> `tactics` -> `director` -> `prepare_approval` -> `approval` [`interrupt()`] -> `finalize_decision`).
 - **PostgreSQL 16 (`migrations/0001_initial.sql`–`migrations/0013_fc27_manual_match_results.sql`, `migrations/post/grants.sql`)**: Single authoritative audit of record across `graph_threads`, `recommendation_packages`, `approval_requests`, `approval_audit`, `fc27_decision_evidence`, `domain_events`, `outbox`, identity tables (`fc27_users`, `fc27_sessions`, `fc27_webauthn_credentials`, `fc27_challenges`), normalized FC 27 performance tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), and isolated manual Match Results tables (`fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, `fc27_manual_match_audit`). LangGraph `PostgresSaver` tables (`checkpoints*`) store workflow state only and are strictly separated from normalized FC 27 tables and authorization state.
 - **Redis (`redis:7.4.2-alpine`)**: Ephemeral pub/sub and watcher lease transport only. **Redis is never audit of record or authorization authority.**
-- **Safe FC 27 Provider & Contract Layer (`src/fc27_authorized_provider.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`)**: Repository-native data-only adaptation (`fc27-safe-adapter-manifest-v1`) of fixed FC 27 endpoint contracts, strict Pydantic response schemas, 23-bit match event bitmap (`ev`) decoding, bounded normalized-object caching, token-bucket rate limiting, per-run request budgets (`max_attempts=1`, `max_retries=0`), and a 3-state circuit breaker.
+- **Safe FC 27 Provider & Contract Layer (`src/fc27_community_provider.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`)**: Repository-native adaptation of fixed FC 27 endpoint contracts, strict Pydantic response schemas, 23-bit match event bitmap (`ev`) decoding, bounded normalized-object caching, token-bucket rate limiting, per-run request budgets (`max_attempts=1`, `max_retries=0`), and a 3-state circuit breaker.
 
 ## 5. Implemented Capabilities
 
@@ -153,9 +153,9 @@ All external networking, persistence writes, analytics execution, recommendation
 
 ## 10. Testing
 
-- **Focused FC 27 Adapter, Manifest, Cache, Rate-Limit, Provider, Search/Scout, Analyst, & Demo Tests (No DB required)**:
+- **Focused FC 27 Contracts, Cache, Rate-Limit, Community Provider, Search/Scout, Analyst, & Demo Tests (No DB required)**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_demo.py -q
+  .\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_community_provider.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_demo.py -q
   ```
 - **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
   ```powershell

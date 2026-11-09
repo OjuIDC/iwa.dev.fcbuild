@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Database Engineers, Developers, Security Reviewers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/0013_fc27_manual_match_results.sql`, `migrations/post/grants.sql`, `src/fc27_repository.py`, `src/fc27_match_results.py`, `src/fc27_clubs.py`, `src/db_migrate.py`, `src/db_roles.py`
+- **Source of truth**: `migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/0013_fc27_manual_match_results.sql`, `migrations/post/grants.sql`, `src/fc27_repository.py`, `src/fc27_match_results.py`, `src/fc27_clubs_api_contracts.py`, `src/db_migrate.py`, `src/db_roles.py`
 - **Supersedes**: `NONE`
 
 This document specifies the normalized PostgreSQL 16 schema for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) introduced in `migrations/0012_fc27_performance_and_quarantine.sql` and the isolated manual Match Results domain introduced in `migrations/0013_fc27_manual_match_results.sql`, owned by `fc27_owner`, and governed by Grants Policy Version 15 (`migrations/post/grants.sql`), `src/fc27_repository.py`, and `src/fc27_match_results.py`.
@@ -41,7 +41,7 @@ Stores validated club-level match outcomes:
 
 ### 2.4 `fc27_player_match_stats` — Pseudonymized Player Match Statistics
 Stores per-player match performance using deterministic pseudonyms:
-- **Pseudonym Constraint**: `player_pseudonym` matches `^plr_ecf_[0-9a-f]{12}$`, generated deterministically via SHA-256 (`src/fc27_clubs.py`, `src/fc27_clubs_api_contracts.py`).
+- **Pseudonym Constraint**: `player_pseudonym` matches `^plr_ecf_[0-9a-f]{12}$`, generated deterministically via SHA-256 (`src/fc27_clubs_api_contracts.py`).
 - **Alias Visibility**: Display aliases are suppressed by default (`include_display_aliases=False` / `include_safe_aliases=False`) in analytics and dashboard queries.
 - **Performance Columns**: `position_group`, `appearances`, `minutes_played`, `goals`, `assists`, `shots`, `passes_completed`, `passes_attempted`, `tackles_won`, `tackles_attempted`, `interceptions`, `saves`, `clean_sheet`, `red_cards`, `man_of_the_match`, `rating`, `stat_hash`.
 

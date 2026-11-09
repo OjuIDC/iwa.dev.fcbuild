@@ -89,14 +89,11 @@ from src.fc27_api_rate_limit import (
     FC27RequestBudget,
     FC27RequestBudgetExceededError,
 )
-from src.fc27_authorized_transport import (
-    PROHIBITED_HEADER_NAMES,
-    parse_json_strict_no_duplicates,
-)
 from src.fc27_clubs_api_contracts import (
     ENDPOINT_CONTRACT_VERSION,
     FC27_ENDPOINT_CONTRACTS,
     NORMALIZATION_VERSION,
+    PROHIBITED_HEADER_NAMES,
     RESPONSE_SCHEMA_VERSION,
     TARGET_CLUB_ID,
     TARGET_CLUB_NAME,
@@ -113,6 +110,7 @@ from src.fc27_clubs_api_contracts import (
     normalize_club_identity_payload,
     normalize_club_statistics_payload,
     normalize_matches_payload,
+    parse_json_strict_no_duplicates,
 )
 from src.fc27_provider import (
     FC27AuthenticationError,

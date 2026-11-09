@@ -164,7 +164,7 @@ See [`docs/FEATURE_FLAGS.md`](FEATURE_FLAGS.md), [`docs/FC27_POLLING_WORKER.md`]
 - **Database Rollback**: Numbered migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`) are forward-only and checksum-verified. To roll back a schema change, restore from the pre-migration `pg_dump` snapshot rather than deleting rows from `schema_migrations`.
 
 ### 8.2 Connection & Log Redaction
-- `src/db_roles.py` (`redact_conninfo`) and `src/fc27_authorized_transport.py` scrub passwords, bearer tokens, API keys, and sensitive query parameters before any exception or structured log is emitted.
+- `src/db_roles.py` provides `redact_conninfo` for PostgreSQL connection-string handling. `src/fc27_community_provider.py` does not provide general password, bearer-token, API-key, or sensitive-query redaction; do not assume its exception messages are sanitized.
 - Langfuse tracing (`src/tracing.py`) defaults to `LANGFUSE_ENABLED=false` and `LANGFUSE_CAPTURE_CONTENT=false` (metadata-only).
 
 ### 8.3 Backup and Quarantine Retention

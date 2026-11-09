@@ -100,6 +100,34 @@ def test_visual_studio_user_state_is_ignored_and_project_files_are_tracked() -> 
     assert set(tracked.stdout.splitlines()) == {"iwa.dev.fcbuild.sln", "iwa.dev.fcbuild.pyproj"}
 
 
+def test_project_includes_only_existing_repository_files_and_excludes_removed_b1_paths() -> None:
+    project = _project_root()
+    included_paths: list[str] = []
+    for tag in ("Compile", "Content"):
+        for node in project.findall(f".//{{{MSBUILD_NS}}}{tag}"):
+            inc = node.get("Include", "").strip()
+            if inc:
+                included_paths.append(inc)
+                rel = Path(inc.replace("\\", "/"))
+                assert (REPO_ROOT / rel).is_file(), f"Missing file in .pyproj {tag}: {inc}"
+
+    removed_b1 = {
+        r"src\fc27_authorized_provider.py",
+        r"src\fc27_authorized_transport.py",
+        r"src\fc27_authorized_api.py",
+        r"src\fc27_provider_contract.py",
+        r"src\fc27_clubs.py",
+        r"scripts\fc27_club_lookup.py",
+        r"config\fc27_safe_adapter_bundle_manifest.json",
+        r"tests\test_fc27_authorized_provider.py",
+        r"tests\test_fc27_authorized_api.py",
+        r"tests\test_fc27_api_ingestion.py",
+        r"tests\test_fc27_clubs_compatibility.py",
+        r"tests\test_fc27_safe_adapter_bundle_manifest.py",
+    }
+    assert removed_b1.isdisjoint(included_paths)
+
+
 def _find_visual_studio_msbuild() -> Path:
     if os.name != "nt":
         pytest.skip("Visual Studio MSBuild integration requires Windows")

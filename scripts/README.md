@@ -41,7 +41,6 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`check_matchpulse_boundary.py`](check_matchpulse_boundary.py) | `CURRENT_SECURITY_COMMAND` | Active (CI & Security Gate) | `NONE` |
 | [`fc27_user_export_import.py`](fc27_user_export_import.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Export/Capture Import) | `NONE` |
 | [`fc27_capture_preflight.py`](fc27_capture_preflight.py) | `CURRENT_OPERATOR_COMMAND` | Active (Offline Capture Preflight) | `NONE` |
-| [`fc27_club_lookup.py`](fc27_club_lookup.py) | `CURRENT_OPERATOR_COMMAND` | Active (Local Identity Verification CLI) | `NONE` |
 | [`commissioner_decide.py`](commissioner_decide.py) | `CURRENT_OPERATOR_COMMAND` | Active (Commissioner Approval CLI) | `NONE` |
 | [`model_health.py`](model_health.py) | `CURRENT_OPERATOR_COMMAND` | Active (Local Ollama Health Check) | `NONE` |
 | [`ollama-init.sh`](ollama-init.sh) | `CURRENT_OPERATOR_COMMAND` | Active (Compose Model Bootstrap) | `NONE` |
@@ -154,20 +153,6 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Expected Output**: JSON preflight verification report.
 - **Teardown**: Stateless CLI process.
 - **Replacement Status**: Current supporting capture preflight CLI (`NONE`).
-
-### 8. `scripts/fc27_club_lookup.py`
-- **Classification**: `CURRENT_OPERATOR_COMMAND`
-- **Purpose**: Verifies East Coasters (`330323`, `common-gen5`, `FC27`) provisional or verified club identity records against local contracts and prohibited-source policies.
-- **Safe Invocation**:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/fc27_club_lookup.py --help
-  ```
-- **Required Feature Flags**: Live mode remains blocked unless `FC27_PROVIDER_ENABLED=true` and an approved live provider is supplied.
-- **Network Behavior**: Zero network requests in default provisional/fixture modes.
-- **Database Behavior**: Zero database writes by default.
-- **Expected Output**: JSON `ClubIdentityRecord` payload.
-- **Teardown**: Stateless CLI process.
-- **Replacement Status**: Current supporting club identity lookup CLI (`NONE`).
 
 ### 9. `scripts/commissioner_decide.py`
 - **Classification**: `CURRENT_OPERATOR_COMMAND`

@@ -21,25 +21,25 @@
 
 ## 2. Suite Execution Summary
 
-### 2.1 Focused FC 27 Safe Adapter Suite (`217 passed`)
+### 2.1 Focused FC 27 Safe Adapter & Community Provider Suite
 Command:
 ```powershell
-.\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_authorized_provider.py tests/test_fc27_authorized_api.py -q
+.\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_community_provider.py tests/test_fc27_polling_worker.py -q
 ```
-Result: **`217 passed` in `1.88s`**
-- `tests/test_fc27_clubs_api_contracts.py`: Verifies all 11 `FC27ClubsEndpointOperation` contracts, strict Pydantic response schemas, 23-bit `ev` bitmap decoding, unknown bit flagging, and forbidden browser header rejection.
+Result: **All passed**
+- `tests/test_fc27_clubs_api_contracts.py`: Verifies all 11 `FC27ClubsEndpointOperation` contracts, strict Pydantic response schemas, 23-bit `ev` bitmap decoding, unknown bit flagging, `parse_json_strict_no_duplicates`, and forbidden browser header rejection (`PROHIBITED_HEADER_NAMES`).
 - `tests/test_fc27_api_cache.py`: Verifies `FC27BoundedNormalizedCache` (`max_entries=128`, `256 KiB`), deterministic cache keys, `stale_if_error_seconds=0`, and rejection of raw provider payloads (`FC27RawCacheProhibitedError`).
 - `tests/test_fc27_api_rate_limit.py`: Verifies `FC27ProviderTokenBucketLimiter` (`capacity=1`, `300s`), `FC27RequestBudget` (`max_attempts=1`, `max_retries=0`), 3-state `FC27AdapterCircuitBreaker` (`OPEN`/`CLOSED`/`HALF_OPEN`), and pure retry classification (`should_retry=False`).
-- `tests/test_fc27_authorized_provider.py`: Verifies `FC27AuthorizedProviderAdapter` across all 8 operations, cache hit/miss/bypass, rate-limit integration, circuit-breaker trip on `HTTP 429`/`403`, and `FC27SourceProvenance` attachment.
-- `tests/test_fc27_authorized_api.py`: Verifies `FC27AuthorizedHTTPTransport` loopback fixtures, DNS resolution blocking for unapproved hosts, secret redaction, and preflight CLI behavior.
+- `tests/test_fc27_community_provider.py`: Verifies `FC27CommunityProviderAdapter`, East Coasters (`330323`, `common-gen5`) identity and match normalization, pseudonymization, and `raw_response_retained=False`.
+- `tests/test_fc27_polling_worker.py`: Verifies disabled-by-default single-flight 12-hour polling worker gates, advisory locks, and conditional analytics execution.
 
-### 2.2 Full FC 27 Domain, Analytics, Coaching, & Repository Regression Suite (`267 passed`)
+### 2.2 Full FC 27 Domain, Analytics, Coaching, & Repository Regression Suite
 Command (with `POSTGRES_DSN` and `POSTGRES_SUPERUSER_DSN` pointing to PostgreSQL 16):
 ```powershell
 .\.venv\Scripts\pytest.exe tests/test_fc27_*.py -q
 ```
-Result: **`267 passed` in `10.17s`**
-- Includes `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_preapproval_validator.py`, `tests/test_fc27_api_ingestion.py`, `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_platform.py`, `tests/test_fc27_clubs_compatibility.py`, plus the 5 focused adapter test modules above, executing real SQL against `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under Grants Policy Version 14.
+Result: **All passed**
+- Includes `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_preapproval_validator.py`, `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_platform.py`, `tests/test_fc27_discord_bot.py`, `tests/test_fc27_match_results.py`, plus the focused provider and contract test modules above, executing real SQL against `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under Grants Policy Version 15.
 
 ### 2.3 Documentation Consistency, Archive Manifest, & Packaging Guard Suite
 Command:

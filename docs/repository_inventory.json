@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
   "base_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470",
-  "total_files": 399,
+  "total_files": 387,
   "files": [
     {
       "path": ".dockerignore",
@@ -283,16 +283,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Machine-readable registry of proven dead/duplicate files removed from the repository",
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
-    },
-    {
-      "path": "config/fc27_safe_adapter_bundle_manifest.json",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository-native FC 27 safe adapter bundle provenance manifest (config/fc27_safe_adapter_bundle_manifest.json)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active machine-readable provenance and component manifest for the verified FC 27 safe adapter bundle",
-      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
     },
     {
       "path": "config/model_catalog.json",
@@ -1465,16 +1455,6 @@
       "last_relevant_commit": "ea384538c70e21deb334726b0571605d2404a5d3"
     },
     {
-      "path": "scripts/fc27_club_lookup.py",
-      "category": "operational_script",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_club_lookup.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active CLI helper verified by regression tests",
-      "last_relevant_commit": "a19aa20115f69928d285e70e178858751a9f9347"
-    },
-    {
       "path": "scripts/fc27_community_eval.py",
       "category": "scripts_and_tooling",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1805,36 +1785,6 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
-      "path": "src/fc27_authorized_api.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_api.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
-      "path": "src/fc27_authorized_provider.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_provider.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
-      "path": "src/fc27_authorized_transport.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_authorized_transport.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "3377226cbdd11ce95580c2020d8bc6b457351fbb"
-    },
-    {
       "path": "src/fc27_backup_restore.py",
       "category": "runtime_source",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1863,16 +1813,6 @@
       "archive_decision": "KEEP_CURRENT",
       "reason": "Authoritative test module isolation classification, marker mapping, and CI shard registry",
       "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
-    },
-    {
-      "path": "src/fc27_clubs.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_clubs.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "bdad68b7b68f3293c68fb6214af64b5e1759c97e"
     },
     {
       "path": "src/fc27_clubs_api_contracts.py",
@@ -2013,16 +1953,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active runtime code verified by automated test suites",
       "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
-    },
-    {
-      "path": "src/fc27_provider_contract.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_provider_contract.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
       "path": "src/fc27_repository.py",
@@ -3365,16 +3295,6 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
-      "path": "tests/test_fc27_api_ingestion.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_api_ingestion.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "bdad68b7b68f3293c68fb6214af64b5e1759c97e"
-    },
-    {
       "path": "tests/test_fc27_api_rate_limit.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -3395,26 +3315,6 @@
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
     },
     {
-      "path": "tests/test_fc27_authorized_api.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_authorized_api.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "3377226cbdd11ce95580c2020d8bc6b457351fbb"
-    },
-    {
-      "path": "tests/test_fc27_authorized_provider.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_authorized_provider.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
       "path": "tests/test_fc27_backup_restore.py",
       "category": "tests",
       "status": "CURRENT_AUTHORITATIVE",
@@ -3433,16 +3333,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
-      "path": "tests/test_fc27_clubs_compatibility.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_clubs_compatibility.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "e32291afbb3cc58673e96787200ff0021da3d179"
     },
     {
       "path": "tests/test_fc27_coach.py",
@@ -3583,16 +3473,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Verifies repository cleanup invariants, logic consolidation, inventory sync, and entrypoint resolution",
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
-    },
-    {
-      "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_safe_adapter_bundle_manifest.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "db77a6f74540079b91ab03657642bbe30e3b9b18"
     },
     {
       "path": "tests/test_fc27_scout.py",

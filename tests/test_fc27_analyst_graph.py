@@ -17,7 +17,7 @@ import psycopg
 from psycopg import conninfo, sql
 import pytest
 
-from src import approval_store, events, fc27_authorized_provider, graph, roles, swarms_backend
+from src import approval_store, events, fc27_community_provider, graph, roles, swarms_backend
 from src.db_migrate import migrate
 from src.db_roles import bootstrap_cluster, bootstrap_database
 from src.fc27_analyst import (
@@ -257,8 +257,8 @@ def test_120_no_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("Provider call attempted in analyst_evidence_node")
 
     monkeypatch.setattr(
-        fc27_authorized_provider.FC27AuthorizedProviderAdapter,
-        "_pre_transport_pipeline",
+        fc27_community_provider.FC27CommunityProviderAdapter,
+        "_require_gates",
         _forbid_provider,
     )
     state = _build_search_scout_state(6)

@@ -3,17 +3,17 @@
 - **Status**: Current
 - **Audience**: Developers, Architects, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/fc27_community_provider.py`, `src/fc27_authorized_api.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `config/fc27_safe_adapter_bundle_manifest.json`, `THIRD_PARTY_NOTICES.md`
+- **Source of truth**: `src/fc27_community_provider.py`, `src/fc27_polling_worker.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `THIRD_PARTY_NOTICES.md`
 - **Supersedes**: `docs/archive/providers/mcp_ws.md`
 
 > **Current Working Real-Data Provider (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`)**:
 >
-> The current supported real-data acquisition path for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) is the bounded one-shot community client wrapper in `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` (`Dockerfile.community-eval`, `docker-compose.community-eval.yml`), which successfully retrieved, validated, normalized, pseudonymized (`plr_ecf_<12-hex>`), persisted (`10` matches, `60` player rows), and analyzed (`Search -> Scout -> Analyst`) real East Coasters match data with `raw_response_retained=False`. See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) for full details.
+> The current supported real-data acquisition path for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) is the bounded one-shot community client wrapper in `src/fc27_community_provider.py`, `src/fc27_polling_worker.py`, and `scripts/fc27_community_eval.py` (`Dockerfile.community-eval`, `docker-compose.community-eval.yml`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`), which retrieves, validates, normalizes, pseudonymizes (`plr_ecf_<12-hex>`), persists, and analyzes (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`) East Coasters match data with `raw_response_retained=False`. See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) for full details.
 >
 > **Historical Transport Findings Recorded (`PART D`)**:
 > - **Standards-Compliant Python `urllib` Live Probe (`feature/fc27-real-east-coasters-ingestion` @ `76d20c4ef6`)**: Confirmed deterministic HTTP `403 Forbidden` at the Akamai edge when calling `https://proclubs.ea.com/api/fc/clubs/info` with standard Python `urllib` headers and TLS profile (`STANDARD_LIVE_PROBE_ACTIVE=NO`).
 > - **Bounded Headless Chromium Browser-Observed Provider (`feature/fc27-browser-observed-provider` @ `414b4f3d67`)**: Confirmed official public page URL (`https://www.ea.com/games/ea-sports-fc/clubs/overview?clubId=330323&platform=common-gen5`) and `common-gen5` platform, while headless Chromium navigation encountered `ERR_HTTP2_PROTOCOL_ERROR` across both Windows host and Linux container environments (`BROWSER_PROVIDER_ACTIVE=NO`).
-> - **Direct Partner/EA Written Authorization Boundary (`EA_APPROVED_ACCESS_REQUEST_DRAFT`)**: The provider-neutral `FC27AuthorizedProviderAdapter` (`src/fc27_authorized_provider.py`) remains retained as a supporting contract/adapter layer (`FC27_PROVIDER_ENABLED=false` by default).
+> - **Retained Contract & Provider Boundary**: The community provider adapter (`src/fc27_community_provider.py`), polling worker (`src/fc27_polling_worker.py`), and fixed endpoint contracts (`src/fc27_clubs_api_contracts.py`) form the retained provider and contract layer (`FC27_PROVIDER_ENABLED=false` and `FC27_COMMUNITY_POLLING_ENABLED=false` by default).
 
 ---
 
@@ -41,13 +41,12 @@ Normalization & Pseudonymization (plr_ecf_<12-hex> + FC27PseudonymCollisionDetec
 
 ---
 
-## 2. Authorization Requirements & Approved Provider Classifications
+## 2. Community Provider Declaration & Safety Boundaries
 
-`src/fc27_authorized_provider.py` and `src/fc27_authorized_api.py` define `FC27AuthorizedProviderDeclaration` and `FC27SourceClassification`:
+`src/fc27_community_provider.py` and `src/fc27_clubs_api_contracts.py` define `FC27CommunityProviderDeclaration`, `FC27ClubsEndpointOperation`, `PROHIBITED_HEADER_NAMES`, and `parse_json_strict_no_duplicates`:
 
-- Allowed live classifications: `EA_DIRECT_APPROVED` and `LICENSED_PARTNER_API` (plus `MOCK_CONTRACT_FIXTURE` for hermetic local tests).
-- Unapproved direct scraping (`UNAPPROVED_DIRECT_EA`), browser-impersonation sidecars (`PROCLUBS_SDK_SIDECAR`), and unlicensed scrapers (`THIRD_PARTY_UNLICENSED`) are permanently rejected.
-- Every live provider declaration requires verified Terms of Service, privacy compliance, a non-placeholder written authorization reference (`EA_APPROVED_ACCESS_REQUEST_DRAFT` is a draft placeholder and fails closed for live traffic), `raw_response_retained=False`, and zero browser/TLS impersonation.
+- Supported community provider classification: `LIVE_EA_CLUBS_COMMUNITY_CLIENT` (`fc-clubs-api-community-v1`), locked strictly to East Coasters (`club_id="330323"`, `platform="common-gen5"`, `game_version="FC27"`, `output_format="records"`).
+- Every provider invocation requires explicit feature gates (`FC27_COMMUNITY_PROVIDER_ENABLED=true` / `FC27_COMMUNITY_POLLING_ENABLED=true` and operator confirmation flags), enforces `maximum_identity_requests=1`, `maximum_match_requests=1`, `maximum_retries=0`, `raw_response_retention=False`, and rejects duplicate JSON keys and `NaN`/`Infinity` constants via `parse_json_strict_no_duplicates`.
 
 ---
 
@@ -70,16 +69,11 @@ Adapted safely from the MIT-licensed `1erkandogan/fc27-clubs-api` endpoint and e
 | `CLUB_PLAYOFF_ACHIEVEMENTS` | `/club/playoffAchievements` | Target Club Only (`clubId=330323`) | `3600s` (1h) |
 | `ASSET_TRANSLATIONS` | `/assets/translations` | Static Asset Metadata | `86400s` (24h) |
 
-### 3.2 Eight Adapter Operations (`FC27AuthorizedOperation`)
-`FC27AuthorizedProviderAdapter` (`src/fc27_authorized_provider.py`) exposes:
-- `FETCH_CLUB_SUMMARY` (`club_summary`)
-- `FETCH_MATCH_HISTORY` (`match_history`)
-- `FETCH_MEMBER_STATISTICS` (`member_statistics`)
-- `FETCH_EXPORT_BUNDLE` (`export_bundle`)
-- `FETCH_PUBLIC_CLUB_SEARCH` (`public_club_search`)
-- `FETCH_PUBLIC_LEADERBOARD` (`public_leaderboard`)
-- `FETCH_CLUB_SETTINGS` (`club_settings`)
-- `FETCH_PLAYOFF_ACHIEVEMENTS` (`playoff_achievements`)
+### 3.2 Community Provider Adapter Operations (`FC27CommunityProviderAdapter`)
+`FC27CommunityProviderAdapter` (`src/fc27_community_provider.py`) exposes:
+- `get_east_coasters_identity_once` (`CLUB_IDENTITY` via `clubs/info`)
+- `get_east_coasters_recent_matches_once` (`CLUB_MATCH_HISTORY` via `clubs/matches`, strictly gated on a prior `PASS` identity envelope)
+- `validate_community_player_match_records` (`PLAYER_MATCH_RECORDS_OFFLINE`, offline validator only)
 
 ### 3.3 23-Bit Match Event Bitmap (`ev`) Decoder
 `decode_match_event_bitmap(ev)` in `src/fc27_clubs_api_contracts.py` decodes bits `0..22` (`MATCH_EVENT_BIT_DEFINITIONS`) and flags any unknown higher bits (`>= bit 23`) in `unknown_bits_mask` / `unknown_bit_positions` without silent data loss.
@@ -111,28 +105,27 @@ Adapted safely from the MIT-licensed `1erkandogan/fc27-clubs-api` endpoint and e
 - **Deterministic Pseudonymization**: Member IDs are transformed via `pseudonymize_club_member_id(raw_id, club_id="330323")` -> `plr_ecf_<12-hex>`. Raw personas are discarded (`raw_persona_persisted=False`, `display_alias=None`).
 - **Collision Guard**: `FC27PseudonymCollisionDetector` aborts with `PSEUDONYM_COLLISION` if two distinct raw member keys ever map to the same pseudonym.
 - **Provenance Metadata**: Every normalized envelope attaches `FC27SourceProvenance` (`provider_id`, `provider_classification`, `authorization_reference`, `fetched_at_utc`, `request_correlation_id`, `payload_sha256`, `endpoint_operation`, `cache_status`, `rate_limit_tokens_remaining`, `circuit_breaker_state`, `raw_response_retained=False`, `raw_persona_persisted=False`).
-- **Offline Preflight & Lookup CLIs**:
+- **Offline Preflight & Evaluation CLIs**:
   ```powershell
   .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py
   .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --mock
-  .\.venv\Scripts\python.exe scripts/fc27_club_lookup.py --help
+  .\.venv\Scripts\python.exe scripts/fc27_community_eval.py --operation mock-eval
   ```
 
 ---
 
-## 6. Repository-Native Safe Adapter Bundle Configuration (`config/fc27_safe_adapter_bundle_manifest.json`)
+## 6. Repository-Native Safe Adapter Provenance (`src/fc27_clubs_api_contracts.py` & `THIRD_PARTY_NOTICES.md`)
 
-The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-verified.zip`, `BUNDLE_SHA256=eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`) is governed by a repository-native provenance manifest (`MANIFEST_VERSION=fc27-safe-adapter-manifest-v1` in `config/fc27_safe_adapter_bundle_manifest.json`) and validated deterministically by `tests/test_fc27_safe_adapter_bundle_manifest.py`:
+The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-verified.zip`, `BUNDLE_SHA256=eb9c42745f9966aa6af197c1b289809575c703d0d4ccef05e4c9678370f301a8`) is integrated directly into repository-native contract, cache, and rate-limit modules and validated deterministically by `tests/test_fc27_clubs_api_contracts.py`:
 
 1. **Original bundle artifact**:
    - Stored only as a git-ignored local input under `.local-artifacts/` (`iwa.dev.fcbuild-safe-adapter-verified.zip`).
    - Never committed to Git and never required by CI or production runtime.
 2. **Temporary inspection workspace**:
-   - Extracted locally under `.local-artifacts/safe-adapter-inspection-eb9c42745f99` (with local inventory map `.local-artifacts/safe-adapter-folder-map.json`) strictly for static verification.
+   - Extracted locally under `.local-artifacts/safe-adapter-inspection-eb9c42745f99` strictly for static verification.
    - Never committed to Git and never imported at runtime (`no zipimport` or `.local-artifacts` imports).
 3. **Repository-native integration**:
-   - Tracked source and test modules (`src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_provider_contract.py`, `src/fc27_authorized_api.py`, and `tests/test_fc27_*.py`).
-   - Tracked provenance manifest `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`) recording exact SHA-256 digests, adaptation summaries, feature flags, and rejected unsafe/non-applicable components.
+   - Tracked source and test modules (`src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `src/fc27_community_provider.py`, and `tests/test_fc27_clubs_api_contracts.py`).
    - Tracked upstream MIT license attribution in `THIRD_PARTY_NOTICES.md`.
 
 ---

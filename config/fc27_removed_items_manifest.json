@@ -1,7 +1,7 @@
 {
   "manifest_version": "fc27-removed-items-manifest-v1",
-  "generated_on": "2026-10-31",
-  "deleted_in_current_phase_count": 0,
+  "generated_on": "2026-11-08",
+  "deleted_in_current_phase_count": 12,
   "removed_items": [
     {
       "path": "src/agency_org.py",
@@ -47,6 +47,175 @@
         "tests/test_fc27_repository_cleanup.py"
       ],
       "rollback_method": "git checkout 92c540ab19d538e9a5783e096357b6783e2701da~1 -- requirements-test.txt"
+    },
+    {
+      "path": "src/fc27_authorized_provider.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active runtime, polling worker, Discord bot, or repository dependencies; superseded by src/fc27_community_provider.py (fc-clubs-api-community-v1).",
+      "replacement": "src/fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of unused standards-HTTP authorized-provider execution pipeline.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py",
+        "tests/test_fc27_api_cache.py",
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_fc27_repository_cleanup.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- src/fc27_authorized_provider.py"
+    },
+    {
+      "path": "src/fc27_authorized_transport.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "General-purpose helpers (parse_json_strict_no_duplicates, PROHIBITED_HEADER_NAMES) moved to src/fc27_clubs_api_contracts.py; standards-HTTP transport removed with zero active callers.",
+      "replacement": "src/fc27_clubs_api_contracts.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of unused standards-HTTP transport after helper extraction into src/fc27_clubs_api_contracts.py.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py",
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_demo.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- src/fc27_authorized_transport.py"
+    },
+    {
+      "path": "src/fc27_authorized_api.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active runtime callers outside deleted authorized-provider modules and their exclusive tests.",
+      "replacement": "src/fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of unused authorized API candidate registry and source provenance wrappers.",
+      "tests_run": [
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_archive_manifest.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- src/fc27_authorized_api.py"
+    },
+    {
+      "path": "src/fc27_provider_contract.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active runtime callers; endpoint contracts and normalization reside in src/fc27_clubs_api_contracts.py.",
+      "replacement": "src/fc27_clubs_api_contracts.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of unused authorized-provider contract wrapper.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py",
+        "tests/test_fc27_archive_manifest.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- src/fc27_provider_contract.py"
+    },
+    {
+      "path": "src/fc27_clubs.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero active runtime callers; club lookup and match normalization handled by src/fc27_community_provider.py and src/fc27_clubs_api_contracts.py.",
+      "replacement": "src/fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of unused legacy clubs compatibility facade.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py",
+        "tests/test_fc27_community_provider.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- src/fc27_clubs.py"
+    },
+    {
+      "path": "scripts/fc27_club_lookup.py",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero Dockerfile, Compose, workflow, or runtime references; superseded by scripts/fc27_community_eval.py and scripts/fc27_polling_worker.py.",
+      "replacement": "scripts/fc27_community_eval.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of CLI entrypoint for deleted authorized-provider path.",
+      "tests_run": [
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_documentation_consistency.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- scripts/fc27_club_lookup.py"
+    },
+    {
+      "path": "config/fc27_safe_adapter_bundle_manifest.json",
+      "classification": "CANDIDATE_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Zero runtime references; tracked SHA-256 digests of removed authorized-provider modules.",
+      "replacement": "NONE",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of safe adapter bundle manifest tied to deleted authorized-provider modules.",
+      "tests_run": [
+        "tests/test_documentation_consistency.py",
+        "tests/test_fc27_archive_manifest.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- config/fc27_safe_adapter_bundle_manifest.json"
+    },
+    {
+      "path": "tests/test_fc27_authorized_provider.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/fc27_authorized_provider.py and src/fc27_authorized_transport.py.",
+      "replacement": "tests/test_fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of exclusive unit test suite for deleted authorized-provider module.",
+      "tests_run": [
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_clubs_api_contracts.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_authorized_provider.py"
+    },
+    {
+      "path": "tests/test_fc27_authorized_api.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/fc27_authorized_api.py and src/fc27_provider_contract.py.",
+      "replacement": "tests/test_fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of exclusive unit test suite for deleted authorized-API module.",
+      "tests_run": [
+        "tests/test_fc27_community_provider.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_authorized_api.py"
+    },
+    {
+      "path": "tests/test_fc27_api_ingestion.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed authorized-provider ingestion wrapper; community provider persistence is tested in tests/test_fc27_community_provider.py and tests/test_fc27_polling_worker.py.",
+      "replacement": "tests/test_fc27_community_provider.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of exclusive test suite for deleted authorized-provider ingestion.",
+      "tests_run": [
+        "tests/test_fc27_community_provider.py",
+        "tests/test_fc27_polling_worker.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_api_ingestion.py"
+    },
+    {
+      "path": "tests/test_fc27_clubs_compatibility.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed src/fc27_clubs.py.",
+      "replacement": "tests/test_fc27_clubs_api_contracts.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of exclusive test suite for deleted src/fc27_clubs.py facade.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_clubs_compatibility.py"
+    },
+    {
+      "path": "tests/test_fc27_safe_adapter_bundle_manifest.py",
+      "classification": "EXCLUSIVE_CANDIDATE_TEST_DELETED_IN_B1",
+      "deleted_in_current_phase": true,
+      "proof_summary": "Exclusively tested removed config/fc27_safe_adapter_bundle_manifest.json.",
+      "replacement": "tests/test_fc27_clubs_api_contracts.py",
+      "last_commit": "8b9e99ea3c492e4bd44ffe4c585d963336772cc5",
+      "reason": "Stage B1 removal of exclusive test suite for deleted safe adapter bundle manifest.",
+      "tests_run": [
+        "tests/test_fc27_clubs_api_contracts.py"
+      ],
+      "rollback_method": "git checkout 8b9e99ea3c492e4bd44ffe4c585d963336772cc5 -- tests/test_fc27_safe_adapter_bundle_manifest.py"
     }
   ]
 }

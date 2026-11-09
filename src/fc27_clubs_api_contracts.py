@@ -15,13 +15,14 @@ credentials, arbitrary URL callers (`get_json`), and automatic club-ID replaceme
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 import urllib.parse
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -73,6 +74,55 @@ class FC27SchemaValidationError(FC27TransportError):
 
 class FC27PseudonymCollisionError(FC27ProviderError):
     """Raised when two distinct player identifiers collide to the same East Coasters pseudonym."""
+
+
+PROHIBITED_HEADER_NAMES: frozenset[str] = frozenset(
+    {
+        "cookie",
+        "set-cookie",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+        "sec-fetch-user",
+        "referer",
+        "origin",
+        "x-forwarded-for",
+        "proxy-authorization",
+    }
+)
+
+
+def parse_json_strict_no_duplicates(raw_text: str | bytes) -> Dict[str, Any]:
+    """Parses JSON rejecting duplicate object keys at any nesting level and NaN/Infinity constants."""
+
+    def _no_dup_pairs(pairs: Sequence[Tuple[str, Any]]) -> Dict[str, Any]:
+        obj: Dict[str, Any] = {}
+        for k, v in pairs:
+            if k in obj:
+                raise FC27TransportError(f"Duplicate JSON key '{k}' rejected")
+            obj[k] = v
+        return obj
+
+    def _reject_constant(val: str) -> Any:
+        raise FC27TransportError(f"Disallowed JSON numeric constant '{val}' rejected")
+
+    try:
+        parsed = json.loads(
+            raw_text,
+            object_pairs_hook=_no_dup_pairs,
+            parse_constant=_reject_constant,
+        )
+    except FC27TransportError:
+        raise
+    except Exception as exc:
+        raise FC27TransportError("Malformed JSON response rejected") from exc
+
+    if not isinstance(parsed, dict):
+        raise FC27TransportError("Top-level JSON response must be an object")
+    return parsed
 
 
 # ==============================================================================
