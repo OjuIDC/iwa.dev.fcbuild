@@ -75,7 +75,7 @@ def test_app_can_use_checkpointer(pg_uri):
     from src.approval_store import ApprovalStore
 
     store = ApprovalStore(pg_uri)
-    deps = GraphDeps(mcp=lambda t, a: {}, role_runner=lambda r, d, reg: None, registry_factory=lambda: None, decision_reader=store.load)
+    deps = GraphDeps(dashboard_reader=lambda t, a: {}, role_runner=lambda r, d, reg: None, registry_factory=lambda: None, decision_reader=store.load)
 
     runner = GraphRunner.from_conninfo(pg_uri, deps, setup=False)
     # the thread inspector read works

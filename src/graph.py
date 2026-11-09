@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Callable, Generator, TypedDict, cast
 from uuid import uuid4
 
-import httpx
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, RunnableConfig, interrupt
 
@@ -126,22 +125,13 @@ def _audit(node: str, state: FC27State, summary: str) -> list[dict]:
              "platform": state.get("platform", DEFAULT_PLATFORM)}]
 
 
-def mcp_call(tool: str, args: dict) -> dict:
-    """Call the MCP proxy (the only component allowed to reach EA)."""
-    url = os.getenv("FC27_MCP_URL", "http://fc27-mcp:8000").rstrip("/") + "/mcp"
-    token = os.getenv("MCP_API_TOKEN", "")
-    r = httpx.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}},
-                   headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    r.raise_for_status()
-    body = r.json()
-    if "error" in body:
-        raise RuntimeError(f"MCP error: {body['error'].get('message', 'unknown')}")
-    return json.loads(body["result"]["content"][0]["text"])
+def _dashboard_reader_not_configured(tool: str, args: dict) -> dict:
+    raise RuntimeError("dashboard reader is not configured")
 
 
 @dataclass
 class GraphDeps:
-    mcp: Callable[[str, dict], dict] = mcp_call
+    dashboard_reader: Callable[[str, dict], dict] = _dashboard_reader_not_configured
     role_runner: Callable[..., RoleResult] = run_role
     registry_factory: Callable[[], Any] = lambda: None
     # Returns the committed DB row for a thread: {"status", "approved_by", "approved_at", "decision_payload"}.
@@ -152,7 +142,9 @@ class GraphDeps:
 def build_graph(deps: GraphDeps) -> StateGraph:
     def search(state: FC27State) -> dict:
         try:
-            dashboard = deps.mcp("get_club_dashboard", {"club_id": state["club_id"], "platform": state["platform"]})
+            dashboard = deps.dashboard_reader(
+                "get_club_dashboard", {"club_id": state["club_id"], "platform": state["platform"]}
+            )
         except Exception as exc:
             return {"status": "failed", "errors": [f"search failed: {type(exc).__name__}"],
                     "audit_log": _audit("search", state, "dashboard unavailable")}

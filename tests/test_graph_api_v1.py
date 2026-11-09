@@ -139,6 +139,17 @@ def test_v1_post_runs_creates_durable_run(client_v1, pg_uri):
         assert row[1] == data["package_version"]
 
 
+def test_run_routes_are_disabled_without_explicit_runtime():
+    app = create_app(settings("postgresql://unused"))
+    client = TestClient(app)
+    for path in ("/v1/runs", "/run"):
+        response = client.post(path, headers=SVC, json={"club_id": "330323"})
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "graph run workflow is disabled: no dashboard/model runtime configured"
+        }
+
+
 def test_v1_post_runs_validation_and_rejection(client_v1):
     """AC §11.3 / F22: POST /v1/runs validates numeric club_id, rejects extra approval fields."""
     # Invalid club_id
