@@ -58,13 +58,12 @@ docker rm -f fc27-test-postgres
 
 ### Focused Offline Suites (No PostgreSQL Required)
 ```powershell
-# FC 27 safe-adapter manifest, contracts, cache, rate limiter, and provider boundary
-.\.venv\Scripts\pytest.exe tests/test_fc27_safe_adapter_bundle_manifest.py `
-  tests/test_fc27_clubs_api_contracts.py `
+# FC 27 contracts, cache, rate limiter, and community provider boundary
+.\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py `
   tests/test_fc27_api_cache.py `
   tests/test_fc27_api_rate_limit.py `
-  tests/test_fc27_authorized_provider.py `
-  tests/test_fc27_authorized_api.py -q
+  tests/test_fc27_community_provider.py `
+  tests/test_fc27_polling_worker.py -q
 
 # FC 27 Search, Scout, Analyst, and One-Shot Ingestion Demo
 .\.venv\Scripts\pytest.exe tests/test_fc27_search.py `
@@ -85,7 +84,7 @@ $env:FC27_DEMO_MODE = "true"
 .\.venv\Scripts\pytest.exe tests/test_fc27_preapproval_validator.py `
   tests/test_fc27_operator_capture.py `
   tests/test_fc27_user_export.py `
-  tests/test_fc27_clubs_compatibility.py -q
+  tests/test_fc27_platform.py -q
 
 # Documentation, packaging, workflow, and archive integrity
 .\.venv\Scripts\pytest.exe tests/test_documentation_consistency.py `
@@ -165,8 +164,8 @@ Remove-Item -Recurse -Force $dockerCfgDir
 ### Files Requiring Special Governance / Avoid Modifying Unnecessarily
 - **Immutable Applied Migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`)**: Applied migrations are SHA-256 checksummed by `src/db_migrate.py`. Never edit an existing migration; new schema changes require a new numbered migration (`0014_*.sql`) and a bumped `-- grants-policy-version:` in `migrations/post/grants.sql` + `src/db_migrate.py`.
 - **Approval & Security Core (`src/approval.py`, `src/approval_store.py`, `src/identity/webauthn.py`, `src/identity/policy.py`, `src/dispatch/gates.py`)**: Governed by strict Phase 1/2 security invariants and concurrency lock hierarchies.
-- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_phase1_scope.py` and `tests/test_fc27_clubs_compatibility.py`.
-- **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories. Any local bundle archive (`.local-artifacts/iwa.dev.fcbuild-safe-adapter-verified.zip`) or extracted inspection workspace (`.local-artifacts/safe-adapter-inspection-eb9c42745f99`) is strictly git-ignored, never required by CI, and never imported at runtime; the tracked source of truth is `config/fc27_safe_adapter_bundle_manifest.json` (`fc27-safe-adapter-manifest-v1`).
+- **Scope-Guarded Files (`docs/DISPATCH_ACTIVATION.md`, `docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`, `docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`)**: Enforced by `tests/test_phase1_scope.py` and `tests/test_fc27_platform.py`.
+- **Ignored Local Directories (`.local-artifacts/`, `.local-data/`, `secrets/`)**: Never stage or commit files from these directories. Any local bundle archive (`.local-artifacts/iwa.dev.fcbuild-safe-adapter-verified.zip`) or extracted inspection workspace (`.local-artifacts/safe-adapter-inspection-eb9c42745f99`) is strictly git-ignored, never required by CI, and never imported at runtime; the tracked source of truth is `src/fc27_clubs_api_contracts.py` and `THIRD_PARTY_NOTICES.md`.
 
 ---
 

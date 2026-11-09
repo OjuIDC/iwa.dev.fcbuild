@@ -1,7 +1,9 @@
 """Tests for FC 27 Clubs API endpoint contracts, schemas, normalization, and match event decoding."""
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -11,7 +13,6 @@ import urllib.request
 import pytest
 from pydantic import ValidationError
 
-from src.fc27_authorized_transport import parse_json_strict_no_duplicates
 from src.fc27_clubs_api_contracts import (
     ALL_CLUBS_ENDPOINT_OPERATIONS,
     ALL_RESPONSE_SCHEMA_MODELS,
@@ -20,6 +21,7 @@ from src.fc27_clubs_api_contracts import (
     FC27_ENDPOINT_CONTRACTS,
     FC27_KNOWN_EVENT_BIT_MAP,
     NORMALIZATION_VERSION,
+    PROHIBITED_HEADER_NAMES,
     RESPONSE_SCHEMA_VERSION,
     TARGET_CLUB_ID,
     TARGET_CLUB_NAME,
@@ -51,6 +53,7 @@ from src.fc27_clubs_api_contracts import (
     normalize_club_statistics_payload,
     normalize_fc27_match_type,
     normalize_matches_payload,
+    parse_json_strict_no_duplicates,
     pseudonymize_east_coasters_identifier,
     validate_aggregate_event_counts,
     validate_event_bitmap,
@@ -709,3 +712,77 @@ def test_41_loopback_http_fixture_server_validates_contracts_offline() -> None:
         assert domain.club_name == "East Coasters"
     finally:
         server.server_close()
+
+
+def test_42_parse_json_strict_no_duplicates_and_prohibited_headers() -> None:
+    assert "cookie" in PROHIBITED_HEADER_NAMES
+    assert "sec-ch-ua" in PROHIBITED_HEADER_NAMES
+    assert "x-forwarded-for" in PROHIBITED_HEADER_NAMES
+
+    valid = parse_json_strict_no_duplicates('{"clubId": "330323", "nested": {"ok": 1}}')
+    assert valid["clubId"] == "330323"
+
+    with pytest.raises(FC27TransportError, match="Duplicate JSON key"):
+        parse_json_strict_no_duplicates('{"clubId": "330323", "clubId": "999999"}')
+
+    with pytest.raises(FC27TransportError, match="Disallowed JSON numeric constant"):
+        parse_json_strict_no_duplicates('{"score": NaN}')
+
+    with pytest.raises(FC27TransportError, match="Top-level JSON response must be an object"):
+        parse_json_strict_no_duplicates('[1, 2, 3]')
+
+
+def test_43_authorized_provider_path_removed_and_discord_bot_isolated() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_paths = (
+        "src/fc27_authorized_provider.py",
+        "src/fc27_authorized_transport.py",
+        "src/fc27_authorized_api.py",
+        "src/fc27_provider_contract.py",
+        "src/fc27_clubs.py",
+        "scripts/fc27_club_lookup.py",
+        "config/fc27_safe_adapter_bundle_manifest.json",
+    )
+    for rel in deleted_paths:
+        assert not (repo_root / rel).exists(), f"Expected deleted path to be absent: {rel}"
+
+    deleted_modules = {
+        "fc27_authorized_provider",
+        "fc27_authorized_transport",
+        "fc27_authorized_api",
+        "fc27_provider_contract",
+        "fc27_clubs",
+        "fc27_club_lookup",
+        "src.fc27_authorized_provider",
+        "src.fc27_authorized_transport",
+        "src.fc27_authorized_api",
+        "src.fc27_provider_contract",
+        "src.fc27_clubs",
+        "scripts.fc27_club_lookup",
+    }
+    for folder in ("src", "scripts", "tests"):
+        for py_path in (repo_root / folder).rglob("*.py"):
+            if "archive" in py_path.parts:
+                continue
+            tree = ast.parse(py_path.read_text(encoding="utf-8"), filename=str(py_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        assert alias.name not in deleted_modules, (
+                            f"{py_path} still imports deleted module {alias.name}"
+                        )
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    assert node.module not in deleted_modules, (
+                        f"{py_path} still imports from deleted module {node.module}"
+                    )
+
+    discord_bot_path = repo_root / "src" / "fc27_discord_bot.py"
+    bot_tree = ast.parse(discord_bot_path.read_text(encoding="utf-8"), filename=str(discord_bot_path))
+    for node in ast.walk(bot_tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "fc27_authorized" not in alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert "fc27_authorized" not in node.module
+            for alias in node.names:
+                assert alias.name != "FC27CommunityProviderAdapter"

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
+from pydantic import BaseModel, ConfigDict
 import pytest
 
 from src.fc27_api_cache import (
@@ -13,13 +15,48 @@ from src.fc27_api_cache import (
     FC27CacheKeySpec,
     build_fc27_cache_key,
 )
-from src.fc27_authorized_provider import (
-    FC27MetadataTransportLog,
-    FC27NormalizedOperationEnvelope,
-    FC27SourceProvenance,
-)
 from src.fc27_provider import create_provisional_club_identity
 from src.settings import is_fc27_api_cache_enabled
+
+
+class _SampleMetadataTransportLog(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_id: str
+    operation: str
+    request_host: str
+    request_path: str
+    http_status: int
+    content_type: str
+    response_size_bytes: int
+    payload_sha256: str
+    outcome_status: str
+    circuit_breaker_state: str
+
+
+class _SampleSourceProvenance(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_id: str
+    provider_declaration_version: str
+    observed_timestamp: datetime
+    source_operation: str
+
+
+class _SampleNormalizedOperationEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_id: str
+    operation: str
+    payload_sha256: str
+    club_identity: Any
+    transport_log: _SampleMetadataTransportLog
+    source_provenance: _SampleSourceProvenance
+    raw_response_retained: bool = False
+    store_display_aliases: bool = False
+    store_gamer_tags: bool = False
+    store_external_player_identifiers: bool = False
+    review_required: bool = True
 
 
 class _FakeClock:
@@ -33,17 +70,17 @@ class _FakeClock:
         self.now += seconds
 
 
-def _make_sample_envelope(operation: str = "CLUB_IDENTITY", sha_char: str = "a") -> FC27NormalizedOperationEnvelope:
+def _make_sample_envelope(operation: str = "CLUB_IDENTITY", sha_char: str = "a") -> _SampleNormalizedOperationEnvelope:
     identity = create_provisional_club_identity(
         club_id="330323",
         club_name="East Coasters",
         platform="common-gen5",
     )
-    log = FC27MetadataTransportLog(
-        provider_id="ea-authorized-clubs-partner",
+    log = _SampleMetadataTransportLog(
+        provider_id="fc-clubs-api-community-v1",
         operation=operation,
-        request_host="api.authorized-fc27.example.com",
-        request_path="/v1/fc27/clubs/identity",
+        request_host="proclubs.ea.com",
+        request_path="/api/fc/clubs/info",
         http_status=200,
         content_type="application/json",
         response_size_bytes=128,
@@ -51,14 +88,14 @@ def _make_sample_envelope(operation: str = "CLUB_IDENTITY", sha_char: str = "a")
         outcome_status="OK",
         circuit_breaker_state="CLOSED",
     )
-    prov = FC27SourceProvenance(
-        provider_id="ea-authorized-clubs-partner",
-        provider_declaration_version="EA-CLUBS-AUTH-REF-2026-001",
+    prov = _SampleSourceProvenance(
+        provider_id="fc-clubs-api-community-v1",
+        provider_declaration_version="fc-clubs-api-community-v1",
         observed_timestamp=datetime(2026, 10, 29, 0, 0, tzinfo=timezone.utc),
         source_operation=operation,
     )
-    return FC27NormalizedOperationEnvelope(
-        provider_id="ea-authorized-clubs-partner",
+    return _SampleNormalizedOperationEnvelope(
+        provider_id="fc-clubs-api-community-v1",
         operation=operation,
         payload_sha256=sha_char * 64,
         club_identity=identity,

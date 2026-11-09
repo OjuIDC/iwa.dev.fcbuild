@@ -1051,7 +1051,6 @@ def test_repository_inventory_json_is_valid_and_metadata_only() -> None:
     assert "README.md" in paths_seen
     assert "docs/ARCHITECTURE.md" in paths_seen
     assert "docs/archive/ARCHIVE_MANIFEST.md" in paths_seen
-    assert "config/fc27_safe_adapter_bundle_manifest.json" in paths_seen
     assert settings_module.is_fc27_provider_enabled() is False
     assert settings_module.is_fc27_api_circuit_breaker_enabled() is True
 

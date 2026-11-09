@@ -162,17 +162,12 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
         or norm in {
             "src/security.py",
             "src/approval.py",
-            "src/fc27_authorized_provider.py",
-            "src/fc27_authorized_transport.py",
-            "src/fc27_provider_contract.py",
-            "src/fc27_authorized_api.py",
             "src/fc27_clubs_api_contracts.py",
+            "src/fc27_community_provider.py",
             "src/fc27_user_export.py",
             "src/fc27_capture.py",
             "scripts/check_matchpulse_boundary.py",
-            "config/fc27_safe_adapter_bundle_manifest.json",
             "tests/test_approval_security.py",
-            "tests/test_fc27_safe_adapter_bundle_manifest.py",
         }
     ):
         cats.add("security")

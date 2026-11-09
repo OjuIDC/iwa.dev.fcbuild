@@ -82,7 +82,6 @@
     <Compile Include="scripts\commissioner_decide.py" />
     <Compile Include="scripts\fc27_backup.py" />
     <Compile Include="scripts\fc27_capture_preflight.py" />
-    <Compile Include="scripts\fc27_club_lookup.py" />
     <Compile Include="scripts\fc27_community_eval.py" />
     <Compile Include="scripts\fc27_demo_fixture_server.py" />
     <Compile Include="scripts\fc27_demo_ingest.py" />
@@ -114,13 +113,9 @@
     <Compile Include="src\fc27_analytics.py" />
     <Compile Include="src\fc27_api_cache.py" />
     <Compile Include="src\fc27_api_rate_limit.py" />
-    <Compile Include="src\fc27_authorized_api.py" />
-    <Compile Include="src\fc27_authorized_provider.py" />
-    <Compile Include="src\fc27_authorized_transport.py" />
     <Compile Include="src\fc27_backup_restore.py" />
     <Compile Include="src\fc27_capture.py" />
     <Compile Include="src\fc27_ci_test_groups.py" />
-    <Compile Include="src\fc27_clubs.py" />
     <Compile Include="src\fc27_clubs_api_contracts.py" />
     <Compile Include="src\fc27_coach.py" />
     <Compile Include="src\fc27_coaching.py" />
@@ -136,7 +131,6 @@
     <Compile Include="src\fc27_performance.py" />
     <Compile Include="src\fc27_polling_worker.py" />
     <Compile Include="src\fc27_provider.py" />
-    <Compile Include="src\fc27_provider_contract.py" />
     <Compile Include="src\fc27_repository.py" />
     <Compile Include="src\fc27_search_scout.py" />
     <Compile Include="src\fc27_tactics.py" />
@@ -268,14 +262,10 @@
     <Compile Include="tests\test_fc27_analyst.py" />
     <Compile Include="tests\test_fc27_analyst_graph.py" />
     <Compile Include="tests\test_fc27_api_cache.py" />
-    <Compile Include="tests\test_fc27_api_ingestion.py" />
     <Compile Include="tests\test_fc27_api_rate_limit.py" />
     <Compile Include="tests\test_fc27_archive_manifest.py" />
-    <Compile Include="tests\test_fc27_authorized_api.py" />
-    <Compile Include="tests\test_fc27_authorized_provider.py" />
     <Compile Include="tests\test_fc27_backup_restore.py" />
     <Compile Include="tests\test_fc27_clubs_api_contracts.py" />
-    <Compile Include="tests\test_fc27_clubs_compatibility.py" />
     <Compile Include="tests\test_fc27_coach.py" />
     <Compile Include="tests\test_fc27_community_provider.py" />
     <Compile Include="tests\test_fc27_dashboard_queries.py" />
@@ -291,7 +281,6 @@
     <Compile Include="tests\test_fc27_polling_worker.py" />
     <Compile Include="tests\test_fc27_preapproval_validator.py" />
     <Compile Include="tests\test_fc27_repository_cleanup.py" />
-    <Compile Include="tests\test_fc27_safe_adapter_bundle_manifest.py" />
     <Compile Include="tests\test_fc27_scout.py" />
     <Compile Include="tests\test_fc27_search.py" />
     <Compile Include="tests\test_fc27_search_scout_graph.py" />
@@ -359,8 +348,7 @@
     <Content Include="config\fc27_archive_manifest.json" />
     <Content Include="config\fc27_east_coasters_normalized_export.schema.json" />
     <Content Include="config\fc27_removed_items_manifest.json" />
-    <Content Include="config\fc27_safe_adapter_bundle_manifest.json" />
-    <Content Include="config\model_catalog.json" />
+    <Content Include="config\model_catalog.json" /> />
     <Content Include="config\role_benchmark_matrix.json" />
     <Content Include="docker-compose.community-eval.yml" />
     <Content Include="docker-compose.community-worker.yml" />

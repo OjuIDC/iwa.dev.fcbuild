@@ -64,7 +64,6 @@ from src.fc27_api_rate_limit import (
     FC27AdapterCircuitBreaker,
     FC27RequestBudget,
 )
-from src.fc27_authorized_transport import parse_json_strict_no_duplicates
 from src.fc27_clubs_api_contracts import (
     TARGET_CLUB_ID,
     TARGET_CLUB_NAME,
@@ -76,6 +75,7 @@ from src.fc27_clubs_api_contracts import (
     decode_fc27_match_events,
     normalize_club_identity_payload,
     normalize_matches_payload,
+    parse_json_strict_no_duplicates,
 )
 from src.fc27_provider import (
     FC27AuthenticationError,

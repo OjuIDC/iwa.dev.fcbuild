@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Security Reviewers, Architects, Developers, Operators
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `src/security.py`, `src/approval.py`, `src/approval_store.py`, `src/identity/`, `src/db_roles.py`, `src/fc27_authorized_provider.py`, `src/fc27_authorized_transport.py`, `src/fc27_clubs_api_contracts.py`, `migrations/post/grants.sql`
+- **Source of truth**: `src/security.py`, `src/approval.py`, `src/approval_store.py`, `src/identity/`, `src/db_roles.py`, `src/fc27_community_provider.py`, `src/fc27_clubs_api_contracts.py`, `migrations/post/grants.sql`
 - **Supersedes**: `docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md`, `docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md`, `docs/archive/reports/SECURITY_CHANGES.md`, `docs/archive/reports/PHASE2_REMEDIATION_REPORT.md`, `docs/archive/reports/BUNDLE_AUDIT.md`, `docs/archive/reports/FINAL_ARCHIVE_AUDIT.md`
 
 This document is the authoritative security boundary specification for `iwa.dev.fcbuild`. Every boundary below is enforced in runtime code, PostgreSQL 16 role grants, and automated verification tests.
@@ -16,12 +16,12 @@ This document is the authoritative security boundary specification for `iwa.dev.
 2. **`REDIS_IS_NOT_AUDIT`**: Redis is a non-authoritative pub/sub and ephemeral lease store (`src/events.py`). Redis events are never authoritative audit records or approval proofs.
 3. **`RESUME_IS_NOT_AUTHORIZATION`**: Caller-supplied `Command(resume=...)` data and `POST /v1/runs/{id}/resume` requests are never authoritative (`src/graph.py`, `src/graph_api.py`). The `approval` node re-reads the committed decision from PostgreSQL and fails closed (`ApprovalNotCommitted`) if none exists.
 4. **`POSTGRES_IS_AUDIT_OF_RECORD`**: PostgreSQL 16 (`approval_requests`, `approval_audit`, `fc27_decision_evidence`, `domain_events`) is the sole authoritative audit of record.
-5. **`PROVIDER_ACCESS_FAILS_CLOSED`**: `FC27_PROVIDER_ENABLED=false`, `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false`, and `FC27_LIVE_INGESTION_ENABLED=false` fail closed by default (`src/settings.py`, `src/fc27_authorized_provider.py`). Enabling cache or rate limiting never enables provider access.
+5. **`PROVIDER_ACCESS_FAILS_CLOSED`**: `FC27_PROVIDER_ENABLED=false`, `FC27_STANDARD_HTTP_TRANSPORT_ENABLED=false`, `FC27_LIVE_INGESTION_ENABLED=false`, `FC27_COMMUNITY_PROVIDER_ENABLED=false`, and `FC27_COMMUNITY_POLLING_ENABLED=false` fail closed by default (`src/settings.py`, `src/fc27_community_provider.py`). Enabling cache or rate limiting never enables provider access.
 6. **`PERSISTENCE_FAILS_CLOSED`**: `FC27_PERSISTENCE_ENABLED=false` by default. Provider results never automatically authorize PostgreSQL persistence (`src/fc27_repository.py`).
 7. **`ANALYTICS_FAILS_CLOSED`**: `FC27_ANALYTICS_ENABLED=false` by default. Persistence never automatically authorizes analytics execution (`src/fc27_dashboard_queries.py`).
 8. **`RECOMMENDATIONS_FAIL_CLOSED`**: `FC27_RECOMMENDATIONS_ENABLED=false` by default. Analytics never automatically authorize coaching recommendations (`src/fc27_coaching.py`).
 9. **`DISPATCH_FAILS_CLOSED`**: `DISPATCH_ENABLED=false` and `DISPATCH_WORKER_ENABLED=false` by default. Recommendations and approvals never automatically authorize dispatch (`src/dispatch/gates.py`).
-10. **`RAW_PROVIDER_RESPONSES_NOT_RETAINED`**: Raw HTTP responses and raw export files are validated in memory only and discarded immediately (`raw_response_retained=False` in `src/fc27_authorized_provider.py` and `src/fc27_api_cache.py`).
+10. **`RAW_PROVIDER_RESPONSES_NOT_RETAINED`**: Raw HTTP responses and raw export files are validated in memory only and discarded immediately (`raw_response_retained=False` in `src/fc27_community_provider.py` and `src/fc27_api_cache.py`).
 11. **`PLAYER_IDENTIFIERS_SUPPRESSED`**: Raw personas, gamer tags, EA Account IDs, Nucleus IDs, and Persona IDs are never persisted (`raw_persona_persisted=False`); player keys are pseudonymized via SHA-256 into `plr_ecf_<12-hex>` (`src/fc27_clubs_api_contracts.py`).
 12. **`ALIASES_HIDDEN_BY_DEFAULT`**: Display aliases default to hidden (`include_display_aliases=False` / `display_alias=None` in `src/fc27_analytics.py` and `src/fc27_dashboard_queries.py`).
 13. **`POSTGRESSAVER_SEPARATE_FROM_DOMAIN_TABLES`**: LangGraph `PostgresSaver` checkpoint blobs (`checkpoints*`) store graph execution state only and are strictly separated from normalized FC 27 domain tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`).
@@ -80,7 +80,7 @@ Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 15`) and ve
 
 ## 6. Anti-Impersonation & Browser Bypass Rejection
 
-`src/fc27_provider_contract.py`, `src/fc27_authorized_transport.py`, and `src/fc27_clubs_api_contracts.py` permanently reject browser/TLS impersonation (`Impit` / `impit-node`, Chromium, Playwright, Puppeteer, Selenium, `curl_cffi`, `tls-client`, `Sec-CH-UA*`, `Sec-Fetch-*`, cookies, session tokens, and residential proxies).
+`src/fc27_clubs_api_contracts.py` (`PROHIBITED_HEADER_NAMES`, `parse_json_strict_no_duplicates`) and `src/fc27_community_provider.py` permanently reject browser/TLS impersonation (`Impit` / `impit-node`, Chromium, Playwright, Puppeteer, Selenium, `curl_cffi`, `tls-client`, `Sec-CH-UA*`, `Sec-Fetch-*`, cookies, session tokens, and residential proxies).
 
 ---
 

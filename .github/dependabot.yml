@@ -28,6 +28,9 @@ updates:
     ignore:
       - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker"
       - dependency-name: "iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot"
+      # Temporary ignore until Stage B2 removes the Langfuse stack (docker-compose.langfuse.yml).
+      - dependency-name: "langfuse/langfuse"
+      - dependency-name: "langfuse/langfuse-worker"
       - dependency-name: "python"
         versions: [">= 3.12.a"]
 

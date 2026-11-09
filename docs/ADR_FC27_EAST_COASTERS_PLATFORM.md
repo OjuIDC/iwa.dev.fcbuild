@@ -344,7 +344,7 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 - **Security & Dependency Review**: `PASS` (Zero mandatory third-party network dependencies; `pandas` optional extra rejected from runtime requirements).
 - **Transport Review**: `REJECTED` (`TRANSPORT_REVIEW_PASS: NO`, `BROWSER_IMPERSONATION_REQUIRED: YES`). Upstream `src/fc_clubs_api/_http.py` injects browser-profile emulation headers (`User-Agent: Mozilla/5.0 ... Chrome/141.0.0.0`, `sec-ch-ua`, and `sec-fetch-site: same-origin`) specifically to bypass Akamai 403 blocks on `proclubs.ea.com`.
 - **Adaptation Decision**: `APPROVED_SUBSET`
-- **Adoption Strategy**: `INTERNAL_REIMPLEMENTATION` in `src/fc27_clubs.py` (no runtime dependency on `fc-clubs-api` or `pandas`).
+- **Adoption Strategy**: `INTERNAL_REIMPLEMENTATION` in `src/fc27_clubs_api_contracts.py` (no runtime dependency on `fc-clubs-api` or `pandas`).
 
 ### 13.2 Unofficial Provider Classification & No EA Endorsement
 - `PROVIDER_NAME`: `EA_FC_CLUBS_WEB`
@@ -360,7 +360,7 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 
 | Upstream Component | Classification | Disposition & Modification Summary |
 |---|---|---|
-| `src/fc_clubs_api/enums.py` | `CLEAN_ROOM_REIMPLEMENTED` | Reimplemented platform (`common-gen5`, `nx`) and operation enums in `src/fc27_clubs.py`. |
+| `src/fc_clubs_api/enums.py` | `CLEAN_ROOM_REIMPLEMENTED` | Reimplemented platform (`common-gen5`, `nx`) and operation enums in `src/fc27_clubs_api_contracts.py`. |
 | `src/fc_clubs_api/exceptions.py` | `CLEAN_ROOM_REIMPLEMENTED` | Mapped error semantics into `FC27ClubsCompatibilityAdapter.translate_error()`. |
 | `src/fc_clubs_api/_columns.py` | `ADAPTED_WITH_LICENSE` | Adapted field mappings into strongly typed Pydantic internal records (`FC27ClubIdentityMappedRecord`, `FC27ClubOverviewRecord`, `FC27ClubMatchSummaryRecord`, `FC27ClubMemberSummaryRecord`, `FC27MemberCareerStatsRecord`, `FC27PlayerMatchStatsRecord`). |
 | `src/fc_clubs_api/_normalize.py` | `CLEAN_ROOM_REIMPLEMENTED` | Reimplemented strict numeric string coercion (`_coerce_int`, `_coerce_float`) and UTC ISO-8601 timestamp normalization (`_normalize_timestamp`). |
@@ -370,7 +370,7 @@ To prevent premature or misleading coaching conclusions, imported data is mapped
 | `src/fc_clubs_api/client.py:get_json` | `REJECTED` | Rejected unguarded arbitrary endpoint caller. |
 | `src/fc_clubs_api/client.py:find_club_id` | `REJECTED` | Rejected automatic single-result selection on club search; explicit human club ID confirmation is mandatory. |
 | `src/fc_clubs_api/_output.py` | `REJECTED` | Rejected `pandas` DataFrame output layer and raw JSON pass-through. |
-| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with dry-run-only `scripts/fc27_club_lookup.py`. |
+| `src/fc_clubs_api/__main__.py` | `REJECTED` | Replaced with dry-run-only `scripts/fc27_community_eval.py`. |
 | `Interactive-63/eafc-pro-clubs-api-research` | `CONCEPT_ONLY` | Unlicensed upstream research repository cited as conceptual provenance only; zero code copied. |
 
 ### 13.4 Separation of Concerns: Authentication, Authorization, Membership, and Manager Authority
@@ -425,7 +425,7 @@ SOFTWARE.
 ## 14. Offline Club Evidence Workflow & Attestation Templates
 
 ### 14.1 Offline Public-Source Observation Model
-To corroborate club identity claims without executing automated requests against EA services or scraping public websites, `src/fc27_clubs.py` implements an offline, metadata-only evidence evaluation workflow (`FC27OfflinePublicObservation`, `evaluate_offline_club_evidence`, `FC27OfflineEvidenceManifest`):
+To corroborate club identity claims without executing automated requests against EA services or scraping public websites, `src/fc27_clubs_api_contracts.py` and `src/fc27_provider.py` support an offline, metadata-only evidence evaluation workflow (`FC27OfflinePublicObservation`, `evaluate_offline_club_evidence`, `FC27OfflineEvidenceManifest`):
 - **No Network or Scraping**: Zero page fetching, zero HTML scraping, zero browser-call replay, zero raw HTML storage, and zero player-linked data retention.
 - **Explicit Source Independence Groups (`FC27SourceIndependenceGroup`)**:
   1. `PROCLUBS_TRACKER`: `https://proclubstracker.com/club/330323?platform=common-gen5` (`proclubstracker.com`, `www.proclubstracker.com`)
@@ -552,7 +552,7 @@ Defense-in-depth enforcement is also applied in:
 
 ## 18. East Coasters FC 27 API Acquisition, Transport Policy, and Stage 4 Exception Gate
 
-### 18.1 Operator Club-Authority & Member-Consent Attestation (`src/fc27_clubs.py`)
+### 18.1 Operator Club-Authority & Member-Consent Attestation (`src/fc27_clubs_api_contracts.py`)
 - **Attestation Record (`EAST_COASTERS_API_AUTHORITY_ATTESTATION`)**:
   - `attestation_reference = "api-east-coasters-authority-2026-10"`
   - `club_id = "330323"`, `club_name = "East Coasters"`, `platform = "common-gen5"`, `game_version = "FC27"`
@@ -564,7 +564,7 @@ Defense-in-depth enforcement is also applied in:
 Both community repositories are third-party client implementations for EA's underlying `https://proclubs.ea.com/api/fc/...` endpoints, not independent data providers:
 1. **Python Reference (`https://github.com/1erkandogan/fc27-clubs-api`)**:
    - Pinned Commit: `26a5ff12ea793042bd776a858c74f3f44dd427f5` (`0.3.1`, `MIT`).
-   - Transport Note: Upstream `src/fc_clubs_api/_http.py` sends spoofed Chrome 141 headers (`User-Agent: Mozilla/5.0 ... Chrome/141.0.0.0`, `sec-ch-ua`, `sec-fetch-site: same-origin`, `Referer: https://www.ea.com/`). Only pure normalization and event-decoding logic are adapted in `src/fc27_clubs.py`; upstream HTTP headers are excluded.
+   - Transport Note: Upstream `src/fc_clubs_api/_http.py` sends spoofed Chrome 141 headers (`User-Agent: Mozilla/5.0 ... Chrome/141.0.0.0`, `sec-ch-ua`, `sec-fetch-site: same-origin`, `Referer: https://www.ea.com/`). Only pure normalization and event-decoding logic are adapted in `src/fc27_clubs_api_contracts.py`; upstream HTTP headers are excluded from standard repository code.
 2. **TypeScript/Node Reference (`https://github.com/alex-jordan547/proclubs-sdk`)**:
    - Pinned Commit: `57ede368098dbb524cbf16a7577fea3e1911e328` (`0.3.3`, `MIT`).
    - Transport Note: Upstream `src/transport/impitTransport.ts` uses `impit` (`new Impit({ browser: 'chrome' })`) for Rust-level Chrome TLS/HTTP2 fingerprint impersonation alongside Chrome headers. `impit` and browser-profile headers are prohibited in standard repository code.
@@ -593,7 +593,7 @@ Both community repositories are third-party client implementations for EA's unde
   - `BROWSER_PROFILE_EXCEPTION_EXECUTED = NO`
   - Executing browser headers or TLS impersonation (`impit` / `curl_cffi`) remains prohibited without a separate explicit operator exception decision, isolated Docker egress containment (`proclubs.ea.com:443` only), and legal/ToS sign-off.
 - **Normalized API Capture Persistence & Analytics Readiness**:
-  - `normalize_api_capture_to_export_envelope`, `persist_authorized_east_coasters_capture` (`source_classification='AUTHORIZED_CAPTURE'`, pseudonymous `plr_ecf_<hash12>` player keys, `display_alias=NULL`), and `validate_east_coasters_read_only_analytics` are implemented and verified in `tests/test_fc27_api_ingestion.py` using deterministic fixtures against PostgreSQL 16. No live EA data was persisted in this phase (`PERSISTENCE_APPLIED=NO`).
+  - `normalize_api_capture_to_export_envelope`, `persist_authorized_east_coasters_capture` (`source_classification='AUTHORIZED_CAPTURE'`, pseudonymous `plr_ecf_<hash12>` player keys, `display_alias=NULL`), and `validate_east_coasters_read_only_analytics` are verified in `tests/test_fc27_persistence_and_queries.py` and `tests/test_fc27_community_provider.py` using deterministic fixtures against PostgreSQL 16. No live EA data was persisted in this phase (`PERSISTENCE_APPLIED=NO`).
 
 ---
 
@@ -693,7 +693,7 @@ Club Manager, East Coasters (Club ID: 330323)
   - A provider or API endpoint may be integrated for live automated access **only** if it explicitly grants automated read-only access rights, normalized-storage rights, 730-day retention rights, and consented member/player data processing rights.
 
 ### 20.2 Candidate API Source Discovery & Evaluation Matrix (`PROVIDERS_REVIEWED=9`)
-Nine candidates across all seven source categories were evaluated in `src/fc27_authorized_provider.py` (`REVIEWED_API_SOURCE_CANDIDATES`):
+Nine candidates across all seven source categories were evaluated during source discovery (`REVIEWED_API_SOURCE_CANDIDATES`):
 
 | # | Candidate Provider | Legal Entity | Category | Classification | FC 27 `330323` (`common-gen5`) Support | Proxies `proclubs.ea.com` | Browser / TLS Impersonation or Session Required | Storage & 730-Day Retention Rights | Selection Decision |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -717,7 +717,7 @@ Nine candidates across all seven source categories were evaluated in `src/fc27_a
   - `NOT_ACCEPTABLE_REJECTED = 5`
 
 ### 20.3 Refined EA Approved-Access & Data-Portability Request (`EA_ACCESS_REQUEST_READY=YES`, `EA_ACCESS_REQUEST_SENT=NO`)
-> **Status**: Ready in [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) (`EA_APPROVED_ACCESS_REQUEST_DRAFT`) and below (`EA_PERMISSION_REQUEST_READY = YES`, `EA_ACCESS_REQUEST_READY = YES`, `EA_PERMISSION_REQUEST_SENT = NO`, `EA_ACCESS_REQUEST_SENT = NO`). Do **not** transmit without separate operator authorization.
+> **Status**: Ready below (`EA_PERMISSION_REQUEST_READY = YES`, `EA_ACCESS_REQUEST_READY = YES`, `EA_PERMISSION_REQUEST_SENT = NO`, `EA_ACCESS_REQUEST_SENT = NO`). Do **not** transmit without separate operator authorization.
 
 ```text
 Subject: Formal Request for Approved Read-Only API Access or Structured Club Data Portability — EA SPORTS FC 27 Clubs ("East Coasters", Club ID: 330323, Platform: common-gen5)
@@ -760,8 +760,8 @@ To: Electronic Arts Inc. — EA SPORTS FC Developer Relations, Partner Licensing
 
 ### 20.4 Provider-Neutral Contract & Bounded Transport Policy
 - **Modules**:
-  - [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) & [`src/fc27_provider_contract.py`](../src/fc27_provider_contract.py)
-  - [`src/fc27_authorized_transport.py`](../src/fc27_authorized_transport.py) & [`src/fc27_authorized_api.py`](../src/fc27_authorized_api.py)
+  - [`src/fc27_community_provider.py`](../src/fc27_community_provider.py) & [`src/fc27_clubs_api_contracts.py`](../src/fc27_clubs_api_contracts.py)
+  - [`src/fc27_api_cache.py`](../src/fc27_api_cache.py) & [`src/fc27_api_rate_limit.py`](../src/fc27_api_rate_limit.py)
 - **Supported Operations (`FC27AuthorizedOperation`)**:
   - `CLUB_IDENTITY`, `CLUB_STATISTICS`, `RECENT_MATCHES`, `MATCH_PLAYER_STATISTICS`, `CURRENT_MEMBER_STATISTICS`, `MEMBER_CAREER_STATISTICS`, `PLAYOFF_ACHIEVEMENTS`.
 - **Fail-Closed Declaration (`FC27AuthorizedProviderDeclaration`)**:
@@ -834,6 +834,6 @@ To: Electronic Arts Inc. — EA SPORTS FC Developer Relations, Partner Licensing
 - **Pure Retry Classifier (`classify_fc27_retry_decision`)**:
   - Pure decision function returning `FC27RetryDecision(should_retry, delay_seconds, reason_code)` with `should_retry=False` by default. Never retries `400`, `401`, `403`, `404`, `409`, `422`, redirects, challenges, CAPTCHA, schema drift, or identity mismatch.
 
-### 21.6 18-Step Provider Adapter Pipeline & Rollback Procedure
-- `FC27AuthorizedProviderAdapter` in [`src/fc27_authorized_provider.py`](../src/fc27_authorized_provider.py) enforces the 18-step execution pipeline: provider declaration check -> expiration check -> terms/privacy version check -> operation allowlist check -> East Coasters (`330323`/`common-gen5`/`FC27`) scope check -> kill-switch check -> circuit-breaker check -> bounded normalized cache lookup -> rate-limit token acquisition -> request-budget consumption -> bounded transport invocation -> response size/status/content-type validation -> strict JSON parse -> strict schema validation -> pseudonymization (`plr_ecf_<12-hex>`) & collision check (`PSEUDONYM_COLLISION`) -> provenance (`FC27SourceProvenance`) & hash attachment -> bounded normalized cache store -> immutable `FC27NormalizedOperationEnvelope` return.
+### 21.6 Provider Adapter Pipeline & Rollback Procedure
+- `FC27CommunityProviderAdapter` in [`src/fc27_community_provider.py`](../src/fc27_community_provider.py) and contracts in [`src/fc27_clubs_api_contracts.py`](../src/fc27_clubs_api_contracts.py) enforce the execution pipeline: provider declaration check -> operation allowlist check -> East Coasters (`330323`/`common-gen5`/`FC27`) scope check -> kill-switch check -> circuit-breaker check -> request-budget consumption -> strict JSON parse (`parse_json_strict_no_duplicates`) -> strict schema validation -> pseudonymization (`plr_ecf_<12-hex>`) & collision check (`PSEUDONYM_COLLISION`) -> provenance & hash attachment -> immutable `FC27CommunityProviderEnvelope` return.
 - **Rollback Procedure**: Revert the single commit on `feature/fc27-api-contract-cache-rate-limits` (`git revert <commit-sha>`); no database migrations (`0001`–`0012`), `PostgresSaver` tables, or MatchPulse Live runtime boundaries are modified by this phase.
