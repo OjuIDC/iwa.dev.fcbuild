@@ -30,7 +30,7 @@ See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALU
 
 Every subsystem in this document is labeled with one of five explicit states:
 - `CURRENT` — Implemented in active source code and verified by automated tests.
-- `OPTIONAL` — Implemented behind an opt-in Docker Compose profile or feature flag (`voice`, `rtsp`, `langfuse`, `LM_STUDIO_FALLBACK_ENABLED`).
+- `OPTIONAL` — Implemented behind an opt-in Docker Compose profile or feature flag (`voice`, `rtsp`, `LM_STUDIO_FALLBACK_ENABLED`).
 - `PROPOSED` — Planned for a subsequent roadmap phase (such as normalized `Coach`, `Tactics`, and `Director` synthesis phases).
 - `DEFERRED` — Intentionally gated off or postponed (`DISPATCH_ENABLED=false`, `FC27_RECOMMENDATIONS_ENABLED=false`, `Windhover` mobile view).
 - `REJECTED` — Evaluated and permanently prohibited (`Impit`/Chromium TLS impersonation sidecar, SQLite persistence, raw payload retention, cookie/session scraping).
@@ -194,4 +194,4 @@ The platform enforces a strictly gated, fail-closed pipeline from data acquisiti
 ## 7. Deployment-Validation Status
 
 - **Validated in Automated Suites**: Python bytecode compilation, static MatchPulse and preflight boundaries, Docker Compose secret/network/pinning isolation (`tests/test_compose_isolation.py`), and all PostgreSQL 16 schema migrations, role grants (`v15`), transactional approval/identity flows, normalized FC 27 storage, manual Match Results storage (`src/fc27_match_results.py`, `tests/test_fc27_match_results.py`), read-only analytics, and safe-adapter contract/cache/rate-limit suites.
-- **Not Yet Validated on Target Production Host (`IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`)**: Multi-container live Docker stack startup with GPU/CPU Ollama model inference, optional `--profile voice` / `--profile rtsp` hardware capture, optional `--profile langfuse` stack, and live EA provider traffic (blocked pending EA authorization).
+- **Not Yet Validated on Target Production Host (`IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`)**: Multi-container live Docker stack startup with GPU/CPU Ollama model inference, optional `--profile voice` / `--profile rtsp` hardware capture, and live EA provider traffic (blocked pending EA authorization).
