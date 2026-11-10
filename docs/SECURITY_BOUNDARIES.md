@@ -63,9 +63,9 @@ Every human decision (historical `src/approval_store.py` superseded in Stage B3)
 
 ---
 
-## 5. Least-Privilege Database Roles (Grants Policy Version 15)
+## 5. Least-Privilege Database Roles (Grants Policy Version 16)
 
-Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 15`) and verified by `src/db_migrate.py` and `src/db_roles.py`:
+Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 16`) and verified by `src/db_migrate.py` and `src/db_roles.py`:
 
 | Role | Login | Capabilities | Restricted From |
 |---|---|---|---|
@@ -73,8 +73,11 @@ Enforced by `migrations/post/grants.sql` (`-- grants-policy-version: 15`) and ve
 | `fc27_migrator` | `LOGIN` (`NOINHERIT`) | DDL migrations via `SET ROLE fc27_owner` | Runtime application queries |
 | `fc27_app` | `LOGIN` | DML on app/FC27 provider tables; `SELECT`-only on `fc27_manual_*` tables; `SELECT, INSERT` only on `approval_audit` & `domain_events`; zero `DELETE` on `fc27_*` tables | DDL, `TRUNCATE`, `DELETE` on `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`, `fc27_manual_*`, `approval_audit`, `domain_events` |
 | `fc27_match_results_writer` | `LOGIN` | Narrow DML on `fc27_manual_matches` (`SELECT, INSERT, UPDATE`), `fc27_manual_match_players` (`SELECT, INSERT, UPDATE, DELETE`), `fc27_manual_match_events` (`SELECT, INSERT, UPDATE, DELETE`), and `fc27_manual_match_audit` (`SELECT, INSERT`) | Zero privileges on `fc27_matches`, `fc27_player_match_stats`, poll state, approval, dispatch, outbox, identity, or migration ledger tables; zero `DELETE` on `fc27_manual_matches` and `fc27_manual_match_audit` |
-| `fc27_dispatch` | `LOGIN` | Scoped to `outbox` and `dispatch_attempts` | Approval tables, graph threads, `fc27_*` analytics and manual tables |
-| `fc27_relay` | `LOGIN` | Scoped to `outbox` relay operations | All approval, identity, and `fc27_*` analytics and manual tables |
+| `fc27_poll_writer` | `LOGIN` | Narrow DML on `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`, `fc27_player_alias_fingerprints` (`SELECT, INSERT, UPDATE (last_seen_at, updated_at)`), and `fc27_discord_jobs` (`SELECT, INSERT`) | Zero privileges on `fc27_player_links`, `fc27_build_catalog`, `fc27_build_catalog_audit`, `fc27_player_suggestions`, `fc27_suggestion_assessments`, `fc27_manual_*`, and legacy tables; zero `DELETE` or `TRUNCATE` |
+| `fc27_player_dev_writer` | `LOGIN` | Narrow DML on `fc27_player_links`, `fc27_build_catalog`, append-only `fc27_build_catalog_audit`, `fc27_player_suggestions`, append-only `fc27_suggestion_assessments`, and `fc27_discord_jobs` (`SELECT, UPDATE` claim/lease/outcome columns); `SELECT`-only on `fc27_player_alias_fingerprints`, `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats` | Zero write privileges on `fc27_player_alias_fingerprints` and provider tables; zero access to `fc27_quarantine_records`, `fc27_manual_*`, and legacy tables; zero `DELETE` or `TRUNCATE` |
+| `fc27_discord_reader` | `LOGIN` | `SELECT`-only on FC27 provider, manual Match Results, and Stage C player development & Discord job tables | Zero `INSERT`, `UPDATE`, `DELETE`, or `TRUNCATE` privileges anywhere; zero access to legacy control-plane tables |
+| `fc27_dispatch` | `LOGIN` | Scoped to `outbox` and `dispatch_attempts` | Approval tables, graph threads, `fc27_*` analytics, manual, and player development tables |
+| `fc27_relay` | `LOGIN` | Scoped to `outbox` relay operations | All approval, identity, and `fc27_*` analytics, manual, and player development tables |
 
 ---
 

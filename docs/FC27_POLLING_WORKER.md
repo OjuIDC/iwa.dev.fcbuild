@@ -67,8 +67,8 @@ All polling settings in `src/settings.py` and `config.example.env` fail closed o
 
 ## 4. Transactional Persistence, Least Privilege, & Conditional Analytics
 
-- **Least-Privilege Runtime Role (`fc27_app`)**:
-  - Connects via `POSTGRES_URI` / `POSTGRES_URI_FILE` (`./secrets/fc27_app_uri`) and validates `check_runtime_posture()` (rejecting superuser, `fc27_owner`, `CREATE`, `BYPASSRLS`, or `REPLICATION`).
+- **Least-Privilege Runtime Role (`fc27_app` / `fc27_poll_writer`)**:
+  - Connects via `POSTGRES_URI` / `POSTGRES_URI_FILE` (`./secrets/fc27_app_uri`) or `FC27_POLL_WRITER_URI_FILE` (`./secrets/fc27_poll_writer_uri`, `fc27_poll_writer` in Grants Policy Version `16`) and validates `check_runtime_posture()` (rejecting superuser, `fc27_owner`, `CREATE`, `BYPASSRLS`, or `REPLICATION`).
   - `GuardedPollingConnection` enforces table-level isolation, raising `FC27PollingTableAccessDeniedError` (`psycopg.errors.InsufficientPrivilege`) if any query touches `checkpoints*`, `approval_*`, `fc27_decision_evidence`, `fc27_approval_inconsistencies`, or `dispatch*`.
 - **Idempotency & Replay Conflict Quarantine**:
   - Identical `match_hash` rows are ignored (`duplicate_match_count`), returning `NO_NEW_MATCHES` when `inserted_match_count == 0`.

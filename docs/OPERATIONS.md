@@ -34,8 +34,14 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 | `./secrets/fc27_dispatch_password` | `FC27_DISPATCH_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_dispatch` |
 | `./secrets/fc27_relay_password` | `FC27_RELAY_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_relay` |
 | `./secrets/fc27_match_results_writer_password` | `FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_match_results_writer` |
+| `./secrets/fc27_poll_writer_password` | `FC27_POLL_WRITER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_poll_writer` |
+| `./secrets/fc27_player_dev_writer_password` | `FC27_PLAYER_DEV_WRITER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_player_dev_writer` |
+| `./secrets/fc27_discord_reader_password` | `FC27_DISCORD_READER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_discord_reader` |
 | `./secrets/fc27_migrator_uri` | `POSTGRES_URI_FILE` | `db-migrate` | Connection URI for `fc27_migrator` |
-| `./secrets/fc27_app_uri` | `POSTGRES_URI_FILE` | `graph-api` | Connection URI for `fc27_app` |
+| `./secrets/fc27_poll_writer_uri` | `FC27_POLL_WRITER_URI_FILE` | `fc27-community-worker` | Connection URI for `fc27_poll_writer` |
+| `./secrets/fc27_player_dev_writer_uri` | `FC27_PLAYER_DEV_WRITER_URI_FILE` | `fc27-discord-bot` | Connection URI for `fc27_player_dev_writer` |
+| `./secrets/fc27_discord_reader_uri` | `FC27_DISCORD_READER_URI_FILE` | `fc27-discord-bot` | Connection URI for `fc27_discord_reader` |
+| `./secrets/fc27_app_uri` | `POSTGRES_URI_FILE` | `graph-api` (historical) / transitional overlays | Connection URI for `fc27_app` |
 | `./secrets/fc27_relay_uri` | `POSTGRES_URI_FILE` | `outbox-relay` | Connection URI for `fc27_relay` |
 | `./secrets/fc27_dispatch_uri` | `POSTGRES_URI_FILE` | `dispatch-worker` | Connection URI for `fc27_dispatch` |
 | `./secrets/bff_service_token` | `BFF_SERVICE_TOKEN_FILE` | `graph-api` | Machine service token for BFF authentication |
@@ -47,18 +53,21 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 ## 3. Database Role Bootstrap & Migration Workflow
 
 ### 3.1 Least-Privilege Database Roles
-PostgreSQL 16 separates schema ownership from runtime execution across six roles (`src/db_roles.py` and `migrations/post/grants.sql`):
+PostgreSQL 16 separates schema ownership from runtime execution across nine roles (`src/db_roles.py` and `migrations/post/grants.sql` Grants Policy Version `16`):
 
 - `fc27_owner` (`NOLOGIN`): Owns all application tables, sequences, and views.
 - `fc27_migrator` (`LOGIN`, `NOINHERIT`): Executes schema migrations under `SET ROLE fc27_owner`.
-- `fc27_app` (`LOGIN`): Runtime role for `graph-api`. Has DML access on operational tables, `SELECT`-only on `fc27_manual_*` tables, append-only `SELECT, INSERT` on `approval_audit` and `domain_events`, and zero `DELETE` privileges on `fc27_*` tables.
+- `fc27_app` (`LOGIN`): Historical runtime role for `graph-api`. Has DML access on operational tables, `SELECT`-only on `fc27_manual_*` tables, append-only `SELECT, INSERT` on `approval_audit` and `domain_events`, and zero `DELETE` privileges on `fc27_*` tables.
 - `fc27_match_results_writer` (`LOGIN`): Dedicated least-privilege writer role for authorized manual Match Results commands (`src/fc27_match_results.py`, `FC27_MATCH_RESULTS_WRITER_URI_FILE`). Scoped strictly to `fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, and `fc27_manual_match_audit`.
+- `fc27_poll_writer` (`LOGIN`): Dedicated least-privilege writer role for `fc27-community-worker` (`FC27_POLL_WRITER_URI_FILE`). Scoped to normalized provider tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), `fc27_player_alias_fingerprints`, and `SELECT, INSERT` on `fc27_discord_jobs`.
+- `fc27_player_dev_writer` (`LOGIN`): Dedicated least-privilege writer role for `fc27-discord-bot` player development and job consumption (`FC27_PLAYER_DEV_WRITER_URI_FILE`). Scoped to `fc27_player_links`, `fc27_build_catalog`, append-only `fc27_build_catalog_audit`, `fc27_player_suggestions`, append-only `fc27_suggestion_assessments`, claim/lease/outcome updates on `fc27_discord_jobs`, and `SELECT` on `fc27_player_alias_fingerprints` and normalized provider tables.
+- `fc27_discord_reader` (`LOGIN`): Dedicated `SELECT`-only role for `fc27-discord-bot` (`FC27_DISCORD_READER_URI_FILE`) across FC 27 provider, manual Match Results, and player development tables.
 - `fc27_dispatch` (`LOGIN`): Runtime role for `dispatch-worker`. Scoped strictly to `outbox`, `dispatch_attempts`, and `domain_events`.
 - `fc27_relay` (`LOGIN`): Runtime role for `outbox-relay`. Scoped strictly to `outbox` claim/relay operations.
 
 ### 3.2 Running Bootstrap and Migrations
 1. **Verify secret files before Compose actions**:
-   Confirm that every secret mounted by `postgres`, `db-bootstrap`, and `db-migrate` exists as a regular file (not an auto-created directory) under `./secrets/`, including `secrets/postgres_password`, `secrets/postgres_admin_uri`, `secrets/fc27_migrator_password`, `secrets/fc27_app_password`, `secrets/fc27_dispatch_password`, `secrets/fc27_relay_password`, `secrets/fc27_match_results_writer_password`, and `secrets/fc27_migrator_uri`. Never print secret contents.
+   Confirm that every secret mounted by `postgres`, `db-bootstrap`, and `db-migrate` exists as a regular file (not an auto-created directory) under `./secrets/`, including `secrets/postgres_password`, `secrets/postgres_admin_uri`, `secrets/fc27_migrator_password`, `secrets/fc27_app_password`, `secrets/fc27_dispatch_password`, `secrets/fc27_relay_password`, `secrets/fc27_match_results_writer_password`, `secrets/fc27_poll_writer_password`, `secrets/fc27_player_dev_writer_password`, `secrets/fc27_discord_reader_password`, and `secrets/fc27_migrator_uri`. Never print secret contents.
 2. **Build `db-migrate` and `db-bootstrap` images before running migrations**:
    ```bash
    docker compose build db-migrate
@@ -66,17 +75,17 @@ PostgreSQL 16 separates schema ownership from runtime execution across six roles
    ```
 3. **Complete migration safety gates before touching a running development database**:
    - Record pre-change row counts (`fc27_matches`, `fc27_player_match_stats`, `fc27_clubs`, `fc27_export_batches`, `fc27_quarantine_records`, `schema_migrations`, `schema_policy_versions`).
-   - Create a full custom-format backup (`pg_dump --format=custom --blobs`), record its SHA-256 digest, validate its table of contents with `pg_restore --list`, and test migration `0001_initial.sql` through `0013_fc27_manual_match_results.sql` against a disposable PostgreSQL 16 restore first (see [`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)).
+   - Create a full custom-format backup (`pg_dump --format=custom --blobs`), record its SHA-256 digest, validate its table of contents with `pg_restore --list`, and test migration `0001_initial.sql` through `0014_fc27_player_development.sql` against a disposable PostgreSQL 16 restore first (see [`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)).
    - Stop active runtime consumers (`fc27-community-worker` and `fc27-discord-bot`) while applying schema and grant updates.
 4. **Bootstrap roles** (preview with dry-run first; requires explicit `--confirm` and superuser credentials to apply):
    ```bash
    docker compose --profile bootstrap run --rm db-bootstrap --confirm
    ```
-5. **Apply numbered SQL migrations (`0001_initial.sql` through `0013_fc27_manual_match_results.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 15**:
+5. **Apply numbered SQL migrations (`0001_initial.sql` through `0014_fc27_player_development.sql`), bootstrap `PostgresSaver` checkpoint tables, and verify Grants Policy Version 16**:
    ```bash
    python -m src.db_migrate
    ```
-   `src/db_migrate.py` acquires transaction-scoped advisory lock, verifies SHA-256 checksums for every applied migration in `schema_migrations`, and applies `migrations/post/grants.sql` (`GRANTS_POLICY_VERSION = 15`).
+   `src/db_migrate.py` acquires transaction-scoped advisory lock, verifies SHA-256 checksums for every applied migration in `schema_migrations`, and applies `migrations/post/grants.sql` (`GRANTS_POLICY_VERSION = 16`).
 
 ### 3.3 Explicit Service Targeting, Orphan Container Hygiene, and Persistent Volume Protection
 - **Explicit Service Targeting**: Always target specific reviewed services (for example, `docker compose build db-migrate` or starting/stopping `fc27-community-worker` and `fc27-discord-bot` explicitly) rather than running broad stack-wide recreation commands.
