@@ -3,8 +3,8 @@
 - **Status**: Current
 - **Audience**: Developers, QA Engineers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_documentation_consistency.py`, `scripts/check_matchpulse_boundary.py`
-- **Supersedes**: `docs/archive/test-results/PHASE2_TEST_TRACEABILITY.md`
+- **Source of truth**: `tests/`, `scripts/test_postgres.sh`, `scripts/check_matchpulse_boundary.py`
+- **Supersedes**: `NONE`
 
 This guide documents the test architecture, PostgreSQL 16 integration harness, offline/DNS network guards, test suite categories, and cleanup procedures for `iwa.dev.fcbuild`.
 
@@ -79,24 +79,17 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 - `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py` — Role bootstrap, migration checksums (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`), Grants Policy Version `15`, and runtime role posture checks (historical `tests/test_migration_0003.py` superseded in Stage B3).
 
 ### 4.4 Historical Control-Plane Suites (Superseded in Stage B3)
-- Historical identity (`tests/identity/*.py`), adversarial (`tests/adversarial/*.py`), dispatch (`tests/test_dispatch_schema.py`, `tests/test_dispatch_transition.py`, `tests/test_dispatch_creation.py`, `tests/test_phase1_scope.py`), and E2E (`tests/e2e/*.py`) control-plane test modules were superseded and removed in Stage B3 (`config/fc27_removed_items_manifest.json`).
+- Historical identity (`tests/identity/*.py`), adversarial (`tests/adversarial/*.py`), dispatch (`tests/test_dispatch_schema.py`, `tests/test_dispatch_transition.py`, `tests/test_dispatch_creation.py`, `tests/test_phase1_scope.py`), and E2E (`tests/e2e/*.py`) control-plane test modules were superseded and removed in Stage B3.
 
-### 4.5 Packaging, Workflow, Compose Isolation, & Documentation Suites
-- `tests/test_packaging.py` — `pyproject.toml` vs. `requirements.txt` synchronization.
-- `tests/test_github_workflows.py` — CI workflow policy and shard completeness (historical `tests/test_workflow.py` superseded in Stage B3).
-- `tests/test_archive_integrity.py` — Required repository files and README references.
+### 4.5 Packaging, Workflow, Compose Isolation, & Boundary Suites
+- `tests/test_packaging.py` — `pyproject.toml` vs. `requirements.txt` synchronization, required repository files, migration SHA-256 pinning, and single-owner checks.
+- `tests/test_github_workflows.py` — CI workflow policy, zero orphaned test modules (`ORPHANED_TEST_MODULES=0`), and shard completeness (`src/fc27_ci_test_groups.py`).
 - `tests/test_compose_isolation.py` — Resolved Docker Compose secret, network, port, and digest isolation.
-- `tests/test_documentation_consistency.py` — Verifies documented paths, scripts, tests, feature flags, Compose services, archive manifest completeness, and security/tactical documentation invariants.
-- `scripts/check_documentation_consistency.py` — Standalone static and strict (`--check`, `--check --strict`, `--json`) documentation consistency validator requiring zero network, Docker, or PostgreSQL access:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check
-  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
-  ```
 - `scripts/check_matchpulse_boundary.py` — Enforces sibling-repository isolation from `..\matchpulse-live-public`.
 - `tests/test_fc27_community_provider.py` & `tests/test_fc27_pandas_view.py` — Offline unit and integration tests for the bounded community provider wrapper (`src/fc27_community_provider.py`) and optional downstream analytical view (`src/fc27_pandas_view.py`).
 - `tests/test_fc27_polling_worker.py` — `101` deterministic unit, PostgreSQL 16 integration, single-flight advisory lock, least-privilege role/table boundary, cache/rate-limit/budget/circuit-breaker, conditional analytics (`Search -> Scout -> Analyst` on new matches only), dashboard status, and Docker Compose hardening tests for the disabled-by-default polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`).
 - `tests/test_fc27_performance.py` — `40` offline tests verifying `src/fc27_performance.py` (`FC27_PERFORMANCE_TELEMETRY_ENABLED=false` default, `extra="forbid"`, `frozen=True`, privacy scrubbing, 20-run retention, 2 MiB file size cap, `SMALL`/`MEDIUM`/`LARGE`/`STRESS` benchmark scenarios, disposable PostgreSQL `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, analytics layers, loopback dashboard endpoints, offline Discord commands, Polars evaluation `NOT_JUSTIFIED`, threshold evaluation, and `KEEP_PYTHON` default decisions).
-- `tests/test_github_workflows.py` & `tests/test_ci_report_sanitization.py` — CI workflow hardening, action SHA pinning, changed-file classification (`scripts/classify_ci_changes.py`), 38-module test isolation matrix (`src/fc27_ci_test_groups.py`), shard completeness (`COLLECTION_UNION_COMPLETE=YES`), and 38-case browser report sanitization and count-reconciliation policy tests (`scripts/build_test_report.py`, `scripts/aggregate_test_reports.py`, `scripts/sanitize_test_report.py`). See [`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md), [`FC27_TEST_ISOLATION_MATRIX.md`](FC27_TEST_ISOLATION_MATRIX.md), and [`FC27_CI_BROWSER_REPORTS.md`](FC27_CI_BROWSER_REPORTS.md).
+- `tests/test_github_workflows.py` & `tests/test_ci_report_sanitization.py` — CI workflow hardening, action SHA pinning, changed-file classification (`scripts/classify_ci_changes.py`), 32-module test isolation matrix (`src/fc27_ci_test_groups.py`), shard completeness (`COLLECTION_UNION_COMPLETE=YES`), and 38-case browser report sanitization and count-reconciliation policy tests (`scripts/build_test_report.py`, `scripts/aggregate_test_reports.py`, `scripts/sanitize_test_report.py`). See [`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md) and [`FC27_CI_BROWSER_REPORTS.md`](FC27_CI_BROWSER_REPORTS.md).
 
 ---
 

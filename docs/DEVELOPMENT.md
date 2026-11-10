@@ -4,7 +4,7 @@
 - **Audience**: Developers, Contributors
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `scripts/`, `tests/`
-- **Supersedes**: `docs/archive/phases/installer.md`
+- **Supersedes**: `NONE`
 
 This guide covers setting up a local development environment for `iwa.dev.fcbuild`, running focused and full test suites, validating Docker Compose configurations, and following repository contribution boundaries.
 
@@ -79,11 +79,10 @@ docker rm -f fc27-test-postgres
   tests/test_fc27_privacy.py `
   tests/test_fc27_platform.py -q
 
-# Documentation, packaging, workflow, and archive integrity
-.\.venv\Scripts\pytest.exe tests/test_documentation_consistency.py `
-  tests/test_packaging.py `
+# Packaging, workflow, and report sanitization
+.\.venv\Scripts\pytest.exe tests/test_packaging.py `
   tests/test_github_workflows.py `
-  tests/test_archive_integrity.py -q
+  tests/test_ci_report_sanitization.py -q
 ```
 
 ### Full Test Suite (With PostgreSQL 16 Running)
@@ -108,11 +107,7 @@ Before staging any commit, run all static verification gates:
 .\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
 .\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status
 
-# 4. Deterministic documentation consistency gate (standard and strict release mode)
-.\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check
-.\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
-
-# 5. Whitespace and conflict marker check
+# 4. Whitespace and conflict marker check
 git diff --check
 ```
 

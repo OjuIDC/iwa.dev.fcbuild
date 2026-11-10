@@ -3,8 +3,8 @@
 - **Status**: Current
 - **Audience**: Developers, Operators, Commissioners, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
-- **Source of truth**: `src/`, `config/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
-- **Supersedes**: `docs/archive/prompts/ORIGINAL_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`
+- **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `config.example.env`, `tests/`
+- **Supersedes**: `NONE`
 
 ## 0. Five-Minute Operator Quickstart (Current Real-Data Path)
 
@@ -45,9 +45,9 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
    ```powershell
    .\.venv\Scripts\pytest.exe tests/test_fc27_community_provider.py tests/test_fc27_pandas_view.py tests/test_fc27_privacy.py tests/test_fc27_discord_bot.py -q
    ```
-5. **Disabled Features & Historical Material**:
+5. **Disabled Features**:
    - Continuous unthrottled polling, browser scraping, raw response storage, player aliases/handles, autonomous Coach/Tactics/Director recommendations (`FC27_RECOMMENDATIONS_ENABLED=false`), and player dispatch (`DISPATCH_ENABLED=false`) remain **disabled**.
-   - Historical and superseded documents/scripts live in [`docs/archive/README.md`](docs/archive/README.md), [`docs/archive/ARCHIVE_MANIFEST.md`](docs/archive/ARCHIVE_MANIFEST.md), and `scripts/archive/` (indexed in [`scripts/README.md`](scripts/README.md)).
+   - Active operator, provider, migration, and CI scripts are indexed in [`scripts/README.md`](scripts/README.md).
 
 ## 1. Project Purpose
 
@@ -155,9 +155,9 @@ All external networking, persistence writes, analytics execution, recommendation
   ```powershell
   .\.venv\Scripts\pytest.exe tests/test_fc27_clubs_api_contracts.py tests/test_fc27_api_cache.py tests/test_fc27_api_rate_limit.py tests/test_fc27_community_provider.py tests/test_fc27_search.py tests/test_fc27_scout.py tests/test_fc27_analyst.py tests/test_fc27_privacy.py tests/test_fc27_discord_bot.py -q
   ```
-- **Documentation, Packaging, Workflow, & Archive Integrity Tests**:
+- **Packaging, Workflow, & Report Sanitization Tests**:
   ```powershell
-  .\.venv\Scripts\pytest.exe tests/test_documentation_consistency.py tests/test_packaging.py tests/test_github_workflows.py tests/test_archive_integrity.py -q
+  .\.venv\Scripts\pytest.exe tests/test_packaging.py tests/test_github_workflows.py tests/test_ci_report_sanitization.py -q
   ```
 - **Full Suite with Ephemeral PostgreSQL 16**: See [`docs/TESTING.md`](docs/TESTING.md) and dated verification results in [`TEST_RESULTS.md`](TEST_RESULTS.md).
 
@@ -208,10 +208,10 @@ All runtime feature flags default to disabled/fail-closed except circuit-breaker
 
 - **Index**: [`docs/README.md`](docs/README.md)
 - **Architecture & Status**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/FC27_COMPONENT_STATUS.md`](docs/FC27_COMPONENT_STATUS.md), [`docs/ADR_FC27_EAST_COASTERS_PLATFORM.md`](docs/ADR_FC27_EAST_COASTERS_PLATFORM.md)
-- **Development, Testing, & Operations**: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`docs/VISUAL_STUDIO_SETUP.md`](docs/VISUAL_STUDIO_SETUP.md), [`docs/TESTING.md`](docs/TESTING.md), [`docs/FC27_CI_TEST_STRATEGY.md`](docs/FC27_CI_TEST_STRATEGY.md), [`docs/FC27_TEST_ISOLATION_MATRIX.md`](docs/FC27_TEST_ISOLATION_MATRIX.md), [`docs/FC27_CI_BROWSER_REPORTS.md`](docs/FC27_CI_BROWSER_REPORTS.md), [`docs/FC27_CONTAINER_PUBLISHING.md`](docs/FC27_CONTAINER_PUBLISHING.md), [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md), [`TEST_RESULTS.md`](TEST_RESULTS.md)
+- **Development, Testing, & Operations**: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`docs/VISUAL_STUDIO_SETUP.md`](docs/VISUAL_STUDIO_SETUP.md), [`docs/TESTING.md`](docs/TESTING.md), [`docs/FC27_CI_TEST_STRATEGY.md`](docs/FC27_CI_TEST_STRATEGY.md), [`docs/FC27_CI_BROWSER_REPORTS.md`](docs/FC27_CI_BROWSER_REPORTS.md), [`docs/FC27_CONTAINER_PUBLISHING.md`](docs/FC27_CONTAINER_PUBLISHING.md), [`docs/FC27_GHCR_RUNTIME_PROMOTION.md`](docs/FC27_GHCR_RUNTIME_PROMOTION.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md), [`TEST_RESULTS.md`](TEST_RESULTS.md)
 - **Security & Feature Flags**: [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md), [`docs/FEATURE_FLAGS.md`](docs/FEATURE_FLAGS.md), [`docs/APPROVAL_SECURITY.md`](docs/APPROVAL_SECURITY.md), [`docs/DEPLOYMENT_AND_SECURITY.md`](docs/DEPLOYMENT_AND_SECURITY.md), [`SECURITY.md`](SECURITY.md)
 - **Provider, Data Model, Analytics, Polling, Discord, Approval, & Hypotheses**: [`docs/FC27_PROVIDER_INTEGRATION.md`](docs/FC27_PROVIDER_INTEGRATION.md), [`docs/FC27_POLLING_WORKER.md`](docs/FC27_POLLING_WORKER.md), [`docs/FC27_DAILY_POLLING_OPERATIONS.md`](docs/FC27_DAILY_POLLING_OPERATIONS.md), [`docs/FC27_DISCORD_BOT.md`](docs/FC27_DISCORD_BOT.md), [`docs/FC27_DATA_MODEL.md`](docs/FC27_DATA_MODEL.md), [`docs/FC27_ANALYTICS.md`](docs/FC27_ANALYTICS.md), [`docs/FC27_APPROVAL_FLOW.md`](docs/FC27_APPROVAL_FLOW.md), [`docs/FC27_TACTICAL_HYPOTHESES.md`](docs/FC27_TACTICAL_HYPOTHESES.md)
-- **Dispatch, Player Identity, & Archive**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md), [`docs/archive/README.md`](docs/archive/README.md)
+- **Dispatch & Player Identity**: [`docs/DISPATCH_ACTIVATION.md`](docs/DISPATCH_ACTIVATION.md), [`docs/EA_PLAYER_IDENTITY_VERIFICATION.md`](docs/EA_PLAYER_IDENTITY_VERIFICATION.md)
 
 ## 16. Current Limitations
 

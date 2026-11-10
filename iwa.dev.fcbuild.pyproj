@@ -4,8 +4,8 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{f27ec330-3230-4fc2-8700-330323000001}</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>scripts\check_documentation_consistency.py</StartupFile>
-    <CommandLineArguments>--check --strict</CommandLineArguments>
+    <StartupFile>scripts\check_matchpulse_boundary.py</StartupFile>
+    <CommandLineArguments></CommandLineArguments>
     <SearchPath>src;scripts</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -42,31 +42,17 @@
   <ItemGroup>
     <Folder Include=".github\" />
     <Folder Include=".github\workflows\" />
-    <Folder Include="config\" />
     <Folder Include="docs\" />
-    <Folder Include="docs\archive\" />
-    <Folder Include="docs\archive\architecture\" />
-    <Folder Include="docs\archive\experiments\" />
-    <Folder Include="docs\archive\phases\" />
-    <Folder Include="docs\archive\plans\" />
-    <Folder Include="docs\archive\prompts\" />
-    <Folder Include="docs\archive\providers\" />
-    <Folder Include="docs\archive\reports\" />
-    <Folder Include="docs\archive\test-results\" />
     <Folder Include="migrations\" />
     <Folder Include="migrations\post\" />
     <Folder Include="scripts\" />
-    <Folder Include="scripts\archive\" />
-    <Folder Include="scripts\archive\experiments\" />
     <Folder Include="src\" />
     <Folder Include="tests\" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="scripts\aggregate_test_reports.py" />
-    <Compile Include="scripts\archive\experiments\matchpulse_conformance.py" />
     <Compile Include="scripts\build_container_report.py" />
     <Compile Include="scripts\build_test_report.py" />
-    <Compile Include="scripts\check_documentation_consistency.py" />
     <Compile Include="scripts\check_matchpulse_boundary.py" />
     <Compile Include="scripts\classify_ci_changes.py" />
     <Compile Include="scripts\fc27_backup.py" />
@@ -106,12 +92,10 @@
     <Compile Include="tests\__init__.py" />
     <Compile Include="tests\conftest.py" />
     <Compile Include="tests\fc27_fixtures.py" />
-    <Compile Include="tests\test_archive_integrity.py" />
     <Compile Include="tests\test_ci_report_sanitization.py" />
     <Compile Include="tests\test_compose_isolation.py" />
     <Compile Include="tests\test_db_migrate_roles.py" />
     <Compile Include="tests\test_db_roles.py" />
-    <Compile Include="tests\test_documentation_consistency.py" />
     <Compile Include="tests\test_events_outbox.py" />
     <Compile Include="tests\test_fc27_advisory_cache.py" />
     <Compile Include="tests\test_fc27_advisory_pipeline_e2e.py" />
@@ -119,7 +103,6 @@
     <Compile Include="tests\test_fc27_analyst_graph.py" />
     <Compile Include="tests\test_fc27_api_cache.py" />
     <Compile Include="tests\test_fc27_api_rate_limit.py" />
-    <Compile Include="tests\test_fc27_archive_manifest.py" />
     <Compile Include="tests\test_fc27_backup_restore.py" />
     <Compile Include="tests\test_fc27_clubs_api_contracts.py" />
     <Compile Include="tests\test_fc27_coach.py" />
@@ -134,7 +117,6 @@
     <Compile Include="tests\test_fc27_platform.py" />
     <Compile Include="tests\test_fc27_polling_worker.py" />
     <Compile Include="tests\test_fc27_privacy.py" />
-    <Compile Include="tests\test_fc27_repository_cleanup.py" />
     <Compile Include="tests\test_fc27_scout.py" />
     <Compile Include="tests\test_fc27_search.py" />
     <Compile Include="tests\test_fc27_search_scout_graph.py" />
@@ -164,9 +146,6 @@
     <Content Include="TEST_RESULTS.md" />
     <Content Include="THIRD_PARTY_NOTICES.md" />
     <Content Include="config.example.env" />
-    <Content Include="config\documentation_consistency_policy.json" />
-    <Content Include="config\fc27_archive_manifest.json" />
-    <Content Include="config\fc27_removed_items_manifest.json" />
     <Content Include="docker-compose.community-worker.yml" />
     <Content Include="docker-compose.discord.yml" />
     <Content Include="docker-compose.ghcr.yml" />
@@ -191,7 +170,6 @@
     <Content Include="docs\FC27_DATA_MODEL.md" />
     <Content Include="docs\FC27_DIRECTOR_RECONCILIATION.md" />
     <Content Include="docs\FC27_DISCORD_BOT.md" />
-    <Content Include="docs\FC27_DOCUMENTATION_TRUTH_TABLE.md" />
     <Content Include="docs\FC27_GHCR_RUNTIME_PROMOTION.md" />
     <Content Include="docs\FC27_LANGUAGE_DECISION_MATRIX.md" />
     <Content Include="docs\FC27_LOCAL_INFERENCE_BOUNDARY.md" />
@@ -200,7 +178,6 @@
     <Content Include="docs\FC27_PROVIDER_INTEGRATION.md" />
     <Content Include="docs\FC27_TACTICAL_HYPOTHESES.md" />
     <Content Include="docs\FC27_TACTICS_CANDIDATE_ENGINE.md" />
-    <Content Include="docs\FC27_TEST_ISOLATION_MATRIX.md" />
     <Content Include="docs\FEATURE_FLAGS.md" />
     <Content Include="docs\MATCHPULSE_INTEGRATION_BOUNDARY.md" />
     <Content Include="docs\OPERATIONS.md" />
@@ -208,31 +185,6 @@
     <Content Include="docs\SECURITY_BOUNDARIES.md" />
     <Content Include="docs\TESTING.md" />
     <Content Include="docs\VISUAL_STUDIO_SETUP.md" />
-    <Content Include="docs\archive\ARCHIVE_MANIFEST.md" />
-    <Content Include="docs\archive\README.md" />
-    <Content Include="docs\archive\architecture\PHASE2_EVIDENCE_BINDING.md" />
-    <Content Include="docs\archive\architecture\PHASE2_RUNBOOKS.md" />
-    <Content Include="docs\archive\architecture\PHASE2_SECURITY_INVARIANTS.md" />
-    <Content Include="docs\archive\architecture\PHASE2_TRANSACTION_MODEL.md" />
-    <Content Include="docs\archive\architecture\PHASE2_WEBAUTHN_POLICY.md" />
-    <Content Include="docs\archive\experiments\WINDHOVER_INTEGRATION_GAP.md" />
-    <Content Include="docs\archive\phases\installer.md" />
-    <Content Include="docs\archive\phases\watcher_ocr_rundown.md" />
-    <Content Include="docs\archive\plans\2026-10-02-player-dispatch-design.md" />
-    <Content Include="docs\archive\prompts\ORIGINAL_REQUEST.md" />
-    <Content Include="docs\archive\prompts\PHASE2_VICTORY_AUDIT_REQUEST.md" />
-    <Content Include="docs\archive\providers\mcp_ws.md" />
-    <Content Include="docs\archive\reports\BUNDLE_AUDIT.md" />
-    <Content Include="docs\archive\reports\FINAL_ARCHIVE_AUDIT.md" />
-    <Content Include="docs\archive\reports\HACKATHON_ALIGNMENT.md" />
-    <Content Include="docs\archive\reports\IMPLEMENTATION_REPORT.md" />
-    <Content Include="docs\archive\reports\PHASE2_LOCAL_MERGE_GATE_REPORT.md" />
-    <Content Include="docs\archive\reports\PHASE2_REMEDIATION_REPORT.md" />
-    <Content Include="docs\archive\reports\SECURITY_CHANGES.md" />
-    <Content Include="docs\archive\reports\TYPED_GRAPH_VOICE_AUDIT.md" />
-    <Content Include="docs\archive\test-results\PHASE2_TEST_TRACEABILITY.md" />
-    <Content Include="docs\archive\test-results\TEST_RESULTS_2026-10-03_PHASE1.md" />
-    <Content Include="docs\repository_inventory.json" />
     <Content Include="migrations\0001_initial.sql" />
     <Content Include="migrations\0002_approval_security.sql" />
     <Content Include="migrations\0003_dispatch_foundation.sql" />

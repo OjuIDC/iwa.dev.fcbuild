@@ -2,7 +2,7 @@
 
 ## Document Classification
 - **Authority Tier**: Tier 1 — Authoritative Documentation Index
-- **Truth Table Role**: Canonical entry point for all active `docs/` and root operational guides (`docs/FC27_DOCUMENTATION_TRUTH_TABLE.md`)
+- **Truth Table Role**: Canonical entry point for all active `docs/` and root operational guides
 - **Scope**: East Coasters (`club_id = 330323`, `platform = common-gen5`, `game_version = FC27`)
 - **Last Verified Against Repo State**: `2026-10-31`
 - **Current Supported Acquisition Paths**:
@@ -17,8 +17,6 @@
 New developers and operators can identify and run the complete current system from these primary entry points:
 - **[`../README.md`](../README.md)** — Repository quickstart, current real-data architecture diagram, 5-minute operator guide, and safety posture
 - **[`FC27_COMPONENT_STATUS.md`](FC27_COMPONENT_STATUS.md)** — Component-by-component operational status matrix (`CURRENT`, `DISABLED`, `DEFERRED`, `REJECTED`)
-- **[`FC27_DOCUMENTATION_TRUTH_TABLE.md`](FC27_DOCUMENTATION_TRUTH_TABLE.md)** — Canonical source-of-truth mapping across code, configuration, tests, and documentation
-- **[`repository_inventory.json`](repository_inventory.json)** — Machine-readable inventory of all tracked files in the repository
 - **[`../scripts/README.md`](../scripts/README.md)** — Complete index of current operator, provider, migration, and CI scripts
 
 ---
@@ -96,8 +94,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 ## 8. Testing
 
 - **[`TESTING.md`](TESTING.md)** — Complete test suite guide, disposable PostgreSQL 16 workflow, and focused validation gates
-- **[`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md)** — Two-tier GitHub Actions test strategy (`test-fast`, `ci`, `test-nightly`), changed-file classification, and benchmark comparisons
-- **[`FC27_TEST_ISOLATION_MATRIX.md`](FC27_TEST_ISOLATION_MATRIX.md)** — Authoritative 128-module test isolation classification matrix, 12 canonical pytest markers, and shard disjointness proofs (`src/fc27_ci_test_groups.py`)
+- **[`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md)** — Two-tier GitHub Actions test strategy (`test-fast`, `ci`, `test-nightly`), changed-file classification, test isolation registry (`src/fc27_ci_test_groups.py`), and benchmark comparisons
 - **[`FC27_CI_BROWSER_REPORTS.md`](FC27_CI_BROWSER_REPORTS.md)** — Browser-previewable GitHub Actions Job Summaries, self-contained HTML reports, GitHub Pages security evaluation, and fail-closed privacy sanitization (`scripts/sanitize_test_report.py`)
 - **[`../TEST_RESULTS.md`](../TEST_RESULTS.md)** — Current reproducible test verification summary
 
@@ -111,10 +108,4 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 - **[`FC27_GHCR_RUNTIME_PROMOTION.md`](FC27_GHCR_RUNTIME_PROMOTION.md)** — Digest-pinned private GHCR runtime promotion overlay (`docker-compose.ghcr.yml`), Cosign/SLSA/SBOM verification, sequential one-service-at-a-time promotion, and rollback runbook
 - **[`DEVELOPMENT.md`](DEVELOPMENT.md)** — Local development setup, virtual environment, and contributor workflow
 - **[`VISUAL_STUDIO_SETUP.md`](VISUAL_STUDIO_SETUP.md)** — Visual Studio Enterprise 2026, verified MSBuild solution/project builds, existing `.venv` integration, Test Explorer pytest discovery, and safe startup
-
----
-
-## 10. Historical Archive
-
-- **[`archive/README.md`](archive/README.md)** — Non-authoritative historical archive index (`Operational status: DO NOT USE`)
-- **[`archive/ARCHIVE_MANIFEST.md`](archive/ARCHIVE_MANIFEST.md)** — Human-readable archive manifest (`fc27-archive-manifest-v1`; machine-readable manifest at `config/fc27_archive_manifest.json`)
+- **[`design/`](design/)** — Historical architecture and design specifications (`docs/design/*`)

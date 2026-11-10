@@ -45,7 +45,7 @@ markers = [
     "docker: Tests inspecting or invoking Docker CLI or container build contracts.",
     "compose: Tests validating Docker Compose profile isolation, config, and service boundaries.",
     "security: Adversarial, authentication, authorization, privacy, and boundary security tests.",
-    "documentation: Documentation consistency, archive manifest, and repository hygiene tests.",
+    "documentation: Documentation, packaging, workflow, and repository hygiene tests.",
     "performance: Performance telemetry, benchmark, and latency threshold tests.",
     "serial: Tests that must execute serially due to shared resources, concurrency races, or cluster state.",
     "slow: Longer-running integration, stress, or multi-database migration tests.",

@@ -4,7 +4,7 @@
 - **Audience**: Platform Operators, Commissioners, Security Engineers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
 - **Source of truth**: `src/settings.py`, `src/db_roles.py`, `src/db_migrate.py`, `migrations/post/grants.sql`, `docker-compose.yml`, `config.example.env`
-- **Supersedes**: `docs/archive/architecture/PHASE2_RUNBOOKS.md`
+- **Supersedes**: `NONE`
 
 > **Deployment Readiness Classification**: `IMPLEMENTED_NOT_DEPLOYMENT_VALIDATED`
 >

@@ -4,7 +4,7 @@
 - **Audience**: Developers, Architects, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `src/fc27_community_provider.py`, `src/fc27_polling_worker.py`, `src/fc27_clubs_api_contracts.py`, `src/fc27_api_cache.py`, `src/fc27_api_rate_limit.py`, `THIRD_PARTY_NOTICES.md`
-- **Supersedes**: `docs/archive/providers/mcp_ws.md`
+- **Supersedes**: `NONE`
 
 > **Current Working Real-Data Provider (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`)**:
 >

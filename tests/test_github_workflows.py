@@ -308,6 +308,17 @@ def test_collection_consistency_and_shard_disjointness() -> None:
     union_shards = set().union(*shard_sets.values())
     assert union_shards == set(discovered_files)
 
+    # Verify zero orphaned test modules and zero deleted B5 process tests in matrix
+    orphaned = [m for m in discovered_files if m not in union_groups]
+    assert orphaned == [], f"Orphaned test modules found: {orphaned}"
+    removed_b5_tests = {
+        "tests/test_documentation_consistency.py",
+        "tests/test_fc27_repository_cleanup.py",
+        "tests/test_fc27_archive_manifest.py",
+        "tests/test_archive_integrity.py",
+    }
+    assert removed_b5_tests.isdisjoint(matrix_files)
+
     # Verify fast workflow groups are non-empty
     for fg in FAST_WORKFLOW_GROUPS:
         assert len(modules_for_fast_group(fg)) > 0

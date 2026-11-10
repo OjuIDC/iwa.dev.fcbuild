@@ -1,7 +1,5 @@
 # Test Execution Results (`iwa.dev.fcbuild`)
 
-> **Historical Phase 1 Acceptance Trace**: The original 2026-10-03 Phase 1 acceptance test trace is preserved in [`docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md`](docs/archive/test-results/TEST_RESULTS_2026-10-03_PHASE1.md).
-
 ---
 
 ## 1. Verification Metadata
@@ -9,8 +7,8 @@
 | Field | Value |
 |---|---|
 | **Verification Date** | `2026-11-09` |
-| **Base Commit (`main`)** | `5d1823c1c37add1d1062eedfec086514a504cd11` |
-| **Cleanup Branch** | `refactor/remove-legacy-control-plane-stack` |
+| **Base Commit (`main`)** | `320782993dceed2ec49e0a237b0fa8f9b1f03322` |
+| **Cleanup Branch** | `refactor/trim-repository-process-overhead` |
 | **Operating System** | Windows 11 (`win32`, Python `3.14.8`, `pytest-8.4.2`) |
 | **PostgreSQL Test Engine** | PostgreSQL `16` (`postgres:16.15-alpine` ephemeral test container on `127.0.0.1:55432`) |
 | **Skipped Tests Count** | `2` (optional dependency / MSBuild workload guards) |
@@ -41,13 +39,13 @@ Command (with `POSTGRES_DSN` and `POSTGRES_SUPERUSER_DSN` pointing to PostgreSQL
 Result: **All passed**
 - Includes `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_coach.py`, `tests/test_fc27_privacy.py`, `tests/test_fc27_platform.py`, `tests/test_fc27_discord_bot.py`, `tests/test_fc27_match_results.py`, plus the focused provider and contract test modules above, executing real SQL against `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under Grants Policy Version 15.
 
-### 2.3 Documentation Consistency, Archive Manifest, & Packaging Guard Suite
+### 2.3 Packaging, Workflow, & Compose Isolation Guard Suite
 Command:
 ```powershell
-.\.venv\Scripts\pytest.exe tests/test_fc27_archive_manifest.py tests/test_fc27_repository_cleanup.py tests/test_documentation_consistency.py tests/test_packaging.py tests/test_github_workflows.py tests/test_archive_integrity.py tests/test_compose_isolation.py -q
+.\.venv\Scripts\pytest.exe tests/test_packaging.py tests/test_github_workflows.py tests/test_ci_report_sanitization.py tests/test_compose_isolation.py -q
 ```
 Result: **All passed (`0 failed`)**
-- Verifies documentation truth-table alignment, archive headers and manifest completeness (`config/fc27_archive_manifest.json` and `config/fc27_removed_items_manifest.json`), relative Markdown link resolution, feature-flag documentation accuracy, HMAC shared-secret semantics, tactical hypothesis `NOT_APPROVABLE` classification, and Docker Compose localhost isolation (`24 passed` in `tests/test_compose_isolation.py`).
+- Verifies dependency pinning, migration SHA-256 pinning, workflow hardening, CI test group completeness (`ORPHANED_TEST_MODULES=0`), report sanitization, and Docker Compose localhost isolation (`24 passed` in `tests/test_compose_isolation.py`).
 
 ### 2.4 Full Repository Test Suite (PostgreSQL 16 Enabled)
 Command:

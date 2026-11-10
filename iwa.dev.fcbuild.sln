@@ -19,9 +19,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{F27EC330
 	ProjectSection(SolutionItems) = preProject
 		tests\conftest.py = tests\conftest.py
 		tests\test_compose_isolation.py = tests\test_compose_isolation.py
-		tests\test_documentation_consistency.py = tests\test_documentation_consistency.py
 		tests\test_fc27_privacy.py = tests\test_fc27_privacy.py
-		tests\test_fc27_repository_cleanup.py = tests\test_fc27_repository_cleanup.py
+		tests\test_github_workflows.py = tests\test_github_workflows.py
 		tests\test_packaging.py = tests\test_packaging.py
 	EndProjectSection
 EndProject
@@ -68,13 +67,11 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Configuration", "Configurat
 		requirements.txt = requirements.txt
 		requirements-dev.txt = requirements-dev.txt
 		config.example.env = config.example.env
-		config\documentation_consistency_policy.json = config\documentation_consistency_policy.json
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Automation", "Automation", "{F27EC330-3230-4FC2-8700-330323000070}"
 	ProjectSection(SolutionItems) = preProject
 		scripts\README.md = scripts\README.md
-		scripts\check_documentation_consistency.py = scripts\check_documentation_consistency.py
 		scripts\check_matchpulse_boundary.py = scripts\check_matchpulse_boundary.py
 		scripts\fc27_backup.py = scripts\fc27_backup.py
 		scripts\fc27_discord_bot.py = scripts\fc27_discord_bot.py

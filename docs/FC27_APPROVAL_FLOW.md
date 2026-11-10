@@ -3,8 +3,8 @@
 - **Status**: Current
 - **Audience**: Commissioners, Developers, Security Reviewers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `src/settings.py`, `src/schemas.py`, `src/fc27_coach.py`, `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`, `config/fc27_removed_items_manifest.json`
-- **Supersedes**: `docs/archive/architecture/PHASE2_EVIDENCE_BINDING.md`, `docs/archive/architecture/PHASE2_TRANSACTION_MODEL.md`
+- **Source of truth**: `src/settings.py`, `src/schemas.py`, `src/fc27_coach.py`, `migrations/0007_decision_evidence.sql`, `migrations/0009_r3_evidence_binding.sql`
+- **Supersedes**: `NONE`
 
 This document specifies the end-to-end lifecycle of a lead/coaching package in `iwa.dev.fcbuild`, from deterministic ranking and pre-approval validation through the single LangGraph `interrupt()`, cryptographic Commissioner decision binding, and non-dispatched finalization.
 

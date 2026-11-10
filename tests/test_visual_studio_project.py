@@ -72,8 +72,20 @@ def test_project_keeps_pytest_test_explorer_configuration() -> None:
     assert project.findtext(f"{{{MSBUILD_NS}}}PropertyGroup/{{{MSBUILD_NS}}}UnitTestRootDirectory") == "tests"
     assert project.findtext(f"{{{MSBUILD_NS}}}PropertyGroup/{{{MSBUILD_NS}}}UnitTestPattern") == "test_*.py"
     assert project.findtext(f"{{{MSBUILD_NS}}}PropertyGroup/{{{MSBUILD_NS}}}StartupFile") == (
-        r"scripts\check_documentation_consistency.py"
+        r"scripts\check_matchpulse_boundary.py"
     )
+
+
+def test_visual_studio_hygiene_and_user_path_absence() -> None:
+    gitignore_text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    for required_rule in ("/.venv/", "/.vs/", "*.suo", "*.user", "*.userosscache", "*.sln.docstates"):
+        assert required_rule in gitignore_text, f"Missing .gitignore rule: {required_rule}"
+    for vs_file in (SOLUTION_PATH, PROJECT_PATH):
+        text = vs_file.read_text(encoding="utf-8")
+        assert "C:\\Users\\" not in text
+        assert "C:\\src\\" not in text
+        assert "iwadev" not in text.lower()
+
 
 
 def test_visual_studio_user_state_is_ignored_and_project_files_are_tracked() -> None:
@@ -195,8 +207,23 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
         r"docs\FC27_DEMO.md",
         r"docs\FC27_COMMUNITY_PROVIDER_EVALUATION.md",
         r"docs\FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md",
+        r"scripts\check_documentation_consistency.py",
+        r"tests\test_documentation_consistency.py",
+        r"config\documentation_consistency_policy.json",
+        r"docs\repository_inventory.json",
+        r"config\fc27_archive_manifest.json",
+        r"config\fc27_removed_items_manifest.json",
+        r"tests\test_fc27_archive_manifest.py",
+        r"tests\test_archive_integrity.py",
+        r"tests\test_fc27_repository_cleanup.py",
+        r"docs\FC27_DOCUMENTATION_TRUTH_TABLE.md",
+        r"docs\FC27_TEST_ISOLATION_MATRIX.md",
+        r"scripts\archive\experiments\matchpulse_conformance.py",
+        r"docs\archive\ARCHIVE_MANIFEST.md",
+        r"docs\archive\README.md",
     }
     assert removed_b1_and_b2.isdisjoint(included_paths)
+    assert not any(p.startswith((r"docs\archive\\", r"scripts\archive\\")) for p in included_paths)
     assert r"src\fc27_privacy.py" in included_paths
     assert r"tests\test_fc27_privacy.py" in included_paths
 

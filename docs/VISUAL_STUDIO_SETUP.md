@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Developers, Operators, Reviewers
 - **Last verified commit**: `4a7d3509cbdc975e556868e7ca2e957528e869f4`
-- **Source of truth**: `iwa.dev.fcbuild.sln`, `iwa.dev.fcbuild.pyproj`, `pyproject.toml`, `.gitignore`, `tests/test_fc27_repository_cleanup.py`, `tests/test_visual_studio_project.py`
+- **Source of truth**: `iwa.dev.fcbuild.sln`, `iwa.dev.fcbuild.pyproj`, `pyproject.toml`, `.gitignore`, `tests/test_visual_studio_project.py`
 - **Supersedes**: `NONE`
 
 This guide documents how to open, navigate, test, and maintain `iwa.dev.fcbuild` in **Visual Studio Enterprise 2026** alongside **Antigravity** using the tracked solution (`iwa.dev.fcbuild.sln`) and Python project (`iwa.dev.fcbuild.pyproj`) while reusing the existing repository-root virtual environment (`.venv`).
@@ -123,7 +123,7 @@ In Visual Studio Solution Explorer, tracked files display a **blue padlock icon*
   ```
 - **Offline Fast Suites (No PostgreSQL Container Required)**:
   ```powershell
-  .\.venv\Scripts\python.exe -m pytest tests/test_fc27_repository_cleanup.py tests/test_documentation_consistency.py tests/test_packaging.py -q
+  .\.venv\Scripts\python.exe -m pytest tests/test_visual_studio_project.py tests/test_packaging.py tests/test_github_workflows.py -q
   ```
 - **PostgreSQL-Backed Integration Tests**:
   Tests that exercise PostgreSQL 16 migrations (`0001`–`0012`), role/grant enforcement, LangGraph `PostgresSaver`, and transactional FC 27 persistence require a disposable loopback PostgreSQL 16 test container (`TEST_POSTGRES_URI` / `TEST_POSTGRES_ADMIN_URI` on `127.0.0.1:55432`) as documented in [`DEVELOPMENT.md`](DEVELOPMENT.md) and [`TESTING.md`](TESTING.md). Do **not** point pytest at any operational database or unrelated local container.
@@ -132,15 +132,11 @@ In Visual Studio Solution Explorer, tracked files display a **blue padlock icon*
 
 ## 6. Safe vs. Prohibited Startup and Command Actions
 
-To preserve the platform's fail-closed operational posture, default project startup in `iwa.dev.fcbuild.pyproj` is bound to the offline documentation validator (`scripts\check_documentation_consistency.py --check --strict`) and **never** starts any network service, bot, or polling worker.
+To preserve the platform's fail-closed operational posture, default project startup in `iwa.dev.fcbuild.pyproj` is bound to the offline sibling repository boundary check (`scripts\check_matchpulse_boundary.py`) and **never** starts any network service, bot, or polling worker.
 
 ### Safe Developer Actions (Allowed)
 
 - Running offline pytest suites or individual pytest files in Test Explorer or PowerShell
-- Static documentation validation:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
-  ```
 - Sibling repository boundary verification:
   ```powershell
   .\.venv\Scripts\python.exe scripts/check_matchpulse_boundary.py
@@ -217,7 +213,7 @@ This setup guide does not duplicate operational or security policies. Refer to t
 
 - **System Architecture & Trust Zones**: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Local Development & Static Gates**: [`DEVELOPMENT.md`](DEVELOPMENT.md)
-- **Test Suites & Isolation Matrix**: [`TESTING.md`](TESTING.md) and [`FC27_TEST_ISOLATION_MATRIX.md`](FC27_TEST_ISOLATION_MATRIX.md)
+- **Test Suites & CI Strategy**: [`TESTING.md`](TESTING.md) and [`FC27_CI_TEST_STRATEGY.md`](FC27_CI_TEST_STRATEGY.md)
 - **Day-2 Operations & Secret Rotation**: [`OPERATIONS.md`](OPERATIONS.md)
 - **Security Boundaries & Authority Model**: [`SECURITY_BOUNDARIES.md`](SECURITY_BOUNDARIES.md)
 - **Deployment Profiles & Container Hardening**: [`DEPLOYMENT_AND_SECURITY.md`](DEPLOYMENT_AND_SECURITY.md) *(note: durable-control-plane Compose hardening and deployment/security documentation reconciliation are tracked separately on branch `ops/fc27-akole-durable-control-plane`)*

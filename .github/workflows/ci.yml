@@ -53,7 +53,6 @@ jobs:
       - name: Compile and static boundary gates
         run: |
           python -m compileall -q src scripts tests
-          python scripts/check_documentation_consistency.py --check --strict
           python scripts/check_matchpulse_boundary.py
       - name: Record full-suite collection count and run full-quality shard
         run: |

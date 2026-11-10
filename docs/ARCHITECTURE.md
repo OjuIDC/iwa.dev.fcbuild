@@ -4,7 +4,7 @@
 - **Audience**: Architects, Developers, Security Reviewers
 - **Last verified commit**: `b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0`
 - **Source of truth**: `src/`, `migrations/`, `docker-compose.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml`, `tests/`
-- **Supersedes**: `docs/archive/prompts/PHASE2_VICTORY_AUDIT_REQUEST.md`, `docs/archive/reports/IMPLEMENTATION_REPORT.md`, `docs/archive/reports/HACKATHON_ALIGNMENT.md`
+- **Supersedes**: `NONE`
 
 This document defines the authoritative architecture of `iwa.dev.fcbuild` derived directly from executable source code (`src/`), database migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql` and `migrations/post/grants.sql`), Docker Compose topology (`docker-compose.yml`, `docker-compose.community-worker.yml`, `docker-compose.discord.yml`, `docker-compose.ghcr.yml` defining `postgres`, `redis`, `db-bootstrap`, `db-migrate`, `fc27-community-worker`, and `fc27-discord-bot`), and automated test suites (`tests/`).
 

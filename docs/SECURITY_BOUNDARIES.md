@@ -4,7 +4,7 @@
 - **Audience**: Security Reviewers, Architects, Developers, Operators
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
 - **Source of truth**: `src/security.py`, `src/settings.py`, `src/db_roles.py`, `src/fc27_community_provider.py`, `src/fc27_clubs_api_contracts.py`, `migrations/post/grants.sql`
-- **Supersedes**: `docs/archive/architecture/PHASE2_SECURITY_INVARIANTS.md`, `docs/archive/architecture/PHASE2_WEBAUTHN_POLICY.md`, `docs/archive/reports/SECURITY_CHANGES.md`, `docs/archive/reports/PHASE2_REMEDIATION_REPORT.md`, `docs/archive/reports/BUNDLE_AUDIT.md`, `docs/archive/reports/FINAL_ARCHIVE_AUDIT.md`
+- **Supersedes**: `NONE`
 
 This document is the authoritative security boundary specification for `iwa.dev.fcbuild`. Every boundary below is enforced in runtime code, PostgreSQL 16 role grants, and automated verification tests.
 

@@ -490,20 +490,6 @@ def test_97_pytest_executes_zero_live_ea_and_discord_network_calls() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 98. Documentation consistency check passes
-# ---------------------------------------------------------------------------
-def test_98_documentation_consistency_check_passes() -> None:
-    proc = subprocess.run(
-        [sys.executable, "scripts/check_documentation_consistency.py", "--check", "--strict"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, f"Documentation check failed:\n{proc.stdout}\n{proc.stderr}"
-
-
-# ---------------------------------------------------------------------------
 # 99. MatchPulse boundary check passes
 # ---------------------------------------------------------------------------
 def test_99_matchpulse_boundary_check_passes() -> None:
@@ -515,14 +501,3 @@ def test_99_matchpulse_boundary_check_passes() -> None:
         check=False,
     )
     assert proc.returncode == 0, f"MatchPulse boundary check failed:\n{proc.stdout}\n{proc.stderr}"
-
-
-# ---------------------------------------------------------------------------
-# 100. Repository cleanup and inventory tests pass
-# ---------------------------------------------------------------------------
-def test_100_repository_cleanup_and_inventory_valid() -> None:
-    inventory_path = REPO_ROOT / "docs" / "repository_inventory.json"
-    assert inventory_path.exists()
-    data = json.loads(inventory_path.read_text(encoding="utf-8"))
-    assert "files" in data
-    assert len(data["files"]) > 0

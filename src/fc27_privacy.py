@@ -6,7 +6,7 @@ Results, and Discord bot:
 
 - Recursive sensitive-key and sensitive-field scanning
 - Plaintext gamertag, raw EA identifier, and token/secret detection
-- Deterministic East Coasters player and match pseudonymization (`plr_ecf_<12hex>`, `ec_m_<4digits>_<10hex>`)
+- Deterministic East Coasters player and match pseudonymization (`plr_ecf_<12hex>`, `mref_ecf_<12hex>`)
 - Pseudonym collision detection (`FC27PseudonymCollisionDetector`)
 - Canonical JSON SHA-256 digest computation and constant-time digest comparison
 - HMAC input normalization and Unicode NFC / casefold / whitespace normalization
@@ -21,7 +21,6 @@ import functools
 import hashlib
 import hmac
 import json
-import math
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence

@@ -167,22 +167,8 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
     ):
         cats.add("security")
 
-    # 10. Documentation & governance manifests
-    if (
-        norm.startswith("docs/")
-        or norm.endswith(".md")
-        or norm in {
-            "scripts/check_documentation_consistency.py",
-            "config/documentation_consistency_policy.json",
-            "config/documentation_waivers.json",
-            "config/fc27_archive_manifest.json",
-            "config/fc27_removed_items_manifest.json",
-            "tests/test_documentation_consistency.py",
-            "tests/test_fc27_archive_manifest.py",
-            "tests/test_fc27_repository_cleanup.py",
-            "tests/test_archive_integrity.py",
-        }
-    ):
+    # 10. Documentation
+    if norm.startswith("docs/") or norm.endswith(".md"):
         cats.add("documentation")
 
     # 11. Python runtime / application code & tests
@@ -192,7 +178,6 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             norm.startswith("scripts/")
             and not norm.endswith(".md")
             and norm not in {
-                "scripts/check_documentation_consistency.py",
                 "scripts/classify_ci_changes.py",
                 "scripts/build_test_report.py",
                 "scripts/sanitize_test_report.py",
@@ -202,10 +187,6 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
         or (
             norm.startswith("tests/")
             and norm not in {
-                "tests/test_documentation_consistency.py",
-                "tests/test_fc27_archive_manifest.py",
-                "tests/test_fc27_repository_cleanup.py",
-                "tests/test_archive_integrity.py",
                 "tests/test_packaging.py",
                 "tests/test_compose_isolation.py",
                 "tests/test_github_workflows.py",

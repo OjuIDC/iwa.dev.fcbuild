@@ -46,7 +46,7 @@ flowchart TD
 - **Concurrency**: Cancels superseded in-progress runs on the same pull-request ref (`group: test-fast-${{ github.workflow }}-${{ github.ref }}`).
 - **Fail-Closed Path Classification (`scripts/classify_ci_changes.py`)**:
   - Classifies changed files across 11 canonical categories (`python-runtime`, `database`, `compose`, `discord`, `polling`, `analytics`, `security`, `documentation`, `packaging`, `workflow`, `performance`).
-  - Always runs `quality` (`compileall`, `check_documentation_consistency.py --check --strict`, `check_matchpulse_boundary.py`, and static policy tests) so path filtering can never produce a green workflow with zero validating jobs.
+  - Always runs `quality` (`compileall`, `check_matchpulse_boundary.py`, and static policy tests) so path filtering can never produce a green workflow with zero validating jobs.
   - Triggers broad coverage (`quality` + `unit-domain` + `postgres-focused` + `docker-compose-focused`) whenever any unknown path, empty diff, workflow file, dependency/packaging file, `src/settings.py`, `tests/conftest.py`, or shared test helper is modified.
 
 ### 2.2 Tier 2 — Complete Required Workflow (`ci`)

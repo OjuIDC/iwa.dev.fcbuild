@@ -16,8 +16,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 1. **Community Polling Worker (`CURRENT_PROVIDER_COMMAND`)**: [`fc27_polling_worker.py`](fc27_polling_worker.py)
 2. **Database Role Bootstrap & Migration Runner (`CURRENT_MIGRATION_COMMAND`)**: `python -m src.db_roles` (`src/db_roles.py`) and `python -m src.db_migrate` (`src/db_migrate.py`)
 3. **Discord Analytics & Match Results Bot (`CURRENT_OPERATOR_COMMAND`)**: [`fc27_discord_bot.py`](fc27_discord_bot.py)
-4. **Documentation Consistency Validator (`CURRENT_CI_COMMAND` / `CURRENT_SECURITY_COMMAND`)**: [`check_documentation_consistency.py`](check_documentation_consistency.py)
-5. **MatchPulse Repository Isolation Guard (`CURRENT_SECURITY_COMMAND` / `CURRENT_CI_COMMAND`)**: [`check_matchpulse_boundary.py`](check_matchpulse_boundary.py)
+4. **MatchPulse Repository Isolation Guard (`CURRENT_SECURITY_COMMAND` / `CURRENT_CI_COMMAND`)**: [`check_matchpulse_boundary.py`](check_matchpulse_boundary.py)
 
 ---
 
@@ -34,10 +33,8 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 | [`build_container_report.py`](build_container_report.py) | `CURRENT_CI_COMMAND` | Active (Container Image Validator, Trivy/SBOM Gate & Report Builder) | `NONE` |
 | [`aggregate_test_reports.py`](aggregate_test_reports.py) | `CURRENT_CI_COMMAND` | Active (Shard Report Aggregator & Pages Tree Builder) | `NONE` |
 | [`sanitize_test_report.py`](sanitize_test_report.py) | `CURRENT_SECURITY_COMMAND` | Active (Fail-Closed Report Privacy & HTML Scanner) | `NONE` |
-| [`check_documentation_consistency.py`](check_documentation_consistency.py) | `CURRENT_CI_COMMAND` | Active (CI & Security Gate) | `NONE` |
 | [`check_matchpulse_boundary.py`](check_matchpulse_boundary.py) | `CURRENT_SECURITY_COMMAND` | Active (CI & Security Gate) | `NONE` |
 | [`test_postgres.sh`](test_postgres.sh) | `TEST_HELPER` | Active (Disposable PostgreSQL Test Runner) | `NONE` |
-| [`archive/experiments/matchpulse_conformance.py`](archive/experiments/matchpulse_conformance.py) | `SUPERSEDED` | Archived (`DO_NOT_USE`) | `scripts/check_matchpulse_boundary.py` |
 
 > **Note on Database Migrations (`CURRENT_MIGRATION_COMMAND`) & Performance Baseline (`python -m src.fc27_performance`)**: PostgreSQL 16 schema migrations (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`) and role grants (`migrations/post/grants.sql`) are executed via the module entrypoints `python -m src.db_roles` (`src/db_roles.py`) and `python -m src.db_migrate` (`src/db_migrate.py`), or via `scripts/test_postgres.sh`. Repeatable offline performance benchmarks and baseline generation are executed via the module entrypoint `python -m src.fc27_performance` (`src/fc27_performance.py`, documented in `docs/FC27_PERFORMANCE_BASELINE.md`).
 
@@ -45,21 +42,7 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 
 ## Detailed Command Reference (All Current Scripts)
 
-### 4. `scripts/check_documentation_consistency.py`
-- **Classification**: `CURRENT_CI_COMMAND`
-- **Purpose**: Validates documentation truth-table rules, archive notice headers, archive manifest (`config/fc27_archive_manifest.json`), removed-items manifest (`config/fc27_removed_items_manifest.json`), internal Markdown links, and zero runtime/workflow/Docker/Compose references to archived files.
-- **Safe Invocation**:
-  ```powershell
-  .\.venv\Scripts\python.exe scripts/check_documentation_consistency.py --check --strict
-  ```
-- **Required Feature Flags**: None.
-- **Network Behavior**: Offline static file checker; zero network access.
-- **Database Behavior**: Zero database access.
-- **Expected Output**: `Result: PASS` and exit code `0`.
-- **Teardown**: Stateless CLI process.
-- **Replacement Status**: Current authoritative documentation consistency validator (`NONE`).
-
-### 5. `scripts/check_matchpulse_boundary.py`
+### 1. `scripts/check_matchpulse_boundary.py`
 - **Classification**: `CURRENT_SECURITY_COMMAND`
 - **Purpose**: Enforces the hard repository isolation boundary between `iwa.dev.fcbuild` and `matchpulse-live-public` (`docs/MATCHPULSE_INTEGRATION_BOUNDARY.md`).
 - **Safe Invocation**:
@@ -71,12 +54,9 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
 - **Database Behavior**: Zero database access.
 - **Expected Output**: Boundary pass confirmation and exit code `0`.
 - **Teardown**: Stateless CLI process.
-- **Replacement Status**: Current authoritative boundary check (`NONE`; replaces archived `scripts/archive/experiments/matchpulse_conformance.py`).
+- **Replacement Status**: Current authoritative boundary check (`NONE`).
 
-### 9. Historical Removed Scripts (Recorded in `config/fc27_removed_items_manifest.json`)
-- **Classification**: `SUPERSEDED` (historical Commissioner approval and Stage B4 demo/export/capture scripts removed and registered in `config/fc27_removed_items_manifest.json`).
-
-### 10. `scripts/test_postgres.sh`
+### 2. `scripts/test_postgres.sh`
 - **Classification**: `TEST_HELPER`
 - **Purpose**: Starts a disposable `postgres:16` Docker container, runs database bootstrap/migrations (`python -m src.db_roles` and `python -m src.db_migrate`) and `pytest`, and tears down the container on exit.
 - **Safe Invocation**:
@@ -177,10 +157,3 @@ For the overall architecture and quickstart path, see [`../README.md`](../README
   .\.venv\Scripts\python.exe scripts/build_container_report.py --help
   ```
 - **Replacement Status**: Current authoritative container validation and report builder (`NONE`).
-
----
-
-## Archived Scripts (`scripts/archive/`)
-
-Archived scripts are non-operational (`DO_NOT_USE`), carry prominent `ARCHIVED: HISTORICAL REFERENCE ONLY` headers, and are never imported or executed by active code, workflows, Dockerfiles, Compose files, or tests:
-- [`archive/experiments/matchpulse_conformance.py`](archive/experiments/matchpulse_conformance.py) — Superseded placeholder conformance harness; replaced by `scripts/check_matchpulse_boundary.py`. See [`../docs/archive/ARCHIVE_MANIFEST.md`](../docs/archive/ARCHIVE_MANIFEST.md) (`ARCH-023`).

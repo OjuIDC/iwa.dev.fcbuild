@@ -74,7 +74,6 @@ jobs:
       - name: Compile and static boundary gates
         run: |
           python -m compileall -q src scripts tests
-          python scripts/check_documentation_consistency.py --check --strict
           python scripts/check_matchpulse_boundary.py
       - name: Run quality and policy test group
         run: |
