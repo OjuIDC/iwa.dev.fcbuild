@@ -29,8 +29,14 @@ ALL_DB_SECRETS = {
     "fc27_dispatch_password",
     "fc27_relay_password",
     "fc27_match_results_writer_password",
+    "fc27_poll_writer_password",
+    "fc27_player_dev_writer_password",
+    "fc27_discord_reader_password",
     "fc27_migrator_uri",
     "fc27_app_uri",
+    "fc27_poll_writer_uri",
+    "fc27_player_dev_writer_uri",
+    "fc27_discord_reader_uri",
     "discord_bot_token",
     "postgres_password",
     "redis_password",
@@ -138,6 +144,9 @@ def test_db_secret_mounts_per_service(model):
                 "fc27_dispatch_password",
                 "fc27_relay_password",
                 "fc27_match_results_writer_password",
+                "fc27_poll_writer_password",
+                "fc27_player_dev_writer_password",
+                "fc27_discord_reader_password",
             }
         elif name == "db-migrate":
             assert mounted == {"fc27_migrator_uri"}
@@ -483,13 +492,129 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
     discord = merged["services"]["fc27-discord-bot"]
     worker = merged["services"]["fc27-community-worker"]
     assert discord["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert discord["environment"]["FC27_DISCORD_READER_URI_FILE"] == "/run/secrets/fc27_discord_reader_uri"
+    assert discord["environment"]["FC27_PLAYER_DEV_WRITER_URI_FILE"] == "/run/secrets/fc27_player_dev_writer_uri"
+    assert "FC27_POLL_WRITER_URI_FILE" not in discord["environment"]
     assert worker["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
-    assert _service_secrets(discord) == {"discord_bot_token", "fc27_app_uri"}
-    assert _service_secrets(worker) == {"fc27_app_uri"}
+    assert worker["environment"]["FC27_POLL_WRITER_URI_FILE"] == "/run/secrets/fc27_poll_writer_uri"
+    assert "FC27_PLAYER_DEV_WRITER_URI_FILE" not in worker["environment"]
+    assert "FC27_DISCORD_READER_URI_FILE" not in worker["environment"]
+    assert _service_secrets(discord) == {
+        "discord_bot_token",
+        "fc27_app_uri",
+        "fc27_discord_reader_uri",
+        "fc27_player_dev_writer_uri",
+    }
+    assert _service_secrets(worker) == {"fc27_app_uri", "fc27_poll_writer_uri"}
 
     grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
     assert "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;" in grants_sql
-    assert "fc27_discord_reader" not in grants_sql
+    assert "fc27_discord_reader" in grants_sql
+    assert "fc27_poll_writer" in grants_sql
+    assert "fc27_player_dev_writer" in grants_sql
+
+
+def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
+    """Verify Stage C password/URI secret isolation and settings fail-closed separation."""
+    from src import settings
+
+    env = _env_file(tmp_path)
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "bootstrap",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    merged = json.loads(out.stdout)
+
+    secrets_cfg = merged.get("secrets") or {}
+    for sec_name in (
+        "fc27_poll_writer_password",
+        "fc27_player_dev_writer_password",
+        "fc27_discord_reader_password",
+        "fc27_poll_writer_uri",
+        "fc27_player_dev_writer_uri",
+        "fc27_discord_reader_uri",
+    ):
+        assert sec_name in secrets_cfg
+        assert str(secrets_cfg[sec_name].get("file", "")).replace("\\", "/").endswith(
+            f"secrets/{sec_name}"
+        )
+
+    bootstrap = merged["services"]["db-bootstrap"]
+    for pw_var, pw_sec in (
+        ("FC27_POLL_WRITER_PASSWORD_FILE", "fc27_poll_writer_password"),
+        ("FC27_PLAYER_DEV_WRITER_PASSWORD_FILE", "fc27_player_dev_writer_password"),
+        ("FC27_DISCORD_READER_PASSWORD_FILE", "fc27_discord_reader_password"),
+    ):
+        assert bootstrap["environment"].get(pw_var) == f"/run/secrets/{pw_sec}"
+        assert pw_sec in _service_secrets(bootstrap)
+        for svc_name, svc in merged["services"].items():
+            if svc_name == "db-bootstrap":
+                continue
+            assert pw_var not in (svc.get("environment") or {})
+            assert pw_sec not in _service_secrets(svc)
+
+    # Empty secret file fails closed even when required=False
+    empty_file = tmp_path / "empty_secret"
+    empty_file.write_text("   \n", encoding="utf-8")
+    monkeypatch.setenv("FC27_POLL_WRITER_PASSWORD_FILE", str(empty_file))
+    with pytest.raises(settings.ConfigError, match="empty"):
+        settings.read_secret("FC27_POLL_WRITER_PASSWORD", required=False)
+    monkeypatch.delenv("FC27_POLL_WRITER_PASSWORD_FILE", raising=False)
+
+    # Missing secret file fails closed
+    monkeypatch.setenv("FC27_POLL_WRITER_URI_FILE", str(tmp_path / "missing_poll_uri"))
+    with pytest.raises(settings.ConfigError):
+        settings.read_fc27_poll_writer_uri(required=True)
+    monkeypatch.delenv("FC27_POLL_WRITER_URI_FILE", raising=False)
+
+    # Role mismatch in URI fails closed
+    wrong_role_file = tmp_path / "wrong_role_uri"
+    wrong_role_file.write_text("postgresql://fc27_app:pw@postgres:5432/fc27\n", encoding="utf-8")
+    monkeypatch.setenv("FC27_DISCORD_READER_URI_FILE", str(wrong_role_file))
+    with pytest.raises(settings.ConfigError, match="fc27_discord_reader"):
+        settings.read_fc27_discord_reader_uri(required=True)
+    monkeypatch.delenv("FC27_DISCORD_READER_URI_FILE", raising=False)
+
+    # Cross-service URI contamination fails closed
+    monkeypatch.setenv("FC27_PLAYER_DEV_WRITER_URI_FILE", "/run/secrets/fc27_player_dev_writer_uri")
+    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+        settings.read_fc27_poll_writer_uri(required=False)
+    monkeypatch.delenv("FC27_PLAYER_DEV_WRITER_URI_FILE", raising=False)
+
+    monkeypatch.setenv("FC27_POLL_WRITER_URI_FILE", "/run/secrets/fc27_poll_writer_uri")
+    with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
+        settings.read_fc27_player_dev_writer_uri(required=False)
+    with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
+        settings.read_fc27_discord_reader_uri(required=False)
+    monkeypatch.delenv("FC27_POLL_WRITER_URI_FILE", raising=False)
+
+    # Reader/writer separation fails closed on shared role or identical URI
+    with pytest.raises(settings.ConfigError, match="identical"):
+        settings.validate_fc27_role_uri_separation(
+            "postgresql://fc27_discord_reader:pw@postgres:5432/fc27",
+            "postgresql://fc27_discord_reader:pw@postgres:5432/fc27",
+        )
+    with pytest.raises(settings.ConfigError, match="separate PostgreSQL roles"):
+        settings.validate_fc27_role_uri_separation(
+            "postgresql://fc27_player_dev_writer:pw1@postgres:5432/fc27",
+            "postgresql://fc27_player_dev_writer:pw2@postgres:5432/fc27",
+        )
+    settings.validate_fc27_role_uri_separation(
+        "postgresql://fc27_discord_reader:pw1@postgres:5432/fc27",
+        "postgresql://fc27_player_dev_writer:pw2@postgres:5432/fc27",
+    )
 
 
 def test_deployment_and_security_documentation_reconciliation():

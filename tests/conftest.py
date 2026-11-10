@@ -114,6 +114,9 @@ class DbUris:
     dispatch: str
     relay: str = ""
     match_results_writer: str = ""
+    poll_writer: str = ""
+    player_dev_writer: str = ""
+    discord_reader: str = ""
     _pre_migrated: bool = False
 
 
@@ -132,6 +135,9 @@ def pg_roles(pg_admin_uri):
             "fc27_dispatch": None,
             "fc27_relay": None,
             "fc27_match_results_writer": None,
+            "fc27_poll_writer": None,
+            "fc27_player_dev_writer": None,
+            "fc27_discord_reader": None,
         },
     )
 
@@ -182,7 +188,8 @@ def pg_db(request, pg_admin_uri, pg_roles):
             conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{tmpl_name}"')
             conn.execute(
                 f'GRANT CONNECT ON DATABASE "{name}" TO '
-                f'fc27_migrator, fc27_app, fc27_dispatch, fc27_relay, fc27_match_results_writer'
+                f"fc27_migrator, fc27_app, fc27_dispatch, fc27_relay, fc27_match_results_writer, "
+                f"fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader"
             )
         uri = _with_db(pg_admin_uri, name)
         pre_migrated = True
@@ -204,7 +211,24 @@ def pg_db(request, pg_admin_uri, pg_roles):
     relay = psycopg.conninfo.make_conninfo(**info)
     info["user"] = "fc27_match_results_writer"
     match_results_writer = psycopg.conninfo.make_conninfo(**info)
-    yield DbUris(uri, migrator, app, dispatch, relay, match_results_writer, _pre_migrated=pre_migrated)
+    info["user"] = "fc27_poll_writer"
+    poll_writer = psycopg.conninfo.make_conninfo(**info)
+    info["user"] = "fc27_player_dev_writer"
+    player_dev_writer = psycopg.conninfo.make_conninfo(**info)
+    info["user"] = "fc27_discord_reader"
+    discord_reader = psycopg.conninfo.make_conninfo(**info)
+    yield DbUris(
+        uri,
+        migrator,
+        app,
+        dispatch,
+        relay,
+        match_results_writer,
+        poll_writer,
+        player_dev_writer,
+        discord_reader,
+        _pre_migrated=pre_migrated,
+    )
 
     with psycopg.connect(pg_admin_uri, autocommit=True) as conn:
         conn.execute(

@@ -226,6 +226,7 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
     assert not any(p.startswith((r"docs\archive\\", r"scripts\archive\\")) for p in included_paths)
     assert r"src\fc27_privacy.py" in included_paths
     assert r"tests\test_fc27_privacy.py" in included_paths
+    assert r"migrations\0014_fc27_player_development.sql" in included_paths
 
 
 def _find_visual_studio_msbuild() -> Path:

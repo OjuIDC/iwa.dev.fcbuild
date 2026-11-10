@@ -105,7 +105,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
-        "schema_migrations": 13,
+        "schema_migrations": 14,
         "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,
@@ -118,6 +118,13 @@ def test_backup_manifest_records_counts_and_sha256_hash(
         "fc27_manual_match_events": 0,
         "fc27_manual_match_audit": 0,
         "fc27_manual_discord_linked_matches": 0,
+        "fc27_player_alias_fingerprints": 0,
+        "fc27_player_links": 0,
+        "fc27_build_catalog": 0,
+        "fc27_build_catalog_audit": 0,
+        "fc27_player_suggestions": 0,
+        "fc27_suggestion_assessments": 0,
+        "fc27_discord_jobs": 0,
     }
     assert len(manifest.archive_sha256) == 64
     assert len(manifest.record_hashes.matches_sha256) == 64
@@ -290,6 +297,13 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
         "fc27_manual_match_players",
         "fc27_manual_match_events",
         "fc27_manual_match_audit",
+        "fc27_player_alias_fingerprints",
+        "fc27_player_links",
+        "fc27_build_catalog",
+        "fc27_build_catalog_audit",
+        "fc27_player_suggestions",
+        "fc27_suggestion_assessments",
+        "fc27_discord_jobs",
     )
     assert "fc27_match_team_stats" not in FC27_DOMAIN_TABLES
     assert FC27_DERIVED_MANIFEST_COUNT_ALIASES == {
@@ -372,7 +386,7 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         pg_db_migrated.admin,
         backup_dir=backup_dir,
     )
-    assert manifest.table_counts.schema_migrations == 13
+    assert manifest.table_counts.schema_migrations == 14
     assert manifest.table_counts.schema_policy_versions == 1
     assert manifest.table_counts.fc27_manual_matches == 1
     assert manifest.table_counts.fc27_manual_match_players == 3
