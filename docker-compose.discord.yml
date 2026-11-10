@@ -43,9 +43,13 @@ services:
       DISPATCH_ENABLED: "false"
       DISCORD_BOT_TOKEN_FILE: /run/secrets/discord_bot_token
       POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+      FC27_DISCORD_READER_URI_FILE: /run/secrets/fc27_discord_reader_uri
+      FC27_PLAYER_DEV_WRITER_URI_FILE: /run/secrets/fc27_player_dev_writer_uri
     secrets:
       - discord_bot_token
       - fc27_app_uri
+      - fc27_discord_reader_uri
+      - fc27_player_dev_writer_uri
     networks:
       - fc27_net
       - fc27_data
@@ -61,3 +65,7 @@ secrets:
     file: ./secrets/discord_bot_token
   fc27_app_uri:
     file: ./secrets/fc27_app_uri
+  fc27_discord_reader_uri:
+    file: ./secrets/fc27_discord_reader_uri
+  fc27_player_dev_writer_uri:
+    file: ./secrets/fc27_player_dev_writer_uri
