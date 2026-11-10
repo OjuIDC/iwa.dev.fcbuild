@@ -11,7 +11,7 @@
 | **Cleanup Branch** | `refactor/trim-repository-process-overhead` |
 | **Operating System** | Windows 11 (`win32`, Python `3.14.8`, `pytest-8.4.2`) |
 | **PostgreSQL Test Engine** | PostgreSQL `16` (`postgres:16.15-alpine` ephemeral test container on `127.0.0.1:55432`) |
-| **Skipped Tests Count** | `2` (optional dependency / MSBuild workload guards) |
+| **Skipped Tests Count** | `1` (MSBuild workload guard on hosts without Visual Studio 2026 Python workload) |
 | **External Network Requests Executed** | `0` (`NETWORK_REQUESTS_EXECUTED=0`, `LIVE_PROVIDER_REQUESTS_EXECUTED=0`) |
 | **EA Hostname DNS Resolutions** | `0` (`EA_DNS_RESOLUTIONS_EXECUTED=0`) |
 
@@ -53,7 +53,7 @@ Command:
 .\.venv\Scripts\pytest.exe -q
 ```
 Result:
-- **PostgreSQL 16 Schema, Role Bootstrap, Least-Privilege Grants (`GRANTS_POLICY_VERSION = 15`), Advisory Pipeline (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`), Community Provider, Polling Worker, Discord Bot, Manual Match Results, Backup/Restore, and Quality Suites**: **`1,453 passed`, `2 skipped`, `0 failed` (`1,455` total)**.
+- **PostgreSQL 16 Schema, Role Bootstrap, Least-Privilege Grants (`GRANTS_POLICY_VERSION = 15`), Advisory Pipeline (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`), Community Provider, Polling Worker, Discord Bot, Manual Match Results, Backup/Restore, and Quality Suites**: **`1,021 passed`, `1 skipped`, `0 failed` (`1,022` total across `32` test modules)**.
 
 ---
 
