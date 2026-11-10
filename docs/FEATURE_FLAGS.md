@@ -49,25 +49,11 @@ FC27_PROVIDER_ENABLED=false
 
 ---
 
-## 3. Local Demo Flags & Bounded Parameters (`docs/FC27_DEMO.md`)
+## 3. Community Provider & Polling Worker Flags (`docs/FC27_POLLING_WORKER.md`)
 
-The local East Coasters FC 27 one-shot ingestion and analytics demo (`src/fc27_demo.py`, `src/fc27_demo_api.py`, `scripts/fc27_demo_ingest.py`) is governed by dedicated fail-closed demo settings in `src/settings.py` and `config.example.env`:
+The East Coasters FC 27 community provider (`src/fc27_community_provider.py`) and polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `docker-compose.community-worker.yml`) are governed by fail-closed settings in `src/settings.py` and `config.example.env`:
 
-- **`FC27_DEMO_MODE`** (default `false`; accepted `true`, `false`): Master gate for `/demo` and `/demo/*` routes in `src/fc27_demo_api.py` (`is_fc27_demo_mode_enabled()`). Returns HTTP `403` (`DEMO_MODE_DISABLED`) when `false`.
-- **`FC27_DEMO_SOURCE`** (default `fixture`; accepted `fixture`, `live`): Selects the demo data source (`get_fc27_demo_source()`). Live probe execution remains disabled (`LIVE_PROBE_EXECUTED=NO`).
-- **`FC27_DEMO_BIND_HOST`** (default `127.0.0.1`; accepted `127.0.0.1` only): Enforces loopback-only socket binding (`get_fc27_demo_bind_host()`). Any non-loopback host (`0.0.0.0`, external IP) fails closed with `DEMO_BIND_HOST_INVALID`.
-- **`FC27_DEMO_MAX_REQUESTS`** (default `1`; accepted `1`): Caps per-run transport requests (`get_fc27_demo_max_requests()`) to prevent polling or multi-request loops.
-- **`FC27_DEMO_MAX_RETRIES`** (default `0`; accepted `0`): Prohibits transport retries (`get_fc27_demo_max_retries()`).
-- **`FC27_DEMO_RAW_RESPONSE_RETENTION`** (default `false`; accepted `false` only): Prohibits raw HTTP response retention (`is_fc27_demo_raw_response_retention_enabled()`); setting `true` fails closed with `RAW_RESPONSE_RETENTION_FORBIDDEN`.
-- **`FC27_DEMO_PORT`** (default `8097`; accepted `0` or `1024..65535`): Local port for `src/fc27_demo_api.py` (`get_fc27_demo_port()`).
-- **`FC27_COMMUNITY_PROVIDER_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for the bounded one-shot community client wrapper in `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` (`is_fc27_community_provider_enabled()`). Requires explicit `--confirm` on the CLI; see [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).
-
----
-
-## 4. Disabled-by-Default Community Polling Worker Flags (`docs/FC27_POLLING_WORKER.md`)
-
-The East Coasters FC 27 community polling worker (`src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `docker-compose.community-worker.yml`) is governed by fail-closed settings in `src/settings.py` and `config.example.env`:
-
+- **`FC27_COMMUNITY_PROVIDER_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for the bounded community client wrapper in `src/fc27_community_provider.py` (`is_fc27_community_provider_enabled()`).
 - **`FC27_COMMUNITY_POLLING_ENABLED`** (default `false`; accepted `true`, `false`): Master gate for polling cycle execution (`is_fc27_community_polling_enabled()`). Returns `POLLING_DISABLED` with `requests_executed=0` when `false`.
 - **`FC27_COMMUNITY_POLL_INTERVAL_SECONDS`** (default `43200`; accepted `43200` only): Fixed 12-hour polling interval in seconds (`get_fc27_community_poll_interval_seconds()`).
 - **`FC27_COMMUNITY_POLL_MIN_SECONDS`** (default `43200`; accepted `43200` only): Minimum sleep interval in seconds (`get_fc27_community_poll_min_seconds()`). Fails closed on `!= 43200`.

@@ -860,3 +860,178 @@ def test_52_gateway_run_mode_gates(
     )
     assert rc_ok == 0
     assert called == ["ran"]
+
+
+def test_53_status_command_registration_and_approved_guild_channel(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """53. `/fc27 status` is registered and returns complete polling and repository status in an approved guild/channel."""
+    from src.fc27_discord_bot import SUPPORTED_DISCORD_SUBCOMMANDS
+
+    assert "status" in SUPPORTED_DISCORD_SUBCOMMANDS
+    runtime = _seed_persisted_matches(monkeypatch, pg_db_migrated.app, count=10)
+    svc = FC27DiscordBotService(
+        _build_enabled_config(),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=APPROVED_USER_ID,
+    )
+    assert resp.status == "OK"
+    assert resp.command == "status"
+    assert resp.provider_requests_executed == 0
+    assert resp.row_count == 10
+    assert 1 <= len(resp.embeds) <= MAX_DISCORD_EMBEDS
+
+    combined_fields: dict[str, str] = {}
+    for emb in resp.embeds:
+        assert len(emb.fields) <= 25
+        combined_fields.update(emb.fields)
+
+    assert combined_fields["provider_id"] == "fc-clubs-api-community-v1"
+    assert combined_fields["source_classification"] == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
+    assert combined_fields["club_name"] == "East Coasters"
+    assert combined_fields["platform"] == "common-gen5"
+    assert combined_fields["game_version"] == "FC27"
+    assert combined_fields["match_type"] == "leagueMatch"
+    assert combined_fields["poll_interval_seconds"] == "43200"
+    assert combined_fields["daily_request_limit"] == "2"
+    assert combined_fields["maximum_requests_per_cycle"] == "1"
+    assert combined_fields["maximum_retries"] == "0"
+    assert combined_fields["single_flight_enabled"] == "true"
+    assert combined_fields["worker_enabled"] in {"true", "false"}
+    assert combined_fields["worker_running"] in {"true", "false"}
+    assert combined_fields["poll_status"] == "NEW_MATCHES_PERSISTED"
+    assert combined_fields["circuit_state"] == "CLOSED"
+    assert combined_fields["consecutive_failures"] == "0"
+    assert combined_fields["total_cycles"] == "1"
+    assert combined_fields["provider_request_count"] == "1"
+    assert combined_fields["matches_inserted"] == "10"
+    assert combined_fields["duplicates_ignored"] == "0"
+    assert combined_fields["replay_conflicts"] == "0"
+    assert combined_fields["schedule_lag_seconds"] == "0"
+    assert combined_fields["missed_intervals"] == "0"
+    assert combined_fields["possible_history_gap"] == "false"
+    assert combined_fields["continuity_last_verified_at"].endswith("Z")
+    assert combined_fields["database_availability"] == "AVAILABLE"
+    assert combined_fields["database_match_count"] == "10"
+    assert combined_fields["latest_stored_match_time"].endswith("Z")
+    assert "READ_ONLY" in combined_fields["manual_match_results_availability"]
+
+
+def test_54_status_database_unavailable_safe_and_no_secret_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """54. `/fc27 status` handles database unavailability safely without leaking URIs, passwords, stack traces, or paths."""
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+    monkeypatch.delenv("POSTGRES_URI_FILE", raising=False)
+    broken_uri = "postgresql://fc27_app:supersecret_db_pw_999@127.0.0.1:1/fc27_nonexistent"
+    svc = FC27DiscordBotService(
+        _build_enabled_config(),
+        db_conn_or_uri=broken_uri,
+        secret_tokens_to_scrub=("supersecret_db_pw_999",),
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=APPROVED_USER_ID,
+    )
+    assert resp.status == "OK"
+    assert resp.provider_requests_executed == 0
+    assert resp.row_count == 0
+    serialized = json.dumps(resp.model_dump(mode="json"))
+    assert "supersecret_db_pw_999" not in serialized
+    assert "postgresql://" not in serialized
+    assert "Traceback" not in serialized
+
+    combined_fields: dict[str, str] = {}
+    for emb in resp.embeds:
+        combined_fields.update(emb.fields)
+    assert combined_fields["database_availability"] == "UNAVAILABLE"
+    assert combined_fields["database_match_count"] == "0"
+    assert combined_fields["latest_stored_match_time"] == "N/A"
+    assert combined_fields["manual_match_results_availability"] == "UNAVAILABLE"
+
+
+def test_55_status_empty_database_and_missing_optional_fields_render_na(
+    pg_db_migrated,
+) -> None:
+    """55. `/fc27 status` with zero matches and missing optional polling fields renders `N/A` and never `None`/`null`/`undefined`/`NaN`."""
+
+    class _MinimalSnapshotStub:
+        worker_enabled = False
+        worker_running = False
+        last_status = None
+        circuit_state = None
+        consecutive_failures = None
+        total_cycles = None
+        total_provider_requests = None
+        total_matches_inserted = None
+        total_duplicates_ignored = None
+        total_replay_conflicts = None
+        schedule_lag_seconds = None
+        missed_intervals = None
+        possible_history_gap = None
+        continuity_last_verified_at = None
+        last_attempt_at = None
+        last_success_at = None
+        next_eligible_at = None
+
+    class _MinimalRuntimeStub:
+        advisory_cache = None
+
+        def snapshot_health(self) -> Any:
+            return _MinimalSnapshotStub()
+
+    svc = FC27DiscordBotService(
+        _build_enabled_config(),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=_MinimalRuntimeStub(),  # type: ignore[arg-type]
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=APPROVED_USER_ID,
+    )
+    assert resp.status == "OK"
+    assert resp.row_count == 0
+    combined_fields: dict[str, str] = {}
+    for emb in resp.embeds:
+        combined_fields.update(emb.fields)
+        for v in emb.fields.values():
+            assert v.lower() not in {"none", "null", "undefined", "nan"}
+    assert combined_fields["database_availability"] == "AVAILABLE"
+    assert combined_fields["database_match_count"] == "0"
+    assert combined_fields["latest_stored_match_time"] == "N/A"
+    assert combined_fields["poll_status"] == "N/A"
+    assert combined_fields["circuit_state"] == "N/A"
+    assert combined_fields["continuity_last_verified_at"] == "N/A"
+    assert combined_fields["last_attempt_at"] == "N/A"
+    assert combined_fields["last_success_at"] == "N/A"
+    assert combined_fields["next_eligible_at"] == "N/A"
+
+
+def test_56_status_suppresses_mentions_and_enforces_embed_bounds() -> None:
+    """56. `/fc27 status` suppresses mentions and enforces Discord embed/field bounds."""
+    from src.fc27_discord_bot import FC27DiscordEmbed, FC27DiscordError, _format_safe_status_value
+
+    sanitized_val = _format_safe_status_value("alert @everyone @here <@123456789> <#987654321>")
+    assert "@everyone" not in sanitized_val
+    assert "@here" not in sanitized_val
+    assert "<@123456789>" not in sanitized_val
+    assert "<#987654321>" not in sanitized_val
+    assert_discord_output_sanitized(sanitized_val)
+
+    with pytest.raises(FC27DiscordPrivacyError):
+        assert_discord_output_sanitized("Unsuppressed @everyone ping")
+
+    too_many_fields = {f"field_{i}": "val" for i in range(26)}
+    with pytest.raises(FC27DiscordError, match="exceeds 25"):
+        FC27DiscordEmbed(title="Test", description="Desc", fields=too_many_fields)

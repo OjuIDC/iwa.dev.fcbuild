@@ -48,8 +48,7 @@ from src.fc27_dashboard_queries import (
     fetch_player_performances_window,
     require_fc27_analytics_enabled,
 )
-from src.fc27_user_export import (
-    CLOCK_SKEW_TOLERANCE_SECONDS,
+from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
     EAST_COASTERS_GAME_VERSION,
@@ -57,6 +56,7 @@ from src.fc27_user_export import (
     canonicalize_for_hashing,
     scan_for_sensitive_fields,
 )
+from src.fc27_repository import CLOCK_SKEW_TOLERANCE_SECONDS
 RANKING_POLICY_VERSION = "fc27-rank-v1"
 from src.schemas import (
     SAMPLE_SIZE_TIERS,

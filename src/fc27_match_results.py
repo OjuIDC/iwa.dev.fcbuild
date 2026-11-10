@@ -150,7 +150,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src import settings
 from src.db_migrate import check_runtime_posture
 from src.db_roles import ROLE_MATCH_RESULTS_WRITER, ROLE_OWNER, redact_conninfo
-from src.fc27_user_export import (
+from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_GAME_VERSION,
     EAST_COASTERS_PLATFORM,

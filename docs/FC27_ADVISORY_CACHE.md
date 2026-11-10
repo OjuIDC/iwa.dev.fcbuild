@@ -3,7 +3,7 @@
 - **Status**: Current (`IMPLEMENTED_AND_TESTED`)
 - **Audience**: Developers, Operators, Architects, Security Reviewers
 - **Target Club**: `East Coasters` (`club_id = 330323`, `platform = common-gen5`, `game_version = FC27`)
-- **Source of Truth**: [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py), [`src/fc27_polling_worker.py`](../src/fc27_polling_worker.py), [`src/fc27_discord_bot.py`](../src/fc27_discord_bot.py), [`src/fc27_demo.py`](../src/fc27_demo.py), [`src/fc27_demo_api.py`](../src/fc27_demo_api.py), [`tests/test_fc27_advisory_cache.py`](../tests/test_fc27_advisory_cache.py)
+- **Source of Truth**: [`src/fc27_advisory_cache.py`](../src/fc27_advisory_cache.py), [`src/fc27_polling_worker.py`](../src/fc27_polling_worker.py), [`src/fc27_discord_bot.py`](../src/fc27_discord_bot.py), [`tests/test_fc27_advisory_cache.py`](../tests/test_fc27_advisory_cache.py)
 - **Companion Specifications**: [`docs/FC27_PERFORMANCE_BASELINE.md`](FC27_PERFORMANCE_BASELINE.md), [`docs/FC27_DISCORD_BOT.md`](FC27_DISCORD_BOT.md), [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md), [`docs/FC27_LANGUAGE_DECISION_MATRIX.md`](FC27_LANGUAGE_DECISION_MATRIX.md)
 - **Cache Contract Version**: `fc27-advisory-cache-1.0.0`
 
@@ -109,10 +109,9 @@ Every validation and privacy-scan site across `src/fc27_*.py` was audited and cl
 | :--- | :--- | :--- |
 | `src/fc27_clubs_api_contracts.py:validate_matches_payload` | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** External provider / fixture JSON schema validation, duplicate-key rejection, and recursive sensitive-field scan. |
 | `src/fc27_community_provider.py` acquisition & normalization | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Community provider response validation, pseudonymization (`plr_ecf_<12-hex>`), and sensitive-field rejection. |
-| `src/fc27_user_export.py` & `src/fc27_capture.py` import boundaries | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Untrusted offline file import and pre-persistence verification. |
+| `src/fc27_privacy.py` & `src/fc27_repository.py` import boundaries | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Untrusted envelope validation, sensitive-field scanning, and pre-persistence verification. |
 | `src/fc27_repository.py` persistence boundary | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Pre-commit hash, pseudonym, and replay-conflict checks. |
 | `src/fc27_discord_bot.py:assert_sql_is_readonly_fc27_select` & `assert_discord_output_sanitized` | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Outbound Discord message/embed/attachment sanitization and read-only SQL enforcement. |
-| `src/fc27_demo_api.py:_scan_no_sensitive_output` | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Outbound HTTP JSON response privacy check. |
 | `src/fc27_performance.py:assert_telemetry_payload_safe` | `TRUST_BOUNDARY_REQUIRED` | **Retained in full.** Telemetry artifact privacy check. |
 | First construction of `FC27SearchContext`, `FC27ScoutReport`, `FC27AnalystReport`, `FC27CoachReport`, `FC27TacticsReport`, `FC27DirectorReport` | `INTERNAL_CONSTRUCTION_REQUIRED` | **Retained in full.** Enforces Pydantic v2 schema invariants, confidence-tier ceilings, evidence-language filters, and deterministic SHA-256 report hashes. |
 | Repeated recursive `scan_for_sensitive_fields` and `model_dump(mode="json")` re-serialization of already-verified frozen upstream reports inside `Scout`, `Analyst`, `Coach`, `Tactics`, and `Director` | `REDUNDANT_INTERNAL_RESCAN` | **Optimized.** Verified frozen models carry a structural signature check (`_is_privacy_verified_frozen_model` / `_has_verified_model_hash`) that detects any `object.__setattr__` tampering while avoiding O(N) redundant re-scans and repeated JSON canonicalization of unchanged upstream reports. |
@@ -136,16 +135,16 @@ All benchmarks were executed offline using [`src/fc27_performance.py`](../src/fc
 | `/fc27 tactics` | `977.454` | `1107.918` | `68.583` | `71.930` | `15.4x` | `PASS` (`< 100 ms`) |
 | `/fc27 director` | `1091.930` | `1293.184` | `65.176` | `67.995` | `19.0x` | `PASS` (`< 100 ms`) |
 
-### 5.2 Loopback Dashboard Endpoints (`src/fc27_demo_api.py`)
+### 5.2 Advisory Cache Serialized Projections (`src/fc27_advisory_cache.py`)
 
-| Endpoint | Before Cold (ms) | After Cold (ms) | Before Warm P95 (ms) | After Warm P95 (ms) | Target (`< 100 ms` Warm) |
+| Projection | Before Cold (ms) | After Cold (ms) | Before Warm P95 (ms) | After Warm P95 (ms) | Target (`< 100 ms` Warm) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `GET /demo/status` | `3080.704` | `396.387` | `3.308` | `5.579` | `PASS` |
-| `GET /demo/matches` | `3.588` | `4.197` | `3.154` | `5.305` | `PASS` |
-| `GET /demo/analysis` | `67.185` | `48.209` | `49.947` | `79.228` | `PASS` |
-| `GET /api/fc27/demo/coach` | `34.142` | `18.308` | `50.659` | `29.477` | `PASS` |
-| `GET /api/fc27/demo/tactics` | `42.201` | `17.560` | `49.093` | `24.977` | `PASS` |
-| `GET /api/fc27/demo/director` | `34.331` | `16.434` | `44.849` | `12.236` | `PASS` |
+| `dashboard_status` | `3080.704` | `396.387` | `3.308` | `5.579` | `PASS` |
+| `dashboard_matches` | `3.588` | `4.197` | `3.154` | `5.305` | `PASS` |
+| `dashboard_analysis` | `67.185` | `48.209` | `49.947` | `79.228` | `PASS` |
+| `dashboard_coach` | `34.142` | `18.308` | `50.659` | `29.477` | `PASS` |
+| `dashboard_tactics` | `42.201` | `17.560` | `49.093` | `24.977` | `PASS` |
+| `dashboard_director` | `34.331` | `16.434` | `44.849` | `12.236` | `PASS` |
 
 ### 5.3 Multi-Scale Cold Full Advisory Pipeline (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`)
 

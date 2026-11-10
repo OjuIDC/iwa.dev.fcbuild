@@ -47,18 +47,18 @@ from src.fc27_dashboard_queries import (
     fetch_player_performances_window,
     require_fc27_analytics_enabled,
 )
-from src.fc27_provider import FC27TransportClient
-from src.fc27_repository import (
-    apply_export_plan,
-    insert_quarantine_record,
-    load_existing_match_hashes,
-)
-from src.fc27_user_export import (
+from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
     EAST_COASTERS_GAME_VERSION,
     EAST_COASTERS_PLATFORM,
     compute_payload_sha256,
+)
+from src.fc27_provider import FC27TransportClient
+from src.fc27_repository import (
+    apply_export_plan,
+    insert_quarantine_record,
+    load_existing_match_hashes,
     parse_fc27_user_export_json,
     plan_fc27_user_export_import,
 )

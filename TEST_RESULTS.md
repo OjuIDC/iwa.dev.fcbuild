@@ -39,7 +39,7 @@ Command (with `POSTGRES_DSN` and `POSTGRES_SUPERUSER_DSN` pointing to PostgreSQL
 .\.venv\Scripts\pytest.exe tests/test_fc27_*.py -q
 ```
 Result: **All passed**
-- Includes `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_coach.py`, `tests/test_fc27_operator_capture.py`, `tests/test_fc27_user_export.py`, `tests/test_fc27_platform.py`, `tests/test_fc27_discord_bot.py`, `tests/test_fc27_match_results.py`, plus the focused provider and contract test modules above, executing real SQL against `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under Grants Policy Version 15.
+- Includes `tests/test_fc27_persistence_and_queries.py`, `tests/test_fc27_dashboard_queries.py`, `tests/test_fc27_coach.py`, `tests/test_fc27_privacy.py`, `tests/test_fc27_platform.py`, `tests/test_fc27_discord_bot.py`, `tests/test_fc27_match_results.py`, plus the focused provider and contract test modules above, executing real SQL against `fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, and `fc27_quarantine_records` under Grants Policy Version 15.
 
 ### 2.3 Documentation Consistency, Archive Manifest, & Packaging Guard Suite
 Command:
@@ -65,6 +65,6 @@ Result:
 |---|---|---|
 | **Bytecode Compilation** | `.\.venv\Scripts\python.exe -m compileall -q src scripts tests` | `EXIT_CODE=0` |
 | **MatchPulse Sibling Boundary** | `.\.venv\Scripts\python.exe scripts/check_matchpulse_boundary.py` | `boundary drift check: OK` |
-| **Community Provider Evaluation (Offline Mock)** | `.\.venv\Scripts\python.exe scripts/fc27_community_eval.py --operation mock-eval` | `MATCH_SCHEMA_STATUS=PASS` (`RAW_RESPONSE_RETAINED=NO`) |
-| **Capture Preflight CLI** | `.\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --help` | `EXIT_CODE=0` (zero network requests) |
+| **Community Polling Worker Status (Offline)** | `.\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status` | `POLL_STATUS=DISABLED` (`0` network requests) |
+| **Discord Bot Status (Offline)** | `.\.venv\Scripts\python.exe scripts/fc27_discord_bot.py --status` | `DISCORD_PROVIDER_REQUESTS=0` |
 | **Git Whitespace & Conflict Check** | `git diff --check` | `EXIT_CODE=0` (clean) |

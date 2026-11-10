@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
-import yaml
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from tests.test_fc27_pandas_view import _make_pandas_shim
 
@@ -35,8 +33,6 @@ from src.fc27_community_provider import (
     FC27CommunityProviderEnvelope,
     apply_community_event_policy,
     build_community_persistence_preview,
-    build_demo_session_artifacts_from_community_envelope,
-    build_demo_session_artifacts_from_persisted_records,
     classify_community_event_id,
     ingest_community_provider_envelope,
     normalize_community_identity_records,
@@ -45,8 +41,6 @@ from src.fc27_community_provider import (
     run_analytics_from_persisted_community_records,
     validate_community_player_match_records,
 )
-from src.fc27_demo import FC27DemoStateStore
-from src.fc27_demo_api import create_demo_app
 from src.fc27_pandas_view import FC27PandasView
 from src.fc27_repository import FC27ReplayConflictError
 from src.fc27_search_scout import FC27PrivacyViolationError
@@ -775,53 +769,6 @@ def test_comm_56_downstream_coaching_and_dispatch_not_called() -> None:
     assert summary.recommendations_enabled == "NO"
     assert summary.dispatch_enabled == "NO"
 
-    store = FC27DemoStateStore()
-    artifacts = build_demo_session_artifacts_from_community_envelope(env)
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    client = TestClient(app)
-    resp = client.get("/demo/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["source_mode"] == LIVE_EA_CLUBS_COMMUNITY_CLIENT
-    assert body["synthetic_data_classification"] == LIVE_EA_CLUBS_COMMUNITY_CLIENT
-    assert body["recommendations_enabled"] is False
-    assert body["dispatch_enabled"] is False
-
-
-# 57. container compose configuration mounts no secrets or home directories
-def test_comm_57_container_compose_isolation() -> None:
-    compose_path = REPO_ROOT / "docker-compose.community-eval.yml"
-    dockerfile_path = REPO_ROOT / "Dockerfile.community-eval"
-    assert compose_path.is_file()
-    assert dockerfile_path.is_file()
-    df_text = dockerfile_path.read_text(encoding="utf-8")
-    assert "@sha256:" in df_text
-    assert UPSTREAM_COMMIT_SHA in df_text
-    assert "USER 10001:65534" in df_text
-
-    cfg = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-    svc = cfg["services"]["fc27-community-client-evaluation"]
-    assert svc["read_only"] is True
-    assert svc["restart"] == "no"
-    assert "no-new-privileges:true" in svc["security_opt"]
-    assert "ALL" in svc["cap_drop"]
-    assert "secrets" not in svc
-    assert "volumes" not in svc
-    assert "ports" not in svc
-    env = svc.get("environment") or {}
-    for forbidden in (
-        "POSTGRES_URI",
-        "POSTGRES_URI_FILE",
-        "APPROVAL_SIGNING_SECRET",
-        "GRAPH_SERVICE_TOKEN",
-        "GRAPH_COMMISSIONER_TOKEN_SHA256",
-        "MCP_API_TOKEN",
-        "WS_AUTH_TOKEN",
-        "LANGFUSE_SECRET_KEY",
-    ):
-        assert forbidden not in env
-
 
 # 58. pytest performs zero live calls and zero EA DNS lookups
 def test_comm_58_pytest_zero_live_calls_and_zero_ea_dns() -> None:
@@ -953,7 +900,7 @@ def test_comm_59_postgres_persistence_idempotency_conflict_and_persisted_read(
             cur.execute("SELECT COUNT(*) FROM public.dispatches")
             assert cur.fetchone()[0] == 0
 
-    # Read back persisted records and run Search -> Scout -> Analyst and Demo API
+    # Read back persisted records and run Search -> Scout -> Analyst
     s_ctx, scout_rep, analyst_rep = run_analytics_from_persisted_community_records(
         pg_db_migrated.app,
         payload_sha256=env.payload_hash,
@@ -963,24 +910,3 @@ def test_comm_59_postgres_persistence_idempotency_conflict_and_persisted_read(
     assert len(s_ctx.context_hash) == 64
     assert len(scout_rep.report_hash) == 64
     assert len(analyst_rep.report_hash) == 64
-
-    artifacts = build_demo_session_artifacts_from_persisted_records(
-        pg_db_migrated.app,
-        payload_sha256=env.payload_hash,
-        analysis_generated_at=gen_at,
-    )
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    client = TestClient(app)
-    html_resp = client.get("/demo")
-    assert html_resp.status_code == 200
-    assert "Live EA Clubs Data via pinned community client" in html_resp.text
-    assert "POLLING_DISABLED" in html_resp.text
-    assert "RECOMMENDATIONS_DISABLED" in html_resp.text
-    assert "DISPATCH_DISABLED" in html_resp.text
-    status_resp = client.get("/demo/status").json()
-    assert status_resp["source_classification"] == LIVE_EA_CLUBS_COMMUNITY_CLIENT
-    assert status_resp["polling_enabled"] is False
-    assert status_resp["recommendations_enabled"] is False
-    assert status_resp["dispatch_enabled"] is False

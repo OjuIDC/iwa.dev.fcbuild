@@ -41,7 +41,7 @@ The East Coasters FC27 Discord bot (`src/fc27_discord_bot.py`, `src/fc27_match_r
 
 ## Provider Analytics `/fc27` Slash Commands (13 Commands + Aliases)
 
-1. `/fc27 status` — Provider, 12-hour polling, and database match count summary
+1. `/fc27 status` — Comprehensive read-only status summary (moved from the former `/demo/status` endpoint in Stage B4) covering club (`East Coasters`, `330323`, `common-gen5`, `FC27`), provider (`fc-clubs-api-community-v1`), 12-hour polling policy (`ONCE_EVERY_12_HOURS`, `43200s`, max 2 requests/24h, `max_requests=1`, `max_retries=0`, single-flight, analytics-on-new-only), runtime health (`polling_enabled`, `worker_running`, `last_status`, `last_attempt_at`, `last_success_at`, `last_new_match_at`, `next_eligible_at`, `consecutive_failures`, `circuit_state`, `total_cycles`, `total_requests`, `total_matches_inserted`, `total_duplicates_ignored`, `total_replay_conflicts`, `last_error_code`, `last_error_summary`), window Continuity (`continuity_status`, `window_max_results`, `previous_latest_match_id_seen`, `latest_match_id_in_window`, `overlap_count_with_stored_matches`), repository availability (`database_available`, `persisted_match_count`, `latest_match_timestamp`, `quarantine_count`), manual Match Results availability (`manual_match_results_available`, `manual_match_count`), and safety gates (`DISCORD_PROVIDER_REQUESTS=0`, `DISCORD_DATABASE_WRITE_ACCESS=False`, `RECOMMENDATIONS=DISABLED`, `DISPATCH=DISABLED`). Missing timestamps or IDs render as `N/A`.
 2. `/fc27 latest` (aliases `/fc27 recent`, `/fc27 last5`) — Paginated sanitized match summaries
 3. `/fc27 form` (alias `/fc27 summary`) — Team form, sample size, and confidence tier
 4. `/fc27 analysis` — Analyst findings, counter-evidence, confounders, and data gaps

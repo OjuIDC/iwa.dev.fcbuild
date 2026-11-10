@@ -175,8 +175,30 @@ def test_project_includes_only_existing_repository_files_and_excludes_removed_b1
         r"src\roles.py",
         r"src\thread_ids.py",
         r"scripts\commissioner_decide.py",
+        r"src\fc27_demo.py",
+        r"src\fc27_demo_api.py",
+        r"src\fc27_user_export.py",
+        r"src\fc27_capture.py",
+        r"scripts\fc27_demo_fixture_server.py",
+        r"scripts\fc27_demo_ingest.py",
+        r"scripts\fc27_capture_preflight.py",
+        r"scripts\fc27_user_export_import.py",
+        r"scripts\fc27_community_eval.py",
+        r"Dockerfile.community-eval",
+        r"docker-compose.community-eval.yml",
+        r"config\fc27_east_coasters_normalized_export.schema.json",
+        r"tests\synthetic_fc27_east_coasters_normalized_template.json",
+        r"tests\synthetic_fc27_user_export.json",
+        r"tests\test_fc27_demo.py",
+        r"tests\test_fc27_user_export.py",
+        r"tests\test_fc27_operator_capture.py",
+        r"docs\FC27_DEMO.md",
+        r"docs\FC27_COMMUNITY_PROVIDER_EVALUATION.md",
+        r"docs\FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md",
     }
     assert removed_b1_and_b2.isdisjoint(included_paths)
+    assert r"src\fc27_privacy.py" in included_paths
+    assert r"tests\test_fc27_privacy.py" in included_paths
 
 
 def _find_visual_studio_msbuild() -> Path:

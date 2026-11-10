@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
   "repository": "iwa.dev.fcbuild",
-  "base_commit": "5d1823c1c37add1d1062eedfec086514a504cd11",
-  "total_files": 213,
+  "base_commit": "6bdebc9aa6da3df3c55dd0b83e3375ba9f4618f0",
+  "total_files": 195,
   "files": [
     {
       "path": ".dockerignore",
@@ -23,16 +23,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active repository configuration and build specification",
       "last_relevant_commit": "ba5afd13281b3a64e6f1bdba1fdf91cb53b553d6"
-    },
-    {
-      "path": ".pre-commit-config.yaml",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Optional local pre-commit hook configuration",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Provides pinned whitespace, newline, YAML, TOML, JSON, and merge-conflict checks without adding CI dependencies",
-      "last_relevant_commit": "2c9104c2f53b8a37a2748f15b47ca24a2c5c9961"
     },
     {
       "path": ".github/dependabot.yml",
@@ -105,14 +95,14 @@
       "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
-      "path": "Dockerfile.community-eval",
+      "path": ".pre-commit-config.yaml",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative configuration, container, or packaging specification (Dockerfile.community-eval)",
+      "authoritative_role": "Optional local pre-commit hook configuration",
       "replacement_path": null,
       "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active repository configuration and build specification",
-      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
+      "reason": "Provides pinned whitespace, newline, YAML, TOML, JSON, and merge-conflict checks without adding CI dependencies",
+      "last_relevant_commit": "2c9104c2f53b8a37a2748f15b47ca24a2c5c9961"
     },
     {
       "path": "Dockerfile.community-worker",
@@ -235,16 +225,6 @@
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
     },
     {
-      "path": "config/fc27_east_coasters_normalized_export.schema.json",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative configuration, container, or packaging specification (config/fc27_east_coasters_normalized_export.schema.json)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active repository configuration and build specification",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
-    },
-    {
       "path": "config/fc27_removed_items_manifest.json",
       "category": "configuration_and_packaging",
       "status": "CURRENT_AUTHORITATIVE",
@@ -253,16 +233,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Machine-readable registry of proven dead/duplicate files removed from the repository",
       "last_relevant_commit": "b2c7bbda0d4a5f5788caa5e2cb74844c9bf5c5f0"
-    },
-    {
-      "path": "docker-compose.community-eval.yml",
-      "category": "configuration_and_packaging",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative configuration, container, or packaging specification (docker-compose.community-eval.yml)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active repository configuration and build specification",
-      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
     },
     {
       "path": "docker-compose.community-worker.yml",
@@ -445,16 +415,6 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
-      "path": "docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
-    },
-    {
       "path": "docs/FC27_COMPONENT_STATUS.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -495,16 +455,6 @@
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
     },
     {
-      "path": "docs/FC27_DEMO.md",
-      "category": "documentation_current",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative documentation for East Coasters FC 27 one-shot ingestion and analytics demo (docs/FC27_DEMO.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_CURRENT",
-      "reason": "Authoritative guide for the loopback-only FC 27 synthetic ingestion and analytics demo",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
       "path": "docs/FC27_DIRECTOR_RECONCILIATION.md",
       "category": "documentation",
       "status": "CURRENT_AUTHORITATIVE",
@@ -533,16 +483,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Current reconciled documentation aligned with implemented code",
       "last_relevant_commit": "764d95687d0ccf848ec5b52fbb19638cc38123e4"
-    },
-    {
-      "path": "docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md",
-      "category": "documentation",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative repository documentation (docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Current reconciled documentation aligned with implemented code",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
       "path": "docs/FC27_GHCR_RUNTIME_PROMOTION.md",
@@ -1135,6 +1075,16 @@
       "last_relevant_commit": "b6094d54f660777a0290cd7d04d2dc90c0e5cab3"
     },
     {
+      "path": "migrations/0013_fc27_manual_match_results.sql",
+      "category": "database_migration",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative database migration for manual Match Results tables and append-only audit trigger (migrations/0013_fc27_manual_match_results.sql)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Defines isolated public.fc27_manual_matches, public.fc27_manual_match_players, public.fc27_manual_match_events, and public.fc27_manual_match_audit",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
+    },
+    {
       "path": "migrations/post/grants.sql",
       "category": "database_migration",
       "status": "IMPLEMENTED_AND_TESTED",
@@ -1265,46 +1215,6 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
-      "path": "scripts/fc27_capture_preflight.py",
-      "category": "operational_script",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_capture_preflight.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active CLI helper verified by regression tests",
-      "last_relevant_commit": "ea384538c70e21deb334726b0571605d2404a5d3"
-    },
-    {
-      "path": "scripts/fc27_community_eval.py",
-      "category": "scripts_and_tooling",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative CLI script or developer/operational tool (scripts/fc27_community_eval.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active CLI or verification script",
-      "last_relevant_commit": "0306bc480de5a55f85e1ddad3716b860b2b7d3a3"
-    },
-    {
-      "path": "scripts/fc27_demo_fixture_server.py",
-      "category": "scripts_and_tools",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Executable operational/validation script (scripts/fc27_demo_fixture_server.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Loopback-only (127.0.0.1) synthetic FC 27 fixture HTTP server for deterministic demo scenarios",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
-      "path": "scripts/fc27_demo_ingest.py",
-      "category": "scripts_and_tools",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Executable operational/validation script (scripts/fc27_demo_ingest.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "One-shot FC 27 ingestion and Search/Scout/Analyst demo CLI",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
       "path": "scripts/fc27_discord_bot.py",
       "category": "scripts",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1333,16 +1243,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active East Coasters FC27 local analytics platform file",
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
-    },
-    {
-      "path": "scripts/fc27_user_export_import.py",
-      "category": "operational_script",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative CLI or boundary check script (scripts/fc27_user_export_import.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active CLI helper verified by regression tests",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
       "path": "scripts/sanitize_test_report.py",
@@ -1465,16 +1365,6 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
-      "path": "src/fc27_capture.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_capture.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "098f919084c0527d0d9e53cfae2cbe3bb8f75c5a"
-    },
-    {
       "path": "src/fc27_ci_test_groups.py",
       "category": "source",
       "status": "CURRENT",
@@ -1525,26 +1415,6 @@
       "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
     },
     {
-      "path": "src/fc27_demo.py",
-      "category": "executable_source",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative runtime implementation module (src/fc27_demo.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Loopback transport, one-shot ingestion pipeline, optional PostgreSQL persistence gate, and Search/Scout/Analyst orchestration",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
-      "path": "src/fc27_demo_api.py",
-      "category": "executable_source",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative runtime implementation module (src/fc27_demo_api.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Loopback-only FastAPI demo routes and self-contained HTML inspection view gated by FC27_DEMO_MODE",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
       "path": "src/fc27_director.py",
       "category": "runtime_source",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1563,6 +1433,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active East Coasters FC27 local analytics platform file",
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
+    },
+    {
+      "path": "src/fc27_match_results.py",
+      "category": "runtime_source",
+      "status": "IMPLEMENTED_AND_TESTED",
+      "authoritative_role": "Manual Match Results domain repository, parsers, embed renderers, and guarded writer connection (src/fc27_match_results.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Implements manual Match Results commands, role-ID authorization helpers, edit-in-place Discord card sync, and optimistic concurrency",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
     },
     {
       "path": "src/fc27_pandas_view.py",
@@ -1593,6 +1473,16 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Implements single-flight advisory lock, bounded polling policy, transactional persistence, and conditional analytics",
       "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
+    },
+    {
+      "path": "src/fc27_privacy.py",
+      "category": "application_code",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative FC27 privacy, pseudonymization, sensitive-field scanning, Discord mention suppression, and CSV sanitization module (src/fc27_privacy.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Active East Coasters FC27 privacy and sanitization boundary module",
+      "last_relevant_commit": "6bdebc9aa6da3df3c55dd0b83e3375ba9f4618f0"
     },
     {
       "path": "src/fc27_provider.py",
@@ -1633,16 +1523,6 @@
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active East Coasters FC27 local analytics platform file",
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
-    },
-    {
-      "path": "src/fc27_user_export.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative runtime module (src/fc27_user_export.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active runtime code verified by automated test suites",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
     },
     {
       "path": "src/schemas.py",
@@ -1705,30 +1585,10 @@
       "last_relevant_commit": "e6c66812101c78eeee408b0b0cd10254e8cef36a"
     },
     {
-      "path": "tests/synthetic_fc27_east_coasters_normalized_template.json",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_east_coasters_normalized_template.json)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
-    },
-    {
       "path": "tests/synthetic_fc27_user_export.csv",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
       "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_user_export.csv)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
-    },
-    {
-      "path": "tests/synthetic_fc27_user_export.json",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/synthetic_fc27_user_export.json)",
       "replacement_path": null,
       "archive_decision": "KEEP_ACTIVE",
       "reason": "Active verification suite guarding runtime and documentation invariants",
@@ -1925,16 +1785,6 @@
       "last_relevant_commit": "de8ac9515d0599693c9bb2905749b24d122c743c"
     },
     {
-      "path": "tests/test_fc27_demo.py",
-      "category": "automated_tests",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Automated verification suite (tests/test_fc27_demo.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "80 end-to-end and adversarial tests for the FC 27 one-shot ingestion and analytics demo",
-      "last_relevant_commit": "6dc09452371570a1f00c77c7f1b930059a8ab938"
-    },
-    {
       "path": "tests/test_fc27_director.py",
       "category": "tests",
       "status": "CURRENT_AUTHORITATIVE",
@@ -1955,14 +1805,14 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
-      "path": "tests/test_fc27_operator_capture.py",
+      "path": "tests/test_fc27_match_results.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_operator_capture.py)",
+      "authoritative_role": "Authoritative automated test module for manual Match Results schema, parsers, role-ID authz, and Discord commands (tests/test_fc27_match_results.py)",
       "replacement_path": null,
       "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "792a217c1c991f35c032060ca4eb8d2c1abdc3c6"
+      "reason": "Active verification suite guarding manual Match Results domain, least-privilege writer role, and privacy boundaries",
+      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
     },
     {
       "path": "tests/test_fc27_pandas_view.py",
@@ -2015,6 +1865,16 @@
       "last_relevant_commit": "bbb28b44774a89dbb40c252f53c500e51d7a0acc"
     },
     {
+      "path": "tests/test_fc27_privacy.py",
+      "category": "tests",
+      "status": "CURRENT_AUTHORITATIVE",
+      "authoritative_role": "Authoritative unit test suite for src/fc27_privacy.py (tests/test_fc27_privacy.py)",
+      "replacement_path": null,
+      "archive_decision": "KEEP_ACTIVE",
+      "reason": "Focused privacy, pseudonymization, mention suppression, and CSV sanitization tests",
+      "last_relevant_commit": "6bdebc9aa6da3df3c55dd0b83e3375ba9f4618f0"
+    },
+    {
       "path": "tests/test_fc27_repository_cleanup.py",
       "category": "test_suite",
       "status": "CURRENT_AUTHORITATIVE",
@@ -2065,16 +1925,6 @@
       "last_relevant_commit": "470c9cc719c3425c57645aa8573eafc2f29bf6dd"
     },
     {
-      "path": "tests/test_fc27_user_export.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module or fixture (tests/test_fc27_user_export.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding runtime and documentation invariants",
-      "last_relevant_commit": "d524b894171c57e90d0a31013116f74d2769df3f"
-    },
-    {
       "path": "tests/test_github_workflows.py",
       "category": "test",
       "status": "CURRENT",
@@ -2083,16 +1933,6 @@
       "archive_decision": "KEEP_CURRENT",
       "reason": "Static policy, security, and shard-completeness tests for GitHub Actions workflows",
       "last_relevant_commit": "4fdde4c85b082941db89ce6fea7ccdc18eef37d0"
-    },
-    {
-      "path": "tests/test_visual_studio_project.py",
-      "category": "automated_test",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Visual Studio Python project build and environment regression tests",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Guards Python targets, relative interpreter paths, solution configuration, ignored IDE state, and real Windows MSBuild builds",
-      "last_relevant_commit": "5d7ca5547e1d1e0c71932ba10c5d5521dff29f4"
     },
     {
       "path": "tests/test_packaging.py",
@@ -2105,34 +1945,14 @@
       "last_relevant_commit": "b8825d6051edca7449691788a4be8f53c4ccbbdd"
     },
     {
-      "path": "migrations/0013_fc27_manual_match_results.sql",
-      "category": "database_migration",
-      "status": "CURRENT_AUTHORITATIVE",
-      "authoritative_role": "Authoritative database migration for manual Match Results tables and append-only audit trigger (migrations/0013_fc27_manual_match_results.sql)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Defines isolated public.fc27_manual_matches, public.fc27_manual_match_players, public.fc27_manual_match_events, and public.fc27_manual_match_audit",
-      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
-    },
-    {
-      "path": "src/fc27_match_results.py",
-      "category": "runtime_source",
-      "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Manual Match Results domain repository, parsers, embed renderers, and guarded writer connection (src/fc27_match_results.py)",
-      "replacement_path": null,
-      "archive_decision": "KEEP_ACTIVE",
-      "reason": "Implements manual Match Results commands, role-ID authorization helpers, edit-in-place Discord card sync, and optimistic concurrency",
-      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
-    },
-    {
-      "path": "tests/test_fc27_match_results.py",
+      "path": "tests/test_visual_studio_project.py",
       "category": "automated_test",
       "status": "IMPLEMENTED_AND_TESTED",
-      "authoritative_role": "Authoritative automated test module for manual Match Results schema, parsers, role-ID authz, and Discord commands (tests/test_fc27_match_results.py)",
+      "authoritative_role": "Visual Studio Python project build and environment regression tests",
       "replacement_path": null,
       "archive_decision": "KEEP_ACTIVE",
-      "reason": "Active verification suite guarding manual Match Results domain, least-privilege writer role, and privacy boundaries",
-      "last_relevant_commit": "a2d325cd6190df366b05cbbc3fd16299e3b9a470"
+      "reason": "Guards Python targets, relative interpreter paths, solution configuration, ignored IDE state, and real Windows MSBuild builds",
+      "last_relevant_commit": "5d7ca5547e1d1e0c71932ba10c5d5521dff29f4"
     }
   ]
 }

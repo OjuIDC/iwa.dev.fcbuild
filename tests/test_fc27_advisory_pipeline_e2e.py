@@ -1,10 +1,9 @@
-"""End-to-End Integration, Dashboard, and Safety Tests for the FC27 Advisory Pipeline (`PHASE 7`, `PHASE 8`, Tests #84–#100).
+"""End-to-End Integration, Discord Readback, and Safety Tests for the FC27 Advisory Pipeline (`PHASE 7`, `PHASE 8`, Tests #84–#100).
 
 Verifies the complete read-only advisory pipeline:
 `Search -> Scout -> Analyst -> Coach -> Tactics -> Director`
-plus dashboard projection (`/demo`, `/demo/status`, `/demo/analysis`), Discord bot parity,
-backup/restore hash determinism, isolation from PostgresSaver/approval/dispatch/MatchPulse Live,
-and repository governance invariants.
+plus Discord bot status and advisory parity, backup/restore hash determinism,
+isolation from PostgresSaver/approval/dispatch/MatchPulse Live, and repository governance invariants.
 
 Executes zero live EA network calls and zero live Discord calls.
 """
@@ -20,15 +19,11 @@ from typing import Any
 
 import psycopg
 import pytest
-from fastapi.testclient import TestClient
 
 from src.fc27_backup_restore import create_fc27_backup, verify_fc27_backup_restore
 from src.fc27_community_provider import (
-    build_demo_session_artifacts_from_persisted_records,
     run_advisory_pipeline_from_persisted_community_records,
 )
-from src.fc27_demo import FC27DemoStateStore
-from src.fc27_demo_api import create_demo_app
 from src.fc27_discord_bot import FC27DiscordBotConfig, FC27DiscordBotService
 from src.fc27_polling_worker import (
     FC27PollingRuntime,
@@ -64,7 +59,6 @@ def _guard_offline_network_and_pandas(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
     monkeypatch.setattr(socket, "create_connection", _guarded_create_connection)
     monkeypatch.setenv("FC27_ANALYTICS_ENABLED", "true")
-    monkeypatch.setenv("FC27_DEMO_ENABLED", "true")
     try:
         import pandas  # noqa: F401
     except ImportError:
@@ -183,159 +177,149 @@ def test_86_full_pipeline_skipped_when_poll_worker_sees_only_duplicate_matches(
 
 
 # ---------------------------------------------------------------------------
-# 87. Dashboard /demo/status includes 12-hour polling and advisory pipeline health
+# 87. Discord /fc27 status includes 12-hour polling and repository health
 # ---------------------------------------------------------------------------
-def test_87_dashboard_demo_status_includes_12_hour_polling_and_advisory_pipeline_health(
+def test_87_discord_status_includes_12_hour_polling_and_repository_health(
     monkeypatch: pytest.MonkeyPatch,
     pg_db_migrated: Any,
 ) -> None:
     runtime = _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
-    artifacts = build_demo_session_artifacts_from_persisted_records(pg_db_migrated.app)
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True, polling_runtime=runtime)
-    client = TestClient(app)
-
-    resp = client.get("/demo/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["polling"]["polling_frequency"] == "ONCE_EVERY_12_HOURS"
-    assert body["polling"]["poll_interval_seconds"] == 43200
-    assert body["polling"]["max_provider_requests_per_24_hours"] == 2
-    assert body["polling"]["catch_up_bursts_allowed"] is False
-
-    adv = body["advisory_pipeline"]
-    assert adv["pipeline_order"] == [
-        "Search",
-        "Scout",
-        "Analyst",
-        "Coach",
-        "Tactics",
-        "Director",
-    ]
-    assert adv["coach_active"] is True
-    assert adv["tactics_active"] is True
-    assert adv["director_active"] is True
-    assert adv["coach_hypotheses_count"] >= 1
-    assert adv["tactics_candidates_count"] >= 1
-    assert adv["recommendations_enabled"] is False
-    assert adv["approval_enabled"] is False
-    assert adv["dispatch_enabled"] is False
+    bot = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    resp = bot.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    assert resp.status == "OK"
+    fields = {k: v for emb in resp.embeds for k, v in emb.fields.items()}
+    assert fields["poll_interval"] == "43200s (ONCE_EVERY_12_HOURS)"
+    assert fields["daily_request_limit"] == "2"
+    assert fields["maximum_requests_per_cycle"] == "1"
+    assert fields["maximum_retries"] == "0"
+    assert fields["single_flight_enabled"] == "true"
+    assert fields["matches_inserted"] == "10"
+    assert fields["database_availability"] == "AVAILABLE"
+    assert fields["database_match_count"] == "10"
 
 
 # ---------------------------------------------------------------------------
-# 88. Dashboard /demo/analysis includes Search, Scout, Analyst, Coach, Tactics, Director, Data Gaps, and Unresolved Questions
+# 88. Discord advisory commands expose Coach, Tactics, Director, and Data Gaps
 # ---------------------------------------------------------------------------
-def test_88_dashboard_demo_analysis_includes_all_advisory_sections(
-    monkeypatch: pytest.MonkeyPatch,
-    pg_db_migrated: Any,
-) -> None:
-    _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
-    artifacts = build_demo_session_artifacts_from_persisted_records(pg_db_migrated.app)
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    client = TestClient(app)
-
-    resp = client.get("/demo/analysis")
-    assert resp.status_code == 200
-    body = resp.json()
-    for required_section in (
-        "search",
-        "scout",
-        "analyst",
-        "coach",
-        "tactics",
-        "director",
-        "data_gaps",
-        "unresolved_questions",
-    ):
-        assert required_section in body, f"Missing {required_section} in /demo/analysis"
-    assert body["coach"] is not None
-    assert len(body["coach"]["hypotheses"]) >= 1
-    assert body["tactics"] is not None
-    assert len(body["tactics"]["candidates"]) >= 1
-    assert body["director"] is not None
-    assert len(body["data_gaps"]) >= 1
-    assert len(body["unresolved_questions"]) >= 1
-    assert body["governance"]["recommendations_enabled"] is False
-    assert body["governance"]["approval_enabled"] is False
-    assert body["governance"]["dispatch_enabled"] is False
-
-
-# ---------------------------------------------------------------------------
-# 89. Dashboard /demo HTML displays required source, 12-hour polling, and safety banners
-# ---------------------------------------------------------------------------
-def test_89_dashboard_demo_html_displays_required_source_polling_and_safety_banners(
-    monkeypatch: pytest.MonkeyPatch,
-    pg_db_migrated: Any,
-) -> None:
-    _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
-    artifacts = build_demo_session_artifacts_from_persisted_records(pg_db_migrated.app)
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    client = TestClient(app)
-
-    resp = client.get("/demo")
-    assert resp.status_code == 200
-    html_text = resp.text
-    assert "LIVE_EA_CLUBS_COMMUNITY_CLIENT" in html_text
-    assert "ONCE_EVERY_12_HOURS" in html_text
-    assert "43200s" in html_text
-    assert "Recommendations Disabled | Approval Disabled | Dispatch Disabled" in html_text
-    assert "Coach Hypotheses &amp; Practice Experiments" in html_text
-    assert "Tactics Experimental Candidates" in html_text
-    assert "Director Evidence Reconciliation" in html_text
-    assert "Data Gaps &amp; Unmeasured Context" in html_text
-    assert "Unresolved Questions" in html_text
-
-
-# ---------------------------------------------------------------------------
-# 90. Dashboard /demo HTML displays no gamer tags, raw player names, or raw payloads
-# ---------------------------------------------------------------------------
-def test_90_dashboard_demo_html_displays_no_gamer_tags_or_raw_payloads(
-    monkeypatch: pytest.MonkeyPatch,
-    pg_db_migrated: Any,
-) -> None:
-    _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
-    artifacts = build_demo_session_artifacts_from_persisted_records(pg_db_migrated.app)
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True)
-    client = TestClient(app)
-
-    resp = client.get("/demo")
-    assert resp.status_code == 200
-    html_text = resp.text
-    for forbidden in (
-        "gamer_tag",
-        "playername",
-        "persona_id",
-        "psn_id",
-        "xbox_gamertag",
-        "ea_account_id",
-        "EastCoastPlayer",
-    ):
-        assert forbidden.lower() not in html_text.lower()
-
-
-# ---------------------------------------------------------------------------
-# 91. Discord bot and dashboard agree on persisted match count and confidence tier
-# ---------------------------------------------------------------------------
-def test_91_discord_bot_and_dashboard_agree_on_match_count_and_confidence_tier(
+def test_88_discord_advisory_commands_expose_all_advisory_sections(
     monkeypatch: pytest.MonkeyPatch,
     pg_db_migrated: Any,
 ) -> None:
     runtime = _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
-    artifacts = build_demo_session_artifacts_from_persisted_records(pg_db_migrated.app)
-    store = FC27DemoStateStore()
-    store.set_artifacts(artifacts)
-    app = create_demo_app(state_store=store, demo_mode_override=True, polling_runtime=runtime)
-    client = TestClient(app)
+    bot = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    for cmd in ("analysis", "coach", "tactics", "director", "data-gaps"):
+        resp = bot.handle_slash_command(
+            cmd,
+            guild_id="123456789012345678",
+            channel_id="234567890123456789",
+        )
+        assert resp.status == "OK", f"Command {cmd} failed"
+        assert resp.provider_requests_executed == 0
+        assert bot.config.database_write_access is False
+        assert len(resp.embeds) >= 1
 
-    dash_status = client.get("/demo/status").json()
-    dash_analysis = client.get("/demo/analysis").json()
+
+# ---------------------------------------------------------------------------
+# 89. Discord status and polling embeds display required source, 12-hour polling, and safety metadata
+# ---------------------------------------------------------------------------
+def test_89_discord_status_displays_required_source_polling_and_safety_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated: Any,
+) -> None:
+    runtime = _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
+    bot = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    resp = bot.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    fields = {k: v for emb in resp.embeds for k, v in emb.fields.items()}
+    assert fields["source_classification"] == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
+    assert "ONCE_EVERY_12_HOURS" in fields["poll_interval"]
+    assert "43200s" in fields["poll_interval"]
+    assert "RECOMMENDATIONS=DISABLED" in fields["governance"]
+
+
+# ---------------------------------------------------------------------------
+# 90. Discord embeds display no gamer tags, raw player names, or raw payloads
+# ---------------------------------------------------------------------------
+def test_90_discord_embeds_display_no_gamer_tags_or_raw_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated: Any,
+) -> None:
+    runtime = _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
+    bot = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        db_conn_or_uri=pg_db_migrated.app,
+        polling_runtime=runtime,
+    )
+    for cmd in ("status", "form", "analysis", "coach", "tactics", "director"):
+        resp = bot.handle_slash_command(
+            cmd,
+            guild_id="123456789012345678",
+            channel_id="234567890123456789",
+        )
+        serialized = json.dumps(resp.model_dump(mode="json"))
+        for forbidden in (
+            "gamer_tag",
+            "playername",
+            "persona_id",
+            "psn_id",
+            "xbox_gamertag",
+            "ea_account_id",
+            "EastCoastPlayer",
+        ):
+            assert forbidden.lower() not in serialized.lower()
+
+
+# ---------------------------------------------------------------------------
+# 91. Discord bot agrees with persisted advisory pipeline on match count and confidence tier
+# ---------------------------------------------------------------------------
+def test_91_discord_bot_agrees_with_persisted_advisory_pipeline_on_match_count_and_confidence_tier(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated: Any,
+) -> None:
+    runtime = _seed_persisted_east_coasters(monkeypatch, pg_db_migrated.app, count=10)
+    (
+        search_ctx,
+        _scout_rep,
+        analyst_rep,
+        _coach_rep,
+        _tactics_rep,
+        _director_rep,
+    ) = run_advisory_pipeline_from_persisted_community_records(pg_db_migrated.app)
 
     bot = FC27DiscordBotService(
         FC27DiscordBotConfig(
@@ -356,12 +340,13 @@ def test_91_discord_bot_and_dashboard_agree_on_match_count_and_confidence_tier(
         guild_id="123456789012345678",
         channel_id="234567890123456789",
     )
-    assert bot_status.row_count == dash_status["match_count"] == 10
+    assert bot_status.row_count == len(search_ctx.baseline_matches) == 10
     assert (
         bot_form.embeds[0].fields["confidence_tier"]
-        == dash_analysis["analyst"]["overall_confidence"]
+        == analyst_rep.overall_confidence
         == "MODERATE_CONFIDENCE"
     )
+
 
 
 # ---------------------------------------------------------------------------

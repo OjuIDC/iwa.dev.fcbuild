@@ -316,13 +316,13 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             'Pure Pydantic v2 endpoint schema, normalizer, pseudonymizer, and 23-bit event bitmap tests.',
         ),
         _entry(
-            'tests/test_fc27_operator_capture.py',
-            'OFFLINE_DOMAIN_PARALLEL_SAFE',
+            'tests/test_fc27_privacy.py',
+            'PURE_UNIT_PARALLEL_SAFE',
             ('unit', 'domain', 'security', 'offline', 'network_forbidden'),
             'unit_domain_parallel',
             'full-unit-domain',
             ('unit-domain',),
-            'Offline operator capture validation, redaction, and preflight tests.',
+            'Pure in-memory privacy, pseudonymization, sensitive-field detection, CSV formula escaping, and secret redaction tests.',
         ),
         _entry(
             'tests/test_fc27_pandas_view.py',
@@ -341,15 +341,6 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             'full-unit-domain',
             ('unit-domain',),
             'Offline FC27 platform domain models, analytics, and feature-gate boundary tests.',
-        ),
-        _entry(
-            'tests/test_fc27_user_export.py',
-            'OFFLINE_DOMAIN_PARALLEL_SAFE',
-            ('unit', 'domain', 'security', 'offline', 'network_forbidden'),
-            'unit_domain_parallel',
-            'full-unit-domain',
-            ('unit-domain',),
-            'Offline user export schema, CSV formula injection defense, and import planning tests.',
         ),
         _entry(
             'tests/test_visual_studio_project.py',
@@ -449,15 +440,6 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             'full-postgres',
             (),
             'Runs SMALL/MEDIUM/LARGE/STRESS timing benchmarks and PostgreSQL EXPLAIN ANALYZE; must run serially for stable timings.',
-        ),
-        _entry(
-            'tests/test_fc27_demo.py',
-            'FIXED_PORT_SERIAL',
-            ('postgres', 'domain', 'serial', 'offline', 'network_forbidden'),
-            'postgres_serial',
-            'full-postgres',
-            (),
-            'Starts loopback HTTP fixture servers and optional PostgreSQL persistence demo pipelines.',
         ),
         _entry(
             'tests/test_fc27_advisory_pipeline_e2e.py',

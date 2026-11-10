@@ -7,11 +7,11 @@ Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "iwa.dev.fcbuild", "iwa.dev.
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Application", "Application", "{F27EC330-3230-4FC2-8700-330323000010}"
 	ProjectSection(SolutionItems) = preProject
-		src\fc27_demo_api.py = src\fc27_demo_api.py
 		src\fc27_community_provider.py = src\fc27_community_provider.py
 		src\fc27_polling_worker.py = src\fc27_polling_worker.py
 		src\fc27_discord_bot.py = src\fc27_discord_bot.py
-		src\graph_api.py = src\graph_api.py
+		src\fc27_privacy.py = src\fc27_privacy.py
+		src\fc27_repository.py = src\fc27_repository.py
 		src\settings.py = src\settings.py
 	EndProjectSection
 EndProject
@@ -20,6 +20,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{F27EC330
 		tests\conftest.py = tests\conftest.py
 		tests\test_compose_isolation.py = tests\test_compose_isolation.py
 		tests\test_documentation_consistency.py = tests\test_documentation_consistency.py
+		tests\test_fc27_privacy.py = tests\test_fc27_privacy.py
 		tests\test_fc27_repository_cleanup.py = tests\test_fc27_repository_cleanup.py
 		tests\test_packaging.py = tests\test_packaging.py
 	EndProjectSection
@@ -35,19 +36,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Database and Migrations", "
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Infrastructure and Containers", "Infrastructure and Containers", "{F27EC330-3230-4FC2-8700-330323000040}"
 	ProjectSection(SolutionItems) = preProject
-		Dockerfile.community-eval = Dockerfile.community-eval
 		Dockerfile.community-worker = Dockerfile.community-worker
 		Dockerfile.discord = Dockerfile.discord
 		Dockerfile.graph = Dockerfile.graph
-		Dockerfile.mcp = Dockerfile.mcp
-		Dockerfile.stt = Dockerfile.stt
-		Dockerfile.tts = Dockerfile.tts
 		docker-compose.yml = docker-compose.yml
-		docker-compose.cpu.yml = docker-compose.cpu.yml
-		docker-compose.gpu.yml = docker-compose.gpu.yml
-		docker-compose.langfuse.yml = docker-compose.langfuse.yml
-		docker-compose.voice-gpu.yml = docker-compose.voice-gpu.yml
-		docker-compose.community-eval.yml = docker-compose.community-eval.yml
 		docker-compose.community-worker.yml = docker-compose.community-worker.yml
 		docker-compose.discord.yml = docker-compose.discord.yml
 		docker-compose.ghcr.yml = docker-compose.ghcr.yml
@@ -75,8 +67,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Configuration", "Configurat
 		pyproject.toml = pyproject.toml
 		requirements.txt = requirements.txt
 		requirements-dev.txt = requirements-dev.txt
-		requirements-langfuse.txt = requirements-langfuse.txt
-		requirements-swarms.txt = requirements-swarms.txt
 		config.example.env = config.example.env
 		config\documentation_consistency_policy.json = config\documentation_consistency_policy.json
 	EndProjectSection

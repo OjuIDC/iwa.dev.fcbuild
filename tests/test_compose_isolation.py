@@ -248,7 +248,6 @@ OPERATIONAL_PYTHON_DOCKERFILES = (
     "Dockerfile.graph",
     "Dockerfile.community-worker",
     "Dockerfile.discord",
-    "Dockerfile.community-eval",
 )
 
 

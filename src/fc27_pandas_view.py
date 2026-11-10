@@ -37,8 +37,9 @@ from src.fc27_clubs_api_contracts import (
     TARGET_GAME_VERSION,
     TARGET_PLATFORM,
 )
+from src.fc27_privacy import escape_csv_formula_cell
 from src.fc27_provider import FC27ProviderError
-from src.fc27_user_export import FC27SuppliedMatch, FC27SuppliedPlayerPerformance
+from src.fc27_repository import FC27SuppliedMatch, FC27SuppliedPlayerPerformance
 
 PANDAS_VIEW_VERSION: str = "fc27-pandas-view-1.0.0"
 CANONICAL_INTERNAL_INGESTION_FORMAT: Literal["records"] = "records"
@@ -361,9 +362,7 @@ def _sanitize_event_structures(
 
 def _sanitize_csv_cell(val: Any) -> Any:
     """Prevents CSV/Excel formula injection on string cells."""
-    if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return f"'{val}"
-    return val
+    return escape_csv_formula_cell(val)
 
 
 class FC27PandasView:

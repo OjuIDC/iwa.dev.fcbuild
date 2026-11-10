@@ -19,7 +19,13 @@ import pytest
 from src import events, settings
 from src.db_migrate import migrate
 from src.db_roles import bootstrap_cluster, bootstrap_database
-from src.fc27_repository import apply_export_plan, insert_quarantine_record
+from src.fc27_privacy import compute_payload_sha256
+from src.fc27_repository import (
+    apply_export_plan,
+    insert_quarantine_record,
+    parse_fc27_user_export_json,
+    plan_fc27_user_export_import,
+)
 from src.fc27_search_scout import (
     BASELINE_MATCH_LIMIT,
     FC27AnalyticsReader,
@@ -29,11 +35,6 @@ from src.fc27_search_scout import (
     PostgresFC27AnalyticsReader,
     scout_node,
     search_node,
-)
-from src.fc27_user_export import (
-    compute_payload_sha256,
-    parse_fc27_user_export_json,
-    plan_fc27_user_export_import,
 )
 
 REF_NOW = datetime(2026, 10, 29, 18, 0, 0, tzinfo=timezone.utc)

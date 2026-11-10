@@ -3,7 +3,7 @@
 - **Status**: Current
 - **Audience**: Security Reviewers, Platform Operators, CI/CD Engineers, Developers
 - **Last verified commit**: `a1dc93fa2b2724ba902c32cdcdf3f5e94972151a`
-- **Source of truth**: `Dockerfile.community-worker`, `Dockerfile.discord`, `Dockerfile.community-eval`, `.dockerignore`, `.github/workflows/container-images.yml`, `scripts/build_container_report.py`, `docker-compose.ghcr.yml`, `tests/test_github_workflows.py`
+- **Source of truth**: `Dockerfile.community-worker`, `Dockerfile.discord`, `.dockerignore`, `.github/workflows/container-images.yml`, `scripts/build_container_report.py`, `docker-compose.ghcr.yml`, `tests/test_github_workflows.py`
 
 This document specifies the container image build, vulnerability and secret scanning, SPDX-2.3 SBOM generation, SLSA v1 provenance, Sigstore Cosign keyless signing, base-image upgrade and waiver-removal evidence, and private GitHub Container Registry (`ghcr.io`) publication posture for `iwa.dev.fcbuild`.
 
@@ -15,7 +15,6 @@ This document specifies the container image build, vulnerability and secret scan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `fc27-community-worker` | `Dockerfile.community-worker` | `linux/amd64` | `10001:65534` | `ENTRYPOINT ["python", "scripts/fc27_polling_worker.py"]` / `CMD ["--status"]` | `ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker` |
 | `fc27-discord-bot` | `Dockerfile.discord` | `linux/amd64` | `10001:65534` | `ENTRYPOINT ["python", "scripts/fc27_discord_bot.py"]` / `CMD ["--status"]` | `ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot` |
-| `fc27-community-client-evaluation` | `Dockerfile.community-eval` | `linux/amd64` | `10001:65534` | `ENTRYPOINT ["python", "scripts/fc27_community_eval.py"]` | Local one-shot evaluation only (not published to GHCR) |
 
 ---
 
@@ -74,7 +73,7 @@ Both remediated images (`fc27-community-worker` and `fc27-discord-bot`) preserve
 - Clean `--status` readiness output and clean `SIGTERM` shutdown (`exit 0`).
 
 ### 3.2 Operational Separation Before Merge, Publication, and Promotion
-- Updating `Dockerfile.community-worker`, `Dockerfile.discord`, `Dockerfile.community-eval`, and `scripts/build_container_report.py` on a candidate branch **does not** modify `docker-compose.ghcr.yml` or redeploy running operational containers.
+- Updating `Dockerfile.community-worker`, `Dockerfile.discord`, and `scripts/build_container_report.py` on a candidate branch **does not** modify `docker-compose.ghcr.yml` or redeploy running operational containers.
 - Operational containers in `fc27-full-stack` continue running the approved, signed GHCR digests documented in [`FC27_GHCR_RUNTIME_PROMOTION.md`](FC27_GHCR_RUNTIME_PROMOTION.md) (`ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot@sha256:b8b571088b9a490fa4a1a517c60e1f43305ad863f3ecea9fc5df636541e7e084` and `ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker@sha256:8628acc26c9c73d9360a5e47d66c10c988e03d8273b5f15bb1f7cd3e1dc1fb79`) until:
   1. The candidate branch is pushed and reviewed in a pull request where `test-fast`, `ci`, `security-scan`, and `container-images` pass with zero waivers.
   2. The pull request is squash-merged to `main` and `.github/workflows/container-images.yml` publishes, attests (SLSA v1 + SPDX-2.3), and signs (Cosign keyless OIDC) the new GHCR digests.

@@ -10,8 +10,9 @@ from scripts import check_documentation_consistency as dc
 from src import (
     fc27_clubs_api_contracts,
     fc27_community_provider,
-    fc27_demo_api,
+    fc27_discord_bot,
     fc27_pandas_view,
+    fc27_privacy,
     settings,
 )
 from src.fc27_pandas_view import _PROHIBITED_VIEW_KEYS
@@ -29,7 +30,7 @@ def test_26_fixture_tests_retained() -> None:
         "tests/test_fc27_scout.py",
         "tests/test_fc27_analyst.py",
         "tests/test_fc27_dashboard_queries.py",
-        "tests/test_fc27_demo.py",
+        "tests/test_fc27_privacy.py",
     ]
     for rel in required_fixture_tests:
         assert (REPO_ROOT / rel).is_file(), f"Missing fixture test suite: {rel}"
@@ -137,18 +138,11 @@ def test_37_no_duplicate_normalization_owner() -> None:
 
 def test_38_no_duplicate_source_classification_definition() -> None:
     assert (
-        fc27_demo_api.LIVE_EA_CLUBS_COMMUNITY_CLIENT
-        is fc27_community_provider.LIVE_EA_CLUBS_COMMUNITY_CLIENT
+        fc27_community_provider.LIVE_EA_CLUBS_COMMUNITY_CLIENT
+        == "LIVE_EA_CLUBS_COMMUNITY_CLIENT"
     )
-    assert callable(fc27_demo_api.resolve_dashboard_source_label)
-    assert (
-        fc27_demo_api.resolve_dashboard_source_label("LIVE_EA_CLUBS_COMMUNITY_CLIENT")
-        == "Live EA Clubs Data via pinned community client"
-    )
-    assert (
-        fc27_demo_api.resolve_dashboard_source_label("DEMO_FIXTURE_LOOPBACK")
-        == "Synthetic Fixture Data"
-    )
+    assert callable(fc27_privacy.scan_for_sensitive_fields)
+    assert callable(fc27_privacy.pseudonymize_east_coasters_identifier)
 
 
 def test_39_no_orphan_current_document() -> None:
@@ -171,13 +165,15 @@ def test_41_no_orphan_current_docker_service() -> None:
     arch_doc = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     dev_doc = (REPO_ROOT / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
     prov_doc = (REPO_ROOT / "docs" / "FC27_PROVIDER_INTEGRATION.md").read_text(encoding="utf-8")
-    eval_doc = (REPO_ROOT / "docs" / "FC27_COMMUNITY_PROVIDER_EVALUATION.md").read_text(encoding="utf-8")
-    combined = arch_doc + "\n" + dev_doc + "\n" + prov_doc + "\n" + eval_doc
+    poll_doc = (REPO_ROOT / "docs" / "FC27_POLLING_WORKER.md").read_text(encoding="utf-8")
+    disc_doc = (REPO_ROOT / "docs" / "FC27_DISCORD_BOT.md").read_text(encoding="utf-8")
+    combined = arch_doc + "\n" + dev_doc + "\n" + prov_doc + "\n" + poll_doc + "\n" + disc_doc
     for service_name in [
         "postgres",
         "redis",
         "db-migrate",
-        "fc27-community-client-evaluation",
+        "fc27-community-worker",
+        "fc27-discord-bot",
     ]:
         assert service_name in combined, f"Service {service_name} not documented"
 
@@ -301,6 +297,8 @@ def test_46_repository_inventory_matches_tracked_files() -> None:
         "migrations/0013_fc27_manual_match_results.sql",
         "src/fc27_match_results.py",
         "tests/test_fc27_match_results.py",
+        "src/fc27_privacy.py",
+        "tests/test_fc27_privacy.py",
     }
     for rel in new_cleanup_files:
         if (REPO_ROOT / rel).exists():
@@ -317,12 +315,12 @@ def test_47_documentation_strict_validation_passes() -> None:
 
 
 def test_48_current_startup_commands_resolve() -> None:
-    assert callable(fc27_demo_api.create_demo_app)
+    assert callable(fc27_discord_bot.FC27DiscordBotService)
 
 
 def test_49_current_cli_entrypoints_import() -> None:
     py_scripts = sorted((REPO_ROOT / "scripts").glob("*.py"))
-    assert len(py_scripts) == 16
+    assert len(py_scripts) == 11
     for script_path in py_scripts:
         source = script_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(script_path))
@@ -333,7 +331,6 @@ def test_50_current_docker_entrypoints_import() -> None:
     docker_targets = [
         "src/db_migrate.py",
         "src/db_roles.py",
-        "scripts/fc27_community_eval.py",
         "scripts/fc27_polling_worker.py",
         "scripts/fc27_discord_bot.py",
     ]

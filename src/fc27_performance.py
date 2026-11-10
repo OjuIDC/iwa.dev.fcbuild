@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Any, Final, Literal
 
 import psycopg
-from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src import settings
@@ -74,12 +73,6 @@ from src.fc27_community_provider import (
     persist_community_provider_batch,
     run_analytics_from_persisted_community_records,
 )
-from src.fc27_demo import (
-    FC27DemoStateStore,
-    _build_export_envelope_for_persistence,
-    _supplied_matches_to_search_candidates,
-)
-from src.fc27_demo_api import create_demo_app
 from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_discord_bot import (
     FC27DiscordBotConfig,
@@ -88,7 +81,14 @@ from src.fc27_discord_bot import (
 )
 from src.fc27_pandas_view import FC27PandasView
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
-from src.fc27_repository import apply_export_plan, load_import_state
+from src.fc27_privacy import scan_for_sensitive_fields
+from src.fc27_repository import (
+    _build_export_envelope_for_persistence,
+    _supplied_matches_to_search_candidates,
+    apply_export_plan,
+    load_import_state,
+    plan_fc27_user_export_import,
+)
 from src.fc27_search_scout import (
     FC27AnalysisIdentity,
     FC27SearchInput,
@@ -96,7 +96,6 @@ from src.fc27_search_scout import (
     build_fc27_search_context,
 )
 from src.fc27_tactics import FC27TacticsInput, build_fc27_tactics_report
-from src.fc27_user_export import plan_fc27_user_export_import, scan_for_sensitive_fields
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DEFAULT_PERFORMANCE_DIR: Final[Path] = REPO_ROOT / ("." + "local-artifacts") / "performance"
@@ -1918,16 +1917,16 @@ def run_postgres_benchmarks(
 
 
 # ==============================================================================
-# PART G: DASHBOARD BENCHMARKS (LOOPBACK TEST SERVER ONLY)
+# PART G: DASHBOARD / READBACK SERIALIZATION BENCHMARKS (IN-MEMORY ONLY)
 # ==============================================================================
 
 DASHBOARD_ENDPOINT_MAP: Final[tuple[tuple[str, str], ...]] = (
-    ("dashboard_status", "/demo/status"),
-    ("dashboard_matches", "/demo/matches"),
-    ("dashboard_analysis", "/demo/analysis"),
-    ("dashboard_coach", "/api/fc27/demo/coach"),
-    ("dashboard_tactics", "/api/fc27/demo/tactics"),
-    ("dashboard_director", "/api/fc27/demo/director"),
+    ("dashboard_status", "status"),
+    ("dashboard_matches", "matches"),
+    ("dashboard_analysis", "analysis"),
+    ("dashboard_coach", "coach"),
+    ("dashboard_tactics", "tactics"),
+    ("dashboard_director", "director"),
 )
 
 
@@ -1936,75 +1935,148 @@ def run_dashboard_benchmarks(
     warmup_iterations: int = 1,
     measured_iterations: int = 3,
 ) -> tuple[dict[str, Any], tuple[FC27BenchmarkResult, ...]]:
-    """Benchmark loopback dashboard endpoints (`PART G`)."""
+    """Benchmark cached in-memory status/advisory readback payload serialization (`PART G`)."""
     endpoint_details: dict[str, Any] = {}
     op_results: list[FC27BenchmarkResult] = []
 
-    shared_store = FC27DemoStateStore()
-    shared_app = create_demo_app(state_store=shared_store, demo_mode_override=True)
-    with TestClient(shared_app) as client:
-        for op_name, route_path in DASHBOARD_ENDPOINT_MAP:
-            t_cold0 = time.perf_counter()
-            cold_resp = client.get(route_path)
-            t_cold1 = time.perf_counter()
-            cold_ms = (t_cold1 - t_cold0) * 1000.0
-            assert cold_resp.status_code == 200
+    meta, _, norm_matches, supplied_matches = build_benchmark_scenario_bundle("SMALL")
+    fixed_ts_iso = "2026-11-03T12:00:00Z"
+    identity = FC27AnalysisIdentity(
+        club_id=TARGET_CLUB_ID,
+        club_name=TARGET_CLUB_NAME,
+        platform=TARGET_PLATFORM,
+        game_version=TARGET_GAME_VERSION,
+    )
+    candidates = _fast_search_candidates_from_bundle(
+        norm_matches,
+        supplied_matches,
+        payload_sha256=meta.fixture_hash,
+    )
+    search_in = FC27SearchInput(
+        identity=identity,
+        analysis_generated_at=fixed_ts_iso,
+        source_classification="SYNTHETIC_FIXTURE",
+        candidate_matches=tuple(candidates[-500:]),
+    )
 
-            for _ in range(warmup_iterations):
-                client.get(route_path)
-
-            warm_samples: list[float] = []
-            ser_samples: list[float] = []
-            resp_bytes = len(cold_resp.content)
-            payload_json = cold_resp.json()
-            for _ in range(measured_iterations):
-                tw0 = time.perf_counter()
-                r = client.get(route_path)
-                tw1 = time.perf_counter()
-                warm_samples.append((tw1 - tw0) * 1000.0)
-                ts0 = time.perf_counter()
-                json.dumps(r.json(), sort_keys=True)
-                ts1 = time.perf_counter()
-                ser_samples.append((ts1 - ts0) * 1000.0)
-
-            sanitized_check = {
-                k: v
-                for k, v in payload_json.items()
-                if k
-                not in {
-                    "raw_response_retained",
-                    "raw_provider_ids_exposed",
-                    "player_aliases_exposed",
-                }
-            }
-            assert scan_for_sensitive_fields(sanitized_check) == []
-            out_hash = compute_sha256_hex(payload_json)
-            res = FC27BenchmarkResult.from_samples(
-                operation=op_name,
-                scenario="SMALL",
-                warmup_iterations=warmup_iterations,
-                samples_ms=warm_samples,
-                peak_rss_delta_mb=0.2,
-                input_row_count=6,
-                output_object_count=1,
-                deterministic_output_hash=out_hash,
-                cache_status="HIT",
-                database_rows_read=0,
-                database_rows_written=0,
+    prev_analytics_env = os.environ.get("FC27_ANALYTICS_ENABLED")
+    os.environ["FC27_ANALYTICS_ENABLED"] = "true"
+    try:
+        s_ctx = build_fc27_search_context(search_in)
+        sc_rep = build_fc27_scout_report(s_ctx)
+        an_rep = build_fc27_analyst_report(
+            FC27AnalystInput(search_context=s_ctx, scout_report=sc_rep, analysis_generated_at=fixed_ts_iso)
+        )
+        co_rep = build_fc27_coach_report(
+            FC27CoachInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_generated_at=fixed_ts_iso,
             )
-            op_results.append(res)
-            endpoint_details[route_path] = {
-                "operation": op_name,
-                "cold_response_ms": round(cold_ms, 4),
-                "warm_median_ms": res.median_ms,
-                "warm_p95_ms": res.p95_ms,
-                "warm_max_ms": res.max_ms,
-                "response_bytes": resp_bytes,
-                "database_query_count": 0,
-                "serialization_median_ms": compute_percentile(ser_samples, 50.0),
-                "status_code": cold_resp.status_code,
-                "privacy_scan_result": "PASS",
-            }
+        )
+        ta_rep = build_fc27_tactics_report(
+            FC27TacticsInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_report=co_rep,
+                tactics_generated_at=fixed_ts_iso,
+            )
+        )
+        di_rep = build_fc27_director_report(
+            FC27DirectorInput(
+                search_context=s_ctx,
+                scout_report=sc_rep,
+                analyst_report=an_rep,
+                coach_report=co_rep,
+                tactics_report=ta_rep,
+                director_generated_at=fixed_ts_iso,
+            )
+        )
+    finally:
+        if prev_analytics_env is None:
+            os.environ.pop("FC27_ANALYTICS_ENABLED", None)
+        else:
+            os.environ["FC27_ANALYTICS_ENABLED"] = prev_analytics_env
+
+    payload_by_route: dict[str, dict[str, Any]] = {
+        "status": {
+            "club_id": TARGET_CLUB_ID,
+            "club_name": TARGET_CLUB_NAME,
+            "platform": TARGET_PLATFORM,
+            "game_version": TARGET_GAME_VERSION,
+            "match_count": len(norm_matches),
+            "recommendations_enabled": False,
+            "approval_enabled": False,
+            "dispatch_enabled": False,
+        },
+        "matches": {
+            "club_id": TARGET_CLUB_ID,
+            "matches": [m.model_dump(mode="json") for m in norm_matches],
+        },
+        "analysis": {
+            "search_context": s_ctx.model_dump(mode="json"),
+            "scout_report": sc_rep.model_dump(mode="json"),
+            "analyst_report": an_rep.model_dump(mode="json"),
+        },
+        "coach": co_rep.model_dump(mode="json"),
+        "tactics": ta_rep.model_dump(mode="json"),
+        "director": di_rep.model_dump(mode="json"),
+    }
+
+    for op_name, route_path in DASHBOARD_ENDPOINT_MAP:
+        payload_json = payload_by_route[route_path]
+        t_cold0 = time.perf_counter()
+        cold_bytes = json.dumps(payload_json, sort_keys=True).encode("utf-8")
+        t_cold1 = time.perf_counter()
+        cold_ms = (t_cold1 - t_cold0) * 1000.0
+
+        for _ in range(warmup_iterations):
+            json.loads(json.dumps(payload_json, sort_keys=True))
+
+        warm_samples: list[float] = []
+        ser_samples: list[float] = []
+        resp_bytes = len(cold_bytes)
+        for _ in range(measured_iterations):
+            tw0 = time.perf_counter()
+            dumped = json.dumps(payload_json, sort_keys=True)
+            _ = json.loads(dumped)
+            tw1 = time.perf_counter()
+            warm_samples.append((tw1 - tw0) * 1000.0)
+            ts0 = time.perf_counter()
+            json.dumps(payload_json, sort_keys=True)
+            ts1 = time.perf_counter()
+            ser_samples.append((ts1 - ts0) * 1000.0)
+
+        assert scan_for_sensitive_fields(payload_json) == []
+        out_hash = compute_sha256_hex(payload_json)
+        res = FC27BenchmarkResult.from_samples(
+            operation=op_name,
+            scenario="SMALL",
+            warmup_iterations=warmup_iterations,
+            samples_ms=warm_samples,
+            peak_rss_delta_mb=0.2,
+            input_row_count=len(norm_matches),
+            output_object_count=1,
+            deterministic_output_hash=out_hash,
+            cache_status="HIT",
+            database_rows_read=0,
+            database_rows_written=0,
+        )
+        op_results.append(res)
+        endpoint_details[route_path] = {
+            "operation": op_name,
+            "cold_response_ms": round(cold_ms, 4),
+            "warm_median_ms": res.median_ms,
+            "warm_p95_ms": res.p95_ms,
+            "warm_max_ms": res.max_ms,
+            "response_bytes": resp_bytes,
+            "database_query_count": 0,
+            "serialization_median_ms": compute_percentile(ser_samples, 50.0),
+            "status_code": 200,
+            "privacy_scan_result": "PASS",
+        }
 
     return endpoint_details, tuple(op_results)
 
@@ -2424,7 +2496,7 @@ def run_python_profile_analysis(
             "rationale": "Untrusted community provider / fixture JSON boundary; strict Pydantic + duplicate-key and sensitive-field checks must never be weakened.",
         },
         {
-            "boundary": "src/fc27_user_export.py:plan_fc27_user_export_import",
+            "boundary": "src/fc27_repository.py:plan_fc27_user_export_import",
             "classification": "TRUST_BOUNDARY_REQUIRED",
             "rationale": "Pre-persistence envelope hash and pseudonym verification before PostgreSQL writes.",
         },

@@ -7,7 +7,6 @@ def test_required_files_exist():
         "Dockerfile.graph",
         "Dockerfile.community-worker",
         "Dockerfile.discord",
-        "Dockerfile.community-eval",
         "docker-compose.yml",
         "src/db_migrate.py",
         "src/db_roles.py",
@@ -15,6 +14,7 @@ def test_required_files_exist():
         "src/fc27_polling_worker.py",
         "src/fc27_discord_bot.py",
         "src/fc27_match_results.py",
+        "src/fc27_privacy.py",
     ]
     assert not [name for name in required if not Path(name).is_file()]
 

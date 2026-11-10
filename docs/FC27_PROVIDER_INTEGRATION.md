@@ -8,7 +8,7 @@
 
 > **Current Working Real-Data Provider (`fc-clubs-api-community-v1` / `LIVE_EA_CLUBS_COMMUNITY_CLIENT`)**:
 >
-> The current supported real-data acquisition path for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) is the bounded one-shot community client wrapper in `src/fc27_community_provider.py`, `src/fc27_polling_worker.py`, and `scripts/fc27_community_eval.py` (`Dockerfile.community-eval`, `docker-compose.community-eval.yml`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`), which retrieves, validates, normalizes, pseudonymizes (`plr_ecf_<12-hex>`), persists, and analyzes (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`) East Coasters match data with `raw_response_retained=False`. See [`docs/FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md) for full details.
+> The current supported real-data acquisition path for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) is the bounded community client wrapper in `src/fc27_community_provider.py` and `src/fc27_polling_worker.py` (`scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`), which retrieves, validates, normalizes, pseudonymizes (`plr_ecf_<12-hex>` via `src/fc27_privacy.py`), persists, and analyzes (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`) East Coasters match data with `raw_response_retained=False`. See [`docs/FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md) and [`docs/FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md) for full details.
 >
 > **Historical Transport Findings Recorded (`PART D`)**:
 > - **Standards-Compliant Python `urllib` Live Probe (`feature/fc27-real-east-coasters-ingestion` @ `76d20c4ef6`)**: Confirmed deterministic HTTP `403 Forbidden` at the Akamai edge when calling `https://proclubs.ea.com/api/fc/clubs/info` with standard Python `urllib` headers and TLS profile (`STANDARD_LIVE_PROBE_ACTIVE=NO`).
@@ -37,7 +37,7 @@ Normalization & Pseudonymization (plr_ecf_<12-hex> + FC27PseudonymCollisionDetec
         └──► FC27PerformanceRepository (PostgreSQL 16 persistence when FC27_PERSISTENCE_ENABLED=true)
 ```
 
-> **Note on Operator-Captured Exports**: The offline JSON/CSV validation workflow (`src/fc27_user_export.py`, `src/fc27_capture.py`, `scripts/fc27_user_export_import.py`, `scripts/fc27_capture_preflight.py`, and [`docs/FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md`](FC27_EAST_COASTERS_EXPORT_PILOT_PACKAGE.md)) is retained solely as a **secondary/offline fallback** and schema validation harness. It is **not** the primary acquisition architecture.
+> **Note on Repository Envelope Validation**: Neutral envelope persistence structures (`FC27UserExportEnvelope`, `plan_fc27_user_export_import`, `apply_fc27_user_export_plan`) reside in `src/fc27_repository.py` and privacy/pseudonymization helpers reside in `src/fc27_privacy.py` (historical user-export and operator-capture CLI scripts were removed in Stage B4).
 
 ---
 
@@ -105,11 +105,9 @@ Adapted safely from the MIT-licensed `1erkandogan/fc27-clubs-api` endpoint and e
 - **Deterministic Pseudonymization**: Member IDs are transformed via `pseudonymize_club_member_id(raw_id, club_id="330323")` -> `plr_ecf_<12-hex>`. Raw personas are discarded (`raw_persona_persisted=False`, `display_alias=None`).
 - **Collision Guard**: `FC27PseudonymCollisionDetector` aborts with `PSEUDONYM_COLLISION` if two distinct raw member keys ever map to the same pseudonym.
 - **Provenance Metadata**: Every normalized envelope attaches `FC27SourceProvenance` (`provider_id`, `provider_classification`, `authorization_reference`, `fetched_at_utc`, `request_correlation_id`, `payload_sha256`, `endpoint_operation`, `cache_status`, `rate_limit_tokens_remaining`, `circuit_breaker_state`, `raw_response_retained=False`, `raw_persona_persisted=False`).
-- **Offline Preflight & Evaluation CLIs**:
+- **Offline Status CLI**:
   ```powershell
-  .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py
-  .\.venv\Scripts\python.exe scripts/fc27_capture_preflight.py --mock
-  .\.venv\Scripts\python.exe scripts/fc27_community_eval.py --operation mock-eval
+  .\.venv\Scripts\python.exe scripts/fc27_polling_worker.py --status
   ```
 
 ---
@@ -130,8 +128,8 @@ The verified safe-adapter bundle (`BUNDLE_NAME=iwa.dev.fcbuild-safe-adapter-veri
 
 ---
 
-## 7. Bounded Community Client Evaluation (`src/fc27_community_provider.py`) & Disabled-by-Default Polling Worker (`src/fc27_polling_worker.py`)
+## 7. Bounded Community Client (`src/fc27_community_provider.py`) & Disabled-by-Default Polling Worker (`src/fc27_polling_worker.py`)
 
-For isolated one-shot evaluation and persistence of the pinned MIT-licensed `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (`v0.3.1`) unofficial community client (`fc-clubs-api-community-v1`, not an official EA SDK), `src/fc27_community_provider.py` and `scripts/fc27_community_eval.py` provide a strictly gated wrapper (`FC27_COMMUNITY_PROVIDER_ENABLED=false` by default, `--confirm` required) under `SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT`, with optional downstream tabular helpers in `src/fc27_pandas_view.py`. See [`FC27_COMMUNITY_PROVIDER_EVALUATION.md`](FC27_COMMUNITY_PROVIDER_EVALUATION.md).
+For bounded evaluation and persistence of the pinned MIT-licensed `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (`v0.3.1`) unofficial community client (`fc-clubs-api-community-v1`, not an official EA SDK), `src/fc27_community_provider.py` provides a strictly gated wrapper (`FC27_COMMUNITY_PROVIDER_ENABLED=false` by default, `--confirm` required) under `SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT`, with optional downstream tabular helpers in `src/fc27_pandas_view.py`.
 
-In addition, `src/fc27_polling_worker.py` and `scripts/fc27_polling_worker.py` (`Dockerfile.community-worker`, `docker-compose.community-worker.yml`, service `fc27-community-worker` under opt-in profile `fc27-polling`) wrap `FC27CommunityProviderAdapter` in a disabled-by-default single-flight polling worker (`FC27_COMMUNITY_POLLING_ENABLED=false` by default, `300..600s` interval, `1` request per cycle, `0` retries, conditional `Search -> Scout -> Analyst` only when new matches are inserted). See [`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md).
+In addition, `src/fc27_polling_worker.py` and `scripts/fc27_polling_worker.py` (`Dockerfile.community-worker`, `docker-compose.community-worker.yml`, service `fc27-community-worker` under opt-in profile `fc27-polling`) wrap `FC27CommunityProviderAdapter` in a disabled-by-default single-flight polling worker (`FC27_COMMUNITY_POLLING_ENABLED=false` by default, `43200s` interval, `1` request per cycle, `0` retries, conditional `Search -> Scout -> Analyst -> Coach -> Tactics -> Director` only when new matches are inserted). See [`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md).
