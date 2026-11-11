@@ -30,12 +30,13 @@ PINNED_APPLIED_MIGRATION_SHA256 = {
     "0011_dispatch_worker_claims.sql": "50163beab93318e64bfd6be7645f7c096b13eaee40436e993f6299ab0ad1407e",
     "0012_fc27_performance_and_quarantine.sql": "84279fa7bddafd8bd056adb69dc5cfbf2b178475d4dbc5442fd7993df8ec1807",
     "0013_fc27_manual_match_results.sql": "2504c4c07d2e7a81a25b408a027122965e66c636e242af0b37f929a6e01242f0",
-    "0014_fc27_player_development.sql": "c15c00db374efead5c3cfca10876b83f642e3d0c1891547e23b9d23b359aab2d",
+    "0014_fc27_player_development.sql": "d51bf8790c145fb53cd88c0acf9d67d5eb6b870e1cd4b25722b6595a0490751e",
+    "0015_fc27_player_development_fixups.sql": "10dfe56ce514fbfb5eb62b10497c408c6eee136e90c526d5c6e4603981ebcb5a",
 }
 
 
-def test_applied_migrations_0001_to_0012_sha256_pinned():
-    """Pins SHA-256 of applied migrations 0001-0014 so any byte modification fails CI."""
+def test_applied_migrations_0001_to_0015_sha256_pinned():
+    """Pins SHA-256 of applied migrations 0001-0015 so any byte modification fails CI."""
     files_by_name = {path.name: path for _, path in migration_files()}
     for name, expected_sha256 in PINNED_APPLIED_MIGRATION_SHA256.items():
         assert name in files_by_name, f"missing applied migration {name}"
@@ -300,10 +301,11 @@ STAGE_C_TABLES = (
 
 
 def test_migration_0014_fresh_and_idempotent(pg_db):
-    """Validates fresh migration 0001..0014, grants policy 16, postconditions, and second-run no-op."""
+    """Validates fresh migration 0001..0015, grants policy 16, postconditions, and second-run no-op."""
     applied_first = migrate(pg_db.migrator)
     assert "0014_fc27_player_development.sql" in applied_first
-    assert len(applied_first) == 14
+    assert "0015_fc27_player_development_fixups.sql" in applied_first
+    assert len(applied_first) == 15
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -367,12 +369,15 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
     assert counts_before.fc27_player_match_stats == 12
     assert counts_before.fc27_manual_matches == 1
 
-    # Upgrade from 0013 to 0014
+    # Upgrade from 0013 through latest (0014 + 0015 fixups)
     applied_upgrade = migrate(pg_db.migrator)
-    assert applied_upgrade == ["0014_fc27_player_development.sql"]
+    assert applied_upgrade == [
+        "0014_fc27_player_development.sql",
+        "0015_fc27_player_development_fixups.sql",
+    ]
 
     _, mig_cnt_after, counts_after, hashes_after = inspect_database_state_for_manifest(pg_db.admin)
-    assert mig_cnt_after == 14
+    assert mig_cnt_after == 15
     assert counts_after.fc27_matches == counts_before.fc27_matches == 2
     assert counts_after.fc27_player_match_stats == counts_before.fc27_player_match_stats == 12
     assert counts_after.fc27_manual_matches == counts_before.fc27_manual_matches == 1

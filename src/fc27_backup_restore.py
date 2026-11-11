@@ -45,7 +45,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0014"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0015"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -312,19 +312,19 @@ def inspect_database_state_for_manifest(
             migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(name), '0014_fc27_player_development.sql') "
+                    "SELECT COUNT(*), COALESCE(MAX(name), '0015_fc27_player_development_fixups.sql') "
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 14)
-                latest_mig = str(mig_row[1] or "0014_fc27_player_development.sql")
+                mig_count = int(mig_row[0] or 15)
+                latest_mig = str(mig_row[1] or "0015_fc27_player_development_fixups.sql")
                 cur.execute(
                     "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
                 )
                 migration_rows = cur.fetchall()
             else:
-                mig_count = 14
-                latest_mig = "0014_fc27_player_development.sql"
+                mig_count = 15
+                latest_mig = "0015_fc27_player_development_fixups.sql"
 
             cur.execute("SELECT to_regclass('public.schema_policy_versions')")
             has_policy_versions = cur.fetchone()[0] is not None
@@ -828,13 +828,11 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             "public.fc27_discord_jobs CASCADE"
         )
 
-        def _run_pg_restore_for_table(tbl: str, *, restore_mode_skip_claim_expiry: bool = False) -> None:
+        def _run_pg_restore_for_table(tbl: str) -> None:
             if host_pg_restore:
                 env = os.environ.copy()
                 if password:
                     env["PGPASSWORD"] = password
-                if restore_mode_skip_claim_expiry:
-                    env["PGOPTIONS"] = "-c fc27.restore_mode=skip_claim_expiry"
                 cmd = [
                     host_pg_restore,
                     "--format=custom",
@@ -866,8 +864,6 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 docker_cmd = ["docker", "exec", "-i"]
                 if password:
                     docker_cmd.extend(["-e", f"PGPASSWORD={password}"])
-                if restore_mode_skip_claim_expiry:
-                    docker_cmd.extend(["-e", "PGOPTIONS=-c fc27.restore_mode=skip_claim_expiry"])
                 docker_cmd.extend(
                     [
                         container,
@@ -905,10 +901,14 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 )
 
         for tbl in FC27_DOMAIN_TABLES:
-            _run_pg_restore_for_table(
-                tbl,
-                restore_mode_skip_claim_expiry=(tbl == "fc27_discord_jobs"),
-            )
+            if tbl == "fc27_discord_jobs":
+                conn.execute("ALTER TABLE public.fc27_discord_jobs DISABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
+                try:
+                    _run_pg_restore_for_table(tbl)
+                finally:
+                    conn.execute("ALTER TABLE public.fc27_discord_jobs ENABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
+            else:
+                _run_pg_restore_for_table(tbl)
 
         # Per-table --data-only restores do not replay sequence setval entries.
         # Resync identity/serial sequences so inserts after restore do not collide.
@@ -1189,8 +1189,8 @@ def verify_fc27_backup_restore(
             )
             migration_ok = (
                 restored_mig_cnt >= 13
-                and ("0013" in restored_mig or "0014" in restored_mig)
-                and manifest.migration_version in ("0001_THROUGH_0013", EXPECTED_MIGRATION_VERSION)
+                and any(v in restored_mig for v in ("0013", "0014", "0015"))
+                and manifest.migration_version in ("0001_THROUGH_0013", "0001_THROUGH_0014", EXPECTED_MIGRATION_VERSION)
             )
             if not migration_ok:
                 raise FC27RestoreVerificationError(

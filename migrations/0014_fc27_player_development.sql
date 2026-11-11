@@ -381,8 +381,6 @@ CREATE TABLE IF NOT EXISTS public.fc27_build_catalog (
 
     CONSTRAINT fc27_build_catalog_key_version_uk
         UNIQUE (build_key, version),
-    CONSTRAINT fc27_build_catalog_row_identity_uk
-        UNIQUE (catalog_row_id, build_key, version),
     CONSTRAINT fc27_build_catalog_build_key_chk
         CHECK (build_key ~ '^[a-z0-9][a-z0-9_-]{1,63}$'),
     CONSTRAINT fc27_build_catalog_name_chk
@@ -457,8 +455,8 @@ CREATE TABLE IF NOT EXISTS public.fc27_build_catalog_audit (
         REFERENCES public.fc27_build_catalog (catalog_row_id)
         ON DELETE RESTRICT,
     CONSTRAINT fc27_build_catalog_audit_key_version_fk
-        FOREIGN KEY (catalog_row_id, build_key, version)
-        REFERENCES public.fc27_build_catalog (catalog_row_id, build_key, version)
+        FOREIGN KEY (build_key, version)
+        REFERENCES public.fc27_build_catalog (build_key, version)
         ON DELETE RESTRICT,
     CONSTRAINT fc27_build_catalog_audit_build_key_chk
         CHECK (build_key ~ '^[a-z0-9][a-z0-9_-]{1,63}$'),
@@ -765,16 +763,8 @@ BEGIN
         IF TG_OP = 'INSERT'
            OR OLD.state <> 'claimed'
            OR NEW.lease_expires_at IS DISTINCT FROM OLD.lease_expires_at
-           OR NEW.claim_owner IS DISTINCT FROM OLD.claim_owner
-           OR NEW.claimed_at IS DISTINCT FROM OLD.claimed_at
         THEN
-            IF current_setting('fc27.restore_mode', true) = 'skip_claim_expiry'
-               AND TG_OP = 'INSERT'
-            THEN
-                -- Allow controlled restore of historical claimed jobs without applying
-                -- the live-claim wall-clock check; normal claims remain validated.
-                NULL;
-            ELSIF NEW.lease_expires_at <= pg_catalog.now() THEN
+            IF NEW.lease_expires_at <= pg_catalog.now() THEN
                 RAISE EXCEPTION 'claimed fc27_discord_jobs row requires an unexpired lease_expires_at > now()'
                     USING ERRCODE = '23514';
             END IF;

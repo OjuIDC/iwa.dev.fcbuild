@@ -66,6 +66,7 @@ def test_required_repository_files_and_entrypoints_exist():
         "migrations/0012_fc27_performance_and_quarantine.sql",
         "migrations/0013_fc27_manual_match_results.sql",
         "migrations/0014_fc27_player_development.sql",
+        "migrations/0015_fc27_player_development_fixups.sql",
         "migrations/post/grants.sql",
         "src/db_migrate.py",
         "src/db_roles.py",
