@@ -37,7 +37,7 @@ This guide documents the test architecture, PostgreSQL 16 integration harness, o
    $env:TEST_POSTGRES_ADMIN_URI = "postgresql://fc27test@127.0.0.1:55432/postgres"
    ```
 3. How the test harness isolates databases (`tests/conftest.py` and `tests/test_fc27_persistence_and_queries.py`):
-   - Each test function or fixture provisions an isolated temporary database (`fc27_test_<uuid>` or `fc27_p_<uuid>`), runs `src.db_roles.bootstrap` and `src.db_migrate.migrate` (migrations `0001`–`0013` + Grants Policy Version `15`), executes assertions using the least-privileged runtime roles (`fc27_app`, `fc27_match_results_writer`, `fc27_dispatch`, `fc27_relay`), and drops the temporary database on teardown.
+   - Each test function or fixture provisions an isolated temporary database (`fc27_test_<uuid>` or `fc27_p_<uuid>`), runs `src.db_roles.bootstrap` and `src.db_migrate.migrate` (migrations `0001`–`0014` + Grants Policy Version `16`), executes assertions using the least-privileged runtime roles (`fc27_app`, `fc27_match_results_writer`, `fc27_poll_writer`, `fc27_player_dev_writer`, `fc27_discord_reader`, `fc27_dispatch`, `fc27_relay`), and drops the temporary database on teardown.
 
 ---
 
