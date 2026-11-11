@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Dict, Final, List, Literal, Mapping, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from src import settings
 from src.fc27_analyst import (
@@ -80,6 +80,7 @@ from src.fc27_clubs_api_contracts import (
 from src.fc27_privacy import (
     FC27SensitiveFieldDetectedError,
     canonicalize_for_hashing,
+    compute_alias_hmac_fingerprint,
     compute_match_hash,
     scan_for_sensitive_fields,
 )
@@ -91,6 +92,7 @@ from src.fc27_provider import (
     FC27TransportError,
 )
 from src.fc27_repository import (
+    FC27AliasFingerprintObservation,
     FC27ReplayConflictError,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
@@ -551,6 +553,60 @@ class FC27CommunityProviderEnvelope(BaseModel):
     schema_status: Literal["PASS", "FAIL"]
     normalization_status: Literal["PASS", "FAIL"]
     privacy_status: Literal["PASS", "FAIL"]
+    _alias_fingerprints: Tuple[FC27AliasFingerprintObservation, ...] = PrivateAttr(default=())
+
+    def __init__(self, **data: Any) -> None:
+        raw_fps = data.pop("alias_fingerprints", ())
+        super().__init__(**data)
+        parsed_fps: List[FC27AliasFingerprintObservation] = []
+        for item in raw_fps or ():
+            if isinstance(item, FC27AliasFingerprintObservation):
+                parsed_fps.append(item)
+            elif isinstance(item, Mapping):
+                parsed_fps.append(
+                    FC27AliasFingerprintObservation(
+                        pseudonym=str(item.get("pseudonym", "")),
+                        gamertag_hmac=str(item.get("gamertag_hmac", "")),
+                    )
+                )
+            else:
+                raise ValueError("unsupported alias_fingerprints entry")
+        object.__setattr__(self, "_alias_fingerprints", tuple(parsed_fps))
+
+    @property
+    def alias_fingerprints(self) -> Tuple[FC27AliasFingerprintObservation, ...]:
+        """Returns privacy-safe `(pseudonym, gamertag_hmac)` observations without exposing them in model_dump."""
+        return self._alias_fingerprints
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> FC27CommunityProviderEnvelope:
+        """Copies the envelope while preserving or updating `_alias_fingerprints`."""
+        upd = dict(update) if update else {}
+        has_fp_update = "alias_fingerprints" in upd
+        new_fps = upd.pop("alias_fingerprints", self._alias_fingerprints)
+        copied = super().model_copy(update=upd or None, deep=deep)
+        if has_fp_update:
+            parsed_fps: List[FC27AliasFingerprintObservation] = []
+            for item in new_fps or ():
+                if isinstance(item, FC27AliasFingerprintObservation):
+                    parsed_fps.append(item)
+                elif isinstance(item, Mapping):
+                    parsed_fps.append(
+                        FC27AliasFingerprintObservation(
+                            pseudonym=str(item.get("pseudonym", "")),
+                            gamertag_hmac=str(item.get("gamertag_hmac", "")),
+                        )
+                    )
+                else:
+                    raise ValueError("unsupported alias_fingerprints entry")
+            object.__setattr__(copied, "_alias_fingerprints", tuple(parsed_fps))
+        else:
+            object.__setattr__(copied, "_alias_fingerprints", self._alias_fingerprints)
+        return copied
 
     @model_validator(mode="after")
     def _validate_envelope(self) -> FC27CommunityProviderEnvelope:
@@ -763,11 +819,21 @@ def normalize_community_identity_records(
 
 def _convert_community_match_record_to_ea_envelope_dict(
     record: Mapping[str, Any],
+    *,
+    default_match_type: str = "leagueMatch",
 ) -> Dict[str, Any]:
     """Converts a single `fc_clubs_api` `clubs/matches` (`output='records'`) item into the
     canonical dict shape expected by `normalize_matches_payload` in `src/fc27_clubs_api_contracts.py`.
     """
     stripped = _strip_raw_keys_in_place_copy(record)
+
+    explicit_mt = str(
+        stripped.get("match_type", stripped.get("matchType", "")) or ""
+    ).strip()
+    if explicit_mt and explicit_mt != default_match_type:
+        raise FC27SchemaValidationError(
+            f"Record match_type '{explicit_mt}' does not match requested match_type '{default_match_type}'"
+        )
 
     # Check if already in EA raw match dict format (`matchId` + `clubs` as Mapping)
     if "matchId" in stripped and isinstance(stripped.get("clubs"), Mapping):
@@ -787,7 +853,7 @@ def _convert_community_match_record_to_ea_envelope_dict(
     dt = datetime.fromisoformat(played_at_utc[:-1] + "+00:00")
     unix_ts = int(dt.timestamp())
 
-    match_type = str(stripped.get("match_type", stripped.get("matchType", "leagueMatch")) or "leagueMatch")
+    match_type = explicit_mt or default_match_type
 
     # Support flat `FC27API.get_club_matches(..., output="records")` row format
     if "clubs" not in stripped and ("clubId" in stripped or "club_id" in stripped):
@@ -955,20 +1021,86 @@ def _convert_community_match_record_to_ea_envelope_dict(
     return ea_dict
 
 
+def _extract_raw_player_aliases_from_match_record(
+    record: Mapping[str, Any],
+) -> List[Tuple[str, str]]:
+    """Extracts `(raw_player_id, raw_alias_or_identifier)` pairs for East Coasters players
+    from an upstream match record before display names are stripped.
+    """
+    extracted: List[Tuple[str, str]] = []
+    alias_keys = ("player_name", "playername", "pro_name", "proName", "display_alias", "name")
+    raw_players = record.get("players")
+    if isinstance(raw_players, list):
+        for idx, p_item in enumerate(raw_players):
+            if not isinstance(p_item, Mapping):
+                continue
+            p_cid = str(p_item.get("club_id", TARGET_CLUB_ID) or TARGET_CLUB_ID).strip()
+            if p_cid != TARGET_CLUB_ID:
+                continue
+            raw_pid = str(
+                p_item.get("player_id", p_item.get("playerId", p_item.get("player_ref", f"idx_{idx}")))
+                or f"idx_{idx}"
+            ).strip()
+            alias_candidate = ""
+            for k in alias_keys:
+                val = p_item.get(k)
+                if isinstance(val, str) and val.strip():
+                    alias_candidate = val.strip()
+                    break
+            if not alias_candidate and isinstance(p_item.get("raw"), Mapping):
+                raw_sub = p_item["raw"]
+                for k in alias_keys:
+                    val = raw_sub.get(k)
+                    if isinstance(val, str) and val.strip():
+                        alias_candidate = val.strip()
+                        break
+            if not alias_candidate and not _PSEUDONYM_RE.fullmatch(raw_pid):
+                alias_candidate = raw_pid
+            if raw_pid and alias_candidate:
+                extracted.append((raw_pid, alias_candidate))
+    elif isinstance(raw_players, Mapping):
+        club_players = raw_players.get(TARGET_CLUB_ID)
+        if isinstance(club_players, Mapping):
+            for raw_pid_key, p_stats in club_players.items():
+                raw_pid = str(raw_pid_key).strip()
+                alias_candidate = ""
+                if isinstance(p_stats, Mapping):
+                    for k in alias_keys:
+                        val = p_stats.get(k)
+                        if isinstance(val, str) and val.strip():
+                            alias_candidate = val.strip()
+                            break
+                    if not alias_candidate and isinstance(p_stats.get("raw"), Mapping):
+                        raw_sub = p_stats["raw"]
+                        for k in alias_keys:
+                            val = raw_sub.get(k)
+                            if isinstance(val, str) and val.strip():
+                                alias_candidate = val.strip()
+                                break
+                if not alias_candidate and not _PSEUDONYM_RE.fullmatch(raw_pid):
+                    alias_candidate = raw_pid
+                if raw_pid and alias_candidate:
+                    extracted.append((raw_pid, alias_candidate))
+    return extracted
+
+
 def normalize_community_match_records(
     records: Sequence[Mapping[str, Any]],
     *,
     declaration: FC27CommunityProviderDeclaration = DEFAULT_COMMUNITY_PROVIDER_DECLARATION,
     match_type: str = "leagueMatch",
+    expected_match_type: Optional[str] = None,
     observed_at: Optional[str] = None,
+    alias_hmac_key: Optional[bytes | str] = None,
 ) -> Tuple[FC27CommunityProviderEnvelope, Tuple[Any, ...]]:
     """Validates, deduplicates, and normalizes `clubs/matches` (`output='records'`) records (`PART F`).
 
     Returns `(FC27CommunityProviderEnvelope, match_envelopes)`.
     """
-    if match_type not in declaration.allowed_match_types:
+    eff_match_type = expected_match_type or match_type
+    if eff_match_type not in declaration.allowed_match_types:
         raise FC27ContractError(
-            f"Unsupported match_type '{match_type}'; allowed={declaration.allowed_match_types}"
+            f"Unsupported match_type '{eff_match_type}'; allowed={declaration.allowed_match_types}"
         )
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
         raise FC27SchemaValidationError("clubs/matches records must be a sequence of mappings")
@@ -977,15 +1109,25 @@ def normalize_community_match_records(
             f"clubs/matches record count ({len(records)}) exceeds maximum_matches ({declaration.maximum_matches})"
         )
 
+    eff_hmac_key = (
+        alias_hmac_key
+        if alias_hmac_key is not None
+        else settings.read_fc27_alias_hmac_key(required=False)
+    )
+
     obs_ts = observed_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ea_matches: List[Dict[str, Any]] = []
+    accepted_raw_aliases: List[Tuple[str, str]] = []
     seen_canonical_by_id: Dict[str, str] = {}
     duplicate_count = 0
 
     for item in records:
         if not isinstance(item, Mapping):
             raise FC27SchemaValidationError("Each match record must be a mapping")
-        ea_item = _convert_community_match_record_to_ea_envelope_dict(item)
+        item_aliases = _extract_raw_player_aliases_from_match_record(item)
+        ea_item = _convert_community_match_record_to_ea_envelope_dict(
+            item, default_match_type=eff_match_type
+        )
         mid = str(ea_item.get("matchId") or "").strip()
         canonical_str = json.dumps(
             canonicalize_for_hashing(ea_item), sort_keys=True, separators=(",", ":")
@@ -999,17 +1141,38 @@ def normalize_community_match_records(
             )
         seen_canonical_by_id[mid] = canonical_str
         ea_matches.append(ea_item)
+        accepted_raw_aliases.extend(item_aliases)
 
     detector = FC27PseudonymCollisionDetector()
     if ea_matches:
         envelopes, supplied_matches, _ = normalize_matches_payload(
             {"matches": ea_matches},
-            default_match_type=match_type,
+            default_match_type=eff_match_type,
             include_player_performances=True,
             collision_detector=detector,
         )
     else:
         envelopes, supplied_matches = (), ()
+
+    alias_fingerprint_obs: List[FC27AliasFingerprintObservation] = []
+    if eff_hmac_key is not None and accepted_raw_aliases:
+        for raw_pid, raw_alias in accepted_raw_aliases:
+            pseudo_ref = (
+                raw_pid
+                if _PSEUDONYM_RE.fullmatch(raw_pid)
+                else detector.resolve(raw_pid)
+            )
+            hmac_digest = compute_alias_hmac_fingerprint(
+                raw_alias,
+                eff_hmac_key,
+                club_id=TARGET_CLUB_ID,
+            )
+            alias_fingerprint_obs.append(
+                FC27AliasFingerprintObservation(
+                    pseudonym=pseudo_ref,
+                    gamertag_hmac=hmac_digest,
+                )
+            )
 
     normalized_records: List[Dict[str, Any]] = []
     record_hashes: List[str] = []
@@ -1115,7 +1278,7 @@ def normalize_community_match_records(
             "upstream_version": declaration.upstream_version,
             "upstream_license": declaration.upstream_license,
             "endpoint_operation": "CLUB_MATCH_HISTORY",
-            "match_type": match_type,
+            "match_type": eff_match_type,
             "output_format": "records",
             "raw_response_retained": "NO",
             "raw_persona_persisted": "NO",
@@ -1127,6 +1290,7 @@ def normalize_community_match_records(
         schema_status="PASS",
         normalization_status="PASS",
         privacy_status="PASS",
+        alias_fingerprints=tuple(alias_fingerprint_obs),
     )
     return envelope, envelopes
 
@@ -1438,6 +1602,13 @@ def _execute_bounded_fc_clubs_api_call(
                                     {
                                         "club_id": str(declaration.club_id),
                                         "player_id": str(raw_pid),
+                                        "player_name": str(
+                                            p_stats.get(
+                                                "playername",
+                                                p_stats.get("proName", p_stats.get("player_name", "")),
+                                            )
+                                            or ""
+                                        ),
                                         "position": str(p_stats.get("pos", "CM") or "CM"),
                                         "rating": float(p_stats.get("rating", 6.0) or 6.0),
                                         "goals": int(float(p_stats.get("goals", 0) or 0)),
@@ -1667,6 +1838,7 @@ class FC27CommunityProviderAdapter:
         output: str = "records",
         identity_envelope: Optional[FC27CommunityProviderEnvelope] = None,
         observed_at: Optional[str] = None,
+        alias_hmac_key: Optional[bytes | str] = None,
     ) -> FC27CommunityProviderEnvelope:
         """Executes at most ONE `clubs/matches` request for East Coasters (`330323`, `common-gen5`),
         strictly gated on a prior validated `CLUB_IDENTITY` envelope (`PART M` & `PART N`).
@@ -1725,6 +1897,7 @@ class FC27CommunityProviderAdapter:
                 declaration=self._declaration,
                 match_type=match_type,
                 observed_at=observed_at,
+                alias_hmac_key=alias_hmac_key,
             )
             self._last_match_envelopes = match_envelopes
             return envelope
@@ -1774,6 +1947,13 @@ class FC27CommunityPersistenceApplySummary(BaseModel):
     replay_conflicts: int = Field(ge=0)
     idempotent_duplicate: bool = False
     export_id: str
+    fingerprints_inserted: int = Field(default=0, ge=0)
+    fingerprints_refreshed: int = Field(default=0, ge=0)
+    fingerprint_duplicate_observations: int = Field(default=0, ge=0)
+    fingerprint_collisions: int = Field(default=0, ge=0)
+    discord_jobs_inserted: int = Field(default=0, ge=0)
+    discord_jobs_existing: int = Field(default=0, ge=0)
+    discord_job_conflicts: int = Field(default=0, ge=0)
 
 
 class FC27CommunityPipelineResult(BaseModel):
@@ -1894,6 +2074,11 @@ def persist_community_provider_batch(
     quarantine_conflicts: bool = False,
     export_id: Optional[str] = None,
     generated_at: Optional[datetime] = None,
+    alias_fingerprints: Optional[Sequence[FC27AliasFingerprintObservation]] = None,
+    enqueue_discord_jobs: bool = False,
+    match_type_override: Optional[str] = None,
+    emit_domain_events: bool = True,
+    source_reference: Optional[str] = None,
 ) -> FC27CommunityPersistenceApplySummary:
     """Persists a validated `FC27CommunityProviderEnvelope` batch in one PostgreSQL transaction (`PART J` & `PART K`)."""
     if match_envelope.operation != "RECENT_MATCHES":
@@ -1924,6 +2109,7 @@ def persist_community_provider_batch(
         supplied_matches,
         export_id=eff_export_id,
         generated_at=gen_dt,
+        source_reference=source_reference or "fc27-community-eval-v1",
     )
     existing_state = load_import_state(
         postgres_conn_or_uri,
@@ -1936,6 +2122,14 @@ def persist_community_provider_batch(
         existing_state=existing_state,
         evaluation_time=gen_dt,
     )
+    eff_fingerprints = (
+        alias_fingerprints
+        if alias_fingerprints is not None
+        else match_envelope.alias_fingerprints
+    )
+    eff_match_type = match_type_override or str(
+        match_envelope.provenance.get("match_type") or "leagueMatch"
+    )
     apply_res = apply_export_plan(
         postgres_conn_or_uri,
         envelope=export_env,
@@ -1943,6 +2137,10 @@ def persist_community_provider_batch(
         actor="fc27_community_eval",
         enforce_posture=enforce_posture,
         quarantine_conflicts=quarantine_conflicts,
+        alias_fingerprints=eff_fingerprints,
+        enqueue_discord_jobs=enqueue_discord_jobs,
+        match_type_override=eff_match_type,
+        emit_domain_events=emit_domain_events,
     )
     if apply_res.status == "REJECTED" or apply_res.replay_conflict:
         raise FC27ReplayConflictError(
@@ -1958,6 +2156,13 @@ def persist_community_provider_batch(
         replay_conflicts=1 if apply_res.replay_conflict else 0,
         idempotent_duplicate=apply_res.idempotent_duplicate,
         export_id=eff_export_id,
+        fingerprints_inserted=apply_res.fingerprints_inserted,
+        fingerprints_refreshed=apply_res.fingerprints_refreshed,
+        fingerprint_duplicate_observations=apply_res.fingerprint_duplicate_observations,
+        fingerprint_collisions=apply_res.fingerprint_collisions,
+        discord_jobs_inserted=apply_res.discord_jobs_inserted,
+        discord_jobs_existing=apply_res.discord_jobs_existing,
+        discord_job_conflicts=apply_res.discord_job_conflicts,
     )
 
 

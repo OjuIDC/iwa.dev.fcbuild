@@ -41,11 +41,12 @@ services:
       FC27_COMMUNITY_POLL_ONCE: ${FC27_COMMUNITY_POLL_ONCE:-false}
       FC27_RECOMMENDATIONS_ENABLED: "false"
       DISPATCH_ENABLED: "false"
-      POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+      FC27_APPROVED_MATCH_TYPES: ${FC27_APPROVED_MATCH_TYPES:-leagueMatch,playoffMatch,friendlyMatch}
       FC27_POLL_WRITER_URI_FILE: /run/secrets/fc27_poll_writer_uri
+      FC27_ALIAS_HMAC_KEY_FILE: /run/secrets/fc27_alias_hmac_key
     secrets:
-      - fc27_app_uri
       - fc27_poll_writer_uri
+      - fc27_alias_hmac_key
     networks:
       - fc27_net
       - fc27_data
@@ -57,7 +58,7 @@ services:
     restart: unless-stopped
 
 secrets:
-  fc27_app_uri:
-    file: ./secrets/fc27_app_uri
   fc27_poll_writer_uri:
     file: ./secrets/fc27_poll_writer_uri
+  fc27_alias_hmac_key:
+    file: ./secrets/fc27_alias_hmac_key

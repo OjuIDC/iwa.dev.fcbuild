@@ -381,6 +381,55 @@ def is_fc27_community_poll_once(*, strict: bool = False) -> bool:
     return False
 
 
+APPROVED_COMMUNITY_MATCH_TYPES: tuple[str, ...] = (
+    "leagueMatch",
+    "playoffMatch",
+    "friendlyMatch",
+)
+ALIAS_HMAC_KEY_MIN_BYTES: int = 32
+
+
+def get_fc27_approved_match_types(*, strict: bool = True) -> tuple[str, ...]:
+    """Return approved FC 27 community provider match types in deterministic rotation order.
+
+    Only ``leagueMatch``, ``playoffMatch``, and ``friendlyMatch`` are permitted.
+    Any unknown, empty, or duplicate match type token fails closed with ``ConfigError``.
+    """
+    raw = os.getenv("FC27_APPROVED_MATCH_TYPES")
+    if raw is None:
+        return APPROVED_COMMUNITY_MATCH_TYPES
+    stripped = raw.strip()
+    if not stripped:
+        if strict:
+            raise ConfigError("FC27_APPROVED_MATCH_TYPES must not be empty")
+        return APPROVED_COMMUNITY_MATCH_TYPES
+    parts = [part.strip() for part in stripped.split(",")]
+    if any(not part for part in parts):
+        if strict:
+            raise ConfigError(
+                "FC27_APPROVED_MATCH_TYPES contains an empty match_type entry"
+            )
+        return APPROVED_COMMUNITY_MATCH_TYPES
+    seen: list[str] = []
+    for token in parts:
+        if token not in APPROVED_COMMUNITY_MATCH_TYPES:
+            if strict:
+                raise ConfigError(
+                    f"Unsupported match_type '{token}' in FC27_APPROVED_MATCH_TYPES; "
+                    f"allowed={APPROVED_COMMUNITY_MATCH_TYPES}"
+                )
+            return APPROVED_COMMUNITY_MATCH_TYPES
+        if token in seen:
+            if strict:
+                raise ConfigError(
+                    f"Duplicate match_type '{token}' in FC27_APPROVED_MATCH_TYPES"
+                )
+            return APPROVED_COMMUNITY_MATCH_TYPES
+        seen.append(token)
+    return tuple(seen)
+
+
+
 def is_fc27_discord_bot_enabled(*, strict: bool = False) -> bool:
     """Check if the read-only FC 27 Discord bot is enabled (default: False, fail-closed)."""
     raw = os.getenv("FC27_DISCORD_BOT_ENABLED")
@@ -586,10 +635,14 @@ def read_fc27_poll_writer_uri(*, required: bool = False) -> str | None:
         "FC27_DISCORD_READER_URI_FILE",
         "FC27_MATCH_RESULTS_WRITER_URI",
         "FC27_MATCH_RESULTS_WRITER_URI_FILE",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_BOT_TOKEN_FILE",
+        "POSTGRES_ADMIN_URI",
+        "POSTGRES_ADMIN_URI_FILE",
     ):
         val = os.getenv(forbidden)
         if val is not None and val.strip():
-            raise ConfigError(f"polling worker must not receive Discord credential {forbidden}")
+            raise ConfigError(f"polling worker must not receive non-polling credential {forbidden}")
     uri = read_secret("FC27_POLL_WRITER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
@@ -603,10 +656,15 @@ def read_fc27_poll_writer_uri(*, required: bool = False) -> str | None:
 def read_fc27_player_dev_writer_uri(*, required: bool = False) -> str | None:
     """Read the least-privilege Discord player-development writer URI."""
     _reject_runtime_bootstrap_password_vars()
-    for forbidden in ("FC27_POLL_WRITER_URI", "FC27_POLL_WRITER_URI_FILE"):
+    for forbidden in (
+        "FC27_POLL_WRITER_URI",
+        "FC27_POLL_WRITER_URI_FILE",
+        "FC27_ALIAS_HMAC_KEY",
+        "FC27_ALIAS_HMAC_KEY_FILE",
+    ):
         val = os.getenv(forbidden)
         if val is not None and val.strip():
-            raise ConfigError(f"Discord bot must not receive polling writer credential {forbidden}")
+            raise ConfigError(f"Discord bot must not receive polling worker credential {forbidden}")
     uri = read_secret("FC27_PLAYER_DEV_WRITER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
@@ -620,10 +678,15 @@ def read_fc27_player_dev_writer_uri(*, required: bool = False) -> str | None:
 def read_fc27_discord_reader_uri(*, required: bool = False) -> str | None:
     """Read the least-privilege read-only Discord reader URI."""
     _reject_runtime_bootstrap_password_vars()
-    for forbidden in ("FC27_POLL_WRITER_URI", "FC27_POLL_WRITER_URI_FILE"):
+    for forbidden in (
+        "FC27_POLL_WRITER_URI",
+        "FC27_POLL_WRITER_URI_FILE",
+        "FC27_ALIAS_HMAC_KEY",
+        "FC27_ALIAS_HMAC_KEY_FILE",
+    ):
         val = os.getenv(forbidden)
         if val is not None and val.strip():
-            raise ConfigError(f"Discord bot must not receive polling writer credential {forbidden}")
+            raise ConfigError(f"Discord bot must not receive polling worker credential {forbidden}")
     uri = read_secret("FC27_DISCORD_READER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
@@ -632,6 +695,102 @@ def read_fc27_discord_reader_uri(*, required: bool = False) -> str | None:
                 "FC27_DISCORD_READER_URI must explicitly connect as fc27_discord_reader"
             )
     return uri
+
+
+@overload
+def read_fc27_alias_hmac_key(*, required: Literal[True] = ...) -> bytes: ...
+
+
+@overload
+def read_fc27_alias_hmac_key(*, required: Literal[False]) -> bytes | None: ...
+
+
+@overload
+def read_fc27_alias_hmac_key(*, required: bool = ...) -> bytes | None: ...
+
+
+def read_fc27_alias_hmac_key(*, required: bool = True) -> bytes | None:
+    """Read the secret HMAC-SHA256 key used to fingerprint raw player aliases (>= 32 bytes).
+
+    Prefers ``FC27_ALIAS_HMAC_KEY_FILE`` (mounted file secret) and falls back to
+    ``FC27_ALIAS_HMAC_KEY`` when ``FC27_ALIAS_HMAC_KEY_FILE`` is not set.
+    Never logs or embeds key material, file contents, or key length in error messages.
+    """
+    _reject_runtime_bootstrap_password_vars()
+    for forbidden in (
+        "FC27_PLAYER_DEV_WRITER_URI",
+        "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        "FC27_DISCORD_READER_URI",
+        "FC27_DISCORD_READER_URI_FILE",
+        "FC27_MATCH_RESULTS_WRITER_URI",
+        "FC27_MATCH_RESULTS_WRITER_URI_FILE",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_BOT_TOKEN_FILE",
+        "POSTGRES_ADMIN_URI",
+        "POSTGRES_ADMIN_URI_FILE",
+    ):
+        val = os.getenv(forbidden)
+        if val is not None and val.strip():
+            raise ConfigError(
+                f"polling worker must not receive non-polling credential {forbidden}"
+            )
+
+    file_env = os.environ.get("FC27_ALIAS_HMAC_KEY_FILE")
+    if file_env is not None:
+        raw_path = file_env.strip()
+        if not raw_path:
+            raise ConfigError("FC27_ALIAS_HMAC_KEY_FILE must not be empty")
+        key_path = Path(raw_path)
+        try:
+            exists = key_path.exists()
+            is_dir = key_path.is_dir() if exists else False
+            is_file = key_path.is_file() if exists else False
+        except OSError as exc:
+            raise ConfigError(
+                "FC27_ALIAS_HMAC_KEY_FILE could not be inspected"
+            ) from exc
+        if is_dir:
+            raise ConfigError(
+                "FC27_ALIAS_HMAC_KEY_FILE must point to a regular file, not a directory"
+            )
+        if not exists or not is_file:
+            raise ConfigError(
+                "FC27_ALIAS_HMAC_KEY_FILE does not exist or is not a regular file"
+            )
+        try:
+            raw_bytes = key_path.read_bytes()
+        except OSError as exc:
+            raise ConfigError("FC27_ALIAS_HMAC_KEY_FILE is not readable") from exc
+        key_bytes = raw_bytes.strip(b" \t\r\n\x0b\x0c")
+        if not key_bytes or len(key_bytes) < ALIAS_HMAC_KEY_MIN_BYTES:
+            raise ConfigError(
+                "FC27_ALIAS_HMAC_KEY_FILE must contain at least 32 non-whitespace bytes"
+            )
+        return key_bytes
+
+    direct_env = os.environ.get("FC27_ALIAS_HMAC_KEY")
+    if direct_env is not None:
+        key_bytes = direct_env.strip().encode("utf-8")
+        if not key_bytes or len(key_bytes) < ALIAS_HMAC_KEY_MIN_BYTES:
+            raise ConfigError(
+                "FC27_ALIAS_HMAC_KEY must contain at least 32 non-whitespace bytes"
+            )
+        return key_bytes
+
+    if required:
+        raise ConfigError(
+            "FC27_ALIAS_HMAC_KEY_FILE is required for player alias HMAC fingerprinting"
+        )
+    return None
+
+
+def is_fc27_alias_hmac_key_configured() -> bool:
+    """Return True if a valid >= 32-byte alias HMAC key is configured, without raising or leaking values."""
+    try:
+        key = read_fc27_alias_hmac_key(required=False)
+        return key is not None and len(key) >= ALIAS_HMAC_KEY_MIN_BYTES
+    except ConfigError:
+        return False
 
 
 def validate_fc27_role_uri_separation(

@@ -15,6 +15,9 @@ fc-clubs-api-community-v1
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 import os
 import random
 import re
@@ -26,7 +29,7 @@ from collections.abc import Callable, Iterator, Sequence
 import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -79,8 +82,14 @@ from src.fc27_provider import (
     FC27ProviderError,
     FC27TransportError,
 )
-from src.fc27_privacy import FC27SensitiveFieldDetectedError
+from src.fc27_privacy import (
+    FC27FingerprintCollisionError,
+    FC27PrivacyError,
+    FC27SensitiveFieldDetectedError,
+    MIN_ALIAS_HMAC_KEY_BYTES as ALIAS_HMAC_KEY_MIN_BYTES,
+)
 from src.fc27_repository import (
+    FC27JobIdempotencyConflictError,
     FC27ReplayConflictError,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
@@ -90,13 +99,16 @@ from src.fc27_repository import (
 )
 from src.fc27_search_scout import FC27PrivacyViolationError
 from src.settings import (
+    APPROVED_COMMUNITY_MATCH_TYPES,
     ConfigError,
+    get_fc27_approved_match_types,
     get_fc27_community_poll_interval_seconds,
     get_fc27_community_poll_max_requests,
     get_fc27_community_poll_max_retries,
     get_fc27_community_poll_max_seconds,
     get_fc27_community_poll_min_seconds,
     is_dispatch_enabled,
+    is_fc27_alias_hmac_key_configured,
     is_fc27_community_poll_analytics_on_new_only,
     is_fc27_community_poll_once,
     is_fc27_community_poll_single_flight,
@@ -104,6 +116,8 @@ from src.settings import (
     is_fc27_community_provider_enabled,
     is_fc27_persistence_enabled,
     is_fc27_recommendations_enabled,
+    read_fc27_alias_hmac_key,
+    read_fc27_poll_writer_uri,
     read_secret,
 )
 
@@ -112,6 +126,7 @@ FIXED_CLUB_NAME = TARGET_CLUB_NAME
 FIXED_PLATFORM = TARGET_PLATFORM
 FIXED_GAME_VERSION = TARGET_GAME_VERSION
 FIXED_MATCH_TYPE = "leagueMatch"
+APPROVED_MATCH_TYPES: Final[tuple[str, ...]] = APPROVED_COMMUNITY_MATCH_TYPES
 FIXED_MATCH_COUNT = 10
 COMMUNITY_SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT
 
@@ -237,6 +252,15 @@ FORBIDDEN_WORKER_SQL_TABLES: frozenset[str] = frozenset(
         "activation_gates",
         "activation_gate_log",
         "service_heartbeats",
+        "fc27_player_links",
+        "fc27_build_catalog",
+        "fc27_build_catalog_audit",
+        "fc27_player_suggestions",
+        "fc27_suggestion_assessments",
+        "fc27_manual_matches",
+        "fc27_manual_match_players",
+        "fc27_manual_match_events",
+        "fc27_manual_match_audit",
     }
 )
 
@@ -247,6 +271,8 @@ ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
         "fc27_matches",
         "fc27_player_match_stats",
         "fc27_quarantine_records",
+        "fc27_player_alias_fingerprints",
+        "fc27_discord_jobs",
     }
 )
 
@@ -256,7 +282,22 @@ _FORBIDDEN_SQL_TABLE_REGEX = re.compile(
 )
 
 _PUBLIC_TABLE_CLAUSE_REGEX = re.compile(
-    r"\b(?:FROM|INTO|JOIN)\s+(?:ONLY\s+)?public\.([a-zA-Z_][a-zA-Z0-9_]*)\b",
+    r"\b(?:FROM|INTO|JOIN|UPDATE)\s+(?:ONLY\s+)?public\.([a-zA-Z_][a-zA-Z0-9_]*)\b",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_DISCORD_JOBS_MUTATION_REGEX = re.compile(
+    r"\b(?:UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?(?:public\.)?fc27_discord_jobs\b",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_FINGERPRINT_DELETE_REGEX = re.compile(
+    r"\bDELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_fingerprints\b",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_FINGERPRINT_IMMUTABLE_UPDATE_REGEX = re.compile(
+    r"\bUPDATE\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_fingerprints\b(?:(?!\bWHERE\b)[\s\S])*?\bSET\b(?:(?!\bWHERE\b)[\s\S])*?\b(?:pseudonym|gamertag_hmac|created_at)\s*=",
     re.IGNORECASE,
 )
 
@@ -313,6 +354,48 @@ def _normalize_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def next_approved_match_type(
+    current_match_type: str,
+    approved_match_types: Sequence[str] = APPROVED_MATCH_TYPES,
+) -> str:
+    """Return the next match type in deterministic rotation order:
+    leagueMatch -> playoffMatch -> friendlyMatch -> leagueMatch.
+    """
+    types_tuple = tuple(str(mt).strip() for mt in approved_match_types if str(mt).strip())
+    if not types_tuple:
+        types_tuple = APPROVED_MATCH_TYPES
+    try:
+        idx = types_tuple.index(current_match_type)
+    except ValueError as exc:
+        raise ValueError(
+            f"Unsupported match_type '{current_match_type}'; approved={types_tuple}"
+        ) from exc
+    return types_tuple[(idx + 1) % len(types_tuple)]
+
+
+class FC27MatchTypePollState(BaseModel):
+    """Metadata-only per-match-type polling state for deterministic rotation inspection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    match_type: str
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_new_match_at: datetime | None = None
+    last_status: FC27PollStatusLiteral = "DISABLED"
+    total_cycles: int = Field(default=0, ge=0)
+    total_provider_requests: int = Field(default=0, ge=0)
+    total_matches_inserted: int = Field(default=0, ge=0)
+    total_duplicates_ignored: int = Field(default=0, ge=0)
+    total_replay_conflicts: int = Field(default=0, ge=0)
+    continuity_anchor_match_id: str | None = None
+    possible_history_gap: bool = False
+    history_gap_reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()
+
+
 class FC27PollingPolicy(BaseModel):
     """Immutable polling policy enforcing East Coasters FC27 12-hour bounds."""
 
@@ -325,6 +408,7 @@ class FC27PollingPolicy(BaseModel):
     platform: str = FIXED_PLATFORM
     game_version: str = FIXED_GAME_VERSION
     match_type: str = FIXED_MATCH_TYPE
+    approved_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
     maximum_results: int = FIXED_MATCH_COUNT
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
@@ -377,8 +461,14 @@ class FC27PollingPolicy(BaseModel):
             raise ValueError(f"platform is fixed to '{FIXED_PLATFORM}'")
         if self.game_version != FIXED_GAME_VERSION:
             raise ValueError(f"game_version is fixed to '{FIXED_GAME_VERSION}'")
-        if self.match_type != FIXED_MATCH_TYPE:
-            raise ValueError(f"match_type is fixed to '{FIXED_MATCH_TYPE}'")
+        if tuple(self.approved_match_types) != APPROVED_MATCH_TYPES:
+            raise ValueError(
+                f"approved_match_types must equal {APPROVED_MATCH_TYPES!r}"
+            )
+        if self.match_type not in self.approved_match_types:
+            raise ValueError(
+                f"match_type must be one of {self.approved_match_types!r}; got '{self.match_type}'"
+            )
         if self.maximum_results != FIXED_MATCH_COUNT:
             raise ValueError(f"maximum_results is fixed to {FIXED_MATCH_COUNT}")
         if (
@@ -475,6 +565,12 @@ class FC27PollResult(BaseModel):
     platform: str = FIXED_PLATFORM
     game_version: str = FIXED_GAME_VERSION
     match_type: str = FIXED_MATCH_TYPE
+    next_match_type: str = FIXED_MATCH_TYPE
+    approved_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
+    current_rotation_match_type: str = FIXED_MATCH_TYPE
+    next_rotation_match_type: str = FIXED_MATCH_TYPE
+    last_attempted_match_type: str | None = None
+    last_successful_match_type: str | None = None
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
         ge=POLL_INTERVAL_SECONDS,
@@ -498,6 +594,41 @@ class FC27PollResult(BaseModel):
     inserted_match_count: int = Field(..., ge=0, le=10)
     duplicate_ignored_count: int = Field(..., ge=0, le=10)
     replay_conflict_count: int = Field(..., ge=0, le=10)
+    fingerprints_inserted: int = Field(default=0, ge=0)
+    fingerprints_refreshed: int = Field(default=0, ge=0)
+    fingerprint_duplicate_observations: int = Field(default=0, ge=0)
+    fingerprint_collisions: int = Field(default=0, ge=0)
+    discord_jobs_inserted: int = Field(default=0, ge=0)
+    discord_jobs_existing: int = Field(default=0, ge=0)
+    discord_job_conflicts: int = Field(default=0, ge=0)
+
+    @property
+    def fingerprints_inserted_count(self) -> int:
+        return self.fingerprints_inserted
+
+    @property
+    def fingerprints_refreshed_count(self) -> int:
+        return self.fingerprints_refreshed
+
+    @property
+    def fingerprint_duplicate_observations_count(self) -> int:
+        return self.fingerprint_duplicate_observations
+
+    @property
+    def fingerprint_collision_count(self) -> int:
+        return self.fingerprint_collisions
+
+    @property
+    def discord_jobs_inserted_count(self) -> int:
+        return self.discord_jobs_inserted
+
+    @property
+    def discord_jobs_existing_count(self) -> int:
+        return self.discord_jobs_existing
+
+    @property
+    def discord_job_conflict_count(self) -> int:
+        return self.discord_job_conflicts
     analytics_executed: bool
     persistence_before_analytics: bool = True
     confidence_tier: str = Field(..., min_length=1, max_length=64)
@@ -544,6 +675,13 @@ class FC27PollingHealth(BaseModel):
     worker_enabled: bool
     worker_running: bool
     current_owner: str | None = None
+    approved_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
+    current_rotation_match_type: str = FIXED_MATCH_TYPE
+    next_rotation_match_type: str = FIXED_MATCH_TYPE
+    last_attempted_match_type: str | None = None
+    last_successful_match_type: str | None = None
+    match_type_states: dict[str, FC27MatchTypePollState] = Field(default_factory=dict)
+    alias_hmac_key_configured: bool = False
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
         ge=POLL_INTERVAL_SECONDS,
@@ -568,13 +706,27 @@ class FC27PollingHealth(BaseModel):
     total_matches_inserted: int = Field(default=0, ge=0)
     total_duplicates_ignored: int = Field(default=0, ge=0)
     total_replay_conflicts: int = Field(default=0, ge=0)
+    last_fingerprints_inserted: int = Field(default=0, ge=0)
+    last_fingerprints_refreshed: int = Field(default=0, ge=0)
+    last_fingerprint_duplicate_observations: int = Field(default=0, ge=0)
+    last_fingerprint_collisions: int = Field(default=0, ge=0)
+    total_fingerprints_inserted: int = Field(default=0, ge=0)
+    total_fingerprints_refreshed: int = Field(default=0, ge=0)
+    total_fingerprint_duplicate_observations: int = Field(default=0, ge=0)
+    total_fingerprint_collisions: int = Field(default=0, ge=0)
+    last_discord_jobs_inserted: int = Field(default=0, ge=0)
+    last_discord_jobs_existing: int = Field(default=0, ge=0)
+    last_discord_job_conflicts: int = Field(default=0, ge=0)
+    total_discord_jobs_inserted: int = Field(default=0, ge=0)
+    total_discord_jobs_existing: int = Field(default=0, ge=0)
+    total_discord_job_conflicts: int = Field(default=0, ge=0)
     circuit_state: str = "CLOSED"
     next_eligible_at: datetime | None = None
     schedule_lag_seconds: int = Field(default=0, ge=0)
     missed_intervals: int = Field(default=0, ge=0)
     catch_up_cycles_suppressed: bool = True
     provider_window_count: int = Field(default=0, ge=0, le=10)
-    elapsed_since_last_success: int | None = Field(default=None, ge=0)
+    elapsed_since_last_success: int | None = None
     possible_history_gap: bool = False
     history_gap_reason: str | None = None
     review_required: bool = False
@@ -605,6 +757,7 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     is_fc27_community_polling_enabled(strict=strict)
     is_fc27_community_provider_enabled(strict=strict)
     is_fc27_community_poll_once(strict=strict)
+    approved_types = get_fc27_approved_match_types(strict=strict)
     interval_sec = get_fc27_community_poll_interval_seconds(strict=strict)
     min_sec = get_fc27_community_poll_min_seconds(strict=strict)
     max_sec = get_fc27_community_poll_max_seconds(strict=strict)
@@ -631,6 +784,8 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     return FC27PollingPolicy(
         club_id=club_id,
         platform=platform,
+        match_type=approved_types[0],
+        approved_match_types=approved_types,
         poll_interval_seconds=interval_sec,
         minimum_interval_seconds=min_sec,
         maximum_interval_seconds=max_sec,
@@ -659,6 +814,18 @@ def assert_polling_sql_allowed(sql: Any) -> None:
         table_name = match.group(1).lower()
         raise FC27PollingTableAccessDeniedError(
             f"FC27 polling worker role is forbidden from accessing table '{table_name}'"
+        )
+    if _FORBIDDEN_DISCORD_JOBS_MUTATION_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role is producer-only and cannot UPDATE or DELETE fc27_discord_jobs"
+        )
+    if _FORBIDDEN_FINGERPRINT_DELETE_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role cannot DELETE from fc27_player_alias_fingerprints"
+        )
+    if _FORBIDDEN_FINGERPRINT_IMMUTABLE_UPDATE_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role cannot UPDATE immutable columns in fc27_player_alias_fingerprints"
         )
     for tbl_match in _PUBLIC_TABLE_CLAUSE_REGEX.finditer(sql_text):
         candidate = tbl_match.group(1).lower()
@@ -967,9 +1134,12 @@ class FC27SingleFlightLeaseContext:
 
 def build_poll_cache_key(
     policy: FC27PollingPolicy | None = None,
+    *,
+    match_type: str | None = None,
 ) -> tuple[str, FC27CacheKeySpec]:
-    """Build complete cache key and spec for the recent league matches poll operation."""
+    """Build complete cache key and spec for the recent matches poll operation."""
     pol = policy or FC27PollingPolicy()
+    eff_match_type = match_type or pol.match_type
     return build_fc27_cache_key(
         provider_id=pol.provider_id,
         provider_authorization_version=COMMUNITY_PROVIDER_VERSION,
@@ -978,7 +1148,7 @@ def build_poll_cache_key(
         platform=pol.platform,
         game_version=pol.game_version,
         parameters={
-            "match_type": pol.match_type,
+            "match_type": eff_match_type,
             "count": str(pol.maximum_results),
         },
         response_schema_version=POLL_RESPONSE_SCHEMA_VERSION,
@@ -1097,21 +1267,40 @@ def _touch_persisted_polling_timestamps(
     poll_timestamp_utc: datetime,
     export_id: str | None = None,
     inserted_matches: int = 0,
+    polled_match_type: str = FIXED_MATCH_TYPE,
 ) -> None:
-    """Record the latest poll timestamp in FC27 domain tables within the active transaction."""
+    """Record the latest poll timestamp and rotation cursor in FC27 domain tables within the active transaction."""
     if not hasattr(conn, "cursor") or not callable(conn.cursor):
         return
     ts_utc = _normalize_utc(poll_timestamp_utc)
+    eff_type = polled_match_type if polled_match_type in APPROVED_MATCH_TYPES else FIXED_MATCH_TYPE
+    supplier_ref = f"fc27-community-v1:{eff_type}"
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE public.fc27_clubs
-               SET updated_at = %s
-             WHERE club_id = %s
-               AND platform = %s
-               AND game_version = %s
+            INSERT INTO public.fc27_clubs (
+                club_id,
+                platform,
+                game_version,
+                club_name,
+                identity_state,
+                manager_authority_status,
+                source_classification,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, 'PROVISIONAL', 'UNVERIFIED', 'COMMUNITY_RESEARCH_DERIVED', %s, %s)
+            ON CONFLICT (club_id, platform, game_version)
+            DO UPDATE SET updated_at = EXCLUDED.updated_at
             """,
-            (ts_utc, FIXED_CLUB_ID, FIXED_PLATFORM, FIXED_GAME_VERSION),
+            (
+                FIXED_CLUB_ID,
+                FIXED_PLATFORM,
+                FIXED_GAME_VERSION,
+                FIXED_CLUB_NAME,
+                ts_utc,
+                ts_utc,
+            ),
         )
         if inserted_matches > 0 and export_id:
             cur.execute(
@@ -1122,6 +1311,85 @@ def _touch_persisted_polling_timestamps(
                 """,
                 (ts_utc, export_id),
             )
+        else:
+            cur.execute(
+                """
+                UPDATE public.fc27_export_batches
+                   SET applied_at = %s
+                 WHERE export_id = (
+                       SELECT b.export_id
+                         FROM public.fc27_export_batches AS b
+                        WHERE b.club_id = %s
+                          AND b.platform = %s
+                          AND b.game_version = %s
+                          AND (
+                              (%s::text IS NOT NULL AND b.export_id = %s::text)
+                              OR b.supplier_reference = %s::text
+                              OR (%s::text = 'leagueMatch' AND b.supplier_reference = 'fc27-community-v1')
+                          )
+                        ORDER BY b.applied_at DESC, b.export_id DESC
+                        LIMIT 1
+                 )
+                """,
+                (
+                    ts_utc,
+                    FIXED_CLUB_ID,
+                    FIXED_PLATFORM,
+                    FIXED_GAME_VERSION,
+                    export_id,
+                    export_id,
+                    supplier_ref,
+                    eff_type,
+                ),
+            )
+            if cur.rowcount == 0:
+                cursor_export_id = f"comm_poll_cursor_{eff_type}"
+                cursor_hash = hashlib.sha256(
+                    f"cursor:{eff_type}".encode("utf-8")
+                ).hexdigest()
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_export_batches (
+                        export_id,
+                        club_id,
+                        platform,
+                        game_version,
+                        contract_version,
+                        schema_version,
+                        source_classification,
+                        supplier_role,
+                        supplier_reference,
+                        consent_version,
+                        consented_categories,
+                        payload_sha256,
+                        total_matches,
+                        accepted_matches,
+                        quarantined_matches,
+                        applied_at,
+                        created_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s,
+                        '1.0.0', '1.0.0', 'COMMUNITY_RESEARCH_DERIVED',
+                        'DATA_STEWARD', %s, '1.0.0',
+                        '["CLUB_AGGREGATE_PERFORMANCE"]'::jsonb, %s,
+                        0, 0, 0,
+                        %s, %s
+                    )
+                    ON CONFLICT (export_id)
+                    DO UPDATE SET applied_at = EXCLUDED.applied_at
+                    """,
+                    (
+                        cursor_export_id,
+                        FIXED_CLUB_ID,
+                        FIXED_PLATFORM,
+                        FIXED_GAME_VERSION,
+                        supplier_ref,
+                        cursor_hash,
+                        ts_utc,
+                        ts_utc,
+                    ),
+                )
 
 
 def persist_polled_match_envelope(
@@ -1131,8 +1399,29 @@ def persist_polled_match_envelope(
     match_envelopes: Sequence[Any] | None = None,
     enforce_posture: bool = False,
     generated_at: datetime | None = None,
+    match_type_override: str | None = None,
 ) -> FC27CommunityPersistenceApplySummary:
     """Persist a polled ``FC27CommunityProviderEnvelope`` in one PostgreSQL transaction."""
+    if isinstance(postgres_conn_or_uri, str):
+        with open_guarded_polling_connection(
+            postgres_conn_or_uri,
+            enforce_posture=enforce_posture,
+        ) as guarded_conn:
+            return persist_polled_match_envelope(
+                guarded_conn,
+                match_envelope=match_envelope,
+                match_envelopes=match_envelopes,
+                enforce_posture=enforce_posture,
+                generated_at=generated_at,
+                match_type_override=match_type_override,
+            )
+
+    eff_match_type = match_type_override or str(
+        match_envelope.provenance.get("match_type") or FIXED_MATCH_TYPE
+    )
+    if eff_match_type not in APPROVED_MATCH_TYPES:
+        eff_match_type = FIXED_MATCH_TYPE
+
     supplied_matches = _supplied_matches_from_normalized_records(
         match_envelope.normalized_records
     )
@@ -1142,25 +1431,97 @@ def persist_polled_match_envelope(
     ) + timedelta(minutes=5)
     poll_ts_utc = _normalize_utc(generated_at) if generated_at is not None else deterministic_gen_dt
 
+    c1_tables_ready = True
+    try:
+        cur_chk = postgres_conn_or_uri.execute(
+            """
+            SELECT current_user,
+                   (to_regclass('public.fc27_player_alias_fingerprints') IS NOT NULL
+                    AND to_regclass('public.fc27_discord_jobs') IS NOT NULL)
+            """
+        ).fetchone()
+        if cur_chk is not None:
+            db_role = str(cur_chk[0] or "")
+            tables_exist = bool(cur_chk[1])
+            if not tables_exist or db_role == "fc27_app":
+                c1_tables_ready = False
+        if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+            postgres_conn_or_uri.commit()
+    except Exception:
+        pass
+
+    eff_alias_fingerprints = (
+        match_envelope.alias_fingerprints if c1_tables_ready else ()
+    )
+    eff_enqueue_jobs = bool(c1_tables_ready)
+
     with _suppress_domain_event_outbox_writes():
         try:
+            if not match_envelopes and not supplied_matches:
+                tx_ctx = (
+                    postgres_conn_or_uri.transaction()
+                    if hasattr(postgres_conn_or_uri, "transaction")
+                    and callable(postgres_conn_or_uri.transaction)
+                    else contextlib.nullcontext()
+                )
+                with tx_ctx:
+                    _touch_persisted_polling_timestamps(
+                        postgres_conn_or_uri,
+                        poll_timestamp_utc=poll_ts_utc,
+                        export_id=None,
+                        inserted_matches=0,
+                        polled_match_type=eff_match_type,
+                    )
+                if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                    postgres_conn_or_uri.commit()
+                return FC27CommunityPersistenceApplySummary(
+                    live_data_persisted="YES",
+                    match_rows_inserted=0,
+                    team_stat_rows_inserted=0,
+                    player_stat_rows_inserted=0,
+                    duplicates_ignored=0,
+                    replay_conflicts=0,
+                    idempotent_duplicate=False,
+                    export_id=f"comm_poll_cursor_{eff_match_type}",
+                    fingerprints_inserted=0,
+                    fingerprints_refreshed=0,
+                    fingerprint_duplicate_observations=0,
+                    fingerprint_collisions=0,
+                    discord_jobs_inserted=0,
+                    discord_jobs_existing=0,
+                    discord_job_conflicts=0,
+                )
+
             if match_envelopes:
-                summary = persist_community_provider_batch(
-                    match_envelope,
-                    match_envelopes=match_envelopes,
-                    postgres_conn_or_uri=postgres_conn_or_uri,
-                    persist_requested=True,
-                    persistence_enabled=True,
-                    enforce_posture=enforce_posture,
-                    quarantine_conflicts=False,
-                    generated_at=deterministic_gen_dt,
+                tx_ctx = (
+                    postgres_conn_or_uri.transaction()
+                    if hasattr(postgres_conn_or_uri, "transaction")
+                    and callable(postgres_conn_or_uri.transaction)
+                    else contextlib.nullcontext()
                 )
-                _touch_persisted_polling_timestamps(
-                    postgres_conn_or_uri,
-                    poll_timestamp_utc=poll_ts_utc,
-                    export_id=summary.export_id,
-                    inserted_matches=summary.match_rows_inserted,
-                )
+                with tx_ctx:
+                    summary = persist_community_provider_batch(
+                        match_envelope,
+                        match_envelopes=match_envelopes,
+                        postgres_conn_or_uri=postgres_conn_or_uri,
+                        persist_requested=True,
+                        persistence_enabled=True,
+                        enforce_posture=enforce_posture,
+                        quarantine_conflicts=False,
+                        generated_at=deterministic_gen_dt,
+                        alias_fingerprints=eff_alias_fingerprints,
+                        enqueue_discord_jobs=eff_enqueue_jobs,
+                        match_type_override=eff_match_type,
+                        emit_domain_events=False,
+                        source_reference=f"fc27-community-v1:{eff_match_type}",
+                    )
+                    _touch_persisted_polling_timestamps(
+                        postgres_conn_or_uri,
+                        poll_timestamp_utc=poll_ts_utc,
+                        export_id=summary.export_id,
+                        inserted_matches=summary.match_rows_inserted,
+                        polled_match_type=eff_match_type,
+                    )
                 if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                     postgres_conn_or_uri.commit()
                 return summary
@@ -1172,6 +1533,7 @@ def persist_polled_match_envelope(
                 supplied_matches,
                 export_id=eff_export_id,
                 generated_at=deterministic_gen_dt,
+                source_reference=f"fc27-community-v1:{eff_match_type}",
             )
             existing_state = load_import_state(
                 postgres_conn_or_uri,
@@ -1200,6 +1562,10 @@ def persist_polled_match_envelope(
                     actor="fc27_community_polling_worker",
                     enforce_posture=enforce_posture,
                     quarantine_conflicts=False,
+                    alias_fingerprints=eff_alias_fingerprints,
+                    enqueue_discord_jobs=eff_enqueue_jobs,
+                    match_type_override=eff_match_type,
+                    emit_domain_events=False,
                 )
                 if apply_res.status == "REJECTED" or apply_res.replay_conflict:
                     raise FC27ReplayConflictError(
@@ -1210,6 +1576,7 @@ def persist_polled_match_envelope(
                     poll_timestamp_utc=poll_ts_utc,
                     export_id=eff_export_id,
                     inserted_matches=apply_res.accepted_records,
+                    polled_match_type=eff_match_type,
                 )
             if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                 postgres_conn_or_uri.commit()
@@ -1223,6 +1590,13 @@ def persist_polled_match_envelope(
                 replay_conflicts=1 if apply_res.replay_conflict else 0,
                 idempotent_duplicate=apply_res.idempotent_duplicate,
                 export_id=eff_export_id,
+                fingerprints_inserted=apply_res.fingerprints_inserted,
+                fingerprints_refreshed=apply_res.fingerprints_refreshed,
+                fingerprint_duplicate_observations=apply_res.fingerprint_duplicate_observations,
+                fingerprint_collisions=apply_res.fingerprint_collisions,
+                discord_jobs_inserted=apply_res.discord_jobs_inserted,
+                discord_jobs_existing=apply_res.discord_jobs_existing,
+                discord_job_conflicts=apply_res.discord_job_conflicts,
             )
         except Exception:
             if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
@@ -1284,6 +1658,26 @@ def evaluate_provider_window_continuity(
     return (False, None, False, anchor_match_id)
 
 
+def _match_type_from_supplier_ref_or_db_type(value: str | None) -> str | None:
+    """Resolve an approved provider match_type from supplier_reference or DB match_type."""
+    if not value:
+        return None
+    val = str(value).strip()
+    if val.startswith("fc27-community-v1:"):
+        suffix = val.split(":", 1)[1].strip()
+        if suffix in APPROVED_MATCH_TYPES:
+            return suffix
+    mapping = {
+        "LEAGUE": "leagueMatch",
+        "leagueMatch": "leagueMatch",
+        "PLAYOFF": "playoffMatch",
+        "playoffMatch": "playoffMatch",
+        "FRIENDLY": "friendlyMatch",
+        "friendlyMatch": "friendlyMatch",
+    }
+    return mapping.get(val)
+
+
 def recover_polling_state_from_postgres(
     db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
     *,
@@ -1292,7 +1686,7 @@ def recover_polling_state_from_postgres(
     enforce_posture: bool = False,
     restore_schedule_window: bool = True,
 ) -> FC27PollingRuntime:
-    """Recover persisted polling timestamps, next_eligible_at, and known match IDs from PostgreSQL."""
+    """Recover persisted polling timestamps, rotation cursor, next_eligible_at, and known match IDs from PostgreSQL."""
     rt = runtime or get_default_polling_runtime()
     pol = policy or rt.policy
 
@@ -1334,21 +1728,79 @@ def recover_polling_state_from_postgres(
 
             cur.execute(
                 """
-                SELECT external_match_id
-                  FROM public.fc27_matches
+                SELECT supplier_reference, applied_at, accepted_matches
+                  FROM public.fc27_export_batches
                  WHERE club_id = %s
                    AND platform = %s
                    AND game_version = %s
-                 ORDER BY played_at DESC, external_match_id DESC
+                 ORDER BY applied_at DESC, export_id DESC
+                """,
+                (pol.club_id, pol.platform, pol.game_version),
+            )
+            batch_history_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT m.external_match_id, b.supplier_reference
+                  FROM public.fc27_matches AS m
+                  LEFT JOIN public.fc27_export_batches AS b
+                    ON b.export_id = m.export_id
+                 WHERE m.club_id = %s
+                   AND m.platform = %s
+                   AND m.game_version = %s
+                 ORDER BY m.played_at DESC, m.external_match_id DESC
                 """,
                 (pol.club_id, pol.platform, pol.game_version),
             )
             match_rows = cur.fetchall()
-            persisted_ids = [str(r[0]) for r in match_rows if r and r[0] is not None]
+            persisted_ids: list[str] = []
+            persisted_ids_by_type: dict[str, list[str]] = {
+                mt: [] for mt in pol.approved_match_types
+            }
+            for r in match_rows:
+                if r and r[0] is not None:
+                    ext_id = str(r[0])
+                    persisted_ids.append(ext_id)
+                    m_type = _match_type_from_supplier_ref_or_db_type(
+                        str(r[1]) if len(r) > 1 and r[1] is not None else None
+                    )
+                    if m_type and m_type in persisted_ids_by_type:
+                        persisted_ids_by_type[m_type].append(ext_id)
+
+    recovered_last_match_type: str | None = None
+    per_type_last_success: dict[str, datetime] = {}
+    per_type_last_new: dict[str, datetime] = {}
+    for b_row in batch_history_rows:
+        if not b_row:
+            continue
+        sup_ref = str(b_row[0]) if b_row[0] is not None else ""
+        b_applied = _normalize_utc(b_row[1]) if len(b_row) > 1 and b_row[1] is not None else None
+        b_accepted = int(b_row[2] or 0) if len(b_row) > 2 else 0
+        m_type = _match_type_from_supplier_ref_or_db_type(sup_ref)
+        if m_type is None and sup_ref == "fc27-community-v1" and b_accepted > 0:
+            m_type = FIXED_MATCH_TYPE
+        if m_type and m_type in pol.approved_match_types and b_applied is not None:
+            if recovered_last_match_type is None:
+                recovered_last_match_type = m_type
+            if m_type not in per_type_last_success:
+                per_type_last_success[m_type] = b_applied
+            if b_accepted > 0 and m_type not in per_type_last_new:
+                per_type_last_new[m_type] = b_applied
+
+    if recovered_last_match_type is None and persisted_ids:
+        for r in match_rows:
+            if r and len(r) > 1 and r[1] is not None:
+                candidate = _match_type_from_supplier_ref_or_db_type(str(r[1]))
+                if candidate in pol.approved_match_types:
+                    recovered_last_match_type = candidate
+                    break
 
     with rt._lock:
         if persisted_ids:
             rt.known_match_ids.update(persisted_ids)
+            for mt, ids in persisted_ids_by_type.items():
+                if ids:
+                    rt.known_match_ids_by_type.setdefault(mt, set()).update(ids)
             if rt.continuity_anchor_match_id is None:
                 rt.continuity_anchor_match_id = persisted_ids[0]
             rt.provider_window_count = min(PROVIDER_WINDOW_MAX_MATCHES, len(persisted_ids))
@@ -1371,6 +1823,38 @@ def recover_polling_state_from_postgres(
                 if rt.continuity_last_verified_at is None:
                     rt.continuity_last_verified_at = eff_last_success
 
+            if recovered_last_match_type is not None:
+                rt.last_successful_match_type = recovered_last_match_type
+                rt.last_attempted_match_type = recovered_last_match_type
+                next_mt = next_approved_match_type(
+                    recovered_last_match_type,
+                    approved_match_types=pol.approved_match_types,
+                )
+                rt.current_rotation_match_type = next_mt
+                rt.next_rotation_match_type = next_approved_match_type(
+                    next_mt,
+                    approved_match_types=pol.approved_match_types,
+                )
+
+            for mt in pol.approved_match_types:
+                prev_state = rt.match_type_states.get(
+                    mt, FC27MatchTypePollState(match_type=mt)
+                )
+                mt_ids = persisted_ids_by_type.get(mt, [])
+                rt.match_type_states[mt] = FC27MatchTypePollState(
+                    match_type=mt,
+                    last_attempt_at=per_type_last_success.get(mt, prev_state.last_attempt_at),
+                    last_success_at=per_type_last_success.get(mt, prev_state.last_success_at),
+                    last_new_match_at=per_type_last_new.get(mt, prev_state.last_new_match_at),
+                    last_status=prev_state.last_status,
+                    total_cycles=prev_state.total_cycles,
+                    total_matches_inserted=max(prev_state.total_matches_inserted, len(mt_ids)),
+                    total_duplicates_ignored=prev_state.total_duplicates_ignored,
+                    continuity_anchor_match_id=(
+                        mt_ids[0] if mt_ids else prev_state.continuity_anchor_match_id
+                    ),
+                )
+
             rt.state_recovered_from_db = True
 
     return rt
@@ -1389,6 +1873,11 @@ class FC27PollingRuntime:
     circuit_breaker: FC27AdapterCircuitBreaker = field(init=False)
     worker_running: bool = False
     current_owner: str | None = None
+    current_rotation_match_type: str = FIXED_MATCH_TYPE
+    next_rotation_match_type: str = "playoffMatch"
+    last_attempted_match_type: str | None = None
+    last_successful_match_type: str | None = None
+    match_type_states: dict[str, FC27MatchTypePollState] = field(default_factory=dict)
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     last_new_match_at: datetime | None = None
@@ -1399,6 +1888,20 @@ class FC27PollingRuntime:
     total_matches_inserted: int = 0
     total_duplicates_ignored: int = 0
     total_replay_conflicts: int = 0
+    total_fingerprints_inserted: int = 0
+    total_fingerprints_refreshed: int = 0
+    total_fingerprint_duplicate_observations: int = 0
+    total_fingerprint_collisions: int = 0
+    total_discord_jobs_inserted: int = 0
+    total_discord_jobs_existing: int = 0
+    total_discord_job_conflicts: int = 0
+    last_fingerprints_inserted: int = 0
+    last_fingerprints_refreshed: int = 0
+    last_fingerprint_duplicate_observations: int = 0
+    last_fingerprint_collisions: int = 0
+    last_discord_jobs_inserted: int = 0
+    last_discord_jobs_existing: int = 0
+    last_discord_job_conflicts: int = 0
     next_eligible_at: datetime | None = None
     schedule_lag_seconds: int = 0
     missed_intervals: int = 0
@@ -1412,6 +1915,7 @@ class FC27PollingRuntime:
     continuity_anchor_match_id: str | None = None
     persistence_before_analytics: bool = True
     known_match_ids: set[str] = field(default_factory=set)
+    known_match_ids_by_type: dict[str, set[str]] = field(default_factory=dict)
     state_recovered_from_db: bool = False
     shutdown_requested: bool = False
     last_result: FC27PollResult | None = None
@@ -1419,6 +1923,15 @@ class FC27PollingRuntime:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
+        approved = self.policy.approved_match_types or APPROVED_MATCH_TYPES
+        first_mt = approved[0]
+        self.current_rotation_match_type = first_mt
+        self.next_rotation_match_type = next_approved_match_type(
+            first_mt, approved_match_types=approved
+        )
+        for mt in approved:
+            self.match_type_states.setdefault(mt, FC27MatchTypePollState(match_type=mt))
+            self.known_match_ids_by_type.setdefault(mt, set())
         self.cache = FC27BoundedNormalizedCache(
             enabled=True,
             max_entries=16,
@@ -1463,6 +1976,15 @@ class FC27PollingRuntime:
                 polling_frequency=self.policy.polling_frequency,
                 max_provider_requests_per_24_hours=self.policy.max_provider_requests_per_24_hours,
                 catch_up_bursts_allowed=self.policy.catch_up_bursts_allowed,
+                approved_match_types=self.policy.approved_match_types,
+                current_rotation_match_type=self.current_rotation_match_type,
+                next_rotation_match_type=self.next_rotation_match_type,
+                last_attempted_match_type=self.last_attempted_match_type,
+                last_successful_match_type=self.last_successful_match_type,
+                match_type_states={
+                    mt: state.to_dict() for mt, state in self.match_type_states.items()
+                },
+                alias_hmac_key_configured=is_fc27_alias_hmac_key_configured(),
                 last_attempt_at=self.last_attempt_at,
                 last_success_at=self.last_success_at,
                 last_new_match_at=self.last_new_match_at,
@@ -1473,6 +1995,20 @@ class FC27PollingRuntime:
                 total_matches_inserted=self.total_matches_inserted,
                 total_duplicates_ignored=self.total_duplicates_ignored,
                 total_replay_conflicts=self.total_replay_conflicts,
+                total_fingerprints_inserted=self.total_fingerprints_inserted,
+                total_fingerprints_refreshed=self.total_fingerprints_refreshed,
+                total_fingerprint_duplicate_observations=self.total_fingerprint_duplicate_observations,
+                total_fingerprint_collisions=self.total_fingerprint_collisions,
+                total_discord_jobs_inserted=self.total_discord_jobs_inserted,
+                total_discord_jobs_existing=self.total_discord_jobs_existing,
+                total_discord_job_conflicts=self.total_discord_job_conflicts,
+                last_fingerprints_inserted=self.last_fingerprints_inserted,
+                last_fingerprints_refreshed=self.last_fingerprints_refreshed,
+                last_fingerprint_duplicate_observations=self.last_fingerprint_duplicate_observations,
+                last_fingerprint_collisions=self.last_fingerprint_collisions,
+                last_discord_jobs_inserted=self.last_discord_jobs_inserted,
+                last_discord_jobs_existing=self.last_discord_jobs_existing,
+                last_discord_job_conflicts=self.last_discord_job_conflicts,
                 circuit_state=c_state,
                 next_eligible_at=self.next_eligible_at,
                 schedule_lag_seconds=self.schedule_lag_seconds,
@@ -1518,6 +2054,8 @@ def reset_default_polling_runtime(
 def _revalidate_polled_match_envelope(
     envelope: FC27CommunityProviderEnvelope,
     policy: FC27PollingPolicy,
+    *,
+    expected_match_type: str | None = None,
 ) -> None:
     """Revalidate provider identity, provenance, schema, and privacy on every poll cycle."""
     prov_id = envelope.provenance.get("provider_id")
@@ -1551,6 +2089,42 @@ def _revalidate_polled_match_envelope(
         raise FC27PollingSchemaDriftError(
             f"Envelope schema/normalization failed: schema={envelope.schema_status}, norm={envelope.normalization_status}"
         )
+    prov_match_type = str(envelope.provenance.get("match_type") or "").strip()
+    if prov_match_type and prov_match_type not in policy.approved_match_types:
+        raise FC27PollingSchemaDriftError(
+            f"Envelope provenance match_type '{prov_match_type}' not in approved_match_types {policy.approved_match_types}"
+        )
+    if expected_match_type is not None and prov_match_type and prov_match_type != expected_match_type:
+        raise FC27PollingSchemaDriftError(
+            f"Envelope provenance match_type '{prov_match_type}' != requested '{expected_match_type}'"
+        )
+    expected_record_types_by_prov = {
+        "leagueMatch": ("leagueMatch", "LEAGUE"),
+        "playoffMatch": ("playoffMatch", "PLAYOFF"),
+        "friendlyMatch": ("friendlyMatch", "FRIENDLY"),
+    }
+    allowed_record_types = {
+        "leagueMatch",
+        "LEAGUE",
+        "playoffMatch",
+        "PLAYOFF",
+        "friendlyMatch",
+        "FRIENDLY",
+    }
+    for rec in envelope.normalized_records:
+        rec_mt = str(rec.get("match_type") or "").strip()
+        if rec_mt and rec_mt not in allowed_record_types:
+            raise FC27PollingSchemaDriftError(
+                f"Record match_type '{rec_mt}' not in allowed match types"
+            )
+        if (
+            prov_match_type in expected_record_types_by_prov
+            and rec_mt
+            and rec_mt not in expected_record_types_by_prov[prov_match_type]
+        ):
+            raise FC27PollingSchemaDriftError(
+                f"Record match_type '{rec_mt}' incompatible with provenance match_type '{prov_match_type}'"
+            )
     if envelope.source_record_count > policy.maximum_results:
         raise FC27PollingSchemaDriftError(
             f"Envelope returned {envelope.source_record_count} matches > max {policy.maximum_results}"
@@ -1582,12 +2156,17 @@ def _classify_provider_exception(
         circuit_breaker.record_failure("IDENTITY_MISMATCH")
         return ("IDENTITY_REJECTED", "IDENTITY_MISMATCH")
 
+    if isinstance(exc, FC27FingerprintCollisionError):
+        circuit_breaker.record_failure("SENSITIVE_FIELD_VIOLATION")
+        return ("PRIVACY_REJECTED", "FINGERPRINT_COLLISION")
+
     if isinstance(
         exc,
         (
             FC27PollingPrivacyRejectedError,
             FC27PrivacyViolationError,
             FC27SensitiveFieldDetectedError,
+            FC27PrivacyError,
         ),
     ):
         circuit_breaker.record_failure("SENSITIVE_FIELD_VIOLATION")
@@ -1641,7 +2220,7 @@ def run_fc27_poll_cycle(
     db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str | None = None,
     advisory_lock_db_source: str | Callable[[], psycopg.Connection[Any]] | None = None,
     adapter: FC27CommunityProviderAdapter | None = None,
-    fetch_matches_fn: Callable[[], FC27CommunityProviderEnvelope] | None = None,
+    fetch_matches_fn: Callable[..., FC27CommunityProviderEnvelope] | None = None,
     persist_fn: Callable[
         [FC27CommunityProviderEnvelope],
         FC27CommunityPersistenceApplySummary,
@@ -1656,6 +2235,7 @@ def run_fc27_poll_cycle(
     use_rate_limiter: bool = True,
     enforce_db_posture: bool = False,
     recover_state_from_db: bool = False,
+    match_type_override: str | None = None,
 ) -> FC27PollResult:
     """Execute at most one bounded East Coasters FC27 poll cycle."""
     rt = runtime or get_default_polling_runtime()
@@ -1666,6 +2246,24 @@ def run_fc27_poll_cycle(
     started_at = _normalize_utc(clock_utc())
     start_epoch = clock_epoch()
     attempt_id = f"poll-{uuid.uuid4().hex[:12]}"
+
+    approved_types = pol.approved_match_types or APPROVED_MATCH_TYPES
+    with rt._lock:
+        if rt.current_rotation_match_type not in approved_types:
+            rt.current_rotation_match_type = approved_types[0]
+        active_match_type = (
+            match_type_override
+            if match_type_override is not None
+            else rt.current_rotation_match_type
+        )
+        if active_match_type not in approved_types:
+            raise FC27PollingSchemaDriftError(
+                f"Unapproved match_type '{active_match_type}' requested; approved={approved_types}"
+            )
+        planned_next_match_type = next_approved_match_type(
+            active_match_type, approved_match_types=approved_types
+        )
+
     attempt = FC27PollAttempt(
         poll_attempt_id=attempt_id,
         started_at=started_at,
@@ -1674,7 +2272,7 @@ def run_fc27_poll_cycle(
         club_id=pol.club_id,
         platform=pol.platform,
         game_version=pol.game_version,
-        match_type=pol.match_type,
+        match_type=active_match_type,
     )
 
     def _finalize(
@@ -1689,11 +2287,19 @@ def run_fc27_poll_cycle(
         inserted_match_count: int = 0,
         duplicate_ignored_count: int = 0,
         replay_conflict_count: int = 0,
+        fingerprints_inserted_count: int = 0,
+        fingerprints_refreshed_count: int = 0,
+        fingerprint_duplicate_observations_count: int = 0,
+        fingerprint_collision_count: int = 0,
+        discord_jobs_inserted_count: int = 0,
+        discord_jobs_existing_count: int = 0,
+        discord_job_conflict_count: int = 0,
         analytics_executed: bool = False,
         confidence_tier: str = "INSUFFICIENT_DATA",
         error_category: str | None = None,
         is_failure: bool = False,
         is_success: bool = False,
+        advance_rotation: bool = False,
         schedule_lag_seconds: int = 0,
         missed_intervals: int = 0,
         provider_window_count: int | None = None,
@@ -1703,11 +2309,13 @@ def run_fc27_poll_cycle(
         review_required: bool | None = None,
         continuity_last_verified_at: datetime | None = None,
         continuity_anchor_match_id: str | None = None,
+        polled_match_type: str | None = None,
     ) -> FC27PollResult:
         finished_at = _normalize_utc(clock_utc())
         end_epoch = clock_epoch()
         duration_ms = max(0, int((end_epoch - start_epoch) * 1000))
         c_state = rt.circuit_breaker.state.value
+        eff_match_type = polled_match_type or active_match_type
 
         with rt._lock:
             is_skipped_without_attempt = poll_status in (
@@ -1720,12 +2328,28 @@ def run_fc27_poll_cycle(
             )
             if not is_skipped_without_attempt or rt.last_attempt_at is None:
                 rt.last_attempt_at = started_at
+            if not is_skipped_without_attempt:
+                rt.last_attempted_match_type = eff_match_type
             rt.last_status = poll_status
             rt.total_cycles += 1
             rt.total_provider_requests += provider_requests
             rt.total_matches_inserted += inserted_match_count
             rt.total_duplicates_ignored += duplicate_ignored_count
             rt.total_replay_conflicts += replay_conflict_count
+            rt.last_fingerprints_inserted = fingerprints_inserted_count
+            rt.last_fingerprints_refreshed = fingerprints_refreshed_count
+            rt.last_fingerprint_duplicate_observations = fingerprint_duplicate_observations_count
+            rt.last_fingerprint_collisions = fingerprint_collision_count
+            rt.total_fingerprints_inserted += fingerprints_inserted_count
+            rt.total_fingerprints_refreshed += fingerprints_refreshed_count
+            rt.total_fingerprint_duplicate_observations += fingerprint_duplicate_observations_count
+            rt.total_fingerprint_collisions += fingerprint_collision_count
+            rt.last_discord_jobs_inserted = discord_jobs_inserted_count
+            rt.last_discord_jobs_existing = discord_jobs_existing_count
+            rt.last_discord_job_conflicts = discord_job_conflict_count
+            rt.total_discord_jobs_inserted += discord_jobs_inserted_count
+            rt.total_discord_jobs_existing += discord_jobs_existing_count
+            rt.total_discord_job_conflicts += discord_job_conflict_count
             rt.schedule_lag_seconds = max(0, schedule_lag_seconds)
             rt.missed_intervals = max(0, missed_intervals)
             rt.catch_up_cycles_suppressed = True
@@ -1750,8 +2374,48 @@ def run_fc27_poll_cycle(
             elif is_success:
                 rt.consecutive_failures = 0
                 rt.last_success_at = finished_at
+                rt.last_successful_match_type = eff_match_type
             if inserted_match_count > 0:
                 rt.last_new_match_at = finished_at
+
+            if not is_skipped_without_attempt:
+                prev_mt_state = rt.match_type_states.get(
+                    eff_match_type, FC27MatchTypePollState(match_type=eff_match_type)
+                )
+                rt.match_type_states[eff_match_type] = FC27MatchTypePollState(
+                    match_type=eff_match_type,
+                    last_attempt_at=started_at,
+                    last_success_at=(
+                        finished_at if is_success else prev_mt_state.last_success_at
+                    ),
+                    last_new_match_at=(
+                        finished_at
+                        if inserted_match_count > 0
+                        else prev_mt_state.last_new_match_at
+                    ),
+                    last_status=poll_status,
+                    total_cycles=prev_mt_state.total_cycles + 1,
+                    total_matches_inserted=prev_mt_state.total_matches_inserted + inserted_match_count,
+                    total_duplicates_ignored=prev_mt_state.total_duplicates_ignored + duplicate_ignored_count,
+                    continuity_anchor_match_id=(
+                        continuity_anchor_match_id
+                        if continuity_anchor_match_id is not None
+                        else prev_mt_state.continuity_anchor_match_id
+                    ),
+                )
+
+            if advance_rotation:
+                next_mt = next_approved_match_type(
+                    eff_match_type, approved_match_types=approved_types
+                )
+                rt.current_rotation_match_type = next_mt
+                rt.next_rotation_match_type = next_approved_match_type(
+                    next_mt, approved_match_types=approved_types
+                )
+            else:
+                rt.next_rotation_match_type = next_approved_match_type(
+                    rt.current_rotation_match_type, approved_match_types=approved_types
+                )
 
             result = FC27PollResult(
                 poll_attempt_id=attempt.poll_attempt_id,
@@ -1764,7 +2428,13 @@ def run_fc27_poll_cycle(
                 club_name=pol.club_name,
                 platform=pol.platform,
                 game_version=pol.game_version,
-                match_type=pol.match_type,
+                match_type=eff_match_type,
+                next_match_type=rt.current_rotation_match_type,
+                approved_match_types=approved_types,
+                current_rotation_match_type=rt.current_rotation_match_type,
+                next_rotation_match_type=rt.next_rotation_match_type,
+                last_attempted_match_type=rt.last_attempted_match_type,
+                last_successful_match_type=rt.last_successful_match_type,
                 poll_interval_seconds=pol.poll_interval_seconds,
                 polling_frequency=pol.polling_frequency,
                 max_provider_requests_per_24_hours=pol.max_provider_requests_per_24_hours,
@@ -1778,6 +2448,15 @@ def run_fc27_poll_cycle(
                 inserted_match_count=min(10, max(0, inserted_match_count)),
                 duplicate_ignored_count=min(10, max(0, duplicate_ignored_count)),
                 replay_conflict_count=min(10, max(0, replay_conflict_count)),
+                fingerprints_inserted=max(0, fingerprints_inserted_count),
+                fingerprints_refreshed=max(0, fingerprints_refreshed_count),
+                fingerprint_duplicate_observations=max(
+                    0, fingerprint_duplicate_observations_count
+                ),
+                fingerprint_collisions=max(0, fingerprint_collision_count),
+                discord_jobs_inserted=max(0, discord_jobs_inserted_count),
+                discord_jobs_existing=max(0, discord_jobs_existing_count),
+                discord_job_conflicts=max(0, discord_job_conflict_count),
                 analytics_executed=analytics_executed,
                 persistence_before_analytics=True,
                 confidence_tier=confidence_tier,
@@ -1830,6 +2509,27 @@ def run_fc27_poll_cycle(
             error_category="FEATURE_GATE_BLOCKED",
         )
 
+    # 3b. Validate required FC27 alias HMAC key before any provider request
+    require_hmac_key = (
+        fetch_matches_fn is None
+        or persist_fn is None
+        or "FC27_ALIAS_HMAC_KEY" in os.environ
+        or "FC27_ALIAS_HMAC_KEY_FILE" in os.environ
+    )
+    alias_hmac_key: str | None = None
+    if require_hmac_key:
+        try:
+            alias_hmac_key = read_fc27_alias_hmac_key(required=True)
+            if not alias_hmac_key or len(alias_hmac_key) < ALIAS_HMAC_KEY_MIN_BYTES:
+                raise ConfigError("FC27 alias HMAC key must be at least 32 bytes")
+        except ConfigError:
+            return _finalize(
+                poll_status="BLOCKED_FEATURE_GATE",
+                single_flight_acquired=False,
+                cache_status="BYPASSED_FEATURE_GATE",
+                error_category="ALIAS_HMAC_KEY_MISSING_OR_INVALID",
+            )
+
     # 4. Check circuit breaker before acquiring locks or making requests
     if rt.circuit_breaker.state is FC27CircuitState.OPEN:
         return _finalize(
@@ -1850,6 +2550,12 @@ def run_fc27_poll_cycle(
                 enforce_posture=enforce_db_posture,
                 restore_schedule_window=bool(recover_state_from_db and not rt.state_recovered_from_db),
             )
+            with rt._lock:
+                if match_type_override is None and rt.current_rotation_match_type in approved_types:
+                    active_match_type = rt.current_rotation_match_type
+                    planned_next_match_type = next_approved_match_type(
+                        active_match_type, approved_match_types=approved_types
+                    )
         except FC27PollingPostureError:
             rt.circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
             return _finalize(
@@ -1871,6 +2577,7 @@ def run_fc27_poll_cycle(
                 poll_status="SKIPPED_MIN_INTERVAL",
                 single_flight_acquired=False,
                 cache_status="BYPASSED_MIN_INTERVAL",
+                polled_match_type=active_match_type,
             )
 
     # Compute schedule lag and missed 12-hour intervals after outage/sleep/hibernate
@@ -1892,14 +2599,26 @@ def run_fc27_poll_cycle(
         )
 
     # 6. Check bounded normalized cache (complete key)
-    _, cache_key_spec = build_poll_cache_key(pol)
+    _, cache_key_spec = build_poll_cache_key(pol, match_type=active_match_type)
     if use_cache:
         cached_val = rt.cache.get(cache_key_spec)
+        if (
+            cached_val is None
+            and rt.next_eligible_at is None
+            and elapsed_since_prev_success is not None
+            and 0 < elapsed_since_prev_success < pol.cache_ttl_seconds
+            and rt.last_successful_match_type is not None
+        ):
+            _, prev_cache_spec = build_poll_cache_key(
+                pol, match_type=rt.last_successful_match_type
+            )
+            cached_val = rt.cache.get(prev_cache_spec)
         if cached_val is not None:
             return _finalize(
                 poll_status="SKIPPED_CACHE_FRESH",
                 single_flight_acquired=False,
                 cache_status="HIT_FRESH",
+                polled_match_type=active_match_type,
             )
 
     # 7. Acquire non-blocking single-flight lease
@@ -1918,6 +2637,7 @@ def run_fc27_poll_cycle(
             poll_status="SKIPPED_SINGLE_FLIGHT_BUSY",
             single_flight_acquired=False,
             cache_status="BYPASSED_SINGLE_FLIGHT_BUSY",
+            polled_match_type=active_match_type,
         )
 
     provider_requests = 0
@@ -1930,6 +2650,7 @@ def run_fc27_poll_cycle(
                 poll_status="SHUTDOWN_REQUESTED",
                 single_flight_acquired=True,
                 cache_status="BYPASSED_SHUTDOWN",
+                polled_match_type=active_match_type,
             )
 
         # Enforce token-bucket rate limiter
@@ -1945,6 +2666,7 @@ def run_fc27_poll_cycle(
                     single_flight_acquired=True,
                     cache_status="BYPASSED_RATE_LIMIT",
                     error_category="RATE_LIMIT_DENIED",
+                    polled_match_type=active_match_type,
                 )
 
         # Enforce per-cycle request budget (max_attempts=1, max_retries=0)
@@ -1962,12 +2684,31 @@ def run_fc27_poll_cycle(
         budget.consume_before_transport(is_retry=False)
         provider_requests = budget.attempts_used
 
-        # Execute 1 bounded provider request for recent East Coasters league matches
+        # Execute 1 bounded provider request for the active match type in rotation
         active_adapter = adapter
+        invoked_with_match_type_arg = False
         try:
             if fetch_matches_fn is not None:
-                match_envelope = fetch_matches_fn()
+                try:
+                    sig = inspect.signature(fetch_matches_fn)
+                    accepts_match_type = any(
+                        p.kind
+                        in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            inspect.Parameter.VAR_POSITIONAL,
+                        )
+                        for p in sig.parameters.values()
+                    )
+                except (ValueError, TypeError):
+                    accepts_match_type = False
+                if accepts_match_type:
+                    invoked_with_match_type_arg = True
+                    match_envelope = fetch_matches_fn(active_match_type)
+                else:
+                    match_envelope = fetch_matches_fn()
             else:
+                invoked_with_match_type_arg = True
                 if active_adapter is None:
                     active_adapter = FC27CommunityProviderAdapter(
                         provider_enabled=True,
@@ -1977,13 +2718,14 @@ def run_fc27_poll_cycle(
                     pol, _normalize_utc(clock_utc())
                 )
                 match_envelope = active_adapter.get_east_coasters_recent_matches_once(
-                    match_type=pol.match_type,
+                    match_type=active_match_type,
                     count=pol.maximum_results,
                     club_id=pol.club_id,
                     platform=pol.platform,
                     output="records",
                     identity_envelope=fixed_identity,
                     observed_at=_normalize_utc(clock_utc()).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    alias_hmac_key=alias_hmac_key,
                 )
         except Exception as exc:
             status_code, err_cat = _classify_provider_exception(
@@ -1996,14 +2738,20 @@ def run_fc27_poll_cycle(
                 provider_requests=provider_requests,
                 error_category=err_cat,
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
 
         # Revalidate identity, provenance, schema, and privacy on returned envelope
         try:
-            _revalidate_polled_match_envelope(match_envelope, pol)
+            _revalidate_polled_match_envelope(
+                match_envelope,
+                pol,
+                expected_match_type=match_type_override,
+            )
         except Exception as exc:
             status_code, err_cat = _classify_provider_exception(
                 exc, rt.circuit_breaker
@@ -2017,17 +2765,37 @@ def run_fc27_poll_cycle(
                 accepted_match_count=match_envelope.accepted_record_count,
                 error_category=err_cat,
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
+
+        env_prov_match_type = str(
+            match_envelope.provenance.get("match_type") or active_match_type
+        )
+        effective_persist_match_type = (
+            env_prov_match_type
+            if env_prov_match_type in approved_types
+            else active_match_type
+        )
 
         incoming_match_ids = [
             str(r.get("match_id", ""))
             for r in match_envelope.normalized_records
             if r.get("match_id")
         ]
-        prior_known_ids = frozenset(rt.known_match_ids)
+        with rt._lock:
+            type_known_set = rt.known_match_ids_by_type.get(
+                effective_persist_match_type, set()
+            )
+            if type_known_set:
+                prior_known_ids = frozenset(type_known_set)
+            elif effective_persist_match_type == FIXED_MATCH_TYPE:
+                prior_known_ids = frozenset(rt.known_match_ids)
+            else:
+                prior_known_ids = frozenset()
 
         # Persist batch transactionally in PostgreSQL BEFORE any analytics execution
         try:
@@ -2053,7 +2821,61 @@ def run_fc27_poll_cycle(
                         match_envelopes=adapter_envelopes,
                         enforce_posture=enforce_db_posture,
                         generated_at=_normalize_utc(clock_utc()),
+                        match_type_override=effective_persist_match_type,
                     )
+        except FC27FingerprintCollisionError:
+            rt.circuit_breaker.record_failure("SENSITIVE_FIELD_VIOLATION")
+            return _finalize(
+                poll_status="PRIVACY_REJECTED",
+                single_flight_acquired=True,
+                cache_status="MISS",
+                provider_requests=provider_requests,
+                source_match_count=match_envelope.source_record_count,
+                accepted_match_count=match_envelope.accepted_record_count,
+                fingerprint_collision_count=1,
+                analytics_executed=False,
+                error_category="FINGERPRINT_COLLISION",
+                is_failure=True,
+                advance_rotation=False,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
+            )
+        except FC27JobIdempotencyConflictError:
+            rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
+            conflict_cnt = max(1, match_envelope.accepted_record_count)
+            rt.advisory_cache.on_poll_cycle_outcome(
+                poll_status="REPLAY_CONFLICT",
+                replay_conflict_count=conflict_cnt,
+            )
+            if rt is get_default_polling_runtime():
+                get_default_advisory_cache().on_poll_cycle_outcome(
+                    poll_status="REPLAY_CONFLICT",
+                    replay_conflict_count=conflict_cnt,
+                )
+            else:
+                get_default_advisory_cache().invalidate_for_new_matches()
+            return _finalize(
+                poll_status="REPLAY_CONFLICT",
+                single_flight_acquired=True,
+                cache_status="MISS",
+                provider_requests=provider_requests,
+                source_match_count=match_envelope.source_record_count,
+                accepted_match_count=match_envelope.accepted_record_count,
+                inserted_match_count=0,
+                duplicate_ignored_count=0,
+                replay_conflict_count=conflict_cnt,
+                discord_job_conflict_count=1,
+                analytics_executed=False,
+                error_category="DISCORD_JOB_IDEMPOTENCY_CONFLICT",
+                is_failure=True,
+                advance_rotation=False,
+                schedule_lag_seconds=schedule_lag_sec,
+                missed_intervals=missed_interval_count,
+                elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
+            )
         except FC27ReplayConflictError:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
             conflict_cnt = max(1, match_envelope.accepted_record_count)
@@ -2081,9 +2903,11 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 error_category="REPLAY_CONFLICT",
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
         except FC27PollingPostureError:
             rt.circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
@@ -2096,9 +2920,11 @@ def run_fc27_poll_cycle(
                 accepted_match_count=match_envelope.accepted_record_count,
                 error_category="DATABASE_POSTURE_ERROR",
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
         except Exception:
             rt.circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
@@ -2115,9 +2941,11 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 error_category="PERSISTENCE_FAILURE",
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
 
         if persistence_summary.replay_conflicts > 0:
@@ -2146,13 +2974,22 @@ def run_fc27_poll_cycle(
                 analytics_executed=False,
                 error_category="REPLAY_CONFLICT",
                 is_failure=True,
+                advance_rotation=False,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
+                polled_match_type=active_match_type,
             )
 
         inserted_matches = persistence_summary.match_rows_inserted
         duplicate_matches = persistence_summary.duplicates_ignored
+        fp_inserted = getattr(persistence_summary, "fingerprints_inserted", 0)
+        fp_refreshed = getattr(persistence_summary, "fingerprints_refreshed", 0)
+        fp_dups = getattr(persistence_summary, "fingerprint_duplicate_observations", 0)
+        fp_collisions = getattr(persistence_summary, "fingerprint_collisions", 0)
+        jobs_inserted = getattr(persistence_summary, "discord_jobs_inserted", 0)
+        jobs_existing = getattr(persistence_summary, "discord_jobs_existing", 0)
+        job_conflicts = getattr(persistence_summary, "discord_job_conflicts", 0)
 
         # Evaluate 10-match provider window continuity and possible history gaps
         effective_prior_known = set(prior_known_ids)
@@ -2169,6 +3006,9 @@ def run_fc27_poll_cycle(
         )
         with rt._lock:
             rt.known_match_ids.update(incoming_match_ids)
+            rt.known_match_ids_by_type.setdefault(
+                effective_persist_match_type, set()
+            ).update(incoming_match_ids)
 
         # Store validated normalized envelope in bounded cache only after conflict-free persistence
         if use_cache:
@@ -2180,6 +3020,7 @@ def run_fc27_poll_cycle(
                         "record_hashes": list(match_envelope.record_hashes),
                         "accepted_record_count": match_envelope.accepted_record_count,
                         "observed_at": match_envelope.observed_at,
+                        "match_type": active_match_type,
                     },
                     ttl_override_seconds=pol.cache_ttl_seconds,
                 )
@@ -2218,9 +3059,17 @@ def run_fc27_poll_cycle(
                 inserted_match_count=0,
                 duplicate_ignored_count=duplicate_matches,
                 replay_conflict_count=0,
+                fingerprints_inserted_count=fp_inserted,
+                fingerprints_refreshed_count=fp_refreshed,
+                fingerprint_duplicate_observations_count=fp_dups,
+                fingerprint_collision_count=fp_collisions,
+                discord_jobs_inserted_count=jobs_inserted,
+                discord_jobs_existing_count=jobs_existing,
+                discord_job_conflict_count=job_conflicts,
                 analytics_executed=False,
                 confidence_tier="UNCHANGED_NO_NEW_MATCHES",
                 is_success=True,
+                advance_rotation=True,
                 schedule_lag_seconds=schedule_lag_sec,
                 missed_intervals=missed_interval_count,
                 provider_window_count=match_envelope.accepted_record_count,
@@ -2230,6 +3079,7 @@ def run_fc27_poll_cycle(
                 review_required=gap_review_req,
                 continuity_last_verified_at=verified_at,
                 continuity_anchor_match_id=anchor_mid,
+                polled_match_type=active_match_type,
             )
 
         rt.advisory_cache.on_poll_cycle_outcome(
@@ -2332,9 +3182,17 @@ def run_fc27_poll_cycle(
             inserted_match_count=inserted_matches,
             duplicate_ignored_count=duplicate_matches,
             replay_conflict_count=0,
+            fingerprints_inserted_count=fp_inserted,
+            fingerprints_refreshed_count=fp_refreshed,
+            fingerprint_duplicate_observations_count=fp_dups,
+            fingerprint_collision_count=fp_collisions,
+            discord_jobs_inserted_count=jobs_inserted,
+            discord_jobs_existing_count=jobs_existing,
+            discord_job_conflict_count=job_conflicts,
             analytics_executed=True,
             confidence_tier=confidence_tier,
             is_success=True,
+            advance_rotation=True,
             schedule_lag_seconds=schedule_lag_sec,
             missed_intervals=missed_interval_count,
             provider_window_count=match_envelope.accepted_record_count,
@@ -2344,6 +3202,7 @@ def run_fc27_poll_cycle(
             review_required=gap_review_req,
             continuity_last_verified_at=verified_at,
             continuity_anchor_match_id=anchor_mid,
+            polled_match_type=active_match_type,
         )
     finally:
         rt.current_owner = None
@@ -2363,7 +3222,7 @@ def run_fc27_polling_worker(
     db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str | None = None,
     advisory_lock_db_source: str | Callable[[], psycopg.Connection[Any]] | None = None,
     adapter: FC27CommunityProviderAdapter | None = None,
-    fetch_matches_fn: Callable[[], FC27CommunityProviderEnvelope] | None = None,
+    fetch_matches_fn: Callable[..., FC27CommunityProviderEnvelope] | None = None,
     persist_fn: Callable[
         [FC27CommunityProviderEnvelope],
         FC27CommunityPersistenceApplySummary,
@@ -2477,6 +3336,9 @@ def run_fc27_polling_worker(
 
 def resolve_polling_database_uri() -> str:
     """Resolve the least-privilege PostgreSQL connection URI for the polling worker."""
+    poll_writer_uri = read_fc27_poll_writer_uri(required=False)
+    if poll_writer_uri:
+        return poll_writer_uri
     uri = read_secret("POSTGRES_URI", required=False)
     if uri:
         return uri
@@ -2484,13 +3346,16 @@ def resolve_polling_database_uri() -> str:
     if fallback:
         return fallback
     raise ConfigError(
-        "POSTGRES_URI (or POSTGRES_URI_FILE / FC27_DEMO_POSTGRES_URI) is required for FC27 polling"
+        "FC27_POLL_WRITER_URI (or FC27_POLL_WRITER_URI_FILE / POSTGRES_URI) is required for FC27 polling"
     )
 
 
 __all__ = [
     "ALLOWED_POLL_STATUSES",
+    "ALLOWED_WORKER_PUBLIC_TABLES",
+    "APPROVED_MATCH_TYPES",
     "COMMUNITY_SOURCE_CLASSIFICATION",
+    "FC27MatchTypePollState",
     "FC27PollAttempt",
     "FC27PollResult",
     "FC27PollStatusLiteral",
@@ -2530,6 +3395,7 @@ __all__ = [
     "build_single_flight_lock_key",
     "evaluate_provider_window_continuity",
     "get_default_polling_runtime",
+    "next_approved_match_type",
     "open_guarded_polling_connection",
     "persist_polled_match_envelope",
     "recover_polling_state_from_postgres",
