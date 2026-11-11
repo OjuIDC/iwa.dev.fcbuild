@@ -802,6 +802,10 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
     password = str(info.get("password") or "")
     dbname = str(info.get("dbname") or "fc27")
 
+    archive_bytes = archive_path.read_bytes()
+    host_pg_restore = shutil.which("pg_restore")
+    container = _resolve_postgres_container_for_port(port)
+
     with psycopg.connect(db_uri, autocommit=True) as conn:
         conn.execute(
             "TRUNCATE public.schema_migrations, "
@@ -824,58 +828,23 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             "public.fc27_discord_jobs CASCADE"
         )
 
-    archive_bytes = archive_path.read_bytes()
-    host_pg_restore = shutil.which("pg_restore")
-    container = _resolve_postgres_container_for_port(port)
-
-    for tbl in FC27_DOMAIN_TABLES:
-        if host_pg_restore:
-            env = os.environ.copy()
-            if password:
-                env["PGPASSWORD"] = password
-            cmd = [
-                host_pg_restore,
-                "--format=custom",
-                "--data-only",
-                "--no-owner",
-                "--no-privileges",
-                "-h",
-                host,
-                "-p",
-                str(port),
-                "-U",
-                user,
-                "-d",
-                dbname,
-                "-t",
-                tbl,
-            ]
-            proc = subprocess.run(
-                cmd,
-                input=archive_bytes,
-                env=env,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode == 0:
-                continue
-
-        if container:
-            docker_cmd = ["docker", "exec", "-i"]
-            if password:
-                docker_cmd.extend(["-e", f"PGPASSWORD={password}"])
-            docker_cmd.extend(
-                [
-                    container,
-                    "pg_restore",
+        def _run_pg_restore_for_table(tbl: str, *, restore_mode_skip_claim_expiry: bool = False) -> None:
+            if host_pg_restore:
+                env = os.environ.copy()
+                if password:
+                    env["PGPASSWORD"] = password
+                if restore_mode_skip_claim_expiry:
+                    env["PGOPTIONS"] = "-c fc27.restore_mode=skip_claim_expiry"
+                cmd = [
+                    host_pg_restore,
                     "--format=custom",
                     "--data-only",
                     "--no-owner",
                     "--no-privileges",
                     "-h",
-                    "127.0.0.1",
+                    host,
                     "-p",
-                    "5432",
+                    str(port),
                     "-U",
                     user,
                     "-d",
@@ -883,22 +852,93 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                     "-t",
                     tbl,
                 ]
-            )
-            proc = subprocess.run(
-                docker_cmd,
-                input=archive_bytes,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                stderr_txt = proc.stderr.decode("utf-8", errors="ignore").strip()
-                raise FC27RestoreVerificationError(
-                    f"pg_restore failed for table '{tbl}' (exit {proc.returncode}): {stderr_txt}"
+                proc = subprocess.run(
+                    cmd,
+                    input=archive_bytes,
+                    env=env,
+                    capture_output=True,
+                    check=False,
                 )
-        else:
-            raise FC27RestoreVerificationError(
-                "Neither host pg_restore nor PostgreSQL container pg_restore is available"
+                if proc.returncode == 0:
+                    return
+
+            if container:
+                docker_cmd = ["docker", "exec", "-i"]
+                if password:
+                    docker_cmd.extend(["-e", f"PGPASSWORD={password}"])
+                if restore_mode_skip_claim_expiry:
+                    docker_cmd.extend(["-e", "PGOPTIONS=-c fc27.restore_mode=skip_claim_expiry"])
+                docker_cmd.extend(
+                    [
+                        container,
+                        "pg_restore",
+                        "--format=custom",
+                        "--data-only",
+                        "--no-owner",
+                        "--no-privileges",
+                        "-h",
+                        "127.0.0.1",
+                        "-p",
+                        "5432",
+                        "-U",
+                        user,
+                        "-d",
+                        dbname,
+                        "-t",
+                        tbl,
+                    ]
+                )
+                proc = subprocess.run(
+                    docker_cmd,
+                    input=archive_bytes,
+                    capture_output=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    stderr_txt = proc.stderr.decode("utf-8", errors="ignore").strip()
+                    raise FC27RestoreVerificationError(
+                        f"pg_restore failed for table '{tbl}' (exit {proc.returncode}): {stderr_txt}"
+                    )
+            else:
+                raise FC27RestoreVerificationError(
+                    "Neither host pg_restore nor PostgreSQL container pg_restore is available"
+                )
+
+        for tbl in FC27_DOMAIN_TABLES:
+            _run_pg_restore_for_table(
+                tbl,
+                restore_mode_skip_claim_expiry=(tbl == "fc27_discord_jobs"),
             )
+
+        # Per-table --data-only restores do not replay sequence setval entries.
+        # Resync identity/serial sequences so inserts after restore do not collide.
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT n.nspname, c.relname, a.attname, pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname)
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                 WHERE n.nspname = 'public'
+                   AND c.relname = ANY(%s)
+                   AND a.attidentity <> ''
+                """,
+                (list(FC27_DOMAIN_TABLES),),
+            )
+            seq_rows = cur.fetchall()
+            for schema_name, table_name, column_name, seq_name in seq_rows:
+                if not seq_name:
+                    continue
+                cur.execute(
+                    f"""
+                    SELECT setval(
+                        %s::regclass,
+                        COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
+                        false
+                    )
+                    """,
+                    (seq_name,),
+                )
 
 
 def enforce_backup_retention(
@@ -1186,6 +1226,49 @@ def verify_fc27_backup_restore(
                     raise FC27RestoreVerificationError(
                         "Search -> Scout -> Analyst readback failed after backup restore"
                     )
+
+            # Controlled post-restore check: ensure identity/serial sequences were
+            # resynced for populated identity-backed tables so the next insert works.
+            if restored_counts.fc27_manual_matches > 0 or restored_counts.fc27_discord_jobs > 0:
+                with psycopg.connect(target_uri, autocommit=True) as verify_conn:
+                    if restored_counts.fc27_manual_matches > 0:
+                        with verify_conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO public.fc27_manual_matches (
+                                    opponent, match_date, match_time, home_score, away_score,
+                                    status, revision, club_id, platform, game_version, source_classification
+                                ) VALUES (
+                                    'Restore Verification Opponent', NULL, NULL, NULL, NULL,
+                                    'scheduled', 1, %s, %s, %s, 'MANUAL_MATCH_RESULTS'
+                                )
+                                RETURNING match_id
+                                """,
+                                (manifest.club_id, manifest.platform, manifest.game_version),
+                            )
+                            inserted_id = int(cur.fetchone()[0])
+                            cur.execute(
+                                "DELETE FROM public.fc27_manual_matches WHERE match_id = %s",
+                                (inserted_id,),
+                            )
+                    if restored_counts.fc27_discord_jobs > 0:
+                        with verify_conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO public.fc27_discord_jobs (
+                                    job_type, payload, state, idempotency_key
+                                ) VALUES (
+                                    'post_new_results', '{}'::jsonb, 'pending', %s
+                                )
+                                RETURNING job_id
+                                """,
+                                (f"restore-verify-{manifest.backup_id}",),
+                            )
+                            inserted_id = int(cur.fetchone()[0])
+                            cur.execute(
+                                "DELETE FROM public.fc27_discord_jobs WHERE job_id = %s",
+                                (inserted_id,),
+                            )
 
             return FC27RestoreVerificationReport(
                 backup_id=manifest.backup_id,
