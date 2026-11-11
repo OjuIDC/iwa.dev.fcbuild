@@ -59,7 +59,7 @@ REQUIRED_DOCKERIGNORE_PATTERNS: tuple[str, ...] = (
 
 EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
     "fc27-community-worker": {
-        "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
+        "ghcr_name": f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY', 'OjuIDC/iwa.dev.fcbuild').lower()}/fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
         "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
         "user": "10001:65534",
@@ -78,7 +78,7 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
         "smoke_args": ["--status"],
     },
     "fc27-discord-bot": {
-        "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot",
+        "ghcr_name": f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY', 'OjuIDC/iwa.dev.fcbuild').lower()}/fc27-discord-bot",
         "dockerfile": "Dockerfile.discord",
         "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
         "user": "10001:65534",

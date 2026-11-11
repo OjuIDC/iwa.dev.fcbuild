@@ -45,7 +45,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0014"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0015"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -312,19 +312,19 @@ def inspect_database_state_for_manifest(
             migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(name), '0014_fc27_player_development.sql') "
+                    "SELECT COUNT(*), COALESCE(MAX(name), '0015_fc27_player_development_fixups.sql') "
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 14)
-                latest_mig = str(mig_row[1] or "0014_fc27_player_development.sql")
+                mig_count = int(mig_row[0] or 15)
+                latest_mig = str(mig_row[1] or "0015_fc27_player_development_fixups.sql")
                 cur.execute(
                     "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
                 )
                 migration_rows = cur.fetchall()
             else:
-                mig_count = 14
-                latest_mig = "0014_fc27_player_development.sql"
+                mig_count = 15
+                latest_mig = "0015_fc27_player_development_fixups.sql"
 
             cur.execute("SELECT to_regclass('public.schema_policy_versions')")
             has_policy_versions = cur.fetchone()[0] is not None
@@ -802,6 +802,10 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
     password = str(info.get("password") or "")
     dbname = str(info.get("dbname") or "fc27")
 
+    archive_bytes = archive_path.read_bytes()
+    host_pg_restore = shutil.which("pg_restore")
+    container = _resolve_postgres_container_for_port(port)
+
     with psycopg.connect(db_uri, autocommit=True) as conn:
         conn.execute(
             "TRUNCATE public.schema_migrations, "
@@ -824,58 +828,21 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             "public.fc27_discord_jobs CASCADE"
         )
 
-    archive_bytes = archive_path.read_bytes()
-    host_pg_restore = shutil.which("pg_restore")
-    container = _resolve_postgres_container_for_port(port)
-
-    for tbl in FC27_DOMAIN_TABLES:
-        if host_pg_restore:
-            env = os.environ.copy()
-            if password:
-                env["PGPASSWORD"] = password
-            cmd = [
-                host_pg_restore,
-                "--format=custom",
-                "--data-only",
-                "--no-owner",
-                "--no-privileges",
-                "-h",
-                host,
-                "-p",
-                str(port),
-                "-U",
-                user,
-                "-d",
-                dbname,
-                "-t",
-                tbl,
-            ]
-            proc = subprocess.run(
-                cmd,
-                input=archive_bytes,
-                env=env,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode == 0:
-                continue
-
-        if container:
-            docker_cmd = ["docker", "exec", "-i"]
-            if password:
-                docker_cmd.extend(["-e", f"PGPASSWORD={password}"])
-            docker_cmd.extend(
-                [
-                    container,
-                    "pg_restore",
+        def _run_pg_restore_for_table(tbl: str) -> None:
+            if host_pg_restore:
+                env = os.environ.copy()
+                if password:
+                    env["PGPASSWORD"] = password
+                cmd = [
+                    host_pg_restore,
                     "--format=custom",
                     "--data-only",
                     "--no-owner",
                     "--no-privileges",
                     "-h",
-                    "127.0.0.1",
+                    host,
                     "-p",
-                    "5432",
+                    str(port),
                     "-U",
                     user,
                     "-d",
@@ -883,22 +850,95 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                     "-t",
                     tbl,
                 ]
-            )
-            proc = subprocess.run(
-                docker_cmd,
-                input=archive_bytes,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                stderr_txt = proc.stderr.decode("utf-8", errors="ignore").strip()
-                raise FC27RestoreVerificationError(
-                    f"pg_restore failed for table '{tbl}' (exit {proc.returncode}): {stderr_txt}"
+                proc = subprocess.run(
+                    cmd,
+                    input=archive_bytes,
+                    env=env,
+                    capture_output=True,
+                    check=False,
                 )
-        else:
-            raise FC27RestoreVerificationError(
-                "Neither host pg_restore nor PostgreSQL container pg_restore is available"
+                if proc.returncode == 0:
+                    return
+
+            if container:
+                docker_cmd = ["docker", "exec", "-i"]
+                if password:
+                    docker_cmd.extend(["-e", f"PGPASSWORD={password}"])
+                docker_cmd.extend(
+                    [
+                        container,
+                        "pg_restore",
+                        "--format=custom",
+                        "--data-only",
+                        "--no-owner",
+                        "--no-privileges",
+                        "-h",
+                        "127.0.0.1",
+                        "-p",
+                        "5432",
+                        "-U",
+                        user,
+                        "-d",
+                        dbname,
+                        "-t",
+                        tbl,
+                    ]
+                )
+                proc = subprocess.run(
+                    docker_cmd,
+                    input=archive_bytes,
+                    capture_output=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    stderr_txt = proc.stderr.decode("utf-8", errors="ignore").strip()
+                    raise FC27RestoreVerificationError(
+                        f"pg_restore failed for table '{tbl}' (exit {proc.returncode}): {stderr_txt}"
+                    )
+            else:
+                raise FC27RestoreVerificationError(
+                    "Neither host pg_restore nor PostgreSQL container pg_restore is available"
+                )
+
+        for tbl in FC27_DOMAIN_TABLES:
+            if tbl == "fc27_discord_jobs":
+                conn.execute("ALTER TABLE public.fc27_discord_jobs DISABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
+                try:
+                    _run_pg_restore_for_table(tbl)
+                finally:
+                    conn.execute("ALTER TABLE public.fc27_discord_jobs ENABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
+            else:
+                _run_pg_restore_for_table(tbl)
+
+        # Per-table --data-only restores do not replay sequence setval entries.
+        # Resync identity/serial sequences so inserts after restore do not collide.
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT n.nspname, c.relname, a.attname, pg_get_serial_sequence(format('%%I.%%I', n.nspname, c.relname), a.attname)
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                 WHERE n.nspname = 'public'
+                   AND c.relname = ANY(%s)
+                   AND a.attidentity <> ''
+                """,
+                (list(FC27_DOMAIN_TABLES),),
             )
+            seq_rows = cur.fetchall()
+            for schema_name, table_name, column_name, seq_name in seq_rows:
+                if not seq_name:
+                    continue
+                cur.execute(
+                    f"""
+                    SELECT setval(
+                        %s::regclass,
+                        COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
+                        false
+                    )
+                    """,
+                    (seq_name,),
+                )
 
 
 def enforce_backup_retention(
@@ -1149,8 +1189,8 @@ def verify_fc27_backup_restore(
             )
             migration_ok = (
                 restored_mig_cnt >= 13
-                and ("0013" in restored_mig or "0014" in restored_mig)
-                and manifest.migration_version in ("0001_THROUGH_0013", EXPECTED_MIGRATION_VERSION)
+                and any(v in restored_mig for v in ("0013", "0014", "0015"))
+                and manifest.migration_version in ("0001_THROUGH_0013", "0001_THROUGH_0014", EXPECTED_MIGRATION_VERSION)
             )
             if not migration_ok:
                 raise FC27RestoreVerificationError(
@@ -1186,6 +1226,51 @@ def verify_fc27_backup_restore(
                     raise FC27RestoreVerificationError(
                         "Search -> Scout -> Analyst readback failed after backup restore"
                     )
+
+            # Controlled post-restore check: ensure identity/serial sequences were
+            # resynced for populated identity-backed tables so the next insert works.
+            if restored_counts.fc27_manual_matches > 0 or restored_counts.fc27_discord_jobs > 0:
+                with psycopg.connect(target_uri, autocommit=True) as verify_conn:
+                    if restored_counts.fc27_manual_matches > 0:
+                        with verify_conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO public.fc27_manual_matches (
+                                    opponent, opponent_normalized, match_date, match_time, home_score, away_score,
+                                    status, revision, club_id, platform, game_version, source_classification,
+                                    created_by, updated_by
+                                ) VALUES (
+                                    'Restore Verification Opponent', 'restore verification opponent',
+                                    NULL, NULL, NULL, NULL, 'SCHEDULED', 1, %s, %s, %s,
+                                    'MANUAL_MATCH_RESULT', '0', '0'
+                                )
+                                RETURNING match_id
+                                """,
+                                (manifest.club_id, manifest.platform, manifest.game_version),
+                            )
+                            inserted_id = int(cur.fetchone()[0])
+                            cur.execute(
+                                "DELETE FROM public.fc27_manual_matches WHERE match_id = %s",
+                                (inserted_id,),
+                            )
+                    if restored_counts.fc27_discord_jobs > 0:
+                        with verify_conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO public.fc27_discord_jobs (
+                                    job_type, payload, state, idempotency_key
+                                ) VALUES (
+                                    'post_new_results', '{"restore_verification":true}'::jsonb, 'pending', %s
+                                )
+                                RETURNING job_id
+                                """,
+                                (f"restore-verify-{manifest.backup_id}",),
+                            )
+                            inserted_id = int(cur.fetchone()[0])
+                            cur.execute(
+                                "DELETE FROM public.fc27_discord_jobs WHERE job_id = %s",
+                                (inserted_id,),
+                            )
 
             return FC27RestoreVerificationReport(
                 backup_id=manifest.backup_id,

@@ -543,17 +543,26 @@ _BOOTSTRAP_PASSWORD_ENV_VARS: tuple[str, ...] = (
 
 
 def _extract_conninfo_user(conninfo: str) -> str | None:
-    """Parse PostgreSQL conninfo and require an explicit login role."""
-    from psycopg import ProgrammingError
-    from psycopg.conninfo import conninfo_to_dict
+    """Extract the PostgreSQL username from a URI or keyword/value conninfo without logging secrets.
 
+    Uses psycopg's conninfo parser so URI query parameters and keyword/value forms
+    are interpreted consistently. Fails closed (returns None) when the username is
+    not explicitly present, so dedicated-role checks cannot accept an implicit login.
+    """
+    raw = conninfo.strip()
+    if not raw:
+        return None
     try:
-        user = conninfo_to_dict(conninfo).get("user")
-    except ProgrammingError:
-        raise ConfigError("Invalid PostgreSQL connection configuration") from None
-    if not user:
-        raise ConfigError("PostgreSQL connection configuration must specify a user")
-    return user
+        import psycopg
+
+        parsed = psycopg.conninfo.conninfo_to_dict(raw)
+    except Exception:
+        return None
+    user = parsed.get("user")
+    if user is None:
+        return None
+    user = str(user).strip()
+    return user or None
 
 
 def _reject_runtime_bootstrap_password_vars() -> None:
@@ -584,9 +593,9 @@ def read_fc27_poll_writer_uri(*, required: bool = False) -> str | None:
     uri = read_secret("FC27_POLL_WRITER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
-        if user is not None and user != "fc27_poll_writer":
+        if user != "fc27_poll_writer":
             raise ConfigError(
-                f"FC27_POLL_WRITER_URI must connect as fc27_poll_writer, got '{user}'"
+                "FC27_POLL_WRITER_URI must explicitly connect as fc27_poll_writer"
             )
     return uri
 
@@ -601,9 +610,9 @@ def read_fc27_player_dev_writer_uri(*, required: bool = False) -> str | None:
     uri = read_secret("FC27_PLAYER_DEV_WRITER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
-        if user is not None and user != "fc27_player_dev_writer":
+        if user != "fc27_player_dev_writer":
             raise ConfigError(
-                f"FC27_PLAYER_DEV_WRITER_URI must connect as fc27_player_dev_writer, got '{user}'"
+                "FC27_PLAYER_DEV_WRITER_URI must explicitly connect as fc27_player_dev_writer"
             )
     return uri
 
@@ -618,9 +627,9 @@ def read_fc27_discord_reader_uri(*, required: bool = False) -> str | None:
     uri = read_secret("FC27_DISCORD_READER_URI", required=required)
     if uri is not None:
         user = _extract_conninfo_user(uri)
-        if user is not None and user != "fc27_discord_reader":
+        if user != "fc27_discord_reader":
             raise ConfigError(
-                f"FC27_DISCORD_READER_URI must connect as fc27_discord_reader, got '{user}'"
+                "FC27_DISCORD_READER_URI must explicitly connect as fc27_discord_reader"
             )
     return uri
 
@@ -636,7 +645,11 @@ def validate_fc27_role_uri_separation(
         raise ConfigError("reader and writer URIs must not be identical")
     reader_user = _extract_conninfo_user(reader_uri)
     writer_user = _extract_conninfo_user(writer_uri)
-    if reader_user and writer_user and reader_user == writer_user:
+    if reader_user is None or writer_user is None:
         raise ConfigError(
-            f"reader and writer URIs must use separate PostgreSQL roles, both used '{reader_user}'"
+            "reader and writer URIs must explicitly specify separate PostgreSQL roles"
+        )
+    if reader_user == writer_user:
+        raise ConfigError(
+            "reader and writer URIs must use separate PostgreSQL roles"
         )
