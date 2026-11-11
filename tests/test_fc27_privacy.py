@@ -33,16 +33,19 @@ import pytest
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     FC27ContractError,
+    FC27FingerprintCollisionError,
     FC27FormulaInjectionError,
     FC27PrivacyError,
     FC27PseudonymCollisionDetector,
     FC27PseudonymCollisionError,
     FC27SensitiveFieldDetectedError,
     FC27ValidationError,
+    HEX_SHA256_RE,
     PSEUDONYM_MATCH_REF_RE,
     PSEUDONYM_PLAYER_REF_RE,
     assert_no_sensitive_fields,
     compare_digest_constant_time,
+    compute_alias_hmac_fingerprint,
     compute_match_hash,
     compute_payload_sha256,
     contains_discord_mention,
@@ -329,6 +332,7 @@ def test_19_single_authoritative_privacy_implementation_in_src() -> None:
         "pseudonymize_match_ref",
         "escape_csv_formula_cell",
         "FC27PseudonymCollisionDetector",
+        "compute_alias_hmac_fingerprint",
     }
     duplicates: list[str] = []
     for py_path in sorted((REPO_ROOT / "src").rglob("*.py")):
@@ -340,3 +344,29 @@ def test_19_single_authoritative_privacy_implementation_in_src() -> None:
                 if node.name in authoritative_defs:
                     duplicates.append(f"{py_path.relative_to(REPO_ROOT).as_posix()}:{node.name}")
     assert duplicates == []
+
+
+def test_20_alias_hmac_fingerprint_determinism_and_key_validation() -> None:
+    """20. C1 alias HMAC-SHA256 fingerprint computation is deterministic, normalizes whitespace/case/NFC, and rejects short/empty keys."""
+    valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+    n1 = normalize_hmac_input("  East   Coaster_99  ")
+    n2 = normalize_hmac_input("east coaster_99")
+    assert n1 == n2 == b"east coaster_99"
+
+    h1 = compute_alias_hmac_fingerprint("  East   Coaster_99  ", valid_key)
+    h2 = compute_alias_hmac_fingerprint("EAST COASTER_99", valid_key)
+    h3 = compute_alias_hmac_fingerprint("OtherPlayer_01", valid_key)
+    assert h1 == h2
+    assert h1 != h3
+    assert HEX_SHA256_RE.fullmatch(h1)
+    assert valid_key not in h1
+    assert "coaster" not in h1
+
+    for bad_key in (None, "", "   ", "short_key_under_32_bytes", b"short_bytes"):
+        with pytest.raises(FC27ValidationError):
+            compute_alias_hmac_fingerprint("EastCoaster", bad_key)  # type: ignore[arg-type]
+
+    assert issubclass(FC27FingerprintCollisionError, FC27PrivacyError)
+
+

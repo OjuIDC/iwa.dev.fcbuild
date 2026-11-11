@@ -50,6 +50,7 @@ from src.fc27_community_provider import (
 from src.fc27_discord_bot import FC27DiscordBotConfig, FC27DiscordBotService
 from src.fc27_privacy import pseudonymize_match_ref as _pseudonymize_match_ref
 from src.fc27_polling_worker import (
+    APPROVED_MATCH_TYPES,
     POLL_NORMALIZATION_VERSION,
     POLL_OPERATION_NAME,
     POLL_RESPONSE_SCHEMA_VERSION,
@@ -68,6 +69,7 @@ from src.fc27_polling_worker import (
     build_poll_cache_key,
     build_single_flight_lock_key,
     open_guarded_polling_connection,
+    recover_polling_state_from_postgres,
     reset_default_polling_runtime,
     run_fc27_poll_cycle,
     run_fc27_polling_worker,
@@ -125,6 +127,15 @@ def _block_external_network_and_reset_polling_state(
         "FC27_COMMUNITY_POLL_ANALYTICS_ON_NEW_ONLY",
         "FC27_COMMUNITY_POLL_SINGLE_FLIGHT",
         "FC27_COMMUNITY_POLL_ONCE",
+        "FC27_APPROVED_MATCH_TYPES",
+        "FC27_ALIAS_HMAC_KEY",
+        "FC27_ALIAS_HMAC_KEY_FILE",
+        "FC27_POLL_WRITER_URI",
+        "FC27_POLL_WRITER_URI_FILE",
+        "FC27_PLAYER_DEV_WRITER_URI",
+        "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        "FC27_DISCORD_READER_URI",
+        "FC27_DISCORD_READER_URI_FILE",
         "FC27_RECOMMENDATIONS_ENABLED",
         "DISPATCH_ENABLED",
         "FC27_CLUB_ID",
@@ -135,10 +146,14 @@ def _block_external_network_and_reset_polling_state(
     reset_default_polling_runtime()
 
 
+TEST_ALIAS_HMAC_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+
 def _enable_all_polling_gates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FC27_COMMUNITY_POLLING_ENABLED", "true")
     monkeypatch.setenv("FC27_COMMUNITY_PROVIDER_ENABLED", "true")
     monkeypatch.setenv("FC27_PERSISTENCE_ENABLED", "true")
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY", TEST_ALIAS_HMAC_KEY)
 
 
 def _build_synthetic_community_match_records(
@@ -147,6 +162,7 @@ def _build_synthetic_community_match_records(
     start_id: int = 991001,
     players_per_match: int = 6,
     goals_override: int | None = None,
+    match_type: str = "leagueMatch",
 ) -> list[dict[str, Any]]:
     positions = ("GK", "CB", "CB", "CM", "CAM", "ST")
     records: list[dict[str, Any]] = []
@@ -187,7 +203,7 @@ def _build_synthetic_community_match_records(
         records.append(
             {
                 "match_id": str(start_id + i),
-                "match_type": "leagueMatch",
+                "match_type": match_type,
                 "timestamp": 1761800000 + i * 3600,
                 "clubs": [
                     {
@@ -231,16 +247,21 @@ def _build_validated_envelope(
     start_id: int = 991001,
     players_per_match: int = 6,
     goals_override: int | None = None,
+    match_type: str = "leagueMatch",
+    alias_hmac_key: bytes | str | None = TEST_ALIAS_HMAC_KEY,
 ) -> tuple[FC27CommunityProviderEnvelope, tuple[Any, ...]]:
     raw = _build_synthetic_community_match_records(
         count=count,
         start_id=start_id,
         players_per_match=players_per_match,
         goals_override=goals_override,
+        match_type=match_type,
     )
     return normalize_community_match_records(
         raw,
+        expected_match_type=match_type,
         observed_at="2026-10-31T12:00:00Z",
+        alias_hmac_key=alias_hmac_key,
     )
 
 
@@ -679,7 +700,7 @@ def test_032_postgres_advisory_lock_key_is_deterministic(pg_db_migrated) -> None
     with FC27SingleFlightLeaseContext(
         policy=FC27PollingPolicy(),
         owner_id="pg-owner-1",
-        db_uri_or_conn_factory=pg_db_migrated.app,
+        db_uri_or_conn_factory=pg_db_migrated.poll_writer,
     ) as lease:
         assert lease.acquired is True
         assert lease.mechanism == "POSTGRES_ADVISORY_LOCK"
@@ -1119,7 +1140,7 @@ def test_053_first_valid_10_match_batch_persists_1_club_1_batch_10_matches_60_pl
     env, _ = _build_validated_envelope(10, players_per_match=6)
     res = run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1146,7 +1167,7 @@ def test_054_first_valid_batch_returns_new_matches_persisted(
     env, _ = _build_validated_envelope(10, players_per_match=6)
     res = run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1165,7 +1186,7 @@ def test_055_identical_second_poll_cycle_persists_0_new_matches_and_0_new_player
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1174,7 +1195,7 @@ def test_055_identical_second_poll_cycle_persists_0_new_matches_and_0_new_player
     second = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1200,7 +1221,7 @@ def test_056_identical_second_poll_cycle_returns_no_new_matches(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1209,7 +1230,7 @@ def test_056_identical_second_poll_cycle_returns_no_new_matches(
     second = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1228,7 +1249,7 @@ def test_057_partial_new_batch_inserts_only_new_matches_and_player_stats(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_initial,
         use_cache=False,
         use_rate_limiter=False,
@@ -1238,7 +1259,7 @@ def test_057_partial_new_batch_inserts_only_new_matches_and_player_stats(
     second = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_overlap,
         use_cache=False,
         use_rate_limiter=False,
@@ -1263,7 +1284,7 @@ def test_058_partial_new_batch_returns_new_matches_persisted_with_2_inserted_8_d
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_initial,
         use_cache=False,
         use_rate_limiter=False,
@@ -1273,7 +1294,7 @@ def test_058_partial_new_batch_returns_new_matches_persisted_with_2_inserted_8_d
     second = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_overlap,
         use_cache=False,
         use_rate_limiter=False,
@@ -1294,7 +1315,7 @@ def test_059_changed_replay_conflict_rolls_back_transactionally(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_initial,
         use_cache=False,
         use_rate_limiter=False,
@@ -1306,7 +1327,7 @@ def test_059_changed_replay_conflict_rolls_back_transactionally(
     conflict_res = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_conflict,
         use_cache=False,
         use_rate_limiter=False,
@@ -1329,7 +1350,7 @@ def test_060_changed_replay_conflict_returns_replay_conflict(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_initial,
         use_cache=False,
         use_rate_limiter=False,
@@ -1341,7 +1362,7 @@ def test_060_changed_replay_conflict_returns_replay_conflict(
     res = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_conflict,
         use_cache=False,
         use_rate_limiter=False,
@@ -1361,7 +1382,7 @@ def test_061_changed_replay_conflict_does_not_overwrite_existing_stored_matches(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_initial,
         use_cache=False,
         use_rate_limiter=False,
@@ -1373,7 +1394,7 @@ def test_061_changed_replay_conflict_does_not_overwrite_existing_stored_matches(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_conflict,
         use_cache=False,
         use_rate_limiter=False,
@@ -1395,7 +1416,7 @@ def test_062_player_identifiers_are_pseudonymous_plr_ecf_12_hex(
     env, _ = _build_validated_envelope(3, players_per_match=6)
     run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1426,7 +1447,7 @@ def test_064_display_alias_remains_null_for_all_persisted_rows(
     env, _ = _build_validated_envelope(3, players_per_match=6)
     run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1471,7 +1492,7 @@ def test_066_search_scout_analyst_execute_when_inserted_match_count_positive(
     res = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1576,12 +1597,12 @@ def test_071_analyst_output_remains_observational(
     env, _ = _build_validated_envelope(10, players_per_match=6)
     run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
     )
-    _, _, analyst_rep = run_analytics_from_persisted_community_records(pg_db_migrated.app)
+    _, _, analyst_rep = run_analytics_from_persisted_community_records(pg_db_migrated.poll_writer)
     assert len(analyst_rep.findings) > 0
     for finding in analyst_rep.findings:
         assert finding.recommendation is False
@@ -1599,7 +1620,7 @@ def test_072_ten_persisted_matches_produce_moderate_confidence(
     env, _ = _build_validated_envelope(10, players_per_match=6)
     res = run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1859,7 +1880,7 @@ def test_085_cli_once_with_valid_fake_provider_and_postgres_persists_once_and_ex
 ) -> None:
     """85. --once with valid fake provider and disposable PostgreSQL persists once and exits."""
     _enable_all_polling_gates(monkeypatch)
-    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.app)
+    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.poll_writer)
     env, _ = _build_validated_envelope(10, players_per_match=6)
     monkeypatch.setattr(
         FC27CommunityProviderAdapter,
@@ -1881,7 +1902,7 @@ def test_086_cli_once_repeated_with_identical_fake_provider_records_no_new_match
 ) -> None:
     """86. --once repeated with identical fake provider records NO_NEW_MATCHES and ANALYTICS_EXECUTED=NO."""
     _enable_all_polling_gates(monkeypatch)
-    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.app)
+    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.poll_writer)
     env, _ = _build_validated_envelope(10, players_per_match=6)
     monkeypatch.setattr(
         FC27CommunityProviderAdapter,
@@ -1921,7 +1942,7 @@ def test_088_cli_output_is_metadata_only(
 ) -> None:
     """88. CLI output is metadata-only."""
     _enable_all_polling_gates(monkeypatch)
-    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.app)
+    monkeypatch.setenv("POSTGRES_URI", pg_db_migrated.poll_writer)
     env, _ = _build_validated_envelope(3, players_per_match=6)
     monkeypatch.setattr(
         FC27CommunityProviderAdapter,
@@ -1932,7 +1953,7 @@ def test_088_cli_output_is_metadata_only(
     out = capsys.readouterr().out
     assert "RAW_RESPONSE_RETAINED=NO" in out
     assert "StripThisPrivateGamerTag" not in out
-    assert pg_db_migrated.app not in out
+    assert pg_db_migrated.poll_writer not in out
 
 
 # ==============================================================================
@@ -2000,7 +2021,7 @@ def test_094_worker_service_does_not_receive_admin_migrator_commissioner_or_disp
         (REPO_ROOT / "docker-compose.community-worker.yml").read_text(encoding="utf-8")
     )
     svc = compose_data["services"]["fc27-community-worker"]
-    assert set(svc["secrets"]) == {"fc27_app_uri", "fc27_poll_writer_uri"}
+    assert set(svc["secrets"]) == {"fc27_poll_writer_uri", "fc27_alias_hmac_key"}
     env_keys = set(svc.get("environment", {}).keys())
     for forbidden in (
         "POSTGRES_ADMIN_URI",
@@ -2019,7 +2040,7 @@ def test_094_worker_service_does_not_receive_admin_migrator_commissioner_or_disp
 
 def test_095_worker_database_role_cannot_access_checkpoints_tables(pg_db_migrated) -> None:
     """95. Worker database role cannot access checkpoints, checkpoint_blobs, or checkpoint_writes."""
-    with open_guarded_polling_connection(pg_db_migrated.app) as conn:
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
         for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
             with pytest.raises(FC27PollingTableAccessDeniedError):
                 conn.execute(f"SELECT COUNT(*) FROM public.{table}")
@@ -2027,7 +2048,7 @@ def test_095_worker_database_role_cannot_access_checkpoints_tables(pg_db_migrate
 
 def test_096_worker_database_role_cannot_access_approval_tables(pg_db_migrated) -> None:
     """96. Worker database role cannot access approval, decision-evidence, or identity/WebAuthn tables."""
-    with open_guarded_polling_connection(pg_db_migrated.app) as conn:
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
         for table in (
             "approval_requests",
             "approval_audit",
@@ -2047,7 +2068,7 @@ def test_096_worker_database_role_cannot_access_approval_tables(pg_db_migrated) 
 
 def test_097_worker_database_role_cannot_access_dispatch_tables(pg_db_migrated) -> None:
     """97. Worker database role cannot access dispatches, dispatch_delivery_attempts, domain_events, or outbox."""
-    with open_guarded_polling_connection(pg_db_migrated.app) as conn:
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
         for table in (
             "dispatches",
             "dispatch_delivery_attempts",
@@ -2062,7 +2083,7 @@ def test_097_worker_database_role_cannot_access_dispatch_tables(pg_db_migrated) 
 
 def test_098_worker_database_role_cannot_run_ddl(pg_db_migrated) -> None:
     """98. Worker database role cannot run DDL (CREATE TABLE fails)."""
-    with open_guarded_polling_connection(pg_db_migrated.app) as conn:
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("CREATE TABLE public.unauthorized_worker_ddl (id int)")
         conn.rollback()
@@ -2200,7 +2221,7 @@ def test_105_worker_container_restart_with_elapsed_under_43200_skips_poll(
     res1 = run_fc27_poll_cycle(
         runtime=rt1,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2221,7 +2242,7 @@ def test_105_worker_container_restart_with_elapsed_under_43200_skips_poll(
     res2 = run_fc27_poll_cycle(
         runtime=rt2,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=_should_not_call,
         now_utc_fn=lambda: t_restart,
         use_cache=False,
@@ -2248,7 +2269,7 @@ def test_106_docker_daemon_restart_recovers_persisted_state_and_skips_when_under
     run_fc27_poll_cycle(
         runtime=FC27PollingRuntime(),
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2260,7 +2281,7 @@ def test_106_docker_daemon_restart_recovers_persisted_state_and_skips_when_under
     results = run_fc27_polling_worker(
         runtime=rt_daemon_restart,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: (_ for _ in ()).throw(AssertionError("Must not poll")),
         now_utc_fn=lambda: t0 + timedelta(hours=6),
         max_cycles=1,
@@ -2286,7 +2307,7 @@ def test_107_host_reboot_simulation_with_persisted_postgres_state_preserves_sche
     run_fc27_poll_cycle(
         runtime=FC27PollingRuntime(),
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2298,7 +2319,7 @@ def test_107_host_reboot_simulation_with_persisted_postgres_state_preserves_sche
     early = run_fc27_poll_cycle(
         runtime=rt_reboot,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0 + timedelta(hours=11),
         use_cache=False,
@@ -2312,7 +2333,7 @@ def test_107_host_reboot_simulation_with_persisted_postgres_state_preserves_sche
     due = run_fc27_poll_cycle(
         runtime=rt_reboot,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0 + timedelta(hours=12),
         use_cache=False,
@@ -2528,7 +2549,7 @@ def test_112_partial_or_mid_transaction_persistence_failure_rolls_back_and_block
     res = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         analytics_fn=lambda: (analytics_called := True) or {},
         use_cache=False,
@@ -2558,13 +2579,13 @@ def test_113_overlapping_manual_and_scheduled_poll_skips_second_via_single_fligh
     with FC27SingleFlightLeaseContext(
         policy=policy,
         owner_id="scheduled-worker",
-        db_uri_or_conn_factory=pg_db_migrated.app,
+        db_uri_or_conn_factory=pg_db_migrated.poll_writer,
     ) as lease:
         assert lease.acquired is True
         manual_res = run_fc27_poll_cycle(
             policy=policy,
             confirm_live_polling=True,
-            db_conn_or_uri=pg_db_migrated.app,
+            db_conn_or_uri=pg_db_migrated.poll_writer,
             use_cache=False,
             use_rate_limiter=False,
         )
@@ -2585,7 +2606,7 @@ def test_114_ten_new_matches_after_existing_matches_flags_possible_history_gap(
     r1 = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_batch_1,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2601,7 +2622,7 @@ def test_114_ten_new_matches_after_existing_matches_flags_possible_history_gap(
     r2 = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_batch_2,
         now_utc_fn=lambda: t1,
         use_cache=False,
@@ -2633,7 +2654,7 @@ def test_115_eight_existing_and_two_new_matches_verifies_continuity_without_gap(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_batch_1,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2648,7 +2669,7 @@ def test_115_eight_existing_and_two_new_matches_verifies_continuity_without_gap(
     r2 = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env_batch_2,
         now_utc_fn=lambda: t1,
         use_cache=False,
@@ -2676,7 +2697,7 @@ def test_116_ten_identical_matches_verifies_continuity_without_gap(
     run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t0,
         use_cache=False,
@@ -2687,7 +2708,7 @@ def test_116_ten_identical_matches_verifies_continuity_without_gap(
     r2 = run_fc27_poll_cycle(
         runtime=rt,
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         now_utc_fn=lambda: t1,
         use_cache=False,
@@ -2723,7 +2744,7 @@ def test_117_persistence_before_analytics_verified_by_execution_order(
 
     res = run_fc27_poll_cycle(
         confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.app,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
         fetch_matches_fn=lambda: env,
         analytics_fn=_verify_committed_before_analytics,
         use_cache=False,
@@ -2732,3 +2753,1129 @@ def test_117_persistence_before_analytics_verified_by_execution_order(
     assert res.poll_status == "NEW_MATCHES_PERSISTED"
     assert res.persistence_before_analytics is True
     assert persisted_count_during_analytics == 10
+
+
+# ==============================================================================
+# STAGE C1 MOCKED PROVIDER TEST MATRIX (Items 1–42 -> Tests 118–159)
+# ==============================================================================
+
+
+def test_118_c1_matrix_01_league_match_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 1: leagueMatch accepted."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=910001, match_type="leagueMatch")
+    assert env.provenance["match_type"] == "leagueMatch"
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda mt: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=3),
+        analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+        match_type_override="leagueMatch",
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.match_type == "leagueMatch"
+
+
+def test_119_c1_matrix_02_playoff_match_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 2: playoffMatch accepted."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=910101, match_type="playoffMatch")
+    assert env.provenance["match_type"] == "playoffMatch"
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda mt: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=3),
+        analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+        match_type_override="playoffMatch",
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.match_type == "playoffMatch"
+
+
+def test_120_c1_matrix_03_friendly_match_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 3: friendlyMatch accepted."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=910201, match_type="friendlyMatch")
+    assert env.provenance["match_type"] == "friendlyMatch"
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda mt: env,
+        persist_fn=lambda _e: _fake_persist_summary(inserted=3),
+        analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+        match_type_override="friendlyMatch",
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.match_type == "friendlyMatch"
+
+
+def test_121_c1_matrix_04_unapproved_match_type_rejected_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 4: Unknown or unapproved match_type rejected before transport."""
+    _enable_all_polling_gates(monkeypatch)
+    transport_calls = 0
+
+    def _never_called(_mt: str) -> FC27CommunityProviderEnvelope:
+        nonlocal transport_calls
+        transport_calls += 1
+        return _build_validated_envelope(1)[0]
+
+    for bad_type in ("cupMatch", "practiceMatch", "unknownMatch", "ALL", ""):
+        with pytest.raises((FC27ContractError, FC27PollingSchemaDriftError, ValueError)):
+            normalize_community_match_records(
+                _build_synthetic_community_match_records(1),
+                match_type=bad_type,
+            )
+        with pytest.raises(FC27PollingSchemaDriftError):
+            run_fc27_poll_cycle(
+                confirm_live_polling=True,
+                fetch_matches_fn=_never_called,
+                match_type_override=bad_type,
+            )
+    assert transport_calls == 0
+
+
+def test_122_c1_matrix_05_mismatched_returned_match_type_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 5: Mismatched returned match_type vs requested match_type rejected."""
+    _enable_all_polling_gates(monkeypatch)
+    raw_playoff = _build_synthetic_community_match_records(
+        2, start_id=910301, match_type="playoffMatch"
+    )
+    with pytest.raises(FC27SchemaValidationError, match="does not match requested match_type"):
+        normalize_community_match_records(
+            raw_playoff,
+            match_type="leagueMatch",
+            alias_hmac_key=TEST_ALIAS_HMAC_KEY,
+        )
+
+    env_playoff, _ = _build_validated_envelope(2, start_id=910301, match_type="playoffMatch")
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        fetch_matches_fn=lambda _mt: env_playoff,
+        match_type_override="leagueMatch",
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "SCHEMA_DRIFT"
+    assert res.inserted_match_count == 0
+
+
+def test_123_c1_matrix_06_rotation_order_league_playoff_friendly_league(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 6: Rotation order leagueMatch -> playoffMatch -> friendlyMatch -> leagueMatch."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    seen_types: list[str] = []
+
+    def _fetch_for_type(mt: str) -> FC27CommunityProviderEnvelope:
+        seen_types.append(mt)
+        env, _ = _build_validated_envelope(
+            2, start_id=911000 + len(seen_types) * 10, match_type=mt
+        )
+        return env
+
+    for step in range(4):
+        res = run_fc27_poll_cycle(
+            runtime=rt,
+            confirm_live_polling=True,
+            fetch_matches_fn=_fetch_for_type,
+            persist_fn=lambda _e: _fake_persist_summary(inserted=2),
+            analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+            now_utc_fn=lambda s=step: t0 + timedelta(seconds=43200 * s),
+            use_cache=False,
+            use_rate_limiter=False,
+        )
+        assert res.poll_status == "NEW_MATCHES_PERSISTED"
+
+    assert seen_types == [
+        "leagueMatch",
+        "playoffMatch",
+        "friendlyMatch",
+        "leagueMatch",
+    ]
+
+
+def test_124_c1_matrix_07_one_provider_request_per_cycle_across_all_match_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 Matrix 7: One provider request per cycle across all match types."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    for step, expected_mt in enumerate(APPROVED_MATCH_TYPES):
+        calls_in_cycle = 0
+
+        def _fetch(mt: str) -> FC27CommunityProviderEnvelope:
+            nonlocal calls_in_cycle
+            calls_in_cycle += 1
+            return _build_validated_envelope(1, start_id=912000 + step * 10, match_type=mt)[0]
+
+        res = run_fc27_poll_cycle(
+            runtime=rt,
+            confirm_live_polling=True,
+            fetch_matches_fn=_fetch,
+            persist_fn=lambda _e: _fake_persist_summary(inserted=1),
+            analytics_fn=lambda: {"confidence_tier": "LOW_CONFIDENCE"},
+            now_utc_fn=lambda s=step: t0 + timedelta(seconds=43200 * s),
+            use_cache=False,
+            use_rate_limiter=False,
+        )
+        assert res.match_type == expected_mt
+        assert res.provider_requests == 1
+        assert calls_in_cycle == 1
+
+
+def test_125_c1_matrix_08_12_hour_interval_and_max_2_requests_per_24h_preserved() -> None:
+    """C1 Matrix 8: 12-hour interval (43200s) and max 2 requests per 24 hours preserved."""
+    pol = FC27PollingPolicy()
+    assert pol.poll_interval_seconds == 43200
+    assert pol.minimum_interval_seconds == 43200
+    assert pol.maximum_interval_seconds == 43200
+    assert pol.max_provider_requests_per_24_hours == 2
+    assert pol.maximum_requests_per_cycle == 1
+    assert pol.approved_match_types == ("leagueMatch", "playoffMatch", "friendlyMatch")
+
+
+def test_126_c1_matrix_09_zero_retries_and_zero_catch_up_bursts_preserved() -> None:
+    """C1 Matrix 9: Zero retries and zero catch-up bursts preserved."""
+    pol = FC27PollingPolicy()
+    assert pol.maximum_retries == 0
+    assert pol.catch_up_bursts_allowed is False
+
+
+def test_127_c1_matrix_10_restart_before_43200s_performs_zero_provider_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 10: Restart before 43200s performs zero provider requests."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 2, 0, 0, 0, tzinfo=timezone.utc)
+    env, _ = _build_validated_envelope(2, start_id=913001, match_type="leagueMatch")
+    r1 = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.poll_status == "NEW_MATCHES_PERSISTED"
+
+    rt_restarted = FC27PollingRuntime()
+    r2 = run_fc27_poll_cycle(
+        runtime=rt_restarted,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: (_ for _ in ()).throw(AssertionError("Must not call provider")),
+        now_utc_fn=lambda: t0 + timedelta(seconds=43199),
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert r2.poll_status == "SKIPPED_MIN_INTERVAL"
+    assert r2.provider_requests == 0
+
+
+def test_128_c1_matrix_11_restart_after_43200s_polls_next_match_type_in_rotation_once(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 11: Restart after >= 43200s polls the next match type in rotation once."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 2, 0, 0, 0, tzinfo=timezone.utc)
+    env_league, _ = _build_validated_envelope(2, start_id=914001, match_type="leagueMatch")
+    r1 = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env_league,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.poll_status == "NEW_MATCHES_PERSISTED"
+    assert r1.match_type == "leagueMatch"
+
+    polled_types: list[str] = []
+
+    def _fetch_after_restart(mt: str) -> FC27CommunityProviderEnvelope:
+        polled_types.append(mt)
+        return _build_validated_envelope(2, start_id=914101, match_type=mt)[0]
+
+    rt_restarted = FC27PollingRuntime()
+    r2 = run_fc27_poll_cycle(
+        runtime=rt_restarted,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=_fetch_after_restart,
+        now_utc_fn=lambda: t0 + timedelta(seconds=43200),
+        use_cache=False,
+        use_rate_limiter=False,
+        recover_state_from_db=True,
+    )
+    assert r2.poll_status == "NEW_MATCHES_PERSISTED"
+    assert polled_types == ["playoffMatch"]
+    assert r2.match_type == "playoffMatch"
+    assert r2.next_match_type == "friendlyMatch"
+    assert r2.provider_requests == 1
+
+
+def test_129_c1_matrix_12_zero_match_response_advances_rotation_cleanly_without_inserts_or_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 12: 0-match response for a match type advances rotation cleanly without error, without inserting match rows, and without enqueueing Discord jobs."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 2, 12, 0, 0, tzinfo=timezone.utc)
+    empty_env, _ = normalize_community_match_records(
+        [],
+        match_type="playoffMatch",
+        observed_at="2026-11-02T12:00:00Z",
+        alias_hmac_key=TEST_ALIAS_HMAC_KEY,
+    )
+    rt = FC27PollingRuntime()
+    rt.current_rotation_match_type = "playoffMatch"
+    res = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: empty_env,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "NO_NEW_MATCHES"
+    assert res.match_type == "playoffMatch"
+    assert res.next_match_type == "friendlyMatch"
+    assert res.inserted_match_count == 0
+    assert res.discord_jobs_inserted_count == 0
+    assert res.fingerprints_inserted_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 0
+
+    # Verify restart durability of the 0-match rotation advance
+    rt_recovered = recover_polling_state_from_postgres(pg_db_migrated.poll_writer)
+    assert rt_recovered.last_successful_match_type == "playoffMatch"
+    assert rt_recovered.current_rotation_match_type == "friendlyMatch"
+
+
+def test_130_c1_matrix_13_valid_alias_and_hmac_key_produces_deterministic_64_hex() -> None:
+    """C1 Matrix 13: Valid alias + valid HMAC key produces deterministic 64-character lowercase hex HMAC."""
+    from src.fc27_privacy import compute_alias_hmac_fingerprint
+
+    d1 = compute_alias_hmac_fingerprint("CaptainEast99", TEST_ALIAS_HMAC_KEY)
+    d2 = compute_alias_hmac_fingerprint("CaptainEast99", TEST_ALIAS_HMAC_KEY)
+    assert d1 == d2
+    assert re.fullmatch(r"^[0-9a-f]{64}$", d1)
+
+
+def test_131_c1_matrix_14_equivalent_aliases_with_whitespace_and_case_produce_identical_hmac() -> None:
+    """C1 Matrix 14: Equivalent aliases with whitespace/case differences produce identical HMAC."""
+    from src.fc27_privacy import compute_alias_hmac_fingerprint
+
+    d1 = compute_alias_hmac_fingerprint("  East   Coaster_Pro  ", TEST_ALIAS_HMAC_KEY)
+    d2 = compute_alias_hmac_fingerprint("east coaster_pro", TEST_ALIAS_HMAC_KEY)
+    d3 = compute_alias_hmac_fingerprint("EAST COASTER_PRO", TEST_ALIAS_HMAC_KEY)
+    assert d1 == d2 == d3
+
+
+def test_132_c1_matrix_15_missing_empty_or_short_hmac_key_fails_closed_before_polling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """C1 Matrix 15: Missing, empty, or < 32-byte HMAC key fails closed before polling persistence."""
+    _enable_all_polling_gates(monkeypatch)
+    provider_calls = 0
+
+    def _fetch(_mt: str) -> FC27CommunityProviderEnvelope:
+        nonlocal provider_calls
+        provider_calls += 1
+        return _build_validated_envelope(1)[0]
+
+    # Case A: missing file
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(tmp_path / "does_not_exist.key"))
+    monkeypatch.delenv("FC27_ALIAS_HMAC_KEY", raising=False)
+    res_missing = run_fc27_poll_cycle(confirm_live_polling=True, fetch_matches_fn=_fetch)
+    assert res_missing.poll_status == "BLOCKED_FEATURE_GATE"
+    assert res_missing.error_category == "ALIAS_HMAC_KEY_MISSING_OR_INVALID"
+
+    # Case B: empty file
+    empty_file = tmp_path / "empty.key"
+    empty_file.write_text("   \n", encoding="utf-8")
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(empty_file))
+    res_empty = run_fc27_poll_cycle(confirm_live_polling=True, fetch_matches_fn=_fetch)
+    assert res_empty.poll_status == "BLOCKED_FEATURE_GATE"
+    assert res_empty.error_category == "ALIAS_HMAC_KEY_MISSING_OR_INVALID"
+
+    # Case C: short (< 32 bytes) key
+    short_file = tmp_path / "short.key"
+    short_file.write_text("too-short-key-only-20b", encoding="utf-8")
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(short_file))
+    res_short = run_fc27_poll_cycle(confirm_live_polling=True, fetch_matches_fn=_fetch)
+    assert res_short.poll_status == "BLOCKED_FEATURE_GATE"
+    assert res_short.error_category == "ALIAS_HMAC_KEY_MISSING_OR_INVALID"
+    assert provider_calls == 0
+
+
+def test_133_c1_matrix_16_same_pseudonym_and_hmac_updates_timestamps_without_duplicate_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 16: Same (pseudonym, gamertag_hmac) updates last_seen_at and updated_at without duplicate rows."""
+    _enable_all_polling_gates(monkeypatch)
+    t0 = datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+    t1 = t0 + timedelta(seconds=43200)
+    rt = FC27PollingRuntime()
+    env1, _ = _build_validated_envelope(
+        2, start_id=915001, players_per_match=6, match_type="leagueMatch"
+    )
+    env2, _ = _build_validated_envelope(
+        2, start_id=915101, players_per_match=6, match_type="playoffMatch"
+    )
+
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env1,
+        now_utc_fn=lambda: t0,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.fingerprints_inserted_count == 6
+    assert r1.fingerprints_refreshed_count == 0
+    assert r1.fingerprint_duplicate_observations_count == 6
+
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env2,
+        now_utc_fn=lambda: t1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.fingerprints_inserted_count == 0
+    assert r2.fingerprints_refreshed_count == 6
+    assert r2.fingerprint_duplicate_observations_count == 6
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*), BOOL_AND(updated_at >= created_at), BOOL_AND(last_seen_at >= created_at) FROM public.fc27_player_alias_fingerprints"
+            )
+            cnt, upd_ok, seen_ok = cur.fetchone()
+            assert cnt == 6
+            assert upd_ok is True
+            assert seen_ok is True
+
+
+def test_134_c1_matrix_17_existing_pseudonym_with_different_hmac_fails_closed_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 17: Existing pseudonym with different gamertag_hmac fails closed and rolls back."""
+    from src.fc27_community_provider import FC27AliasFingerprintObservation
+
+    _enable_all_polling_gates(monkeypatch)
+    env1, _ = _build_validated_envelope(2, start_id=916001, players_per_match=6)
+    r1 = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.poll_status == "NEW_MATCHES_PERSISTED"
+    existing_pseudo = env1.alias_fingerprints[0].pseudonym
+
+    env2_base, _ = _build_validated_envelope(
+        2, start_id=916101, players_per_match=6, match_type="playoffMatch"
+    )
+    colliding_fps = (
+        FC27AliasFingerprintObservation(
+            pseudonym=existing_pseudo,
+            gamertag_hmac="f" * 64,
+        ),
+    )
+    env2 = env2_base.model_copy(update={"alias_fingerprints": colliding_fps})
+
+    rt2 = FC27PollingRuntime()
+    rt2.current_rotation_match_type = "playoffMatch"
+    r2 = run_fc27_poll_cycle(
+        runtime=rt2,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env2,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "PRIVACY_REJECTED"
+    assert r2.error_category == "FINGERPRINT_COLLISION"
+    assert r2.fingerprint_collision_count == 1
+    assert r2.inserted_match_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 2
+
+
+def test_135_c1_matrix_18_existing_hmac_with_different_pseudonym_fails_closed_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 18: Existing gamertag_hmac with different pseudonym fails closed and rolls back."""
+    from src.fc27_community_provider import FC27AliasFingerprintObservation
+
+    _enable_all_polling_gates(monkeypatch)
+    env1, _ = _build_validated_envelope(2, start_id=917001, players_per_match=6)
+    run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env1,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    existing_hmac = env1.alias_fingerprints[0].gamertag_hmac
+
+    env2_base, _ = _build_validated_envelope(
+        2, start_id=917101, players_per_match=6, match_type="playoffMatch"
+    )
+    colliding_fps = (
+        FC27AliasFingerprintObservation(
+            pseudonym="plr_ecf_deadbeef0123",
+            gamertag_hmac=existing_hmac,
+        ),
+    )
+    env2 = env2_base.model_copy(update={"alias_fingerprints": colliding_fps})
+
+    rt2 = FC27PollingRuntime()
+    rt2.current_rotation_match_type = "playoffMatch"
+    r2 = run_fc27_poll_cycle(
+        runtime=rt2,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env2,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "PRIVACY_REJECTED"
+    assert r2.error_category == "FINGERPRINT_COLLISION"
+    assert r2.inserted_match_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 2
+
+
+def test_136_c1_matrix_19_fingerprints_table_never_stores_plaintext_gamertags_raw_ids_or_hmac_key(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 19: fc27_player_alias_fingerprints never stores plaintext gamertags, raw EA IDs, or the HMAC key."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(2, start_id=918001, players_per_match=6)
+    run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pseudonym, gamertag_hmac FROM public.fc27_player_alias_fingerprints"
+            )
+            rows = cur.fetchall()
+    assert len(rows) == 6
+    for pseudo, ghmac in rows:
+        assert re.fullmatch(r"^plr_ecf_[0-9a-f]{12}$", pseudo)
+        assert re.fullmatch(r"^[0-9a-f]{64}$", ghmac)
+        assert "StripThisPrivateGamerTag" not in pseudo
+        assert "StripThisPrivateGamerTag" not in ghmac
+        assert TEST_ALIAS_HMAC_KEY not in ghmac
+
+
+def test_137_c1_matrix_20_poll_writer_can_select_insert_and_update_timestamps_on_fingerprints(
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 20: fc27_poll_writer can SELECT, INSERT, and UPDATE (last_seen_at, updated_at) on fc27_player_alias_fingerprints."""
+    now = datetime(2026, 11, 1, 12, 0, 0, tzinfo=timezone.utc)
+    later = now + timedelta(hours=12)
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
+        conn.execute(
+            """
+            INSERT INTO public.fc27_player_alias_fingerprints (
+                pseudonym, gamertag_hmac, last_seen_at, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("plr_ecf_001122334455", "a" * 64, now, now, now),
+        )
+        conn.execute(
+            """
+            UPDATE public.fc27_player_alias_fingerprints
+               SET last_seen_at = %s, updated_at = %s
+             WHERE pseudonym = %s
+            """,
+            (later, later, "plr_ecf_001122334455"),
+        )
+        cur = conn.execute(
+            "SELECT pseudonym, gamertag_hmac FROM public.fc27_player_alias_fingerprints WHERE pseudonym = %s",
+            ("plr_ecf_001122334455",),
+        )
+        assert cur.fetchone() == ("plr_ecf_001122334455", "a" * 64)
+        conn.commit()
+
+
+def test_138_c1_matrix_21_poll_writer_cannot_delete_or_update_immutable_columns_on_fingerprints(
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 21: fc27_poll_writer cannot DELETE from fc27_player_alias_fingerprints or update immutable columns."""
+    now = datetime(2026, 11, 1, 12, 0, 0, tzinfo=timezone.utc)
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
+        conn.execute(
+            """
+            INSERT INTO public.fc27_player_alias_fingerprints (
+                pseudonym, gamertag_hmac, last_seen_at, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("plr_ecf_aabbccddeeff", "b" * 64, now, now, now),
+        )
+        conn.commit()
+        with pytest.raises(FC27PollingTableAccessDeniedError):
+            conn.execute(
+                "DELETE FROM public.fc27_player_alias_fingerprints WHERE pseudonym = 'plr_ecf_aabbccddeeff'"
+            )
+        with pytest.raises(FC27PollingTableAccessDeniedError):
+            conn.execute(
+                "UPDATE public.fc27_player_alias_fingerprints SET gamertag_hmac = %s WHERE pseudonym = %s",
+                ("c" * 64, "plr_ecf_aabbccddeeff"),
+            )
+
+    # Also verify PostgreSQL role enforcement directly without the Python SQL guard
+    with psycopg.connect(pg_db_migrated.poll_writer) as raw_conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            raw_conn.execute(
+                "DELETE FROM public.fc27_player_alias_fingerprints WHERE pseudonym = 'plr_ecf_aabbccddeeff'"
+            )
+        raw_conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            raw_conn.execute(
+                "UPDATE public.fc27_player_alias_fingerprints SET gamertag_hmac = %s WHERE pseudonym = %s",
+                ("c" * 64, "plr_ecf_aabbccddeeff"),
+            )
+        raw_conn.rollback()
+
+
+def test_139_c1_matrix_22_23_new_match_enqueues_one_pending_job_with_deterministic_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 22 & 23: New persisted match enqueues one post_new_results job with state='pending', attempt_count=0, and idempotency_key='fc27:post_new_results:<match_ref>'."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(1, start_id=919001, players_per_match=6)
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.discord_jobs_inserted_count == 1
+    expected_mref = _pseudonymize_match_ref("919001")
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT job_type, state, attempt_count, idempotency_key, payload, claim_owner, claimed_at, completed_at FROM public.fc27_discord_jobs"
+            )
+            rows = cur.fetchall()
+    assert len(rows) == 1
+    job_type, state, attempts, ikey, payload, owner, claimed, completed = rows[0]
+    assert job_type == "post_new_results"
+    assert state == "pending"
+    assert attempts == 0
+    assert ikey == f"fc27:post_new_results:{expected_mref}"
+    assert payload["match_ref"] == expected_mref
+    assert owner is None
+    assert claimed is None
+    assert completed is None
+
+
+def test_140_c1_matrix_24_batch_of_3_new_matches_enqueues_3_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 24: Batch of 3 new matches enqueues 3 jobs with distinct deterministic idempotency keys."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=920001, players_per_match=6)
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.discord_jobs_inserted_count == 3
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT idempotency_key FROM public.fc27_discord_jobs ORDER BY job_id ASC")
+            keys = [r[0] for r in cur.fetchall()]
+    assert len(keys) == 3
+    assert len(set(keys)) == 3
+    for mid in ("920001", "920002", "920003"):
+        assert f"fc27:post_new_results:{_pseudonymize_match_ref(mid)}" in keys
+
+
+def test_141_c1_matrix_25_partial_new_batch_8_existing_2_new_enqueues_only_2_new_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 25: Partial new batch (8 existing + 2 new) enqueues only 2 new jobs."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    env_8, _ = _build_validated_envelope(8, start_id=921001, players_per_match=6)
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env_8,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.discord_jobs_inserted_count == 8
+
+    rt.next_eligible_at = None
+    env_10, _ = _build_validated_envelope(10, start_id=921001, players_per_match=6)
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env_10,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.inserted_match_count == 2
+    assert r2.discord_jobs_inserted_count == 2
+    assert r2.discord_jobs_existing_count == 8
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 10
+
+
+def test_142_c1_matrix_26_27_duplicate_batch_enqueues_0_new_jobs_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 26 & 27: Duplicate batch (0 new matches) enqueues 0 new jobs and re-running identical match batch is idempotent."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    env, _ = _build_validated_envelope(4, start_id=922001, players_per_match=6)
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.discord_jobs_inserted_count == 4
+
+    rt.next_eligible_at = None
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "NO_NEW_MATCHES"
+    assert r2.discord_jobs_inserted_count == 0
+    assert r2.discord_jobs_existing_count == 4
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 4
+
+
+def test_143_c1_matrix_28_conflicting_payload_for_existing_idempotency_key_fails_closed_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 28: Conflicting payload for an existing idempotency_key fails closed and rolls back."""
+    _enable_all_polling_gates(monkeypatch)
+    mref = _pseudonymize_match_ref("923001")
+    ikey = f"fc27:post_new_results:{mref}"
+
+    # Pre-seed a conflicting payload under the same idempotency_key
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        conn.execute(
+            """
+            INSERT INTO public.fc27_discord_jobs (
+                job_type, idempotency_key, payload, state, attempt_count
+            ) VALUES (
+                'post_new_results', %s, %s::jsonb, 'pending', 0
+            )
+            """,
+            (
+                ikey,
+                json.dumps(
+                    {
+                        "club_id": "330323",
+                        "export_id": "comm_poll_conflict",
+                        "game_version": "FC27",
+                        "goals_against": 99,
+                        "goals_for": 0,
+                        "match_hash": "0" * 64,
+                        "match_ref": mref,
+                        "match_type": "leagueMatch",
+                        "opponent_name": "Tampered Club",
+                        "platform": "common-gen5",
+                        "played_at": "2026-10-31T00:00:00Z",
+                        "result": "LOSS",
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+
+    env, _ = _build_validated_envelope(2, start_id=923001, players_per_match=6)
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "REPLAY_CONFLICT"
+    assert res.error_category == "DISCORD_JOB_IDEMPOTENCY_CONFLICT"
+    assert res.discord_job_conflict_count == 1
+    assert res.inserted_match_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints")
+            assert cur.fetchone()[0] == 0
+
+
+def test_144_c1_matrix_29_job_payload_passes_safe_bounded_jsonb_and_privacy_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 29: Job payload passes fc27_is_safe_bounded_jsonb, contains no sensitive keys, mentions, or URLs, and stays <= 4096 bytes."""
+    from src.fc27_privacy import contains_discord_mention, contains_prohibited_url, scan_for_sensitive_fields
+
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=924001, players_per_match=6)
+    run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payload FROM public.fc27_discord_jobs")
+            payloads = [r[0] for r in cur.fetchall()]
+    assert len(payloads) == 3
+    for p in payloads:
+        raw_bytes = json.dumps(p, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        assert len(raw_bytes) <= 4096
+        assert scan_for_sensitive_fields(p) == []
+        assert not contains_discord_mention(json.dumps(p))
+        assert not contains_prohibited_url(json.dumps(p))
+
+
+def test_145_c1_matrix_30_31_32_poll_writer_is_producer_only_on_discord_jobs(
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 30, 31, 32: Polling worker never claims/completes/fails/retries/deletes jobs; fc27_poll_writer can SELECT and INSERT but cannot UPDATE or DELETE fc27_discord_jobs."""
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as conn:
+        with pytest.raises(FC27PollingTableAccessDeniedError):
+            conn.execute("UPDATE public.fc27_discord_jobs SET state = 'claimed'")
+        with pytest.raises(FC27PollingTableAccessDeniedError):
+            conn.execute("DELETE FROM public.fc27_discord_jobs")
+
+    with psycopg.connect(pg_db_migrated.poll_writer) as raw_conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            raw_conn.execute("UPDATE public.fc27_discord_jobs SET state = 'completed'")
+        raw_conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            raw_conn.execute("DELETE FROM public.fc27_discord_jobs")
+        raw_conn.rollback()
+
+
+def test_146_c1_matrix_33_34_atomic_commit_and_zero_discord_network_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 33 & 34: Match insert, player stat insert, fingerprint upsert, and Discord job insert commit together on success with zero Discord calls."""
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=925001, players_per_match=6)
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "NEW_MATCHES_PERSISTED"
+    assert res.inserted_match_count == 3
+    assert res.fingerprints_inserted_count == 6
+    assert res.discord_jobs_inserted_count == 3
+    assert _EXTERNAL_NETWORK_CALLS == []
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 3
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats")
+            assert cur.fetchone()[0] == 18
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints")
+            assert cur.fetchone()[0] == 6
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 3
+
+
+def test_147_c1_matrix_35_simulated_failure_during_fingerprint_persistence_rolls_back_all_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 35: Simulated failure during fingerprint persistence rolls back match, player stat, batch, and Discord job writes."""
+    import src.fc27_repository as repo_mod
+
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=926001, players_per_match=6)
+    monkeypatch.setattr(
+        repo_mod,
+        "persist_player_alias_fingerprints_in_tx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            psycopg.DatabaseError("simulated fingerprint persistence failure")
+        ),
+    )
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "TRANSIENT_FAILURE"
+    assert res.error_category == "PERSISTENCE_FAILURE"
+    assert res.inserted_match_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            for tbl in (
+                "fc27_export_batches",
+                "fc27_matches",
+                "fc27_player_match_stats",
+                "fc27_player_alias_fingerprints",
+                "fc27_discord_jobs",
+            ):
+                cur.execute(f"SELECT COUNT(*) FROM public.{tbl}")
+                assert cur.fetchone()[0] == 0
+
+
+def test_148_c1_matrix_36_simulated_failure_during_discord_job_enqueue_rolls_back_all_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 36: Simulated failure during Discord job enqueue rolls back match, player stat, batch, and fingerprint writes."""
+    import src.fc27_repository as repo_mod
+
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(3, start_id=927001, players_per_match=6)
+    monkeypatch.setattr(
+        repo_mod,
+        "enqueue_post_new_results_jobs_in_tx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            psycopg.DatabaseError("simulated discord job enqueue failure")
+        ),
+    )
+    res = run_fc27_poll_cycle(
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda _mt: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.poll_status == "TRANSIENT_FAILURE"
+    assert res.error_category == "PERSISTENCE_FAILURE"
+    assert res.inserted_match_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            for tbl in (
+                "fc27_export_batches",
+                "fc27_matches",
+                "fc27_player_match_stats",
+                "fc27_player_alias_fingerprints",
+                "fc27_discord_jobs",
+            ):
+                cur.execute(f"SELECT COUNT(*) FROM public.{tbl}")
+                assert cur.fetchone()[0] == 0
+
+
+def test_149_c1_matrix_37_replay_conflict_rolls_back_match_stats_batch_fingerprint_and_job_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 37: Replay conflict rolls back match, player stat, batch, fingerprint, and Discord job writes."""
+    _enable_all_polling_gates(monkeypatch)
+    rt = FC27PollingRuntime()
+    env_initial, _ = _build_validated_envelope(2, start_id=928001, players_per_match=4)
+    r1 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env_initial,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r1.inserted_match_count == 2
+    assert r1.fingerprints_inserted_count == 4
+    assert r1.discord_jobs_inserted_count == 2
+
+    rt.next_eligible_at = None
+    env_conflict, _ = _build_validated_envelope(
+        3, start_id=928001, players_per_match=6, goals_override=7
+    )
+    r2 = run_fc27_poll_cycle(
+        runtime=rt,
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=lambda: env_conflict,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert r2.poll_status == "REPLAY_CONFLICT"
+    assert r2.inserted_match_count == 0
+    assert r2.fingerprints_inserted_count == 0
+    assert r2.discord_jobs_inserted_count == 0
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints")
+            assert cur.fetchone()[0] == 4
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 2
+
+
+def test_150_c1_matrix_38_39_40_role_boundaries_for_poll_writer_discord_reader_and_app(
+    pg_db_migrated,
+) -> None:
+    """C1 Matrix 38, 39, 40: Verify fc27_poll_writer, fc27_discord_reader, and fc27_app role boundaries on Stage C tables."""
+    # 38: fc27_poll_writer cannot access player_dev or manual match tables
+    with open_guarded_polling_connection(pg_db_migrated.poll_writer) as gconn:
+        for forbidden_tbl in (
+            "fc27_player_links",
+            "fc27_build_catalog",
+            "fc27_build_catalog_audit",
+            "fc27_player_suggestions",
+            "fc27_suggestion_assessments",
+            "fc27_manual_matches",
+            "fc27_manual_match_players",
+            "fc27_manual_match_events",
+            "fc27_manual_match_audit",
+        ):
+            with pytest.raises(FC27PollingTableAccessDeniedError):
+                gconn.execute(f"SELECT COUNT(*) FROM public.{forbidden_tbl}")
+
+    # 39: fc27_discord_reader is read-only on fingerprints and discord_jobs
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        with rconn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints")
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+            assert cur.fetchone()[0] == 0
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            rconn.execute(
+                "INSERT INTO public.fc27_player_alias_fingerprints (pseudonym, gamertag_hmac) VALUES ('plr_ecf_112233445566', %s)",
+                ("d" * 64,),
+            )
+        rconn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            rconn.execute(
+                "INSERT INTO public.fc27_discord_jobs (job_type, idempotency_key, payload) VALUES ('post_new_results', 'k1', '{}'::jsonb)"
+            )
+        rconn.rollback()
+
+    # 40: fc27_app has no access to fingerprints or discord_jobs
+    with psycopg.connect(pg_db_migrated.app) as aconn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            aconn.execute("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints")
+        aconn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            aconn.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs")
+        aconn.rollback()
+
+
+def test_151_c1_matrix_41_42_status_surfaces_expose_c1_metadata_and_zero_external_calls(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """C1 Matrix 41 & 42: /fc27 status and --status remain offline/read-only and expose C1 rotation, fingerprint, and job-production metadata without secrets or raw aliases."""
+    rt = FC27PollingRuntime()
+    rc = polling_cli_main(["--status"], runtime=rt)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "APPROVED_MATCH_TYPES=leagueMatch,playoffMatch,friendlyMatch" in out
+    assert "CURRENT_ROTATION_MATCH_TYPE=leagueMatch" in out
+    assert "NEXT_ROTATION_MATCH_TYPE=playoffMatch" in out
+    assert "TOTAL_FINGERPRINTS_INSERTED=0" in out
+    assert "TOTAL_DISCORD_JOBS_INSERTED=0" in out
+
+    svc = FC27DiscordBotService(
+        FC27DiscordBotConfig(
+            enabled=True,
+            allowed_guild_ids=frozenset({"123456789012345678"}),
+            allowed_channel_ids=frozenset({"234567890123456789"}),
+        ),
+        polling_runtime=rt,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id="123456789012345678",
+        channel_id="234567890123456789",
+    )
+    assert resp.status == "OK"
+    fields = {k: v for emb in resp.embeds for k, v in emb.fields.items()}
+    assert fields["approved_match_types"] == "leagueMatch,playoffMatch,friendlyMatch"
+    assert fields["current_rotation_match_type"] == "leagueMatch"
+    assert fields["next_rotation_match_type"] == "playoffMatch"
+    assert fields["fingerprints_inserted"] == "0"
+    assert fields["discord_jobs_inserted"] == "0"
+    assert _EXTERNAL_NETWORK_CALLS == []
+

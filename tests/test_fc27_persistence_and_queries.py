@@ -1183,3 +1183,78 @@ def test_60_matchpulse_boundary_remains_intact() -> None:
         check=True,
     )
     assert "boundary drift check: OK" in proc.stdout
+
+
+def test_61_c1_poll_writer_fingerprints_and_discord_jobs_atomic_persistence(
+    pg_db_migrated,
+) -> None:
+    """61. C1 atomic persistence of matches, alias fingerprints, and post_new_results Discord jobs under fc27_poll_writer."""
+    from src.fc27_privacy import FC27FingerprintCollisionError
+    from src.fc27_repository import (
+        FC27AliasFingerprintObservation,
+        fetch_discord_jobs,
+        fetch_player_alias_fingerprints,
+    )
+
+    data1 = make_synthetic_export_dict(
+        export_id="exp-c1-atomic-01",
+        external_match_id="match-c1-atomic-101",
+    )
+    env1 = parse_fc27_user_export_json(json.dumps(data1))
+    fps1 = (
+        FC27AliasFingerprintObservation(
+            pseudonym="plr_ecf_001122334455",
+            gamertag_hmac="1" * 64,
+        ),
+        FC27AliasFingerprintObservation(
+            pseudonym="plr_ecf_aabbccddeeff",
+            gamertag_hmac="2" * 64,
+        ),
+    )
+    res1 = apply_export_plan(
+        pg_db_migrated.poll_writer,
+        envelope=env1,
+        alias_fingerprints=fps1,
+        enqueue_discord_jobs=True,
+        match_type_override="playoffMatch",
+        emit_domain_events=False,
+    )
+    assert res1.status == "APPLIED"
+    assert res1.accepted_records == 1
+    assert res1.fingerprints_inserted == 2
+    assert res1.discord_jobs_inserted == 1
+
+    persisted_fps = fetch_player_alias_fingerprints(pg_db_migrated.poll_writer)
+    assert len(persisted_fps) == 2
+    persisted_jobs = fetch_discord_jobs(pg_db_migrated.poll_writer)
+    assert len(persisted_jobs) == 1
+    assert persisted_jobs[0]["job_type"] == "post_new_results"
+    assert persisted_jobs[0]["state"] == "pending"
+    assert persisted_jobs[0]["attempt_count"] == 0
+    assert persisted_jobs[0]["payload"]["match_type"] == "playoffMatch"
+
+    # Colliding fingerprint in next batch rolls back match, batch, and job inserts
+    data2 = make_synthetic_export_dict(
+        export_id="exp-c1-atomic-02",
+        external_match_id="match-c1-atomic-102",
+    )
+    env2 = parse_fc27_user_export_json(json.dumps(data2))
+    colliding_fps = (
+        FC27AliasFingerprintObservation(
+            pseudonym="plr_ecf_001122334455",
+            gamertag_hmac="9" * 64,
+        ),
+    )
+    with pytest.raises(FC27FingerprintCollisionError):
+        apply_export_plan(
+            pg_db_migrated.poll_writer,
+            envelope=env2,
+            alias_fingerprints=colliding_fps,
+            enqueue_discord_jobs=True,
+            match_type_override="friendlyMatch",
+            emit_domain_events=False,
+        )
+
+    assert len(fetch_discord_jobs(pg_db_migrated.poll_writer)) == 1
+    assert fetch_export_batch_status(pg_db_migrated.poll_writer, "exp-c1-atomic-02") is None
+

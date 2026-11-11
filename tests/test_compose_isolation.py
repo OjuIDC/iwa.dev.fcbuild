@@ -37,6 +37,7 @@ ALL_DB_SECRETS = {
     "fc27_poll_writer_uri",
     "fc27_player_dev_writer_uri",
     "fc27_discord_reader_uri",
+    "fc27_alias_hmac_key",
     "discord_bot_token",
     "postgres_password",
     "redis_password",
@@ -495,17 +496,21 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
     assert discord["environment"]["FC27_DISCORD_READER_URI_FILE"] == "/run/secrets/fc27_discord_reader_uri"
     assert discord["environment"]["FC27_PLAYER_DEV_WRITER_URI_FILE"] == "/run/secrets/fc27_player_dev_writer_uri"
     assert "FC27_POLL_WRITER_URI_FILE" not in discord["environment"]
-    assert worker["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
+    assert "FC27_ALIAS_HMAC_KEY_FILE" not in discord["environment"]
+    assert "POSTGRES_URI_FILE" not in worker["environment"]
     assert worker["environment"]["FC27_POLL_WRITER_URI_FILE"] == "/run/secrets/fc27_poll_writer_uri"
+    assert worker["environment"]["FC27_ALIAS_HMAC_KEY_FILE"] == "/run/secrets/fc27_alias_hmac_key"
+    assert worker["environment"]["FC27_APPROVED_MATCH_TYPES"] == "leagueMatch,playoffMatch,friendlyMatch"
     assert "FC27_PLAYER_DEV_WRITER_URI_FILE" not in worker["environment"]
     assert "FC27_DISCORD_READER_URI_FILE" not in worker["environment"]
+    assert "DISCORD_BOT_TOKEN_FILE" not in worker["environment"]
     assert _service_secrets(discord) == {
         "discord_bot_token",
         "fc27_app_uri",
         "fc27_discord_reader_uri",
         "fc27_player_dev_writer_uri",
     }
-    assert _service_secrets(worker) == {"fc27_app_uri", "fc27_poll_writer_uri"}
+    assert _service_secrets(worker) == {"fc27_poll_writer_uri", "fc27_alias_hmac_key"}
 
     grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
     assert "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;" in grants_sql
@@ -545,6 +550,7 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
         "fc27_poll_writer_uri",
         "fc27_player_dev_writer_uri",
         "fc27_discord_reader_uri",
+        "fc27_alias_hmac_key",
     ):
         assert sec_name in secrets_cfg
         assert str(secrets_cfg[sec_name].get("file", "")).replace("\\", "/").endswith(
@@ -587,11 +593,18 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
         settings.read_fc27_discord_reader_uri(required=True)
     monkeypatch.delenv("FC27_DISCORD_READER_URI_FILE", raising=False)
 
-    # Cross-service URI contamination fails closed
+    # Cross-service URI/secret contamination fails closed
     monkeypatch.setenv("FC27_PLAYER_DEV_WRITER_URI_FILE", "/run/secrets/fc27_player_dev_writer_uri")
     with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
         settings.read_fc27_poll_writer_uri(required=False)
     monkeypatch.delenv("FC27_PLAYER_DEV_WRITER_URI_FILE", raising=False)
+
+    monkeypatch.setenv("DISCORD_BOT_TOKEN_FILE", "/run/secrets/discord_bot_token")
+    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+        settings.read_fc27_poll_writer_uri(required=False)
+    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+        settings.read_fc27_alias_hmac_key(required=False)
+    monkeypatch.delenv("DISCORD_BOT_TOKEN_FILE", raising=False)
 
     monkeypatch.setenv("FC27_POLL_WRITER_URI_FILE", "/run/secrets/fc27_poll_writer_uri")
     with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
@@ -599,6 +612,24 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
     with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
         settings.read_fc27_discord_reader_uri(required=False)
     monkeypatch.delenv("FC27_POLL_WRITER_URI_FILE", raising=False)
+
+    # Alias HMAC key validation fails closed on missing, empty, or <32-byte key
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(tmp_path / "missing_hmac_key"))
+    with pytest.raises(settings.ConfigError):
+        settings.read_fc27_alias_hmac_key(required=True)
+
+    short_key_file = tmp_path / "short_hmac_key"
+    short_key_file.write_text("too_short_key_16b\n", encoding="utf-8")
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(short_key_file))
+    with pytest.raises(settings.ConfigError, match="at least 32"):
+        settings.read_fc27_alias_hmac_key(required=True)
+
+    valid_key_file = tmp_path / "valid_hmac_key"
+    valid_key_file.write_text("a" * 64 + "\n", encoding="utf-8")
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(valid_key_file))
+    loaded_key = settings.read_fc27_alias_hmac_key(required=True)
+    assert loaded_key == b"a" * 64
+    monkeypatch.delenv("FC27_ALIAS_HMAC_KEY_FILE", raising=False)
 
     # Reader/writer separation fails closed on shared role or identical URI
     with pytest.raises(settings.ConfigError, match="identical"):

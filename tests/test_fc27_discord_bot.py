@@ -51,10 +51,11 @@ def _seed_persisted_matches(
     _enable_all_polling_gates(monkeypatch)
     runtime = FC27PollingRuntime()
     env, _ = _build_validated_envelope(count=count, start_id=992001, players_per_match=6)
+    seed_uri = app_db_uri.replace("user=fc27_app", "user=fc27_poll_writer")
     res = run_fc27_poll_cycle(
         runtime=runtime,
         confirm_live_polling=True,
-        db_conn_or_uri=app_db_uri,
+        db_conn_or_uri=seed_uri,
         fetch_matches_fn=lambda: env,
         use_cache=False,
         use_rate_limiter=False,
@@ -1040,3 +1041,43 @@ def test_56_status_suppresses_mentions_and_enforces_embed_bounds() -> None:
     too_many_fields = {f"field_{i}": "val" for i in range(26)}
     with pytest.raises(FC27DiscordError, match="exceeds 25"):
         FC27DiscordEmbed(title="Test", description="Desc", fields=too_many_fields)
+
+
+def test_57_status_exposes_c1_multi_match_rotation_fingerprints_and_discord_job_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    """57. `/fc27 status` exposes C1 rotation match types, alias HMAC key configured status, fingerprint counts, and Discord job queue counts without exposing secrets."""
+    secret_hmac = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY", secret_hmac)
+    runtime = _seed_persisted_matches(monkeypatch, pg_db_migrated.poll_writer, count=3)
+    svc = FC27DiscordBotService(
+        _build_enabled_config(),
+        db_conn_or_uri=pg_db_migrated.discord_reader,
+        polling_runtime=runtime,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=APPROVED_USER_ID,
+    )
+    assert resp.status == "OK"
+    assert resp.provider_requests_executed == 0
+    combined_fields: dict[str, str] = {}
+    for emb in resp.embeds:
+        combined_fields.update(emb.fields)
+
+    assert combined_fields["approved_match_types"] == "leagueMatch,playoffMatch,friendlyMatch"
+    assert combined_fields["current_rotation_match_type"] == "playoffMatch"
+    assert combined_fields["next_rotation_match_type"] == "friendlyMatch"
+    assert combined_fields["last_attempted_match_type"] == "leagueMatch"
+    assert combined_fields["last_successful_match_type"] == "leagueMatch"
+    assert combined_fields["alias_hmac_key_configured"] == "true"
+    assert int(combined_fields["fingerprints_inserted"]) == 6
+    assert int(combined_fields["discord_jobs_inserted"]) == 3
+    assert combined_fields["discord_jobs_existing"] == "0"
+
+    serialized = json.dumps(resp.model_dump(mode="json"))
+    assert secret_hmac not in serialized
+
