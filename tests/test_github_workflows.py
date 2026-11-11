@@ -367,7 +367,7 @@ def test_container_images_workflow_yaml_permissions_pins_and_timeouts() -> None:
     }
     gate_script = jobs["gate-context"]["steps"][0]["run"]
     assert 'repo_name.casefold() == "ojuidc/iwa.dev.fcbuild"' in gate_script
-    assert "pr_head_repo.casefold() != repo_name.casefold()" in gate_script
+    assert 'pr_head_repo.casefold() != "ojuidc/iwa.dev.fcbuild"' in gate_script
 
     for job_name, job in jobs.items():
         timeout = job.get("timeout-minutes")
