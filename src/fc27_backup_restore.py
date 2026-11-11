@@ -1260,7 +1260,7 @@ def verify_fc27_backup_restore(
                                 INSERT INTO public.fc27_discord_jobs (
                                     job_type, payload, state, idempotency_key
                                 ) VALUES (
-                                    'post_new_results', '{}'::jsonb, 'pending', %s
+                                    'post_new_results', '{"restore_verification":true}'::jsonb, 'pending', %s
                                 )
                                 RETURNING job_id
                                 """,
