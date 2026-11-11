@@ -61,7 +61,7 @@ jobs:
           is_fork_pr = (
               is_pr
               and bool(pr_head_repo)
-              and pr_head_repo.casefold() != repo_name.casefold()
+              and pr_head_repo.casefold() != "ojuidc/iwa.dev.fcbuild"
           )
 
           semver_pattern = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")

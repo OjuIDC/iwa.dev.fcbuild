@@ -31,7 +31,7 @@ PINNED_APPLIED_MIGRATION_SHA256 = {
     "0012_fc27_performance_and_quarantine.sql": "84279fa7bddafd8bd056adb69dc5cfbf2b178475d4dbc5442fd7993df8ec1807",
     "0013_fc27_manual_match_results.sql": "2504c4c07d2e7a81a25b408a027122965e66c636e242af0b37f929a6e01242f0",
     "0014_fc27_player_development.sql": "d51bf8790c145fb53cd88c0acf9d67d5eb6b870e1cd4b25722b6595a0490751e",
-    "0015_fc27_player_development_fixups.sql": "10dfe56ce514fbfb5eb62b10497c408c6eee136e90c526d5c6e4603981ebcb5a",
+    "0015_fc27_player_development_fixups.sql": "01511d5415c836017b18d1ed88bbc64153658bb3930c4feb2619f3c3c4dd2ee6",
 }
 
 
