@@ -207,4 +207,3 @@ def test_poll_writer_c1_fingerprints_and_discord_jobs_privileges(pg_db_migrated)
                 ),
             )
             assert cur.fetchone() == (True, True, False, False)
-

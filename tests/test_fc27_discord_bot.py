@@ -1080,4 +1080,3 @@ def test_57_status_exposes_c1_multi_match_rotation_fingerprints_and_discord_job_
 
     serialized = json.dumps(resp.model_dump(mode="json"))
     assert secret_hmac not in serialized
-

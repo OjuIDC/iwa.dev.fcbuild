@@ -368,5 +368,3 @@ def test_20_alias_hmac_fingerprint_determinism_and_key_validation() -> None:
             compute_alias_hmac_fingerprint("EastCoaster", bad_key)  # type: ignore[arg-type]
 
     assert issubclass(FC27FingerprintCollisionError, FC27PrivacyError)
-
-

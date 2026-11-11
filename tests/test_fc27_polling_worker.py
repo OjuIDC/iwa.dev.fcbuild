@@ -3878,4 +3878,3 @@ def test_151_c1_matrix_41_42_status_surfaces_expose_c1_metadata_and_zero_externa
     assert fields["fingerprints_inserted"] == "0"
     assert fields["discord_jobs_inserted"] == "0"
     assert _EXTERNAL_NETWORK_CALLS == []
-

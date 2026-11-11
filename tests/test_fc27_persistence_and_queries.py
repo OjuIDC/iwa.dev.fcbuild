@@ -1257,4 +1257,3 @@ def test_61_c1_poll_writer_fingerprints_and_discord_jobs_atomic_persistence(
 
     assert len(fetch_discord_jobs(pg_db_migrated.poll_writer)) == 1
     assert fetch_export_batch_status(pg_db_migrated.poll_writer, "exp-c1-atomic-02") is None
-

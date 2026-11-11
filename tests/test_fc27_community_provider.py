@@ -953,4 +953,3 @@ def test_56_c1_multi_match_types_and_alias_fingerprints_extraction() -> None:
             observed_at="2026-11-01T12:00:00Z",
             alias_hmac_key=hmac_key,
         )
-
