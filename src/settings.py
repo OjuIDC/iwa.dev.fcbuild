@@ -543,22 +543,17 @@ _BOOTSTRAP_PASSWORD_ENV_VARS: tuple[str, ...] = (
 
 
 def _extract_conninfo_user(conninfo: str) -> str | None:
-    """Extract the PostgreSQL username from a URI or keyword/value conninfo without logging secrets."""
-    raw = conninfo.strip()
-    if not raw:
-        return None
-    if raw.startswith(("postgresql://", "postgres://")):
-        rest = raw.split("://", 1)[1]
-        if "@" not in rest:
-            return None
-        userinfo = rest.split("@", 1)[0]
-        user = userinfo.split(":", 1)[0].strip()
-        return user or None
-    for token in raw.split():
-        if token.startswith("user="):
-            user = token.split("=", 1)[1].strip().strip("'\"")
-            return user or None
-    return None
+    """Parse PostgreSQL conninfo and require an explicit login role."""
+    from psycopg import ProgrammingError
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        user = conninfo_to_dict(conninfo).get("user")
+    except ProgrammingError:
+        raise ConfigError("Invalid PostgreSQL connection configuration") from None
+    if not user:
+        raise ConfigError("PostgreSQL connection configuration must specify a user")
+    return user
 
 
 def _reject_runtime_bootstrap_password_vars() -> None:
