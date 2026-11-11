@@ -1,4 +1,4 @@
--- grants-policy-version: 15
+-- grants-policy-version: 16
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -388,6 +388,376 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_manual_match_audit_audit_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    -- =========================================================================
+    -- Migration 0014: Player Development, Linking, Build Catalog, Suggestions,
+    -- and Discord Job Queue Roles (Grants Policy Version 16)
+    -- =========================================================================
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+        EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_poll_writer';
+        EXECUTE 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fc27_poll_writer';
+        EXECUTE 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM fc27_poll_writer';
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO fc27_poll_writer';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+        EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_player_dev_writer';
+        EXECUTE 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fc27_player_dev_writer';
+        EXECUTE 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM fc27_player_dev_writer';
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO fc27_player_dev_writer';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+        EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_discord_reader';
+        EXECUTE 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fc27_discord_reader';
+        EXECUTE 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM fc27_discord_reader';
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO fc27_discord_reader';
+    END IF;
+
+    -- Provider-derived tables (0012) grants for Stage C roles
+    IF to_regclass('public.fc27_clubs') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (club_name, identity_state, source_classification, updated_at) ON public.fc27_clubs TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_clubs TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_clubs TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_export_batches') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (accepted_matches, quarantined_matches, applied_at) ON public.fc27_export_batches TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_export_batches TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_export_batches TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_matches') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_matches TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_matches TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_matches TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_match_stats') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_player_match_stats TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_match_stats TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_match_stats TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_match_stats_stat_id_seq') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_match_stats_stat_id_seq TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_quarantine_records') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_quarantine_records TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_quarantine_records TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_valid_diagnostic_paths') THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_diagnostic_paths(jsonb) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    -- Manual Match Results tables (0013) read-only access for fc27_discord_reader
+    IF to_regclass('public.fc27_manual_matches') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_manual_matches TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_players') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_manual_match_players TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_events') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_manual_match_events TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_manual_match_audit') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_manual_match_audit TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    -- Migration 0014 validation helper functions
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_valid_catalog_positions') THEN
+        REVOKE ALL ON FUNCTION public.fc27_is_valid_catalog_positions(jsonb) FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_catalog_positions(jsonb) TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_catalog_positions(jsonb) TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_safe_bounded_jsonb') THEN
+        REVOKE ALL ON FUNCTION public.fc27_is_safe_bounded_jsonb(jsonb, text, boolean, integer) FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_safe_bounded_jsonb(jsonb, text, boolean, integer) TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_safe_bounded_jsonb(jsonb, text, boolean, integer) TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_safe_bounded_jsonb(jsonb, text, boolean, integer) TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_valid_suggestion_objective') THEN
+        REVOKE ALL ON FUNCTION public.fc27_is_valid_suggestion_objective(jsonb) FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_suggestion_objective(jsonb) TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_suggestion_objective(jsonb) TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fc27_is_valid_match_id_array') THEN
+        REVOKE ALL ON FUNCTION public.fc27_is_valid_match_id_array(text[]) FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_match_id_array(text[]) TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_is_valid_match_id_array(text[]) TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    -- 1. public.fc27_player_alias_fingerprints
+    IF to_regclass('public.fc27_player_alias_fingerprints') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_alias_fingerprints FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_fingerprints FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_fingerprints FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (last_seen_at, updated_at) ON public.fc27_player_alias_fingerprints TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_fingerprints TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_fingerprints TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    -- 2. public.fc27_player_links
+    IF to_regclass('public.fc27_player_links') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_links FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_links FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_links FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_player_links TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_links TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_links_link_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_links_link_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_links_link_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_links_link_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_links_link_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- 3. public.fc27_build_catalog
+    IF to_regclass('public.fc27_build_catalog') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_build_catalog FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_build_catalog FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_build_catalog FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_build_catalog TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_build_catalog TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_build_catalog_catalog_row_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_build_catalog_catalog_row_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_build_catalog_catalog_row_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_build_catalog_catalog_row_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_build_catalog_catalog_row_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- 4. public.fc27_build_catalog_audit (append-only)
+    IF to_regclass('public.fc27_build_catalog_audit') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_build_catalog_audit FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_build_catalog_audit FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_build_catalog_audit FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_build_catalog_audit TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_build_catalog_audit TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_build_catalog_audit_audit_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_build_catalog_audit_audit_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_build_catalog_audit_audit_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_build_catalog_audit_audit_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_build_catalog_audit_audit_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- 5. public.fc27_player_suggestions
+    IF to_regclass('public.fc27_player_suggestions') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_suggestions FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_suggestions FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_suggestions FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_player_suggestions TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_player_suggestions TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_suggestions_suggestion_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_suggestions_suggestion_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_suggestions_suggestion_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_suggestions_suggestion_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_suggestions_suggestion_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- 6. public.fc27_suggestion_assessments (append-only)
+    IF to_regclass('public.fc27_suggestion_assessments') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_suggestion_assessments FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_suggestion_assessments FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_suggestion_assessments FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_suggestion_assessments TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_suggestion_assessments TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_suggestion_assessments_assessment_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_suggestion_assessments_assessment_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_suggestion_assessments_assessment_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_suggestion_assessments_assessment_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_suggestion_assessments_assessment_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- 7. public.fc27_discord_jobs
+    IF to_regclass('public.fc27_discord_jobs') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_discord_jobs FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_discord_jobs FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_discord_jobs FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_discord_jobs TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (state, claim_owner, claimed_at, lease_expires_at, attempt_count, last_error_category, available_at, completed_at) ON public.fc27_discord_jobs TO fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_discord_jobs TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_discord_jobs_job_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_discord_jobs_job_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_discord_jobs_job_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_discord_jobs_job_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_discord_jobs_job_id_seq TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_discord_jobs_job_id_seq TO fc27_player_dev_writer';
         END IF;
     END IF;
 END $$;

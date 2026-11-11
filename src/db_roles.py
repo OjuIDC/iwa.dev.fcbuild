@@ -16,7 +16,11 @@ ROLE_APP = "fc27_app"
 ROLE_DISPATCH = "fc27_dispatch"
 ROLE_RELAY = "fc27_relay"
 ROLE_MATCH_RESULTS_WRITER = "fc27_match_results_writer"
-GRANTS_POLICY_VERSION = 15
+ROLE_POLL_WRITER = "fc27_poll_writer"
+ROLE_PLAYER_DEV_WRITER = "fc27_player_dev_writer"
+ROLE_DISCORD_READER = "fc27_discord_reader"
+GRANTS_POLICY_VERSION = 16
+
 
 @dataclass
 class BootstrapReport:
@@ -33,6 +37,18 @@ LOGIN_ROLES = (
     ROLE_DISPATCH,
     ROLE_RELAY,
     ROLE_MATCH_RESULTS_WRITER,
+    ROLE_POLL_WRITER,
+    ROLE_PLAYER_DEV_WRITER,
+    ROLE_DISCORD_READER,
+)
+RUNTIME_SCHEMA_USAGE_ROLES = (
+    ROLE_APP,
+    ROLE_DISPATCH,
+    ROLE_RELAY,
+    ROLE_MATCH_RESULTS_WRITER,
+    ROLE_POLL_WRITER,
+    ROLE_PLAYER_DEV_WRITER,
+    ROLE_DISCORD_READER,
 )
 ALL_ROLES = (ROLE_OWNER, *LOGIN_ROLES)
 
@@ -99,9 +115,13 @@ def bootstrap_cluster(admin_conninfo: str, passwords: Mapping[str, str | None]) 
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
                 if not cur.fetchone():
                     if role == ROLE_OWNER:
-                        cur.execute(f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
+                        cur.execute(
+                            f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                        )
                     else:
-                        cur.execute(f"CREATE ROLE {role} LOGIN NOINHERIT")
+                        cur.execute(
+                            f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                        )
 
             # GRANT fc27_owner TO fc27_migrator
             cur.execute(f"GRANT {ROLE_OWNER} TO {ROLE_MIGRATOR}")
@@ -162,7 +182,7 @@ def _plan_database_grants(cur, dbname: str) -> list[str]:
     for priv in ("USAGE", "CREATE"):
         if not _acl_has(cur, catalog="schema", name="public", grantee=ROLE_OWNER, privilege=priv):
             planned.append(f"GRANT {priv} ON SCHEMA public TO {ROLE_OWNER}")
-    for role in (ROLE_APP, ROLE_DISPATCH, ROLE_RELAY, ROLE_MATCH_RESULTS_WRITER):
+    for role in RUNTIME_SCHEMA_USAGE_ROLES:
         if not _acl_has(cur, catalog="schema", name="public", grantee=role, privilege="USAGE"):
             planned.append(f"GRANT USAGE ON SCHEMA public TO {role}")
     return planned
@@ -199,11 +219,9 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                 # GRANT USAGE, CREATE ON SCHEMA public TO fc27_owner
                 cur.execute(f"GRANT USAGE, CREATE ON SCHEMA public TO {ROLE_OWNER}")
 
-                # GRANT USAGE ON SCHEMA public TO app, dispatch, relay, match_results_writer
-                cur.execute(
-                    f"GRANT USAGE ON SCHEMA public TO "
-                    f"{ROLE_APP}, {ROLE_DISPATCH}, {ROLE_RELAY}, {ROLE_MATCH_RESULTS_WRITER}"
-                )
+                # GRANT USAGE ON SCHEMA public TO runtime login roles
+                runtime_roles_csv = ", ".join(RUNTIME_SCHEMA_USAGE_ROLES)
+                cur.execute(f"GRANT USAGE ON SCHEMA public TO {runtime_roles_csv}")
 
             # Ownership transfer
             query = """
@@ -326,19 +344,14 @@ def main():
         migrator_pw = settings.read_secret("FC27_MIGRATOR_PASSWORD")
         app_pw = settings.read_secret("FC27_APP_PASSWORD")
         dispatch_pw = settings.read_secret("FC27_DISPATCH_PASSWORD")
+        relay_pw = settings.read_secret("FC27_RELAY_PASSWORD", required=False)
+        writer_pw = settings.read_secret("FC27_MATCH_RESULTS_WRITER_PASSWORD", required=False)
+        poll_writer_pw = settings.read_secret("FC27_POLL_WRITER_PASSWORD", required=False)
+        player_dev_writer_pw = settings.read_secret("FC27_PLAYER_DEV_WRITER_PASSWORD", required=False)
+        discord_reader_pw = settings.read_secret("FC27_DISCORD_READER_PASSWORD", required=False)
     except settings.ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(2)
-
-    try:
-        relay_pw = settings.read_secret("FC27_RELAY_PASSWORD")
-    except settings.ConfigError:
-        relay_pw = None
-
-    try:
-        writer_pw = settings.read_secret("FC27_MATCH_RESULTS_WRITER_PASSWORD")
-    except settings.ConfigError:
-        writer_pw = None
 
     if not admin_uri:
         print("Configuration error: POSTGRES_ADMIN_URI is not set", file=sys.stderr)
@@ -349,6 +362,12 @@ def main():
         passwords[ROLE_RELAY] = relay_pw
     if writer_pw is not None:
         passwords[ROLE_MATCH_RESULTS_WRITER] = writer_pw
+    if poll_writer_pw is not None:
+        passwords[ROLE_POLL_WRITER] = poll_writer_pw
+    if player_dev_writer_pw is not None:
+        passwords[ROLE_PLAYER_DEV_WRITER] = player_dev_writer_pw
+    if discord_reader_pw is not None:
+        passwords[ROLE_DISCORD_READER] = discord_reader_pw
     info = psycopg.conninfo.conninfo_to_dict(admin_uri)
     info["dbname"] = args.database
     db_conninfo = psycopg.conninfo.make_conninfo(**info)

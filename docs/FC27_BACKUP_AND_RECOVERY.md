@@ -2,17 +2,17 @@
 
 ## Overview & Current Scope Classification (`PARTIAL_FC27_DOMAIN_TABLES_ONLY`)
 
-`src/fc27_backup_restore.py`, `scripts/fc27_backup.py`, and `scripts/fc27_restore_verify.py` provide local PostgreSQL backup creation, retention enforcement, SHA-256 integrity verification, and isolated restore verification for the **11 backed-up FC27 domain, migration-ledger, and manual Match Results tables** (`FC27_DOMAIN_TABLES`).
+`src/fc27_backup_restore.py`, `scripts/fc27_backup.py`, and `scripts/fc27_restore_verify.py` provide local PostgreSQL backup creation, retention enforcement, SHA-256 integrity verification, and isolated restore verification for the **18 backed-up FC27 domain, migration-ledger, manual Match Results, and Stage C player development & Discord job tables** (`FC27_DOMAIN_TABLES`).
 
 > **Scope & Historical Recovery Notice**:
-> - Current executable backup coverage in `src/fc27_backup_restore.py` is a **partial domain-table backup** (`PARTIAL_FC27_DOMAIN_TABLES_ONLY`); it covers the 5 normalized provider/import domain tables, the 2 migration/policy ledger tables (`schema_migrations`, `schema_policy_versions`), and the 4 manual Match Results tables (`fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, `fc27_manual_match_audit`), while identity, approval/authority, dispatch/outbox, and LangGraph checkpoint tables remain omitted (`full_required_database_state_covered = False`).
+> - Current executable backup coverage in `src/fc27_backup_restore.py` is a **partial domain-table backup** (`PARTIAL_FC27_DOMAIN_TABLES_ONLY`); it covers the 5 normalized provider/import domain tables, the 2 migration/policy ledger tables (`schema_migrations`, `schema_policy_versions`), the 4 manual Match Results tables (`fc27_manual_matches`, `fc27_manual_match_players`, `fc27_manual_match_events`, `fc27_manual_match_audit`), and the 7 Stage C player development & Discord job tables (`fc27_player_alias_fingerprints`, `fc27_player_links`, `fc27_build_catalog`, `fc27_build_catalog_audit`, `fc27_player_suggestions`, `fc27_suggestion_assessments`, `fc27_discord_jobs`), while identity, approval/authority, dispatch/outbox, and LangGraph checkpoint tables remain omitted (`full_required_database_state_covered = False`).
 > - `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` in `FC27BackupTableCounts` are **derived manifest row-count aliases** (`FC27_DERIVED_MANIFEST_COUNT_ALIASES`), **not** separate physical PostgreSQL tables.
 > - **Historical recovery status**: No authoritative historical backup has yet been verified (`HISTORICAL_RECOVERY_VERIFIED=NO`).
 
 ## Current Backup Inclusions & Manifest (`FC27_DOMAIN_TABLES`)
 
 Each backup writes two untracked local files under `.local-data/backups/`:
-1. `<backup_id>.dump` — Custom-format `pg_dump -Fc` archive of the **11** backed-up tables (`FC27_DOMAIN_TABLES`):
+1. `<backup_id>.dump` — Custom-format `pg_dump -Fc` archive of the **18** backed-up tables (`FC27_DOMAIN_TABLES`):
    - `public.fc27_clubs` (club metadata)
    - `public.fc27_export_batches` (polling reconstruction, ingest, and export batch history)
    - `public.fc27_matches` (FC27 provider-derived matches and team-level aggregates)
@@ -24,21 +24,29 @@ Each backup writes two untracked local files under `.local-data/backups/`:
    - `public.fc27_manual_match_players` (manual Match Results player stats)
    - `public.fc27_manual_match_events` (manual Match Results goal/assist events)
    - `public.fc27_manual_match_audit` (append-only manual Match Results audit trail)
+   - `public.fc27_player_alias_fingerprints` (player pseudonym HMAC alias fingerprints)
+   - `public.fc27_player_links` (player-to-Discord links)
+   - `public.fc27_build_catalog` (versioned Pro Clubs build catalog)
+   - `public.fc27_build_catalog_audit` (append-only build catalog audit trail)
+   - `public.fc27_player_suggestions` (player development suggestions)
+   - `public.fc27_suggestion_assessments` (append-only suggestion assessments)
+   - `public.fc27_discord_jobs` (bounded Discord job queue)
 2. `<backup_id>.manifest.json` — `FC27BackupManifest` containing:
-   - `backup_id`, `created_at_utc`, `migration_version` (`0001_THROUGH_0013`)
+   - `backup_id`, `created_at_utc`, `migration_version` (`0001_THROUGH_0014`)
    - `archive_filename`, `archive_size_bytes`, `archive_sha256`
-   - `table_counts` (`FC27BackupTableCounts`: row counts for all 11 physical tables in `FC27_DOMAIN_TABLES` plus derived `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` counts)
+   - `table_counts` (`FC27BackupTableCounts`: row counts for all 18 physical tables in `FC27_DOMAIN_TABLES` plus derived `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` counts)
    - `record_hashes` (`FC27BackupRecordHashes`: `matches_sha256`, `player_stats_sha256`, `combined_records_sha256`, `match_record_hashes`, `manual_matches_sha256`, `manual_players_sha256`, `manual_events_sha256`, `manual_audit_sha256`)
 
 ## Full Required Database State & Current Backup Omissions (`FC27_BACKUP_OMITTED_TABLES_BY_DOMAIN`)
 
-The target full-state backup scope requires complete coverage of the FC27 PostgreSQL `public` schema. The following domains are covered or **omitted** from the current 11-table `FC27_DOMAIN_TABLES` archive and tracked for a dedicated backup-remediation PR (`SEPARATE_BACKUP_REMEDIATION_PR`):
+The target full-state backup scope requires complete coverage of the FC27 PostgreSQL `public` schema. The following domains are covered or **omitted** from the current 18-table `FC27_DOMAIN_TABLES` archive and tracked for a dedicated backup-remediation PR (`SEPARATE_BACKUP_REMEDIATION_PR`):
 
 | Domain | Current Executable Backup Status | Tables / Scope |
 |---|---|---|
 | **Schema & Migration Ledger** | **Included** (`FC27_DOMAIN_TABLES`) | `public.schema_migrations`, `public.schema_policy_versions` |
 | **FC27 Provider Matches, Player Stats, Polling Reconstruction & Ingest/Export** | **Included** (`FC27_DOMAIN_TABLES`) | `public.fc27_clubs`, `public.fc27_export_batches`, `public.fc27_matches`, `public.fc27_player_match_stats`, `public.fc27_quarantine_records` |
 | **Manual Match Results & Audit/Discord Linkage** | **Included** (`FC27_DOMAIN_TABLES`) | `public.fc27_manual_matches`, `public.fc27_manual_match_players`, `public.fc27_manual_match_events`, `public.fc27_manual_match_audit` |
+| **Player Development & Discord Jobs (`0014`)** | **Included** (`FC27_DOMAIN_TABLES`) | `public.fc27_player_alias_fingerprints`, `public.fc27_player_links`, `public.fc27_build_catalog`, `public.fc27_build_catalog_audit`, `public.fc27_player_suggestions`, `public.fc27_suggestion_assessments`, `public.fc27_discord_jobs` |
 | **Identity State** | Omitted | `public.fc27_users`, `public.fc27_user_roles`, `public.fc27_invitations`, `public.fc27_sessions`, `public.fc27_webauthn_credentials`, `public.fc27_totp_credentials`, `public.fc27_recovery_codes`, `public.fc27_action_tokens`, `public.fc27_challenges`, `public.fc27_bootstrap_locks`, `public.fc27_credentials` |
 | **Approval, Nonces & Authority Audit** | Omitted | `public.graph_threads`, `public.run_sequences`, `public.approval_requests`, `public.approval_nonces`, `public.approval_audit`, `public.fc27_decision_evidence`, `public.authority_policies`, `public.authority_delegations`, `public.fc27_delegations`, `public.player_assignments`, `public.player_decision_requests`, `public.player_decisions`, `public.approval_escalations`, `public.authority_conflicts`, `public.idempotency_keys` |
 | **Dispatch & Outbox State** | Omitted | `public.domain_events`, `public.outbox`, `public.dispatches`, `public.dispatch_plans`, `public.dispatch_transition_rules`, `public.player_observations`, `public.dispatch_assessments`, `public.dispatch_delivery_attempts`, `public.dispatch_acknowledgments`, `public.dispatch_plan_decisions`, `public.dispatch_comments`, `public.analyst_notes`, `public.players`, `public.activation_gates`, `public.activation_gate_log`, `public.service_heartbeats`, `public.dispatch_worker_claims` |

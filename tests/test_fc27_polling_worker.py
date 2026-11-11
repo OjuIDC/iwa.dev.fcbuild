@@ -2000,7 +2000,7 @@ def test_094_worker_service_does_not_receive_admin_migrator_commissioner_or_disp
         (REPO_ROOT / "docker-compose.community-worker.yml").read_text(encoding="utf-8")
     )
     svc = compose_data["services"]["fc27-community-worker"]
-    assert svc["secrets"] == ["fc27_app_uri"]
+    assert set(svc["secrets"]) == {"fc27_app_uri", "fc27_poll_writer_uri"}
     env_keys = set(svc.get("environment", {}).keys())
     for forbidden in (
         "POSTGRES_ADMIN_URI",
@@ -2010,6 +2010,9 @@ def test_094_worker_service_does_not_receive_admin_migrator_commissioner_or_disp
         "APPROVAL_SIGNING_SECRET",
         "BFF_SERVICE_TOKEN",
         "FC27_DISPATCH_PASSWORD_FILE",
+        "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        "FC27_DISCORD_READER_URI_FILE",
+        "FC27_POLL_WRITER_PASSWORD_FILE",
     ):
         assert forbidden not in env_keys
 

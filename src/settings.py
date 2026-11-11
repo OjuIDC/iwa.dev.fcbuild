@@ -34,11 +34,13 @@ def read_secret(name: str, *, required: bool = ..., min_length: int = ...) -> st
 
 def read_secret(name: str, *, required: bool = True, min_length: int = 0) -> str | None:
     file_var = os.getenv(f"{name}_FILE")
-    if file_var:
+    if file_var is not None and file_var.strip():
         try:
-            value = Path(file_var).read_text(encoding="utf-8").strip()
+            value = Path(file_var.strip()).read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise ConfigError(f"cannot read {name}_FILE") from exc
+        if not value:
+            raise ConfigError(f"{name}_FILE is empty")
     else:
         value = os.getenv(name, "").strip()
     if not value:
@@ -526,3 +528,115 @@ def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
             f"FC27_PERFORMANCE_TELEMETRY_ENABLED must be a valid boolean, got '{raw}'"
         )
     return False
+
+
+_BOOTSTRAP_PASSWORD_ENV_VARS: tuple[str, ...] = (
+    "FC27_MIGRATOR_PASSWORD",
+    "FC27_APP_PASSWORD",
+    "FC27_DISPATCH_PASSWORD",
+    "FC27_RELAY_PASSWORD",
+    "FC27_MATCH_RESULTS_WRITER_PASSWORD",
+    "FC27_POLL_WRITER_PASSWORD",
+    "FC27_PLAYER_DEV_WRITER_PASSWORD",
+    "FC27_DISCORD_READER_PASSWORD",
+)
+
+
+def _extract_conninfo_user(conninfo: str) -> str | None:
+    """Parse PostgreSQL conninfo and require an explicit login role."""
+    from psycopg import ProgrammingError
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        user = conninfo_to_dict(conninfo).get("user")
+    except ProgrammingError:
+        raise ConfigError("Invalid PostgreSQL connection configuration") from None
+    if not user:
+        raise ConfigError("PostgreSQL connection configuration must specify a user")
+    return user
+
+
+def _reject_runtime_bootstrap_password_vars() -> None:
+    """Fail closed if a runtime service environment contains bootstrap-only role password variables."""
+    for base_name in _BOOTSTRAP_PASSWORD_ENV_VARS:
+        for var_name in (base_name, f"{base_name}_FILE"):
+            val = os.getenv(var_name)
+            if val is not None and val.strip():
+                raise ConfigError(
+                    f"runtime service must not receive bootstrap password variable {var_name}"
+                )
+
+
+def read_fc27_poll_writer_uri(*, required: bool = False) -> str | None:
+    """Read the least-privilege polling writer URI (FC27_POLL_WRITER_URI / FC27_POLL_WRITER_URI_FILE)."""
+    _reject_runtime_bootstrap_password_vars()
+    for forbidden in (
+        "FC27_PLAYER_DEV_WRITER_URI",
+        "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        "FC27_DISCORD_READER_URI",
+        "FC27_DISCORD_READER_URI_FILE",
+        "FC27_MATCH_RESULTS_WRITER_URI",
+        "FC27_MATCH_RESULTS_WRITER_URI_FILE",
+    ):
+        val = os.getenv(forbidden)
+        if val is not None and val.strip():
+            raise ConfigError(f"polling worker must not receive Discord credential {forbidden}")
+    uri = read_secret("FC27_POLL_WRITER_URI", required=required)
+    if uri is not None:
+        user = _extract_conninfo_user(uri)
+        if user is not None and user != "fc27_poll_writer":
+            raise ConfigError(
+                f"FC27_POLL_WRITER_URI must connect as fc27_poll_writer, got '{user}'"
+            )
+    return uri
+
+
+def read_fc27_player_dev_writer_uri(*, required: bool = False) -> str | None:
+    """Read the least-privilege Discord player-development writer URI."""
+    _reject_runtime_bootstrap_password_vars()
+    for forbidden in ("FC27_POLL_WRITER_URI", "FC27_POLL_WRITER_URI_FILE"):
+        val = os.getenv(forbidden)
+        if val is not None and val.strip():
+            raise ConfigError(f"Discord bot must not receive polling writer credential {forbidden}")
+    uri = read_secret("FC27_PLAYER_DEV_WRITER_URI", required=required)
+    if uri is not None:
+        user = _extract_conninfo_user(uri)
+        if user is not None and user != "fc27_player_dev_writer":
+            raise ConfigError(
+                f"FC27_PLAYER_DEV_WRITER_URI must connect as fc27_player_dev_writer, got '{user}'"
+            )
+    return uri
+
+
+def read_fc27_discord_reader_uri(*, required: bool = False) -> str | None:
+    """Read the least-privilege read-only Discord reader URI."""
+    _reject_runtime_bootstrap_password_vars()
+    for forbidden in ("FC27_POLL_WRITER_URI", "FC27_POLL_WRITER_URI_FILE"):
+        val = os.getenv(forbidden)
+        if val is not None and val.strip():
+            raise ConfigError(f"Discord bot must not receive polling writer credential {forbidden}")
+    uri = read_secret("FC27_DISCORD_READER_URI", required=required)
+    if uri is not None:
+        user = _extract_conninfo_user(uri)
+        if user is not None and user != "fc27_discord_reader":
+            raise ConfigError(
+                f"FC27_DISCORD_READER_URI must connect as fc27_discord_reader, got '{user}'"
+            )
+    return uri
+
+
+def validate_fc27_role_uri_separation(
+    reader_uri: str | None,
+    writer_uri: str | None,
+) -> None:
+    """Fail closed if reader and writer URIs share credentials or database login roles."""
+    if not reader_uri or not writer_uri:
+        return
+    if reader_uri.strip() == writer_uri.strip():
+        raise ConfigError("reader and writer URIs must not be identical")
+    reader_user = _extract_conninfo_user(reader_uri)
+    writer_user = _extract_conninfo_user(writer_uri)
+    if reader_user and writer_user and reader_user == writer_user:
+        raise ConfigError(
+            f"reader and writer URIs must use separate PostgreSQL roles, both used '{reader_user}'"
+        )

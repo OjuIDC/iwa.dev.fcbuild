@@ -76,7 +76,7 @@ The FC 27 test suites enforce strict offline and no-EA-traffic invariants:
 
 ### 4.3 Advisory Pipeline & Database Role Suites
 - `tests/test_fc27_advisory_pipeline_e2e.py` — End-to-end deterministic advisory pipeline (`Search -> Scout -> Analyst -> Coach -> Tactics -> Director`; historical `tests/test_graph_persistence.py`, `tests/test_langgraph_flow.py`, `tests/test_graph_api_v1.py`, `tests/test_approval_security.py`, `tests/test_approval_lifecycle.py`, `tests/test_commissioner_cli.py`, `tests/test_events_outbox.py` superseded in Stage B3).
-- `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py` — Role bootstrap, migration checksums (`migrations/0001_initial.sql` through `migrations/0013_fc27_manual_match_results.sql`), Grants Policy Version `15`, and runtime role posture checks (historical `tests/test_migration_0003.py` superseded in Stage B3).
+- `tests/test_db_roles.py`, `tests/test_db_migrate_roles.py` — Role bootstrap, migration checksums (`migrations/0001_initial.sql` through `migrations/0014_fc27_player_development.sql`), Grants Policy Version `16`, Stage C player development & Discord job schema invariants, and runtime role posture checks (historical `tests/test_migration_0003.py` superseded in Stage B3).
 
 ### 4.4 Historical Control-Plane Suites (Superseded in Stage B3)
 - Historical identity (`tests/identity/*.py`), adversarial (`tests/adversarial/*.py`), dispatch (`tests/test_dispatch_schema.py`, `tests/test_dispatch_transition.py`, `tests/test_dispatch_creation.py`, `tests/test_phase1_scope.py`), and E2E (`tests/e2e/*.py`) control-plane test modules were superseded and removed in Stage B3.

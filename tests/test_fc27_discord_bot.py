@@ -754,7 +754,12 @@ def test_50_discord_container_and_compose_isolation() -> None:
     assert "volumes" not in svc
     assert svc["command"] == ["--run"]
     assert svc["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
-    assert set(svc["secrets"]) == {"discord_bot_token", "fc27_app_uri"}
+    assert set(svc["secrets"]) == {
+        "discord_bot_token",
+        "fc27_app_uri",
+        "fc27_discord_reader_uri",
+        "fc27_player_dev_writer_uri",
+    }
 
 
 def test_51_identity_and_webauthn_tables_blocked_and_role_allowlist_enforced(

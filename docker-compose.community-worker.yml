@@ -42,8 +42,10 @@ services:
       FC27_RECOMMENDATIONS_ENABLED: "false"
       DISPATCH_ENABLED: "false"
       POSTGRES_URI_FILE: /run/secrets/fc27_app_uri
+      FC27_POLL_WRITER_URI_FILE: /run/secrets/fc27_poll_writer_uri
     secrets:
       - fc27_app_uri
+      - fc27_poll_writer_uri
     networks:
       - fc27_net
       - fc27_data
@@ -57,3 +59,5 @@ services:
 secrets:
   fc27_app_uri:
     file: ./secrets/fc27_app_uri
+  fc27_poll_writer_uri:
+    file: ./secrets/fc27_poll_writer_uri

@@ -55,6 +55,9 @@ services:
       FC27_DISPATCH_PASSWORD_FILE: /run/secrets/fc27_dispatch_password
       FC27_RELAY_PASSWORD_FILE: /run/secrets/fc27_relay_password
       FC27_MATCH_RESULTS_WRITER_PASSWORD_FILE: /run/secrets/fc27_match_results_writer_password
+      FC27_POLL_WRITER_PASSWORD_FILE: /run/secrets/fc27_poll_writer_password
+      FC27_PLAYER_DEV_WRITER_PASSWORD_FILE: /run/secrets/fc27_player_dev_writer_password
+      FC27_DISCORD_READER_PASSWORD_FILE: /run/secrets/fc27_discord_reader_password
     secrets:
       - postgres_admin_uri
       - fc27_migrator_password
@@ -62,6 +65,9 @@ services:
       - fc27_dispatch_password
       - fc27_relay_password
       - fc27_match_results_writer_password
+      - fc27_poll_writer_password
+      - fc27_player_dev_writer_password
+      - fc27_discord_reader_password
     networks: [fc27_data]
     profiles: [bootstrap]
     restart: "no"
@@ -147,6 +153,12 @@ secrets:
     file: ./secrets/fc27_relay_password
   fc27_match_results_writer_password:
     file: ./secrets/fc27_match_results_writer_password
+  fc27_poll_writer_password:
+    file: ./secrets/fc27_poll_writer_password
+  fc27_player_dev_writer_password:
+    file: ./secrets/fc27_player_dev_writer_password
+  fc27_discord_reader_password:
+    file: ./secrets/fc27_discord_reader_password
   postgres_password:
     file: ./secrets/postgres_password
   redis_password:

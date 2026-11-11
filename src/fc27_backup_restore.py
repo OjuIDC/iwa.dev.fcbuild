@@ -45,7 +45,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0013"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0014"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -61,6 +61,13 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_manual_match_players",
     "fc27_manual_match_events",
     "fc27_manual_match_audit",
+    "fc27_player_alias_fingerprints",
+    "fc27_player_links",
+    "fc27_build_catalog",
+    "fc27_build_catalog_audit",
+    "fc27_player_suggestions",
+    "fc27_suggestion_assessments",
+    "fc27_discord_jobs",
 )
 
 # `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` in `FC27BackupTableCounts`
@@ -188,7 +195,7 @@ class FC27BackupTableCounts(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_migrations: int = Field(default=13, ge=0)
+    schema_migrations: int = Field(default=14, ge=0)
     schema_policy_versions: int = Field(default=1, ge=0)
     fc27_clubs: int = Field(..., ge=0)
     fc27_export_batches: int = Field(..., ge=0)
@@ -201,6 +208,13 @@ class FC27BackupTableCounts(BaseModel):
     fc27_manual_match_events: int = Field(default=0, ge=0)
     fc27_manual_match_audit: int = Field(default=0, ge=0)
     fc27_manual_discord_linked_matches: int = Field(default=0, ge=0)
+    fc27_player_alias_fingerprints: int = Field(default=0, ge=0)
+    fc27_player_links: int = Field(default=0, ge=0)
+    fc27_build_catalog: int = Field(default=0, ge=0)
+    fc27_build_catalog_audit: int = Field(default=0, ge=0)
+    fc27_player_suggestions: int = Field(default=0, ge=0)
+    fc27_suggestion_assessments: int = Field(default=0, ge=0)
+    fc27_discord_jobs: int = Field(default=0, ge=0)
 
 
 class FC27BackupRecordHashes(BaseModel):
@@ -298,19 +312,19 @@ def inspect_database_state_for_manifest(
             migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(name), '0013_fc27_manual_match_results.sql') "
+                    "SELECT COUNT(*), COALESCE(MAX(name), '0014_fc27_player_development.sql') "
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 13)
-                latest_mig = str(mig_row[1] or "0013_fc27_manual_match_results.sql")
+                mig_count = int(mig_row[0] or 14)
+                latest_mig = str(mig_row[1] or "0014_fc27_player_development.sql")
                 cur.execute(
                     "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
                 )
                 migration_rows = cur.fetchall()
             else:
-                mig_count = 13
-                latest_mig = "0013_fc27_manual_match_results.sql"
+                mig_count = 14
+                latest_mig = "0014_fc27_player_development.sql"
 
             cur.execute("SELECT to_regclass('public.schema_policy_versions')")
             has_policy_versions = cur.fetchone()[0] is not None
@@ -489,6 +503,30 @@ def inspect_database_state_for_manifest(
             manual_audit_rows = cur.fetchall()
             manual_audit_cnt = len(manual_audit_rows)
 
+            player_dev_counts: dict[str, int] = {}
+            for pd_tbl in (
+                "fc27_player_alias_fingerprints",
+                "fc27_player_links",
+                "fc27_build_catalog",
+                "fc27_build_catalog_audit",
+                "fc27_player_suggestions",
+                "fc27_suggestion_assessments",
+                "fc27_discord_jobs",
+            ):
+                cur.execute("SELECT to_regclass(%s)", (f"public.{pd_tbl}",))
+                if cur.fetchone()[0] is not None:
+                    cur.execute(
+                        "SELECT has_table_privilege(current_user, %s, 'SELECT')",
+                        (f"public.{pd_tbl}",),
+                    )
+                    if cur.fetchone()[0]:
+                        cur.execute(f"SELECT COUNT(*) FROM public.{pd_tbl}")
+                        player_dev_counts[pd_tbl] = int(cur.fetchone()[0])
+                    else:
+                        player_dev_counts[pd_tbl] = 0
+                else:
+                    player_dev_counts[pd_tbl] = 0
+
     for p_row in player_rows:
         if p_row[12] is not None:
             raise FC27BackupError("Non-null display_alias detected in fc27_player_match_stats")
@@ -651,6 +689,13 @@ def inspect_database_state_for_manifest(
         fc27_manual_match_events=manual_events_cnt,
         fc27_manual_match_audit=manual_audit_cnt,
         fc27_manual_discord_linked_matches=manual_linked_cnt,
+        fc27_player_alias_fingerprints=player_dev_counts["fc27_player_alias_fingerprints"],
+        fc27_player_links=player_dev_counts["fc27_player_links"],
+        fc27_build_catalog=player_dev_counts["fc27_build_catalog"],
+        fc27_build_catalog_audit=player_dev_counts["fc27_build_catalog_audit"],
+        fc27_player_suggestions=player_dev_counts["fc27_player_suggestions"],
+        fc27_suggestion_assessments=player_dev_counts["fc27_suggestion_assessments"],
+        fc27_discord_jobs=player_dev_counts["fc27_discord_jobs"],
     )
     hashes = FC27BackupRecordHashes(
         matches_sha256=matches_digest,
@@ -769,7 +814,14 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             "public.fc27_manual_match_audit, "
             "public.fc27_manual_match_events, "
             "public.fc27_manual_match_players, "
-            "public.fc27_manual_matches CASCADE"
+            "public.fc27_manual_matches, "
+            "public.fc27_suggestion_assessments, "
+            "public.fc27_player_suggestions, "
+            "public.fc27_build_catalog_audit, "
+            "public.fc27_build_catalog, "
+            "public.fc27_player_links, "
+            "public.fc27_player_alias_fingerprints, "
+            "public.fc27_discord_jobs CASCADE"
         )
 
     archive_bytes = archive_path.read_bytes()
@@ -1071,6 +1123,9 @@ def verify_fc27_backup_restore(
                     "fc27_dispatch": None,
                     "fc27_relay": None,
                     "fc27_match_results_writer": None,
+                    "fc27_poll_writer": None,
+                    "fc27_player_dev_writer": None,
+                    "fc27_discord_reader": None,
                 },
             )
             with psycopg.connect(reachable_admin_uri, autocommit=True) as admin_conn:
@@ -1094,8 +1149,8 @@ def verify_fc27_backup_restore(
             )
             migration_ok = (
                 restored_mig_cnt >= 13
-                and "0013" in restored_mig
-                and manifest.migration_version == EXPECTED_MIGRATION_VERSION
+                and ("0013" in restored_mig or "0014" in restored_mig)
+                and manifest.migration_version in ("0001_THROUGH_0013", EXPECTED_MIGRATION_VERSION)
             )
             if not migration_ok:
                 raise FC27RestoreVerificationError(

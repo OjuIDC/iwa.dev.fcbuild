@@ -198,6 +198,7 @@
     <Content Include="migrations\0011_dispatch_worker_claims.sql" />
     <Content Include="migrations\0012_fc27_performance_and_quarantine.sql" />
     <Content Include="migrations\0013_fc27_manual_match_results.sql" />
+    <Content Include="migrations\0014_fc27_player_development.sql" />
     <Content Include="migrations\post\grants.sql" />
     <Content Include="pyproject.toml" />
     <Content Include="requirements-dev.txt" />

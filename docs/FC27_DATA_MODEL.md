@@ -3,10 +3,10 @@
 - **Status**: Current
 - **Audience**: Database Engineers, Developers, Security Reviewers
 - **Last verified commit**: `764d95687d0ccf848ec5b52fbb19638cc38123e4`
-- **Source of truth**: `migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/0013_fc27_manual_match_results.sql`, `migrations/post/grants.sql`, `src/fc27_repository.py`, `src/fc27_match_results.py`, `src/fc27_clubs_api_contracts.py`, `src/db_migrate.py`, `src/db_roles.py`
+- **Source of truth**: `migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/0013_fc27_manual_match_results.sql`, `migrations/0014_fc27_player_development.sql`, `migrations/post/grants.sql`, `src/fc27_repository.py`, `src/fc27_match_results.py`, `src/fc27_clubs_api_contracts.py`, `src/db_migrate.py`, `src/db_roles.py`
 - **Supersedes**: `NONE`
 
-This document specifies the normalized PostgreSQL 16 schema for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) introduced in `migrations/0012_fc27_performance_and_quarantine.sql` and the isolated manual Match Results domain introduced in `migrations/0013_fc27_manual_match_results.sql`, owned by `fc27_owner`, and governed by Grants Policy Version 15 (`migrations/post/grants.sql`), `src/fc27_repository.py`, and `src/fc27_match_results.py`.
+This document specifies the normalized PostgreSQL 16 schema for East Coasters (`club_id=330323`, `platform=common-gen5`, `game_version=FC27`) introduced in `migrations/0012_fc27_performance_and_quarantine.sql`, the isolated manual Match Results domain introduced in `migrations/0013_fc27_manual_match_results.sql`, and the player development and Discord job domain introduced in `migrations/0014_fc27_player_development.sql`, owned by `fc27_owner`, and governed by Grants Policy Version 16 (`migrations/post/grants.sql`), `src/fc27_repository.py`, and `src/fc27_match_results.py`.
 
 ---
 
@@ -68,12 +68,36 @@ To preserve analytical integrity of provider-derived tables (`public.fc27_matche
 
 ---
 
-## 4. Privacy Exclusions & Ownership Rules
+## 4. Player Development & Discord Job Domain (`migrations/0014_fc27_player_development.sql`)
 
-1. **Zero Raw Persona Persistence**: `fc27_player_match_stats` has no column for `personaName`, `blazeId`, `nucleusId`, PSN ID, Xbox Gamertag, or EA Account ID. Manual Match Results (`fc27_manual_match_players`) accept bounded operator-entered display labels only and reject Xbox IDs/gamertags.
+`migrations/0014_fc27_player_development.sql` adds seven purpose-specific tables owned by `fc27_owner` for privacy-preserving player alias fingerprinting, player-to-Discord linking, build catalog and audit, player development suggestions and assessments, and bounded Discord work jobs:
+
+1. **`public.fc27_player_alias_fingerprints`**:
+   - Keyed by `pseudonym` (`^plr_ecf_[0-9a-f]{12}$`) with unique `gamertag_hmac` (`^[0-9a-f]{64}$`), `last_seen_at`, `created_at`, and `updated_at`. Stores HMAC-SHA256 digests only; never stores raw gamertags.
+2. **`public.fc27_player_links`**:
+   - Stores consented player-to-Discord links (`link_id`, `pseudonym`, `discord_user_id`, `status` in `'pending' | 'confirmed' | 'revoked'`, `requested_by`, `confirmed_by`, `requested_at`, `confirmed_at`, `revoked_at`, `created_at`, `updated_at`).
+   - Enforces partial unique indexes `uq_fc27_player_links_confirmed_pseudonym` and `uq_fc27_player_links_confirmed_discord_user` (`WHERE status = 'confirmed'`), allowing re-linking after revocation.
+3. **`public.fc27_build_catalog`**:
+   - Versioned Pro Clubs build definitions (`catalog_row_id`, `build_key`, `name`, `positions` `text[]`, `archetype`, `attribute_priorities`, `playstyles`, `match_rules`, `game_patch`, `notes`, `version`, `status` in `'active' | 'retired'`, `created_by`, `created_at`, `UNIQUE (build_key, version)`). Starts empty (`0` rows) by default so unverified external meta builds are never pre-seeded.
+4. **`public.fc27_build_catalog_audit`**:
+   - Append-only audit log (`audit_id`, `catalog_row_id`, `build_key`, `version`, `action` in `'create' | 'update' | 'retire'`, `actor_discord_user_id`, `snapshot`, `created_at`) protected by trigger `trg_fc27_build_catalog_audit_append_only`.
+5. **`public.fc27_player_suggestions`**:
+   - Tracks player development suggestions (`suggestion_id`, `pseudonym`, `kind` in `'build' | 'training'`, structured `objective` JSONB requiring `metric`, `direction`, `target_delta`, `min_matches <= max_matches`, `content`, `catalog_build_key`, `catalog_version`, `baseline`, `baseline_match_ids` `text[]`, `status` in `'suggested' | 'acknowledged' | 'tracking' | 'outcome'`, `outcome` in `'target_met' | 'improving' | 'no_change' | 'regressed' | 'insufficient_data'`, `outcome_value`, Discord IDs, and lifecycle timestamps).
+6. **`public.fc27_suggestion_assessments`**:
+   - Append-only assessment checkpoints (`assessment_id`, `suggestion_id`, `calculated_values`, `match_ids` `text[]`, `assessment_time`, `created_at`) protected by trigger `trg_fc27_suggestion_assessments_append_only`.
+7. **`public.fc27_discord_jobs`**:
+   - Bounded Discord job queue (`job_id`, `job_type` in `'post_new_results' | 'evaluate_suggestions'`, `payload`, `state` in `'pending' | 'claimed' | 'completed' | 'failed'`, `claim_owner`, `claimed_at`, `lease_expires_at`, `attempt_count`, `last_error_category`, `created_at`, `available_at`, `completed_at`, `idempotency_key` `UNIQUE`) with trigger `trg_fc27_discord_jobs_validate_claim` enforcing active claim leases (`lease_expires_at > now()`) when `state = 'claimed'`.
+
+---
+
+## 5. Privacy Exclusions & Ownership Rules
+
+1. **Zero Raw Persona Persistence**: `fc27_player_match_stats` and all Stage C player-development tables have no columns for `personaName`, `blazeId`, `nucleusId`, PSN ID, Xbox Gamertag, or EA Account ID. Manual Match Results (`fc27_manual_match_players`) accept bounded operator-entered display labels only and reject Xbox IDs/gamertags.
 2. **Zero Raw Provider Payload Persistence**: Neither `fc27_export_batches` nor `fc27_quarantine_records` stores raw HTTP response bodies (`raw_response_retained=False`).
-3. **Database Ownership & Grants Policy Version 15**:
-   - All provider-derived `fc27_*` tables and all manual Match Results `fc27_manual_*` tables are owned by `fc27_owner` (`migrations/0012_fc27_performance_and_quarantine.sql`, `migrations/0013_fc27_manual_match_results.sql`, and `migrations/post/grants.sql`).
-   - `fc27_app` has DML `SELECT, INSERT, UPDATE` only on provider-derived `fc27_*` tables and `SELECT`-only on `fc27_manual_*` tables (`DELETE` is revoked from `fc27_app` across all `fc27_*` tables).
+3. **Database Ownership & Grants Policy Version 16**:
+   - All provider-derived `fc27_*` tables, manual Match Results `fc27_manual_*` tables, and Stage C player development & Discord job tables are owned by `fc27_owner` (`migrations/0012_fc27_performance_and_quarantine.sql` through `migrations/0014_fc27_player_development.sql`, and `migrations/post/grants.sql`).
+   - `fc27_poll_writer` has narrow write access to normalized provider tables (`fc27_clubs`, `fc27_export_batches`, `fc27_matches`, `fc27_player_match_stats`, `fc27_quarantine_records`), `fc27_player_alias_fingerprints`, and `SELECT, INSERT` on `fc27_discord_jobs`.
+   - `fc27_player_dev_writer` has narrow write access to `fc27_player_links`, `fc27_build_catalog`, append-only `fc27_build_catalog_audit`, `fc27_player_suggestions`, append-only `fc27_suggestion_assessments`, and claim/lease/outcome updates on `fc27_discord_jobs`, plus `SELECT`-only access to `fc27_player_alias_fingerprints` and normalized provider tables.
+   - `fc27_discord_reader` has `SELECT`-only access across provider, manual Match Results, and player development tables, with zero write privileges anywhere.
    - `fc27_match_results_writer` has `SELECT, INSERT, UPDATE` on `fc27_manual_matches`, `SELECT, INSERT, UPDATE, DELETE` on `fc27_manual_match_players` and `fc27_manual_match_events` (for transactional stat replacement during edits), and `SELECT, INSERT` on `fc27_manual_match_audit` (zero `DELETE` on `fc27_manual_matches` and `fc27_manual_match_audit`, and zero access to provider-derived or control-plane tables).
-   - `fc27_dispatch` and `fc27_relay` have **zero** privileges on any `fc27_*` analytics or manual Match Results table.
+   - `fc27_dispatch` and `fc27_relay` have **zero** privileges on any `fc27_*` analytics, manual Match Results, or player development table.

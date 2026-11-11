@@ -18,14 +18,15 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 15
+GRANTS_POLICY_VERSION = 16
 
 
 def _compute_grants_sha256() -> str:
     p = MIGRATIONS_DIR / "post" / "grants.sql"
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
-GRANTS_POLICY = GrantsPolicy(version=15, sha256=_compute_grants_sha256())
+
+GRANTS_POLICY = GrantsPolicy(version=16, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -90,6 +91,39 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
             cur.execute("SELECT has_schema_privilege('fc27_match_results_writer', 'public', 'CREATE')")
             if cur.fetchone()[0]:
                 violations.append("match_results_writer_create_on_public")
+
+        # check Stage C roles (fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader)
+        for stage_c_role in (
+            "fc27_poll_writer",
+            "fc27_player_dev_writer",
+            "fc27_discord_reader",
+        ):
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (stage_c_role,))
+            if cur.fetchone():
+                cur.execute(
+                    "SELECT rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls "
+                    "FROM pg_roles WHERE rolname = %s",
+                    (stage_c_role,),
+                )
+                r_flags = cur.fetchone()
+                if r_flags and any(r_flags):
+                    violations.append(f"{stage_c_role}_privileged_flag")
+                cur.execute("SELECT pg_has_role(%s, 'fc27_owner', 'MEMBER')", (stage_c_role,))
+                if cur.fetchone()[0]:
+                    violations.append(f"{stage_c_role}_owner_member")
+                cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE')", (stage_c_role,))
+                if cur.fetchone()[0]:
+                    violations.append(f"{stage_c_role}_create_on_public")
+                cur.execute(
+                    """
+                    SELECT count(*) FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relowner::regrole::text = %s
+                    """,
+                    (stage_c_role,),
+                )
+                if cur.fetchone()[0] > 0:
+                    violations.append(f"{stage_c_role}_owns_objects")
 
         # check fc27_dispatch_transition
         cur.execute("""
@@ -289,6 +323,215 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         )
                         if cur.fetchone()[0]:
                             violations.append(f"writer_{priv.lower()}_on_{ftbl}")
+
+        # check Migration 0014 tables, indexes, triggers, ownership, and least-privilege grants
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version = '0014'")
+            has_0014 = cur.fetchone() is not None
+        else:
+            has_0014 = False
+
+        if has_0014:
+            player_dev_tables = (
+                "fc27_player_alias_fingerprints",
+                "fc27_player_links",
+                "fc27_build_catalog",
+                "fc27_build_catalog_audit",
+                "fc27_player_suggestions",
+                "fc27_suggestion_assessments",
+                "fc27_discord_jobs",
+            )
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay'")
+            has_relay = cur.fetchone() is not None
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+            has_mr_writer = cur.fetchone() is not None
+
+            for tbl in player_dev_tables:
+                cur.execute(
+                    """
+                    SELECT c.relowner::regrole::text
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = %s
+                    """,
+                    (tbl,),
+                )
+                t_row = cur.fetchone()
+                if not t_row:
+                    violations.append(f"missing_table_{tbl}")
+                    continue
+                if t_row[0] != "fc27_owner":
+                    violations.append(f"table_owner_{tbl}")
+
+                # PUBLIC and unrelated roles must have zero privileges on Migration 0014 tables
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute("SELECT has_table_privilege('public', %s, %s)", (f"public.{tbl}", priv))
+                    if cur.fetchone()[0]:
+                        violations.append(f"public_{priv.lower()}_on_{tbl}")
+                    for unrelated_role in ("fc27_app", "fc27_dispatch"):
+                        cur.execute("SELECT has_table_privilege(%s, %s, %s)", (unrelated_role, f"public.{tbl}", priv))
+                        if cur.fetchone()[0]:
+                            violations.append(f"{unrelated_role}_{priv.lower()}_on_{tbl}")
+                    if has_relay:
+                        cur.execute("SELECT has_table_privilege('fc27_relay', %s, %s)", (f"public.{tbl}", priv))
+                        if cur.fetchone()[0]:
+                            violations.append(f"fc27_relay_{priv.lower()}_on_{tbl}")
+                    if has_mr_writer:
+                        cur.execute(
+                            "SELECT has_table_privilege('fc27_match_results_writer', %s, %s)",
+                            (f"public.{tbl}", priv),
+                        )
+                        if cur.fetchone()[0]:
+                            violations.append(f"fc27_match_results_writer_{priv.lower()}_on_{tbl}")
+
+            player_dev_indexes = (
+                "idx_fc27_player_alias_fingerprints_last_seen",
+                "uq_fc27_player_links_confirmed_pseudonym",
+                "uq_fc27_player_links_confirmed_discord_user",
+                "idx_fc27_player_links_pseudonym_status",
+                "idx_fc27_player_links_discord_user_status",
+                "idx_fc27_build_catalog_status_key_version",
+                "idx_fc27_build_catalog_audit_key_created",
+                "idx_fc27_player_suggestions_open_pseudonym_status",
+                "idx_fc27_player_suggestions_pseudonym_status",
+                "idx_fc27_suggestion_assessments_suggestion_time",
+                "idx_fc27_discord_jobs_pending_available",
+                "idx_fc27_discord_jobs_claimed_lease",
+            )
+            for idx_name in player_dev_indexes:
+                cur.execute("SELECT to_regclass(%s)", (f"public.{idx_name}",))
+                if cur.fetchone()[0] is None:
+                    violations.append(f"missing_index_{idx_name}")
+
+            player_dev_triggers = (
+                ("fc27_build_catalog_audit", "trg_fc27_build_catalog_audit_immutable"),
+                ("fc27_suggestion_assessments", "trg_fc27_suggestion_assessments_immutable"),
+                ("fc27_discord_jobs", "trg_fc27_discord_jobs_claim_lease"),
+            )
+            for tbl_name, trg_name in player_dev_triggers:
+                cur.execute(
+                    """
+                    SELECT 1 FROM pg_trigger t
+                    JOIN pg_class c ON c.oid = t.tgrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = %s AND t.tgname = %s AND NOT t.tgisinternal
+                    """,
+                    (tbl_name, trg_name),
+                )
+                if cur.fetchone() is None:
+                    violations.append(f"missing_trigger_{trg_name}")
+
+            # Verify all 3 Stage C login roles exist when 0014 is applied
+            for req_role in ("fc27_poll_writer", "fc27_player_dev_writer", "fc27_discord_reader"):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (req_role,))
+                if not cur.fetchone():
+                    violations.append(f"missing_role_{req_role}")
+
+            # Expected privilege matrices for Stage C roles
+            expected_role_grants: dict[str, dict[str, set[str]]] = {
+                "fc27_poll_writer": {
+                    "fc27_clubs": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_export_batches": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_matches": {"SELECT", "INSERT"},
+                    "fc27_player_match_stats": {"SELECT", "INSERT"},
+                    "fc27_quarantine_records": {"SELECT", "INSERT"},
+                    "fc27_player_alias_fingerprints": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_discord_jobs": {"SELECT", "INSERT"},
+                    "fc27_player_links": set(),
+                    "fc27_build_catalog": set(),
+                    "fc27_build_catalog_audit": set(),
+                    "fc27_player_suggestions": set(),
+                    "fc27_suggestion_assessments": set(),
+                    "fc27_manual_matches": set(),
+                    "fc27_manual_match_players": set(),
+                    "fc27_manual_match_events": set(),
+                    "fc27_manual_match_audit": set(),
+                },
+                "fc27_player_dev_writer": {
+                    "fc27_player_links": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_build_catalog": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_build_catalog_audit": {"SELECT", "INSERT"},
+                    "fc27_player_suggestions": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_suggestion_assessments": {"SELECT", "INSERT"},
+                    "fc27_discord_jobs": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_player_alias_fingerprints": {"SELECT"},
+                    "fc27_clubs": {"SELECT"},
+                    "fc27_export_batches": {"SELECT"},
+                    "fc27_matches": {"SELECT"},
+                    "fc27_player_match_stats": {"SELECT"},
+                    "fc27_quarantine_records": set(),
+                    "fc27_manual_matches": set(),
+                    "fc27_manual_match_players": set(),
+                    "fc27_manual_match_events": set(),
+                    "fc27_manual_match_audit": set(),
+                },
+                "fc27_discord_reader": {
+                    "fc27_clubs": {"SELECT"},
+                    "fc27_export_batches": {"SELECT"},
+                    "fc27_matches": {"SELECT"},
+                    "fc27_player_match_stats": {"SELECT"},
+                    "fc27_quarantine_records": {"SELECT"},
+                    "fc27_manual_matches": {"SELECT"},
+                    "fc27_manual_match_players": {"SELECT"},
+                    "fc27_manual_match_events": {"SELECT"},
+                    "fc27_manual_match_audit": {"SELECT"},
+                    "fc27_player_alias_fingerprints": {"SELECT"},
+                    "fc27_player_links": {"SELECT"},
+                    "fc27_build_catalog": {"SELECT"},
+                    "fc27_build_catalog_audit": {"SELECT"},
+                    "fc27_player_suggestions": {"SELECT"},
+                    "fc27_suggestion_assessments": {"SELECT"},
+                    "fc27_discord_jobs": {"SELECT"},
+                },
+            }
+            legacy_forbidden_tables = (
+                "approval_requests",
+                "approval_audit",
+                "dispatches",
+                "outbox",
+                "domain_events",
+                "fc27_users",
+                "fc27_sessions",
+                "fc27_passkeys",
+                "fc27_decision_evidence",
+                "schema_migrations",
+            )
+            for role_name, table_map in expected_role_grants.items():
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                if not cur.fetchone():
+                    continue
+                for tbl_name, allowed_privs in table_map.items():
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{tbl_name}",))
+                    if cur.fetchone()[0] is None:
+                        continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        priv_fn = (
+                            "has_any_column_privilege"
+                            if priv == "UPDATE"
+                            else "has_table_privilege"
+                        )
+                        cur.execute(
+                            f"SELECT {priv_fn}(%s, %s, %s)",
+                            (role_name, f"public.{tbl_name}", priv),
+                        )
+                        has_priv = bool(cur.fetchone()[0])
+                        if priv in allowed_privs and not has_priv:
+                            violations.append(f"missing_{role_name}_{priv.lower()}_on_{tbl_name}")
+                        elif priv not in allowed_privs and has_priv:
+                            violations.append(f"forbidden_{role_name}_{priv.lower()}_on_{tbl_name}")
+
+                for leg_tbl in legacy_forbidden_tables:
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{leg_tbl}",))
+                    if cur.fetchone()[0] is None:
+                        continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, %s, %s)",
+                            (role_name, f"public.{leg_tbl}", priv),
+                        )
+                        if cur.fetchone()[0]:
+                            violations.append(f"forbidden_{role_name}_{priv.lower()}_on_{leg_tbl}")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
