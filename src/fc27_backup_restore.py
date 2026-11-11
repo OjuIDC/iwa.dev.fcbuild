@@ -915,7 +915,7 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT n.nspname, c.relname, a.attname, pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname)
+                SELECT n.nspname, c.relname, a.attname, pg_get_serial_sequence(format('%%I.%%I', n.nspname, c.relname), a.attname)
                   FROM pg_class c
                   JOIN pg_namespace n ON n.oid = c.relnamespace
                   JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -1236,11 +1236,13 @@ def verify_fc27_backup_restore(
                             cur.execute(
                                 """
                                 INSERT INTO public.fc27_manual_matches (
-                                    opponent, match_date, match_time, home_score, away_score,
-                                    status, revision, club_id, platform, game_version, source_classification
+                                    opponent, opponent_normalized, match_date, match_time, home_score, away_score,
+                                    status, revision, club_id, platform, game_version, source_classification,
+                                    created_by, updated_by
                                 ) VALUES (
-                                    'Restore Verification Opponent', NULL, NULL, NULL, NULL,
-                                    'scheduled', 1, %s, %s, %s, 'MANUAL_MATCH_RESULTS'
+                                    'Restore Verification Opponent', 'restore verification opponent',
+                                    NULL, NULL, NULL, NULL, 'SCHEDULED', 1, %s, %s, %s,
+                                    'MANUAL_MATCH_RESULT', '0', '0'
                                 )
                                 RETURNING match_id
                                 """,
