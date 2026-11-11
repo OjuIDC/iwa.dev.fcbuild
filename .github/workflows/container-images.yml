@@ -19,7 +19,7 @@ concurrency:
 
 env:
   GHCR_REGISTRY: ghcr.io
-  GHCR_NAMESPACE: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild
+  GHCR_NAMESPACE: ghcr.io/${{ github.repository }}
   CONTAINER_PLATFORMS: linux/amd64
   GHCR_VISIBILITY: PRIVATE
 
@@ -56,12 +56,12 @@ jobs:
           ref_type = os.environ.get("REF_TYPE", "")
           pr_head_repo = os.environ.get("PR_HEAD_REPO", "")
 
-          trusted_repo = repo_name.casefold() == "ojuidc/iwa.dev.fcbuild"
+          trusted_repo = repo_name.casefold() == "oju-idc/iwa.dev.fcbuild" or repo_name.casefold() == "ojuidc/iwa.dev.fcbuild"
           is_pr = event_name == "pull_request"
           is_fork_pr = (
               is_pr
               and bool(pr_head_repo)
-              and pr_head_repo.casefold() != "ojuidc/iwa.dev.fcbuild"
+              and pr_head_repo.casefold() != repo_name.casefold()
           )
 
           semver_pattern = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -137,12 +137,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      - name: Compute GHCR image repository
+        id: ghcr_repo
+        env:
+          IMAGE_NAME: ${{ matrix.image }}
+        run: |
+          echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Extract bounded OCI metadata and tags
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
-            name=${{ matrix.ghcr_repo }},enable=${{ github.event_name != 'pull_request' }}
+            name=${{ steps.ghcr_repo.outputs.repo }},enable=${{ github.event_name != 'pull_request' }}
           tags: |
             type=sha,prefix=sha-,format=short,enable=${{ github.event_name != 'pull_request' }}
             type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == 'main' }}
@@ -152,7 +159,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=${{ matrix.image }}
             org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.source=https://github.com/iwa-ojuidc/iwa.dev.fcbuild
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=UNLICENSED
 
@@ -320,11 +327,9 @@ jobs:
         include:
           - image: fc27-community-worker
             dockerfile: Dockerfile.community-worker
-            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker
             description: "FC27 read-only community polling worker (non-root 10001:65534, read-only rootfs)"
           - image: fc27-discord-bot
             dockerfile: Dockerfile.discord
-            ghcr_repo: ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-discord-bot
             description: "FC27 read-only Discord slash-command bot (non-root 10001:65534, read-only rootfs)"
     steps:
       - name: Checkout repository
@@ -381,11 +386,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute GHCR image repository
+        id: ghcr_repo
+        env:
+          IMAGE_NAME: ${{ matrix.image }}
+        run: |
+          echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Extract immutable GHCR tags and OCI labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ matrix.ghcr_repo }}
+          images: ${{ steps.ghcr_repo.outputs.repo }}
           tags: |
             type=sha,prefix=sha-,format=short
             type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == 'main' }}
@@ -395,7 +407,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=${{ matrix.image }}
             org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.source=https://github.com/iwa-ojuidc/iwa.dev.fcbuild
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=UNLICENSED
 
@@ -418,7 +430,7 @@ jobs:
         continue-on-error: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ${{ matrix.ghcr_repo }}
+          subject-name: ${{ steps.ghcr_repo.outputs.repo }}
           subject-digest: ${{ steps.push_image.outputs.digest }}
           push-to-registry: true
 
@@ -427,7 +439,7 @@ jobs:
 
       - name: Sign published image digest with Sigstore Cosign
         env:
-          IMAGE_REPO: ${{ matrix.ghcr_repo }}
+          IMAGE_REPO: ${{ steps.ghcr_repo.outputs.repo }}
           IMAGE_DIGEST: ${{ steps.push_image.outputs.digest }}
         run: |
           cosign sign --yes "${IMAGE_REPO}@${IMAGE_DIGEST}"
