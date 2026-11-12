@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Iterator, Literal, Sequence
+from typing import Any, Iterator, Literal, Mapping, Sequence
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,11 +32,19 @@ from src.fc27_privacy import (
     EAST_COASTERS_CLUB_NAME,
     EAST_COASTERS_GAME_VERSION,
     EAST_COASTERS_PLATFORM,
+    FC27FingerprintCollisionError,
     FC27SensitiveFieldDetectedError,
     FORMULA_PREFIXES,
+    HEX_SHA256_RE,
+    PSEUDONYM_MATCH_REF_RE,
+    PSEUDONYM_PLAYER_REF_RE,
     canonicalize_for_hashing,
+    compare_digest_constant_time,
     compute_match_hash,
     compute_payload_sha256,
+    contains_discord_mention,
+    contains_prohibited_url,
+    pseudonymize_match_ref,
     scan_for_sensitive_fields,
 )
 from src.schemas import (
@@ -1014,6 +1022,42 @@ class FC27ReplayConflictError(FC27RepositoryError):
     """Raised when an external match ID is replayed with a modified record hash."""
 
 
+class FC27JobIdempotencyConflictError(FC27RepositoryError):
+    """Raised when an existing Discord job shares an idempotency_key with a conflicting job_type or payload."""
+
+
+class FC27AliasFingerprintObservation(BaseModel):
+    """Privacy-safe player pseudonym + HMAC-SHA256 alias fingerprint observation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pseudonym: str = Field(pattern=r"^plr_ecf_[0-9a-f]{12}$")
+    gamertag_hmac: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FC27FingerprintPersistenceResult(BaseModel):
+    """Summary of persisting player alias fingerprints in a poll batch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    inserted_count: int = Field(default=0, ge=0)
+    refreshed_count: int = Field(default=0, ge=0)
+    duplicate_observation_count: int = Field(default=0, ge=0)
+    collision_count: int = Field(default=0, ge=0)
+
+
+class FC27DiscordJobEnqueueResult(BaseModel):
+    """Summary of idempotent Discord job production in a poll batch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    inserted_count: int = Field(default=0, ge=0)
+    existing_equivalent_count: int = Field(default=0, ge=0)
+    conflict_count: int = Field(default=0, ge=0)
+    enqueued_job_ids: tuple[int, ...] = ()
+
+
+
 class FC27QuarantineRecordResult(BaseModel):
     """Immutable metadata summary of a persisted quarantine record."""
 
@@ -1091,6 +1135,13 @@ class FC27ExportApplyResult(BaseModel):
     replay_conflict: bool = False
     quarantine_ids: list[str] = Field(default_factory=list)
     domain_event_ids: list[int] = Field(default_factory=list)
+    fingerprints_inserted: int = 0
+    fingerprints_refreshed: int = 0
+    fingerprint_duplicate_observations: int = 0
+    fingerprint_collisions: int = 0
+    discord_jobs_inserted: int = 0
+    discord_jobs_existing: int = 0
+    discord_job_conflicts: int = 0
     correlation_id: str
     detail: str
 
@@ -1651,6 +1702,515 @@ def purge_expired_quarantine_records(
     )
 
 
+def _validate_discord_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validates that a Discord job payload is metadata-only, privacy-safe, and within 4096 bytes."""
+    required_keys = {
+        "club_id",
+        "export_id",
+        "game_version",
+        "goals_against",
+        "goals_for",
+        "match_hash",
+        "match_ref",
+        "match_type",
+        "opponent_name",
+        "platform",
+        "played_at",
+        "result",
+    }
+    actual_keys = set(payload.keys())
+    if not required_keys.issubset(actual_keys):
+        missing = sorted(required_keys - actual_keys)
+        raise ValueError(f"post_new_results payload missing required keys: {missing}")
+    extra_keys = actual_keys - required_keys
+    if extra_keys:
+        raise ValueError(f"post_new_results payload contains unsupported keys: {sorted(extra_keys)}")
+
+    sensitive_paths = scan_for_sensitive_fields(dict(payload))
+    if sensitive_paths:
+        raise ValueError("prohibited sensitive fields detected in Discord job payload")
+
+    match_ref = str(payload["match_ref"]).strip()
+    if not PSEUDONYM_MATCH_REF_RE.fullmatch(match_ref):
+        raise ValueError("match_ref in Discord job payload must be a pseudonymized match reference")
+
+    match_hash = str(payload["match_hash"]).strip()
+    if not HEX_SHA256_RE.fullmatch(match_hash):
+        raise ValueError("match_hash in Discord job payload must be lowercase 64-character hex")
+
+    club_id = str(payload["club_id"]).strip()
+    platform = str(payload["platform"]).strip()
+    game_version = str(payload["game_version"]).strip().upper()
+    match_type = str(payload["match_type"]).strip()
+    played_at = str(payload["played_at"]).strip()
+    result = str(payload["result"]).strip()
+    opponent_name = str(payload["opponent_name"]).strip()
+    export_id = str(payload["export_id"]).strip()
+    goals_for = int(payload["goals_for"])
+    goals_against = int(payload["goals_against"])
+    if (
+        not club_id
+        or not platform
+        or not game_version
+        or not match_type
+        or not played_at
+        or not result
+        or not opponent_name
+        or not export_id
+        or goals_for < 0
+        or goals_against < 0
+    ):
+        raise ValueError("Discord job payload metadata fields must be valid and non-empty")
+
+    normalized: dict[str, Any] = {
+        "club_id": club_id,
+        "export_id": export_id,
+        "game_version": game_version,
+        "goals_against": goals_against,
+        "goals_for": goals_for,
+        "match_hash": match_hash,
+        "match_ref": match_ref,
+        "match_type": match_type,
+        "opponent_name": opponent_name,
+        "platform": platform,
+        "played_at": played_at,
+        "result": result,
+    }
+    serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > 4096:
+        raise ValueError("Discord job payload exceeds 4096-byte limit")
+    if contains_discord_mention(serialized) or contains_prohibited_url(serialized):
+        raise ValueError("Discord job payload contains prohibited mention or URL")
+    return normalized
+
+
+def _discord_job_payloads_equivalent(
+    existing_payload: Mapping[str, Any],
+    expected_payload: Mapping[str, Any],
+) -> bool:
+    """Checks whether an existing post_new_results job payload is equivalent to expected_payload.
+
+    Compares all match identity and result fields while allowing export_id or match_type casing
+    to reflect the initial batch that persisted the match.
+    """
+    invariant_keys = (
+        "club_id",
+        "game_version",
+        "goals_against",
+        "goals_for",
+        "match_hash",
+        "match_ref",
+        "opponent_name",
+        "platform",
+        "played_at",
+        "result",
+    )
+    for k in invariant_keys:
+        if existing_payload.get(k) != expected_payload.get(k):
+            return False
+    return True
+
+
+def persist_player_alias_fingerprints_in_tx(
+    conn: psycopg.Connection,
+    observations: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]],
+    *,
+    observed_at: datetime | None = None,
+) -> FC27FingerprintPersistenceResult:
+    """Persists or refreshes player alias HMAC fingerprints inside an active PostgreSQL transaction.
+
+    Enforces strict 1:1 mapping between `pseudonym` and `gamertag_hmac`. Any collision where an
+    existing `pseudonym` maps to a different `gamertag_hmac` or an existing `gamertag_hmac` maps
+    to a different `pseudonym` raises `FC27FingerprintCollisionError` so the caller transaction
+    rolls back cleanly.
+    """
+    if not observations:
+        return FC27FingerprintPersistenceResult()
+
+    now = (observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    normalized_obs: list[FC27AliasFingerprintObservation] = []
+    for item in observations:
+        if isinstance(item, FC27AliasFingerprintObservation):
+            normalized_obs.append(item)
+        elif isinstance(item, Mapping):
+            normalized_obs.append(
+                FC27AliasFingerprintObservation(
+                    pseudonym=str(item.get("pseudonym", "")),
+                    gamertag_hmac=str(item.get("gamertag_hmac", "")),
+                )
+            )
+        else:
+            raise ValueError("unsupported alias fingerprint observation type")
+
+    seen_by_pseudonym: dict[str, str] = {}
+    seen_by_hmac: dict[str, str] = {}
+    unique_ordered: list[FC27AliasFingerprintObservation] = []
+    duplicate_observation_count = 0
+
+    for obs in normalized_obs:
+        existing_hmac = seen_by_pseudonym.get(obs.pseudonym)
+        existing_pseudo = seen_by_hmac.get(obs.gamertag_hmac)
+        if existing_hmac is not None and not compare_digest_constant_time(existing_hmac, obs.gamertag_hmac):
+            raise FC27FingerprintCollisionError(
+                f"in-batch fingerprint collision for pseudonym {obs.pseudonym}"
+            )
+        if existing_pseudo is not None and existing_pseudo != obs.pseudonym:
+            raise FC27FingerprintCollisionError(
+                f"in-batch fingerprint collision for pseudonym {obs.pseudonym}"
+            )
+        if existing_hmac is not None and existing_pseudo == obs.pseudonym:
+            duplicate_observation_count += 1
+            continue
+        seen_by_pseudonym[obs.pseudonym] = obs.gamertag_hmac
+        seen_by_hmac[obs.gamertag_hmac] = obs.pseudonym
+        unique_ordered.append(obs)
+
+    inserted_count = 0
+    refreshed_count = 0
+
+    with conn.cursor() as cur:
+        for obs in unique_ordered:
+            cur.execute(
+                """
+                SELECT pseudonym, gamertag_hmac
+                FROM public.fc27_player_alias_fingerprints
+                WHERE pseudonym = %s OR gamertag_hmac = %s
+                """,
+                (obs.pseudonym, obs.gamertag_hmac),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_player_alias_fingerprints (
+                        pseudonym, gamertag_hmac, last_seen_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (obs.pseudonym, obs.gamertag_hmac, now, now, now),
+                )
+                inserted_count += 1
+                continue
+
+            if len(rows) > 1:
+                raise FC27FingerprintCollisionError(
+                    f"persisted fingerprint collision detected for pseudonym {obs.pseudonym}"
+                )
+
+            db_pseudo = str(rows[0][0])
+            db_hmac = str(rows[0][1])
+            if db_pseudo != obs.pseudonym or not compare_digest_constant_time(db_hmac, obs.gamertag_hmac):
+                raise FC27FingerprintCollisionError(
+                    f"persisted fingerprint collision detected for pseudonym {obs.pseudonym}"
+                )
+
+            cur.execute(
+                """
+                UPDATE public.fc27_player_alias_fingerprints
+                SET last_seen_at = %s,
+                    updated_at = %s
+                WHERE pseudonym = %s
+                """,
+                (now, now, obs.pseudonym),
+            )
+            refreshed_count += 1
+
+    return FC27FingerprintPersistenceResult(
+        inserted_count=inserted_count,
+        refreshed_count=refreshed_count,
+        duplicate_observation_count=duplicate_observation_count,
+        collision_count=0,
+    )
+
+
+def persist_player_alias_fingerprints(
+    conn_or_uri: psycopg.Connection | str | Any,
+    observations: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]],
+    *,
+    observed_at: datetime | None = None,
+    enforce_posture: bool = True,
+) -> FC27FingerprintPersistenceResult:
+    """Atomically persists or refreshes player alias HMAC fingerprints in PostgreSQL."""
+    with _managed_connection(conn_or_uri) as conn:
+        if enforce_posture:
+            _enforce_runtime_posture(conn)
+        with conn.transaction():
+            return persist_player_alias_fingerprints_in_tx(
+                conn,
+                observations,
+                observed_at=observed_at,
+            )
+
+
+def fetch_player_alias_fingerprints(
+    conn_or_uri: psycopg.Connection | str | Any,
+) -> list[dict[str, Any]]:
+    """Fetches persisted player alias fingerprint rows ordered by pseudonym."""
+    with _managed_connection(conn_or_uri) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pseudonym, gamertag_hmac, last_seen_at, created_at, updated_at
+                FROM public.fc27_player_alias_fingerprints
+                ORDER BY pseudonym ASC
+                """
+            )
+            return [
+                {
+                    "pseudonym": str(row[0]),
+                    "gamertag_hmac": str(row[1]),
+                    "last_seen_at": row[2],
+                    "created_at": row[3],
+                    "updated_at": row[4],
+                }
+                for row in cur.fetchall()
+            ]
+
+
+def _build_post_new_results_payload(
+    match: FC27SuppliedMatch,
+    *,
+    match_hash: str,
+    club_id: str,
+    platform: str,
+    game_version: str,
+    export_id: str,
+    match_type_override: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Builds `(idempotency_key, normalized_payload)` for a `post_new_results` Discord job."""
+    raw_mid = str(match.external_match_id).strip()
+    match_ref = (
+        raw_mid
+        if PSEUDONYM_MATCH_REF_RE.fullmatch(raw_mid)
+        else pseudonymize_match_ref(raw_mid, club_id=club_id)
+    )
+    idempotency_key = f"fc27:post_new_results:{match_ref}"
+    eff_match_type = str(match_type_override or match.match_type or "leagueMatch").strip()
+    payload = _validate_discord_job_payload(
+        {
+            "club_id": club_id,
+            "export_id": export_id,
+            "game_version": game_version.upper(),
+            "goals_against": int(match.goals_against),
+            "goals_for": int(match.goals_for),
+            "match_hash": match_hash,
+            "match_ref": match_ref,
+            "match_type": eff_match_type,
+            "opponent_name": str(match.opponent_name),
+            "platform": platform,
+            "played_at": match.played_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "result": str(match.result),
+        }
+    )
+    return idempotency_key, payload
+
+
+def enqueue_post_new_results_jobs_in_tx(
+    conn: psycopg.Connection,
+    *,
+    accepted_matches: Sequence[tuple[FC27SuppliedMatch, str]],
+    duplicate_matches: Sequence[tuple[FC27SuppliedMatch, str]] = (),
+    club_id: str,
+    platform: str = "common-gen5",
+    game_version: str = "FC27",
+    export_id: str = "comm_poll_batch",
+    match_type_override: str | None = None,
+    enqueued_at: datetime | None = None,
+) -> FC27DiscordJobEnqueueResult:
+    """Enqueues durable idempotent `post_new_results` Discord jobs inside an active transaction.
+
+    - Enqueues one `post_new_results` job per newly accepted match using deterministic
+      `idempotency_key = f"fc27:post_new_results:{match_ref}"`.
+    - Never enqueues a new job when `accepted_matches` is empty.
+    - When an existing job shares `idempotency_key`:
+      - If `job_type == 'post_new_results'` and payload is equivalent, increments
+        `existing_equivalent_count` without inserting or mutating the existing job.
+      - Otherwise raises `FC27JobIdempotencyConflictError` to abort the transaction.
+    """
+    now = (enqueued_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    norm_version = game_version.upper()
+    inserted_count = 0
+    existing_equivalent_count = 0
+    enqueued_ids: list[int] = []
+
+    with conn.cursor() as cur:
+        for match, mhash in accepted_matches:
+            idempotency_key, expected_payload = _build_post_new_results_payload(
+                match,
+                match_hash=mhash,
+                club_id=club_id,
+                platform=platform,
+                game_version=norm_version,
+                export_id=export_id,
+                match_type_override=match_type_override,
+            )
+            cur.execute(
+                """
+                SELECT job_id, job_type, payload
+                FROM public.fc27_discord_jobs
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            )
+            existing_row = cur.fetchone()
+            if existing_row is not None:
+                db_job_type = str(existing_row[1])
+                raw_db_payload = existing_row[2]
+                db_payload = (
+                    dict(raw_db_payload)
+                    if isinstance(raw_db_payload, Mapping)
+                    else json.loads(str(raw_db_payload))
+                )
+                if db_job_type != "post_new_results" or not _discord_job_payloads_equivalent(
+                    db_payload, expected_payload
+                ):
+                    raise FC27JobIdempotencyConflictError(
+                        f"conflicting Discord job already exists for idempotency_key '{idempotency_key}'"
+                    )
+                existing_equivalent_count += 1
+                continue
+
+            cur.execute(
+                """
+                INSERT INTO public.fc27_discord_jobs (
+                    job_type, idempotency_key, payload, state, attempt_count,
+                    available_at, created_at
+                ) VALUES (
+                    'post_new_results', %s, %s::jsonb, 'pending', 0,
+                    %s, %s
+                )
+                RETURNING job_id
+                """,
+                (
+                    idempotency_key,
+                    json.dumps(expected_payload, sort_keys=True, separators=(",", ":")),
+                    now,
+                    now,
+                ),
+            )
+            inserted_row = cur.fetchone()
+            assert inserted_row is not None
+            enqueued_ids.append(int(inserted_row[0]))
+            inserted_count += 1
+
+        for match, mhash in duplicate_matches:
+            idempotency_key, expected_payload = _build_post_new_results_payload(
+                match,
+                match_hash=mhash,
+                club_id=club_id,
+                platform=platform,
+                game_version=norm_version,
+                export_id=export_id,
+                match_type_override=match_type_override,
+            )
+            cur.execute(
+                """
+                SELECT job_id, job_type, payload
+                FROM public.fc27_discord_jobs
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            )
+            existing_row = cur.fetchone()
+            if existing_row is not None:
+                db_job_type = str(existing_row[1])
+                raw_db_payload = existing_row[2]
+                db_payload = (
+                    dict(raw_db_payload)
+                    if isinstance(raw_db_payload, Mapping)
+                    else json.loads(str(raw_db_payload))
+                )
+                if db_job_type != "post_new_results" or not _discord_job_payloads_equivalent(
+                    db_payload, expected_payload
+                ):
+                    raise FC27JobIdempotencyConflictError(
+                        f"conflicting Discord job already exists for idempotency_key '{idempotency_key}'"
+                    )
+                existing_equivalent_count += 1
+
+    return FC27DiscordJobEnqueueResult(
+        inserted_count=inserted_count,
+        existing_equivalent_count=existing_equivalent_count,
+        conflict_count=0,
+        enqueued_job_ids=tuple(enqueued_ids),
+    )
+
+
+def enqueue_post_new_results_jobs(
+    conn_or_uri: psycopg.Connection | str | Any,
+    *,
+    accepted_matches: Sequence[tuple[FC27SuppliedMatch, str]],
+    duplicate_matches: Sequence[tuple[FC27SuppliedMatch, str]] = (),
+    club_id: str,
+    platform: str = "common-gen5",
+    game_version: str = "FC27",
+    export_id: str = "comm_poll_batch",
+    match_type_override: str | None = None,
+    enqueued_at: datetime | None = None,
+    enforce_posture: bool = True,
+) -> FC27DiscordJobEnqueueResult:
+    """Atomically enqueues `post_new_results` Discord jobs in PostgreSQL."""
+    with _managed_connection(conn_or_uri) as conn:
+        if enforce_posture:
+            _enforce_runtime_posture(conn)
+        with conn.transaction():
+            return enqueue_post_new_results_jobs_in_tx(
+                conn,
+                accepted_matches=accepted_matches,
+                duplicate_matches=duplicate_matches,
+                club_id=club_id,
+                platform=platform,
+                game_version=game_version,
+                export_id=export_id,
+                match_type_override=match_type_override,
+                enqueued_at=enqueued_at,
+            )
+
+
+def fetch_discord_jobs(
+    conn_or_uri: psycopg.Connection | str | Any,
+) -> list[dict[str, Any]]:
+    """Fetches persisted Discord job rows ordered by job_id ascending."""
+    with _managed_connection(conn_or_uri) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    job_id, job_type, idempotency_key, payload, state,
+                    attempt_count, available_at, claimed_at, claim_owner,
+                    lease_expires_at, last_error_category, created_at, completed_at
+                FROM public.fc27_discord_jobs
+                ORDER BY job_id ASC
+                """
+            )
+            results: list[dict[str, Any]] = []
+            for row in cur.fetchall():
+                raw_payload = row[3]
+                payload_dict = (
+                    dict(raw_payload)
+                    if isinstance(raw_payload, Mapping)
+                    else json.loads(str(raw_payload))
+                )
+                results.append(
+                    {
+                        "id": int(row[0]),
+                        "job_id": int(row[0]),
+                        "job_type": str(row[1]),
+                        "idempotency_key": str(row[2]),
+                        "payload": payload_dict,
+                        "state": str(row[4]),
+                        "attempt_count": int(row[5]),
+                        "available_at": row[6],
+                        "claimed_at": row[7],
+                        "claim_owner": row[8],
+                        "lease_expires_at": row[9],
+                        "last_error_category": row[10],
+                        "created_at": row[11],
+                        "completed_at": row[12],
+                    }
+                )
+            return results
+
+
 def apply_export_plan(
     conn_or_uri: psycopg.Connection | str | Any,
     *,
@@ -1661,6 +2221,10 @@ def apply_export_plan(
     enforce_posture: bool = True,
     quarantine_conflicts: bool = True,
     source_classification_override: Literal["AUTHORIZED_CAPTURE"] | None = None,
+    alias_fingerprints: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]] | None = None,
+    enqueue_discord_jobs: bool = False,
+    match_type_override: str | None = None,
+    emit_domain_events: bool = True,
 ) -> FC27ExportApplyResult:
     """Atomically applies a validated FC 27 export envelope and plan to PostgreSQL.
 
@@ -1812,6 +2376,7 @@ def apply_export_plan(
             conflicting_matches: list[ tuple[int, FC27SuppliedMatch, str] ] = []
             accepted_matches: list[ tuple[FC27SuppliedMatch, str] ] = []
             duplicate_matches: list[str] = []
+            duplicate_match_tuples: list[tuple[FC27SuppliedMatch, str]] = []
 
             for idx, match in enumerate(envelope.matches):
                 mid = match.external_match_id
@@ -1825,6 +2390,7 @@ def apply_export_plan(
                 if mid in existing_match_hashes:
                     if existing_match_hashes[mid] == mhash:
                         duplicate_matches.append(mid)
+                        duplicate_match_tuples.append((match, mhash))
                     else:
                         conflicting_matches.append((idx, match, mhash))
                 else:
@@ -1883,30 +2449,57 @@ def apply_export_plan(
                 or envelope.payload_sha256 in processed_payload_hashes
                 or (len(accepted_matches) == 0 and len(duplicate_matches) > 0)
             ):
-                dup_reason = _build_safe_event_reason(
-                    export_id=envelope.export_id,
-                    club_id=club_id,
-                    platform=platform,
-                    game_version=game_version,
-                    source_classification=source_cls,
-                    accepted_count=0,
-                    duplicate_count=len(duplicate_matches),
-                    quarantine_count=0,
-                    reason_code="DUPLICATE_EXPORT_IGNORED",
-                    recorded_at=now,
+                fp_dup_res = (
+                    persist_player_alias_fingerprints_in_tx(
+                        conn,
+                        alias_fingerprints,
+                        observed_at=now,
+                    )
+                    if alias_fingerprints
+                    else FC27FingerprintPersistenceResult()
                 )
-                dup_event_id = record_event(
-                    conn,
-                    event_type="fc27.export.duplicate_ignored",
-                    entity_type="fc27_export_batch",
-                    entity_id=envelope.export_id,
-                    actor=actor,
-                    correlation_id=corr_id,
-                    visibility="ops",
-                    scope_club_id=club_id,
-                    to_status="DUPLICATE_IGNORED",
-                    reason=dup_reason,
+                job_dup_res = (
+                    enqueue_post_new_results_jobs_in_tx(
+                        conn,
+                        accepted_matches=(),
+                        duplicate_matches=duplicate_match_tuples,
+                        club_id=club_id,
+                        platform=platform,
+                        game_version=game_version,
+                        export_id=envelope.export_id,
+                        match_type_override=match_type_override,
+                        enqueued_at=now,
+                    )
+                    if enqueue_discord_jobs
+                    else FC27DiscordJobEnqueueResult()
                 )
+                dup_event_ids: list[int] = []
+                if emit_domain_events:
+                    dup_reason = _build_safe_event_reason(
+                        export_id=envelope.export_id,
+                        club_id=club_id,
+                        platform=platform,
+                        game_version=game_version,
+                        source_classification=source_cls,
+                        accepted_count=0,
+                        duplicate_count=len(duplicate_matches),
+                        quarantine_count=0,
+                        reason_code="DUPLICATE_EXPORT_IGNORED",
+                        recorded_at=now,
+                    )
+                    dup_event_id = record_event(
+                        conn,
+                        event_type="fc27.export.duplicate_ignored",
+                        entity_type="fc27_export_batch",
+                        entity_id=envelope.export_id,
+                        actor=actor,
+                        correlation_id=corr_id,
+                        visibility="ops",
+                        scope_club_id=club_id,
+                        to_status="DUPLICATE_IGNORED",
+                        reason=dup_reason,
+                    )
+                    dup_event_ids.append(dup_event_id)
                 return FC27ExportApplyResult(
                     status="APPLIED",
                     export_id=envelope.export_id,
@@ -1920,7 +2513,14 @@ def apply_export_plan(
                     player_stat_records=0,
                     idempotent_duplicate=True,
                     replay_conflict=False,
-                    domain_event_ids=[dup_event_id],
+                    domain_event_ids=dup_event_ids,
+                    fingerprints_inserted=fp_dup_res.inserted_count,
+                    fingerprints_refreshed=fp_dup_res.refreshed_count,
+                    fingerprint_duplicate_observations=fp_dup_res.duplicate_observation_count,
+                    fingerprint_collisions=fp_dup_res.collision_count,
+                    discord_jobs_inserted=job_dup_res.inserted_count,
+                    discord_jobs_existing=job_dup_res.existing_equivalent_count,
+                    discord_job_conflicts=job_dup_res.conflict_count,
                     correlation_id=str(corr_id),
                     detail="Idempotent reapply: all records already persisted with matching hashes.",
                 )
@@ -2120,31 +2720,60 @@ def apply_export_plan(
                         )
                         player_stats_count += 1
 
-            # Step 10: Emit domain_events and outbox entry in the same transaction
-            applied_reason = _build_safe_event_reason(
-                export_id=envelope.export_id,
-                club_id=club_id,
-                platform=platform,
-                game_version=game_version,
-                source_classification=source_cls,
-                accepted_count=len(accepted_matches),
-                duplicate_count=len(duplicate_matches),
-                quarantine_count=0,
-                reason_code="EXPORT_APPLIED",
-                recorded_at=now,
+            # Step 10: Persist alias fingerprints and enqueue Discord jobs atomically in the same transaction
+            fp_res = (
+                persist_player_alias_fingerprints_in_tx(
+                    conn,
+                    alias_fingerprints,
+                    observed_at=now,
+                )
+                if alias_fingerprints
+                else FC27FingerprintPersistenceResult()
             )
-            event_id = record_event(
-                conn,
-                event_type="fc27.export.applied",
-                entity_type="fc27_export_batch",
-                entity_id=envelope.export_id,
-                actor=actor,
-                correlation_id=corr_id,
-                visibility="ops",
-                scope_club_id=club_id,
-                to_status="APPLIED",
-                reason=applied_reason,
+            job_res = (
+                enqueue_post_new_results_jobs_in_tx(
+                    conn,
+                    accepted_matches=accepted_matches,
+                    duplicate_matches=duplicate_match_tuples,
+                    club_id=club_id,
+                    platform=platform,
+                    game_version=game_version,
+                    export_id=envelope.export_id,
+                    match_type_override=match_type_override,
+                    enqueued_at=now,
+                )
+                if enqueue_discord_jobs
+                else FC27DiscordJobEnqueueResult()
             )
+
+            # Step 11: Emit domain_events and outbox entry in the same transaction when enabled
+            applied_event_ids: list[int] = []
+            if emit_domain_events:
+                applied_reason = _build_safe_event_reason(
+                    export_id=envelope.export_id,
+                    club_id=club_id,
+                    platform=platform,
+                    game_version=game_version,
+                    source_classification=source_cls,
+                    accepted_count=len(accepted_matches),
+                    duplicate_count=len(duplicate_matches),
+                    quarantine_count=0,
+                    reason_code="EXPORT_APPLIED",
+                    recorded_at=now,
+                )
+                event_id = record_event(
+                    conn,
+                    event_type="fc27.export.applied",
+                    entity_type="fc27_export_batch",
+                    entity_id=envelope.export_id,
+                    actor=actor,
+                    correlation_id=corr_id,
+                    visibility="ops",
+                    scope_club_id=club_id,
+                    to_status="APPLIED",
+                    reason=applied_reason,
+                )
+                applied_event_ids.append(event_id)
 
             return FC27ExportApplyResult(
                 status="APPLIED",
@@ -2159,7 +2788,14 @@ def apply_export_plan(
                 player_stat_records=player_stats_count,
                 idempotent_duplicate=False,
                 replay_conflict=False,
-                domain_event_ids=[event_id],
+                domain_event_ids=applied_event_ids,
+                fingerprints_inserted=fp_res.inserted_count,
+                fingerprints_refreshed=fp_res.refreshed_count,
+                fingerprint_duplicate_observations=fp_res.duplicate_observation_count,
+                fingerprint_collisions=fp_res.collision_count,
+                discord_jobs_inserted=job_res.inserted_count,
+                discord_jobs_existing=job_res.existing_equivalent_count,
+                discord_job_conflicts=job_res.conflict_count,
                 correlation_id=str(corr_id),
                 detail=f"Applied {len(accepted_matches)} match(es) and {player_stats_count} player performance row(s).",
             )

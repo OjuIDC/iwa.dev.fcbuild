@@ -168,3 +168,42 @@ def test_bootstrap_cli_never_prints_password(pg_db, capsys):
         os.remove("tests/test_s3cret_migrator")
         os.remove("tests/test_s3cret_app")
         os.remove("tests/test_s3cret_dispatch")
+
+
+def test_poll_writer_c1_fingerprints_and_discord_jobs_privileges(pg_db_migrated):
+    """Verify fc27_poll_writer least-privilege matrix on C1 fingerprint and Discord job tables."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            # Allowed on fc27_player_alias_fingerprints: SELECT, INSERT, UPDATE(last_seen_at, updated_at)
+            cur.execute(
+                "SELECT has_table_privilege(%s, 'public.fc27_player_alias_fingerprints', 'SELECT'), "
+                "has_table_privilege(%s, 'public.fc27_player_alias_fingerprints', 'INSERT'), "
+                "has_table_privilege(%s, 'public.fc27_player_alias_fingerprints', 'DELETE'), "
+                "has_column_privilege(%s, 'public.fc27_player_alias_fingerprints', 'last_seen_at', 'UPDATE'), "
+                "has_column_privilege(%s, 'public.fc27_player_alias_fingerprints', 'updated_at', 'UPDATE'), "
+                "has_column_privilege(%s, 'public.fc27_player_alias_fingerprints', 'gamertag_hmac', 'UPDATE')",
+                (
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                ),
+            )
+            assert cur.fetchone() == (True, True, False, True, True, False)
+
+            # Allowed on fc27_discord_jobs: SELECT, INSERT only (no UPDATE, no DELETE)
+            cur.execute(
+                "SELECT has_table_privilege(%s, 'public.fc27_discord_jobs', 'SELECT'), "
+                "has_table_privilege(%s, 'public.fc27_discord_jobs', 'INSERT'), "
+                "has_table_privilege(%s, 'public.fc27_discord_jobs', 'UPDATE'), "
+                "has_table_privilege(%s, 'public.fc27_discord_jobs', 'DELETE')",
+                (
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                    ROLE_POLL_WRITER,
+                ),
+            )
+            assert cur.fetchone() == (True, True, False, False)

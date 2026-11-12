@@ -246,6 +246,8 @@ ALLOWED_READONLY_TABLES: Final[frozenset[str]] = frozenset(
         "fc27_manual_match_players",
         "fc27_manual_match_events",
         "fc27_manual_match_audit",
+        "fc27_player_alias_fingerprints",
+        "fc27_discord_jobs",
     }
 )
 
@@ -1978,6 +1980,39 @@ class FC27DiscordBotService:
                     ),
                 },
             )
+            approved_types_raw = getattr(snap, "approved_match_types", None) or (
+                "leagueMatch",
+                "playoffMatch",
+                "friendlyMatch",
+            )
+            approved_types_str = ",".join(str(x) for x in approved_types_raw)
+            current_rot_str = _format_safe_status_value(
+                getattr(snap, "current_rotation_match_type", None), default=FIXED_MATCH_TYPE
+            )
+            next_rot_str = _format_safe_status_value(
+                getattr(snap, "next_rotation_match_type", None), default="playoffMatch"
+            )
+            last_attempted_mt_str = _format_safe_status_value(
+                getattr(snap, "last_attempted_match_type", None), default="N/A"
+            )
+            last_successful_mt_str = _format_safe_status_value(
+                getattr(snap, "last_successful_match_type", None), default="N/A"
+            )
+            hmac_configured_str = _format_safe_status_value(
+                getattr(snap, "alias_hmac_key_configured", None), default="false"
+            )
+            fp_inserted_str = _format_safe_status_value(
+                getattr(snap, "total_fingerprints_inserted", None), default="N/A"
+            )
+            fp_refreshed_str = _format_safe_status_value(
+                getattr(snap, "total_fingerprints_refreshed", None), default="N/A"
+            )
+            jobs_inserted_str = _format_safe_status_value(
+                getattr(snap, "total_discord_jobs_inserted", None), default="N/A"
+            )
+            jobs_existing_str = _format_safe_status_value(
+                getattr(snap, "total_discord_jobs_existing", None), default="N/A"
+            )
             policy_embed = FC27DiscordEmbed(
                 title="East Coasters — Polling Policy & Repository Details",
                 description=(
@@ -1989,6 +2024,16 @@ class FC27DiscordBotService:
                     "platform": TARGET_PLATFORM,
                     "game_version": TARGET_GAME_VERSION,
                     "match_type": FIXED_MATCH_TYPE,
+                    "approved_match_types": approved_types_str,
+                    "current_rotation_match_type": current_rot_str,
+                    "next_rotation_match_type": next_rot_str,
+                    "last_attempted_match_type": last_attempted_mt_str,
+                    "last_successful_match_type": last_successful_mt_str,
+                    "alias_hmac_key_configured": hmac_configured_str,
+                    "fingerprints_inserted": fp_inserted_str,
+                    "fingerprints_refreshed": fp_refreshed_str,
+                    "discord_jobs_inserted": jobs_inserted_str,
+                    "discord_jobs_existing": jobs_existing_str,
                     "poll_interval_seconds": str(SUPPORTED_POLL_INTERVAL_SECONDS),
                     "daily_request_limit": str(SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS),
                     "maximum_requests_per_cycle": "1",
@@ -2017,15 +2062,51 @@ class FC27DiscordBotService:
 
         if cmd == "polling":
             match_count = self._load_persisted_match_count()
+            approved_types_raw = getattr(snap, "approved_match_types", None) or (
+                "leagueMatch",
+                "playoffMatch",
+                "friendlyMatch",
+            )
             embed = FC27DiscordEmbed(
                 title="East Coasters — 12-Hour Polling & Continuity Status",
                 description=(
                     f"Polling Frequency: **every 12 hours** (`{POLLING_FREQUENCY_12H}`, `{SUPPORTED_POLL_INTERVAL_SECONDS}` seconds)\n"
                     f"Max Provider Requests: `1` per cycle / `{SUPPORTED_POLL_MAX_REQUESTS_PER_24_HOURS}` per 24 hours\n"
+                    f"Approved Match Types: `{','.join(str(x) for x in approved_types_raw)}` "
+                    f"(current=`{getattr(snap, 'current_rotation_match_type', FIXED_MATCH_TYPE)}`, "
+                    f"next=`{getattr(snap, 'next_rotation_match_type', 'playoffMatch')}`)\n"
                     f"Catch-Up Bursts Suppressed: `{str(snap.catch_up_cycles_suppressed).lower()}`"
                 ),
                 fields={
                     "polling_frequency": f"{POLLING_FREQUENCY_12H} (every 12 hours / 43200s)",
+                    "approved_match_types": ",".join(str(x) for x in approved_types_raw),
+                    "current_rotation_match_type": str(
+                        getattr(snap, "current_rotation_match_type", FIXED_MATCH_TYPE)
+                    ),
+                    "next_rotation_match_type": str(
+                        getattr(snap, "next_rotation_match_type", "playoffMatch")
+                    ),
+                    "last_attempted_match_type": str(
+                        getattr(snap, "last_attempted_match_type", None) or "NONE"
+                    ),
+                    "last_successful_match_type": str(
+                        getattr(snap, "last_successful_match_type", None) or "NONE"
+                    ),
+                    "alias_hmac_key_configured": str(
+                        getattr(snap, "alias_hmac_key_configured", False)
+                    ).lower(),
+                    "fingerprints_inserted": str(
+                        getattr(snap, "total_fingerprints_inserted", 0)
+                    ),
+                    "fingerprints_refreshed": str(
+                        getattr(snap, "total_fingerprints_refreshed", 0)
+                    ),
+                    "discord_jobs_inserted": str(
+                        getattr(snap, "total_discord_jobs_inserted", 0)
+                    ),
+                    "discord_jobs_existing": str(
+                        getattr(snap, "total_discord_jobs_existing", 0)
+                    ),
                     "last_attempt_at": str(snap.last_attempt_at or "NONE"),
                     "last_success_at": str(snap.last_success_at or "NONE"),
                     "last_new_match_at": str(snap.last_new_match_at or "NONE"),

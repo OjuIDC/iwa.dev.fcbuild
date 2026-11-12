@@ -13,17 +13,17 @@
 
 ## 1. Architecture & Supported Operational Path
 
-For **East Coasters (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`, `match_type="leagueMatch"`, `max_results=10`)**, the polling worker extends the validated community-provider path into a bounded, single-flight 12-hour background worker:
+For **East Coasters (`club_id="330323"`, `club_name="East Coasters"`, `platform="common-gen5"`, `game_version="FC27"`, `approved_match_types=("leagueMatch", "playoffMatch", "friendlyMatch")`, `max_results=10`)**, the polling worker extends the validated community-provider path into a bounded, single-flight 12-hour background worker with deterministic multi-match-type rotation (`leagueMatch -> playoffMatch -> friendlyMatch -> leagueMatch`):
 
 ```text
 fc-clubs-api-community-v1 (LIVE_EA_CLUBS_COMMUNITY_CLIENT)
-  -> FC27PollingPolicy (POLL_INTERVAL_SECONDS=43200, ONCE_EVERY_12_HOURS, max 2 req/24h) + 4 fail-closed activation gates
+  -> FC27PollingPolicy (POLL_INTERVAL_SECONDS=43200, ONCE_EVERY_12_HOURS, max 2 req/24h across all match types) + fail-closed activation & HMAC key gates
   -> FC27SingleFlightLeaseContext (in-process lock + PostgreSQL pg_try_advisory_lock)
-  -> FC27BoundedNormalizedCache (TTL = 43200s; normalized objects only)
+  -> FC27BoundedNormalizedCache (TTL = 43200s; normalized objects only, keyed by match_type)
   -> FC27AdapterCircuitBreaker + FC27ProviderTokenBucketLimiter + FC27RequestBudget (max_requests=1, max_retries=0)
-  -> FC27CommunityProviderAdapter (clubs/matches, leagueMatch, maxResultCount=10, raw_response_retained=False)
-  -> Repository validation, sensitive-field rejection & plr_ecf_<12-hex> pseudonymization
-  -> Transactional PostgreSQL 16 persistence via fc27_app BEFORE analytics (persist_polled_match_envelope)
+  -> FC27CommunityProviderAdapter (clubs/matches, active match_type in rotation, maxResultCount=10, raw_response_retained=False)
+  -> Repository validation, sensitive-field rejection, HMAC-SHA256 alias fingerprinting & plr_ecf_<12-hex> pseudonymization
+  -> Atomic PostgreSQL 16 persistence via fc27_poll_writer BEFORE analytics (matches + fc27_player_alias_fingerprints + fc27_discord_jobs post_new_results)
   -> Conditional read-only advisory pipeline ONLY when inserted_match_count > 0 (Search -> Scout -> Analyst -> Coach -> Tactics -> Director)
   -> Read-only Discord status card (/fc27 status in src/fc27_discord_bot.py)
 ```
@@ -39,6 +39,9 @@ All polling settings in `src/settings.py` and `config.example.env` fail closed o
 | `FC27_COMMUNITY_POLLING_ENABLED` | `false` | `false` / `true` | Master gate for polling cycle execution |
 | `FC27_COMMUNITY_PROVIDER_ENABLED` | `false` | `false` / `true` | Required community provider gate (`fc-clubs-api-community-v1`) |
 | `FC27_PERSISTENCE_ENABLED` | `false` | `false` / `true` | Required PostgreSQL persistence gate |
+| `FC27_APPROVED_MATCH_TYPES` | `leagueMatch,playoffMatch,friendlyMatch` | Subset/order of `leagueMatch`, `playoffMatch`, `friendlyMatch` | Deterministic match-type rotation sequence |
+| `FC27_POLL_WRITER_URI_FILE` | `/run/secrets/fc27_poll_writer_uri` | Secret file path | Least-privilege `fc27_poll_writer` PostgreSQL connection URI |
+| `FC27_ALIAS_HMAC_KEY_FILE` | `/run/secrets/fc27_alias_hmac_key` | Secret file (`>= 32` bytes) | Required HMAC-SHA256 key for privacy-safe player alias fingerprinting |
 | `FC27_COMMUNITY_POLL_INTERVAL_SECONDS` | `43200` | `43200` (strictly `43200`) | Fixed 12-hour inter-cycle interval (`ONCE_EVERY_12_HOURS`) |
 | `FC27_COMMUNITY_POLL_MIN_SECONDS` | `43200` | `43200` (strictly `43200`) | Minimum inter-cycle sleep interval (12 hours) |
 | `FC27_COMMUNITY_POLL_MAX_SECONDS` | `43200` | `43200` (strictly `43200`) | Maximum inter-cycle sleep interval (12 hours) |

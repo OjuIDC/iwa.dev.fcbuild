@@ -39,6 +39,7 @@ All runtime secrets are stored as single-line files in `./secrets/` (git-ignored
 | `./secrets/fc27_discord_reader_password` | `FC27_DISCORD_READER_PASSWORD_FILE` | `db-bootstrap` | Password assigned to `fc27_discord_reader` |
 | `./secrets/fc27_migrator_uri` | `POSTGRES_URI_FILE` | `db-migrate` | Connection URI for `fc27_migrator` |
 | `./secrets/fc27_poll_writer_uri` | `FC27_POLL_WRITER_URI_FILE` | `fc27-community-worker` | Connection URI for `fc27_poll_writer` |
+| `./secrets/fc27_alias_hmac_key` | `FC27_ALIAS_HMAC_KEY_FILE` | `fc27-community-worker` | Symmetric HMAC-SHA256 key (`>= 32` bytes) for privacy-safe player alias fingerprinting |
 | `./secrets/fc27_player_dev_writer_uri` | `FC27_PLAYER_DEV_WRITER_URI_FILE` | `fc27-discord-bot` | Connection URI for `fc27_player_dev_writer` |
 | `./secrets/fc27_discord_reader_uri` | `FC27_DISCORD_READER_URI_FILE` | `fc27-discord-bot` | Connection URI for `fc27_discord_reader` |
 | `./secrets/fc27_app_uri` | `POSTGRES_URI_FILE` | `graph-api` (historical) / transitional overlays | Connection URI for `fc27_app` |

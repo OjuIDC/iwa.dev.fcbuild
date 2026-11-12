@@ -102,7 +102,7 @@ Adapted safely from the MIT-licensed `1erkandogan/fc27-clubs-api` endpoint and e
 
 ## 5. Privacy Controls, Provenance, & Offline Preflight CLI
 
-- **Deterministic Pseudonymization**: Member IDs are transformed via `pseudonymize_club_member_id(raw_id, club_id="330323")` -> `plr_ecf_<12-hex>`. Raw personas are discarded (`raw_persona_persisted=False`, `display_alias=None`).
+- **Deterministic Pseudonymization & Keyed Alias Fingerprinting**: Member IDs are transformed via `pseudonymize_club_member_id(raw_id, club_id="330323")` -> `plr_ecf_<12-hex>`, and raw player aliases are fingerprinted via `compute_alias_hmac_fingerprint(raw_alias, hmac_key)` (`HMAC-SHA256`, 64 lowercase hex characters) before raw personas are discarded (`raw_persona_persisted=False`, `display_alias=None`).
 - **Collision Guard**: `FC27PseudonymCollisionDetector` aborts with `PSEUDONYM_COLLISION` if two distinct raw member keys ever map to the same pseudonym.
 - **Provenance Metadata**: Every normalized envelope attaches `FC27SourceProvenance` (`provider_id`, `provider_classification`, `authorization_reference`, `fetched_at_utc`, `request_correlation_id`, `payload_sha256`, `endpoint_operation`, `cache_status`, `rate_limit_tokens_remaining`, `circuit_breaker_state`, `raw_response_retained=False`, `raw_persona_persisted=False`).
 - **Offline Status CLI**:

@@ -910,3 +910,46 @@ def test_comm_59_postgres_persistence_idempotency_conflict_and_persisted_read(
     assert len(s_ctx.context_hash) == 64
     assert len(scout_rep.report_hash) == 64
     assert len(analyst_rep.report_hash) == 64
+
+
+def test_56_c1_multi_match_types_and_alias_fingerprints_extraction() -> None:
+    """Test 56: C1 approved match types (leagueMatch, playoffMatch, friendlyMatch), mismatch rejection, and alias HMAC extraction."""
+    import json
+    import re
+
+    hmac_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    expected_norm_type = {
+        "leagueMatch": "LEAGUE",
+        "playoffMatch": "PLAYOFF",
+        "friendlyMatch": "FRIENDLY",
+    }
+    for mt, norm_mt in expected_norm_type.items():
+        records = _sample_community_match_records(2)
+        for rec in records:
+            rec["match_type"] = mt
+        env, match_envs = normalize_community_match_records(
+            records,
+            expected_match_type=mt,
+            observed_at="2026-11-01T12:00:00Z",
+            alias_hmac_key=hmac_key,
+        )
+        assert env.provenance["match_type"] == mt
+        assert all(m.normalized_match_type == norm_mt for m in match_envs)
+        assert len(env.alias_fingerprints) == 4
+        for fp in env.alias_fingerprints:
+            assert re.fullmatch(r"^plr_ecf_[0-9a-f]{12}$", fp.pseudonym)
+            assert re.fullmatch(r"^[0-9a-f]{64}$", fp.gamertag_hmac)
+        dumped = json.dumps(env.model_dump())
+        assert "alias_fingerprints" not in dumped
+        assert "gamertag_hmac" not in dumped
+
+    # Mismatched returned match_type vs expected_match_type fails closed
+    bad_records = _sample_community_match_records(1)
+    bad_records[0]["match_type"] = "playoffMatch"
+    with pytest.raises(FC27SchemaValidationError, match="does not match requested match_type"):
+        normalize_community_match_records(
+            bad_records,
+            expected_match_type="leagueMatch",
+            observed_at="2026-11-01T12:00:00Z",
+            alias_hmac_key=hmac_key,
+        )

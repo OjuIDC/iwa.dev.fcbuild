@@ -205,6 +205,13 @@ class FC27PseudonymCollisionError(FC27PrivacyError):
     """Raised when two distinct normalized source identities map to the same pseudonym."""
 
 
+class FC27FingerprintCollisionError(FC27PrivacyError):
+    """Raised when a player pseudonym or gamertag_hmac conflicts with an existing persisted mapping."""
+
+
+MIN_ALIAS_HMAC_KEY_BYTES: Final[int] = 32
+
+
 def reject_control_characters(value: str, *, field_name: str = "input") -> str:
     """Reject ASCII/Unicode control characters (including NUL, CR, LF, TAB)."""
     for ch in value:
@@ -246,6 +253,52 @@ def normalize_hmac_input(
     """Normalize an input string deterministically (NFC + casefold + collapsed whitespace) into UTF-8 bytes."""
     norm = normalize_whitespace_and_casefold(value, field_name=field_name, max_len=max_len)
     return norm.encode("utf-8")
+
+
+def compute_alias_hmac_fingerprint(
+    raw_identifier: Any,
+    hmac_key: bytes | str,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+) -> str:
+    """Compute a privacy-safe 64-character lowercase hex HMAC-SHA256 fingerprint for a raw player alias.
+
+    Normalizes the raw alias with Unicode NFC, control-character rejection, collapsed whitespace,
+    trimming, and casefolding before computing ``HMAC-SHA256``. Rejects already-pseudonymized
+    ``plr_ecf_<12hex>`` or ``mref_ecf_<12hex>`` tokens and never includes the plaintext alias or
+    key material in any error message.
+    """
+    if str(club_id).strip() != EAST_COASTERS_CLUB_ID:
+        raise FC27ValidationError("Unsupported club_id for East Coasters alias fingerprinting")
+    if not isinstance(raw_identifier, str):
+        raise FC27ValidationError("Raw player alias for HMAC fingerprint must be a string")
+
+    msg_bytes = normalize_hmac_input(
+        raw_identifier,
+        field_name="player_alias",
+        max_len=MAX_SAFE_TEXT_LENGTH,
+    )
+    norm_check = msg_bytes.decode("utf-8")
+    if PSEUDONYM_PLAYER_REF_RE.fullmatch(norm_check) or PSEUDONYM_MATCH_REF_RE.fullmatch(
+        norm_check
+    ):
+        raise FC27ValidationError(
+            "Cannot compute alias HMAC fingerprint from an already pseudonymized reference"
+        )
+
+    if isinstance(hmac_key, bytes):
+        key_bytes = hmac_key.strip(b" \t\r\n\x0b\x0c")
+    elif isinstance(hmac_key, str):
+        key_bytes = hmac_key.strip().encode("utf-8")
+    else:
+        raise FC27ValidationError("Alias HMAC key must be bytes or str")
+
+    if not key_bytes or len(key_bytes) < MIN_ALIAS_HMAC_KEY_BYTES:
+        raise FC27ValidationError(
+            "Alias HMAC key must contain at least 32 non-whitespace bytes"
+        )
+
+    return hmac.new(key_bytes, msg_bytes, hashlib.sha256).hexdigest().lower()
 
 
 def compare_digest_constant_time(expected_hex: str, actual_hex: str) -> bool:
@@ -712,6 +765,7 @@ __all__ = [
     "EAST_COASTERS_GAME_VERSION",
     "EAST_COASTERS_PLATFORM",
     "FC27ContractError",
+    "FC27FingerprintCollisionError",
     "FC27FormulaInjectionError",
     "FC27PrivacyError",
     "FC27PrivacyViolationError",
@@ -724,6 +778,7 @@ __all__ = [
     "HEX_SHA256_RE",
     "MAX_IDENTIFIER_LENGTH",
     "MAX_SAFE_TEXT_LENGTH",
+    "MIN_ALIAS_HMAC_KEY_BYTES",
     "POSTGRES_URI_SECRET_RE",
     "PRIVACY_POLICY_VERSION",
     "PROHIBITED_SENSITIVE_TOKENS",
@@ -745,6 +800,7 @@ __all__ = [
     "assert_no_sensitive_fields",
     "canonicalize_for_hashing",
     "compare_digest_constant_time",
+    "compute_alias_hmac_fingerprint",
     "compute_match_hash",
     "compute_payload_sha256",
     "contains_discord_mention",

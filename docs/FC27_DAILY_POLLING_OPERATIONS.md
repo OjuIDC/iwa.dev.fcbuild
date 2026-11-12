@@ -10,15 +10,16 @@ The East Coasters FC27 polling worker (`src/fc27_polling_worker.py`, `scripts/fc
 | --- | --- |
 | `POLL_INTERVAL_SECONDS` | `43200` (12 hours) |
 | `POLLING_FREQUENCY` | `ONCE_EVERY_12_HOURS` |
-| `MAX_PROVIDER_REQUESTS_PER_CYCLE` | `1` |
-| `MAX_PROVIDER_REQUESTS_PER_24_HOURS` | `2` |
+| `APPROVED_MATCH_TYPES` | `leagueMatch,playoffMatch,friendlyMatch` (deterministic rotation) |
+| `MAX_PROVIDER_REQUESTS_PER_CYCLE` | `1` (one match type per cycle) |
+| `MAX_PROVIDER_REQUESTS_PER_24_HOURS` | `2` (across all match types combined) |
 | `MAX_RETRIES_PER_CYCLE` | `0` |
 | `CATCH_UP_BURSTS_ALLOWED` | `false` |
 | `POLLING_ENABLED_DEFAULT` | `false` |
 
 ## Provider Window Continuity (`MAX_RESULTS=10`)
 
-Because the upstream community provider (`fc-clubs-api-community-v1`) fetches a maximum of `10` league matches per cycle (`match_type=leagueMatch`), if East Coasters plays more than 10 league matches between two 12-hour polls, matches older than the latest 10 could fall outside the provider window.
+Because the upstream community provider (`fc-clubs-api-community-v1`) fetches a maximum of `10` matches per cycle for the active rotation match type (`leagueMatch -> playoffMatch -> friendlyMatch -> leagueMatch`), if East Coasters plays more than 10 matches of that type between polls, matches older than the latest 10 could fall outside the provider window.
 
 `evaluate_provider_window_continuity(...)` compares the fetched match batch against the newest persisted match in PostgreSQL:
 - If all 10 fetched matches are new and the oldest fetched match is newer than the newest previously persisted match, the worker sets `possible_history_gap=true` and `history_gap_reason=PROVIDER_WINDOW_ROLLED_OVER_BETWEEN_12H_POLLS` without issuing extra provider requests.
