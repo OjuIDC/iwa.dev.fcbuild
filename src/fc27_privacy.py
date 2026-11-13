@@ -276,11 +276,12 @@ def normalize_hmac_input(
     collapsed = re.sub(r"\s+", " ", normalized_unicode).strip()
     if not collapsed:
         raise FC27ValidationError(f"Field '{field_name}' cannot be empty")
+    collapsed = collapsed.casefold()
     if len(collapsed) > max_len:
         raise FC27ValidationError(
             f"Field '{field_name}' exceeds maximum length of {max_len} characters"
         )
-    return collapsed.casefold().encode("utf-8")
+    return collapsed.encode("utf-8")
 
 
 def compute_alias_hmac_fingerprint(
