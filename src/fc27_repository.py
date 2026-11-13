@@ -10,16 +10,18 @@ Safety Invariants:
 - Player references must be pseudonymous; display aliases are never emitted to audit events.
 - Club identity records never grant or verify manager authority.
 """
+
 from __future__ import annotations
 
 import json
 import re
 import uuid
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Iterator, Literal, Mapping, Sequence
+from typing import Any, Final, Literal
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,12 +34,10 @@ from src.fc27_privacy import (
     EAST_COASTERS_CLUB_NAME,
     EAST_COASTERS_GAME_VERSION,
     EAST_COASTERS_PLATFORM,
+    FORMULA_PREFIXES,
+    PSEUDONYM_MATCH_REF_RE,
     FC27FingerprintCollisionError,
     FC27SensitiveFieldDetectedError,
-    FORMULA_PREFIXES,
-    HEX_SHA256_RE,
-    PSEUDONYM_MATCH_REF_RE,
-    PSEUDONYM_PLAYER_REF_RE,
     canonicalize_for_hashing,
     compare_digest_constant_time,
     compute_match_hash,
@@ -48,14 +48,16 @@ from src.fc27_privacy import (
     scan_for_sensitive_fields,
 )
 from src.schemas import (
-    ClubIdentityState,
     VALID_FC27_FORMATIONS,
     VALID_FC27_POSITIONS,
     VALID_FC27_ROLES,
+    ClubIdentityState,
 )
 
 SUPPORTED_CONTRACT_VERSION: str = "1.0.0"
 SUPPORTED_SCHEMA_VERSION: str = "1.0.0"
+POST_NEW_RESULTS_SCHEMA_VERSION: Final[str] = "fc27-post-new-results-v1"
+POST_NEW_RESULTS_EVENT_TYPE: Final[str] = "post_new_results"
 MAX_EXPORT_BYTES: int = 5242880  # 5 MiB
 MAX_EXPORT_MATCHES: int = 100
 CLOCK_SKEW_TOLERANCE_SECONDS: float = 300.0
@@ -83,7 +85,13 @@ class FC27SupplierAttestation(BaseModel):
     supplier_reference: str = Field(min_length=1, max_length=128)
     attested_at: datetime
     authority_scope: list[
-        Literal["CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"]
+        Literal[
+            "CLUB_IDENTITY",
+            "MATCH_RESULTS",
+            "LINEUPS",
+            "PLAYER_PERFORMANCE",
+            "BUILD_REFERENCES",
+        ]
     ]
     statement_version: str = Field(default="1.0.0", min_length=1, max_length=32)
 
@@ -91,19 +99,28 @@ class FC27SupplierAttestation(BaseModel):
     @classmethod
     def validate_no_pii_in_reference(cls, v: str) -> str:
         if "@" in v:
-            raise ValueError("supplier_reference must be pseudonymous; email addresses are prohibited")
+            raise ValueError(
+                "supplier_reference must be pseudonymous; email addresses are prohibited"
+            )
         lowered = v.lower()
         for term in ("password", "token", "secret", "bearer", "session", "cookie"):
             if term in lowered:
-                raise ValueError(f"prohibited secret term '{term}' in supplier_reference")
+                raise ValueError(
+                    f"prohibited secret term '{term}' in supplier_reference"
+                )
         return v
 
     @model_validator(mode="after")
     def validate_utc_and_baseline_scope(self) -> FC27SupplierAttestation:
         if self.attested_at.tzinfo is None:
             raise ValueError("attested_at must be timezone-aware UTC")
-        if "CLUB_IDENTITY" not in self.authority_scope or "MATCH_RESULTS" not in self.authority_scope:
-            raise ValueError("authority_scope must include at least 'CLUB_IDENTITY' and 'MATCH_RESULTS'")
+        if (
+            "CLUB_IDENTITY" not in self.authority_scope
+            or "MATCH_RESULTS" not in self.authority_scope
+        ):
+            raise ValueError(
+                "authority_scope must include at least 'CLUB_IDENTITY' and 'MATCH_RESULTS'"
+            )
         return self
 
 
@@ -115,7 +132,13 @@ class FC27ConsentAttestation(BaseModel):
     consent_version: str = Field(default="1.0.0", min_length=1, max_length=32)
     consented_at: datetime
     data_categories: list[
-        Literal["CLUB_IDENTITY", "MATCH_RESULTS", "LINEUPS", "PLAYER_PERFORMANCE", "BUILD_REFERENCES"]
+        Literal[
+            "CLUB_IDENTITY",
+            "MATCH_RESULTS",
+            "LINEUPS",
+            "PLAYER_PERFORMANCE",
+            "BUILD_REFERENCES",
+        ]
     ]
     retention_acknowledged: Literal[True] = True
     analytics_use_acknowledged: Literal[True] = True
@@ -130,8 +153,13 @@ class FC27ConsentAttestation(BaseModel):
             if self.revoked_at.tzinfo is None:
                 raise ValueError("revoked_at must be timezone-aware UTC")
             raise ValueError("consent has been explicitly revoked; import fails closed")
-        if "CLUB_IDENTITY" not in self.data_categories or "MATCH_RESULTS" not in self.data_categories:
-            raise ValueError("data_categories must include at least 'CLUB_IDENTITY' and 'MATCH_RESULTS'")
+        if (
+            "CLUB_IDENTITY" not in self.data_categories
+            or "MATCH_RESULTS" not in self.data_categories
+        ):
+            raise ValueError(
+                "data_categories must include at least 'CLUB_IDENTITY' and 'MATCH_RESULTS'"
+            )
         return self
 
 
@@ -140,12 +168,16 @@ class FC27SuppliedClubIdentity(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    club_id: str = Field(pattern=r"^[0-9]{1,20}$", description="Numeric club identifier")
+    club_id: str = Field(
+        pattern=r"^[0-9]{1,20}$", description="Numeric club identifier"
+    )
     club_name: str = Field(min_length=1, max_length=128)
     platform: Literal["common-gen5"] = "common-gen5"
     game_version: Literal["FC27", "fc27"] = "FC27"
     supplied_identity_state: ClubIdentityState = ClubIdentityState.PROVISIONAL
-    source_reference: str = Field(default="user_supplied_export", min_length=1, max_length=128)
+    source_reference: str = Field(
+        default="user_supplied_export", min_length=1, max_length=128
+    )
 
     @field_validator("club_id")
     @classmethod
@@ -184,14 +216,18 @@ class FC27SuppliedPlayerPerformance(BaseModel):
     @classmethod
     def validate_position_allowed(cls, v: str) -> str:
         if v != "UNKNOWN" and v not in VALID_FC27_POSITIONS:
-            raise ValueError(f"position '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_POSITIONS)}")
+            raise ValueError(
+                f"position '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_POSITIONS)}"
+            )
         return v
 
     @field_validator("role")
     @classmethod
     def validate_role_allowed(cls, v: str) -> str:
         if v != "UNKNOWN" and v not in VALID_FC27_ROLES:
-            raise ValueError(f"role '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_ROLES)}")
+            raise ValueError(
+                f"role '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_ROLES)}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -202,7 +238,9 @@ class FC27SuppliedPlayerPerformance(BaseModel):
                     f"passes_completed ({self.passes_completed}) cannot exceed passes_attempted ({self.passes_attempted})"
                 )
         elif self.passes_completed is not None and self.passes_attempted is None:
-            raise ValueError("passes_completed cannot be provided when passes_attempted is null")
+            raise ValueError(
+                "passes_completed cannot be provided when passes_attempted is null"
+            )
 
         if self.tackles_won is not None and self.tackles_attempted is not None:
             if self.tackles_won > self.tackles_attempted:
@@ -210,7 +248,9 @@ class FC27SuppliedPlayerPerformance(BaseModel):
                     f"tackles_won ({self.tackles_won}) cannot exceed tackles_attempted ({self.tackles_attempted})"
                 )
         elif self.tackles_won is not None and self.tackles_attempted is None:
-            raise ValueError("tackles_won cannot be provided when tackles_attempted is null")
+            raise ValueError(
+                "tackles_won cannot be provided when tackles_attempted is null"
+            )
 
         if self.shots_on_target is not None and self.shots is not None:
             if self.shots_on_target > self.shots:
@@ -235,18 +275,26 @@ class FC27SuppliedMatch(BaseModel):
     opponent_name: str = Field(min_length=1, max_length=128)
     formation: str = Field(default="UNKNOWN")
     lineup: list[str] = Field(default_factory=list, max_length=11)
-    player_performances: list[FC27SuppliedPlayerPerformance] = Field(default_factory=list, max_length=18)
+    player_performances: list[FC27SuppliedPlayerPerformance] = Field(
+        default_factory=list, max_length=18
+    )
     source_record_hash: str | None = None
     match_status: Literal["COMPLETED", "ABANDONED", "PARTIAL"] = "COMPLETED"
-    match_type: Literal["LEAGUE", "PLAYOFF", "FRIENDLY", "CUP", "PRACTICE", "UNKNOWN"] | None = None
+    match_type: (
+        Literal["LEAGUE", "PLAYOFF", "FRIENDLY", "CUP", "PRACTICE", "UNKNOWN"] | None
+    ) = None
     data_quality_status: Literal["PROVISIONAL", "VERIFIED", "INCOMPLETE"] | None = None
-    source_classification: Literal["USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"] | None = None
+    source_classification: (
+        Literal["USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"] | None
+    ) = None
 
     @field_validator("opponent_name")
     @classmethod
     def sanitize_opponent_name(cls, v: str) -> str:
         if any(v.startswith(p) for p in FORMULA_INJECTION_PREFIXES):
-            raise ValueError(f"opponent_name '{v}' begins with unsafe formula character")
+            raise ValueError(
+                f"opponent_name '{v}' begins with unsafe formula character"
+            )
         return v.strip()
 
     @field_validator("formation", mode="before")
@@ -255,7 +303,9 @@ class FC27SuppliedMatch(BaseModel):
         if v is None:
             return "UNKNOWN"
         if v != "UNKNOWN" and v not in VALID_FC27_FORMATIONS:
-            raise ValueError(f"formation '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_FORMATIONS)}")
+            raise ValueError(
+                f"formation '{v}' must be UNKNOWN or one of {sorted(VALID_FC27_FORMATIONS)}"
+            )
         return v
 
     @field_validator("lineup")
@@ -383,9 +433,13 @@ class FC27UserExportEnvelope(BaseModel):
 
         if has_lineups:
             if "LINEUPS" not in self.supplier_attestation.authority_scope:
-                raise FC27AttestationError("matches contain lineup data but supplier authority_scope lacks 'LINEUPS'")
+                raise FC27AttestationError(
+                    "matches contain lineup data but supplier authority_scope lacks 'LINEUPS'"
+                )
             if "LINEUPS" not in self.consent_attestation.data_categories:
-                raise FC27AttestationError("matches contain lineup data but consent data_categories lacks 'LINEUPS'")
+                raise FC27AttestationError(
+                    "matches contain lineup data but consent data_categories lacks 'LINEUPS'"
+                )
 
         if has_player_data:
             if "PLAYER_PERFORMANCE" not in self.supplier_attestation.authority_scope:
@@ -415,7 +469,9 @@ class FC27ImportState(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     processed_payload_hashes: set[str] = Field(default_factory=set)
-    existing_match_hashes: dict[str, str] = Field(default_factory=dict, description="match_id -> record_hash")
+    existing_match_hashes: dict[str, str] = Field(
+        default_factory=dict, description="match_id -> record_hash"
+    )
     club_identity_verified: bool = False
 
 
@@ -433,7 +489,9 @@ class FC27UserExportImportPlan(BaseModel):
     conflicting_match_ids: list[str] = Field(default_factory=list)
     rejected_records: list[dict[str, str]] = Field(default_factory=list)
     consent_status: Literal["VALID", "MISSING_CATEGORIES", "REVOKED", "EXPIRED"]
-    supplier_authority_status: Literal["AUTHORIZED", "SCOPE_INSUFFICIENT", "ROLE_UNAUTHORIZED"]
+    supplier_authority_status: Literal[
+        "AUTHORIZED", "SCOPE_INSUFFICIENT", "ROLE_UNAUTHORIZED"
+    ]
     sensitive_field_status: Literal["CLEAN", "SENSITIVE_DETECTED"]
     total_matches: int = 0
     analytics_eligible_matches: int = 0
@@ -477,10 +535,14 @@ def _reject_duplicate_json_keys(ordered_pairs: list[tuple[str, Any]]) -> dict[st
 
 
 def _reject_json_constants(val: str) -> None:
-    raise ValueError(f"disallowed JSON constant '{val}' detected; RFC 8259 compliance required")
+    raise ValueError(
+        f"disallowed JSON constant '{val}' detected; RFC 8259 compliance required"
+    )
 
 
-def _check_json_max_depth(obj: Any, current_depth: int = 1, max_depth: int = 20) -> None:
+def _check_json_max_depth(
+    obj: Any, current_depth: int = 1, max_depth: int = 20
+) -> None:
     if current_depth > max_depth:
         raise ValueError(f"JSON nesting depth exceeds maximum limit of {max_depth}")
     if isinstance(obj, dict):
@@ -500,19 +562,20 @@ def parse_fc27_user_export_json(
     evaluation_time: datetime | None = None,
 ) -> FC27UserExportEnvelope:
     """Parses and strictly validates a JSON persistence envelope entirely offline."""
-    now = evaluation_time or datetime.now(timezone.utc)
+    now = evaluation_time or datetime.now(UTC)
     raw_bytes = raw_input.encode("utf-8") if isinstance(raw_input, str) else raw_input
 
     if len(raw_bytes) > max_bytes:
-        raise ValueError(f"export payload size ({len(raw_bytes)} bytes) exceeds maximum limit ({max_bytes} bytes)")
+        raise ValueError(
+            f"export payload size ({len(raw_bytes)} bytes) exceeds maximum limit ({max_bytes} bytes)"
+        )
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"invalid UTF-8 encoding in export: {exc}")
 
-    if text.startswith("\ufeff"):
-        text = text[1:]
+    text = text.removeprefix("\ufeff")
 
     try:
         raw_dict = json.loads(
@@ -524,7 +587,9 @@ def parse_fc27_user_export_json(
         raise ValueError(f"invalid JSON structure: {exc}")
 
     if not isinstance(raw_dict, dict):
-        raise ValueError("top-level export must be a JSON object, arrays are forbidden")
+        raise ValueError(  # noqa: TRY004 - public parser contract raises ValueError
+            "top-level export must be a JSON object, arrays are forbidden"
+        )
 
     _check_json_max_depth(raw_dict)
 
@@ -534,10 +599,14 @@ def parse_fc27_user_export_json(
 
     cv = raw_dict.get("contract_version")
     if cv != expected_contract_version:
-        raise ValueError(f"unsupported contract_version '{cv}'; expected '{expected_contract_version}'")
+        raise ValueError(
+            f"unsupported contract_version '{cv}'; expected '{expected_contract_version}'"
+        )
     sv = raw_dict.get("schema_version")
     if sv != expected_schema_version:
-        raise ValueError(f"unsupported schema_version '{sv}'; expected '{expected_schema_version}'")
+        raise ValueError(
+            f"unsupported schema_version '{sv}'; expected '{expected_schema_version}'"
+        )
 
     claimed_sha = raw_dict.get("payload_sha256")
     if not claimed_sha:
@@ -551,9 +620,13 @@ def parse_fc27_user_export_json(
     envelope = FC27UserExportEnvelope.model_validate(raw_dict)
     max_allowed = now.timestamp() + CLOCK_SKEW_TOLERANCE_SECONDS
     if envelope.generated_at.timestamp() > max_allowed:
-        raise ValueError(f"generated_at ({envelope.generated_at.isoformat()}) is in the future beyond tolerance")
+        raise ValueError(
+            f"generated_at ({envelope.generated_at.isoformat()}) is in the future beyond tolerance"
+        )
     if envelope.supplied_at.timestamp() > max_allowed:
-        raise ValueError(f"supplied_at ({envelope.supplied_at.isoformat()}) is in the future beyond tolerance")
+        raise ValueError(
+            f"supplied_at ({envelope.supplied_at.isoformat()}) is in the future beyond tolerance"
+        )
     return envelope
 
 
@@ -575,14 +648,16 @@ def plan_fc27_user_export_import(
 
     if identity_state == ClubIdentityState.CONFLICTED:
         can_apply = False
-        diagnostics.append({
-            "code": "IDENTITY_CONFLICT",
-            "path": "club",
-            "detail": (
-                f"Supplied club ({envelope.club.club_id}, '{envelope.club.club_name}', '{envelope.club.platform}') "
-                "conflicts with expected East Coasters configuration"
-            ),
-        })
+        diagnostics.append(
+            {
+                "code": "IDENTITY_CONFLICT",
+                "path": "club",
+                "detail": (
+                    f"Supplied club ({envelope.club.club_id}, '{envelope.club.club_name}', '{envelope.club.platform}') "
+                    "conflicts with expected East Coasters configuration"
+                ),
+            }
+        )
 
     if envelope.payload_sha256 in state.processed_payload_hashes:
         for m in envelope.matches:
@@ -630,14 +705,16 @@ def plan_fc27_user_export_import(
             else:
                 conflicting_ids.append(mid)
                 can_apply = False
-                diagnostics.append({
-                    "code": "MATCH_RECORD_CONFLICT",
-                    "path": f"matches[{mid}]",
-                    "detail": (
-                        f"match data changed from previously imported hash '{existing_hash}' "
-                        f"to '{mhash}' without explicit versioning"
-                    ),
-                })
+                diagnostics.append(
+                    {
+                        "code": "MATCH_RECORD_CONFLICT",
+                        "path": f"matches[{mid}]",
+                        "detail": (
+                            f"match data changed from previously imported hash '{existing_hash}' "
+                            f"to '{mhash}' without explicit versioning"
+                        ),
+                    }
+                )
         else:
             accepted_ids.append(mid)
             if match.match_status == "COMPLETED":
@@ -773,7 +850,7 @@ def apply_fc27_user_export_plan(
             applied_count=0,
             detail=f"Repository error: {redact_conninfo(str(exc))}",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - sanitize and fail closed on any persistence error
         return FC27PersistenceResult(
             status="REJECTED",
             applied_count=0,
@@ -899,17 +976,33 @@ def build_export_envelope_for_persistence(
                     update={
                         "display_alias": None,
                         "role": _default_role_for_position(p.position),
-                        "minutes_played": p.minutes_played if p.minutes_played is not None else 90,
-                        "passes_attempted": p.passes_attempted if p.passes_attempted is not None else 0,
-                        "passes_completed": p.passes_completed if p.passes_completed is not None else 0,
-                        "tackles_attempted": p.tackles_attempted if p.tackles_attempted is not None else 0,
-                        "tackles_won": p.tackles_won if p.tackles_won is not None else 0,
-                        "interceptions": p.interceptions if p.interceptions is not None else 0,
+                        "minutes_played": p.minutes_played
+                        if p.minutes_played is not None
+                        else 90,
+                        "passes_attempted": p.passes_attempted
+                        if p.passes_attempted is not None
+                        else 0,
+                        "passes_completed": p.passes_completed
+                        if p.passes_completed is not None
+                        else 0,
+                        "tackles_attempted": p.tackles_attempted
+                        if p.tackles_attempted is not None
+                        else 0,
+                        "tackles_won": p.tackles_won
+                        if p.tackles_won is not None
+                        else 0,
+                        "interceptions": p.interceptions
+                        if p.interceptions is not None
+                        else 0,
                         "shots": p.shots if p.shots is not None else 0,
-                        "shots_on_target": p.shots_on_target if p.shots_on_target is not None else 0,
+                        "shots_on_target": p.shots_on_target
+                        if p.shots_on_target is not None
+                        else 0,
                         "saves": p.saves if p.saves is not None else 0,
                         "possession_losses": 2,
-                        "provider_rating": p.provider_rating if p.provider_rating is not None else 7.0,
+                        "provider_rating": p.provider_rating
+                        if p.provider_rating is not None
+                        else 7.0,
                         "build_reference": _default_build_for_position(p.position),
                     }
                 )
@@ -986,23 +1079,27 @@ def build_export_envelope_for_persistence(
 
 _build_export_envelope_for_persistence = build_export_envelope_for_persistence
 
-ALLOWED_ANOMALY_CATEGORIES: frozenset[str] = frozenset({
-    "VALIDATION_ANOMALY",
-    "SCHEMA_DRIFT",
-    "OUT_OF_RANGE_OBSERVATION",
-    "REPLAY_CONFLICT",
-    "INTEGRITY_MISMATCH",
-    "REVIEW_REQUIRED",
-    "SENSITIVE_FIELD_REJECTED",
-})
+ALLOWED_ANOMALY_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "VALIDATION_ANOMALY",
+        "SCHEMA_DRIFT",
+        "OUT_OF_RANGE_OBSERVATION",
+        "REPLAY_CONFLICT",
+        "INTEGRITY_MISMATCH",
+        "REVIEW_REQUIRED",
+        "SENSITIVE_FIELD_REJECTED",
+    }
+)
 
-ALLOWED_QUARANTINE_REVIEW_STATUSES: frozenset[str] = frozenset({
-    "PENDING_REVIEW",
-    "APPROVED_OVERRIDE",
-    "REJECTED_PERMANENT",
-    "RESOLVED",
-    "EXPIRED",
-})
+ALLOWED_QUARANTINE_REVIEW_STATUSES: frozenset[str] = frozenset(
+    {
+        "PENDING_REVIEW",
+        "APPROVED_OVERRIDE",
+        "REJECTED_PERMANENT",
+        "RESOLVED",
+        "EXPIRED",
+    }
+)
 
 DEFAULT_QUARANTINE_RETENTION_DAYS: int = 30
 _SAFE_DIAGNOSTIC_PATH_RE = re.compile(r"^[a-zA-Z0-9_.\[\]-]{1,128}$")
@@ -1055,7 +1152,6 @@ class FC27DiscordJobEnqueueResult(BaseModel):
     existing_equivalent_count: int = Field(default=0, ge=0)
     conflict_count: int = Field(default=0, ge=0)
     enqueued_job_ids: tuple[int, ...] = ()
-
 
 
 class FC27QuarantineRecordResult(BaseModel):
@@ -1147,7 +1243,9 @@ class FC27ExportApplyResult(BaseModel):
 
 
 @contextmanager
-def _managed_connection(conn_or_uri: psycopg.Connection | str | Any) -> Iterator[psycopg.Connection]:
+def _managed_connection(
+    conn_or_uri: psycopg.Connection | str | Any,
+) -> Iterator[psycopg.Connection]:
     """Yields a psycopg.Connection from an existing Connection, a conninfo URI, or a ConnectionPool."""
     if isinstance(conn_or_uri, psycopg.Connection):
         yield conn_or_uri
@@ -1156,7 +1254,9 @@ def _managed_connection(conn_or_uri: psycopg.Connection | str | Any) -> Iterator
         try:
             conn = psycopg.connect(conn_or_uri, connect_timeout=5)
         except Exception as exc:
-            raise FC27RepositoryError(f"database connection failed: {redact_conninfo(str(exc))}") from exc
+            raise FC27RepositoryError(
+                f"database connection failed: {redact_conninfo(str(exc))}"
+            ) from exc
         with conn:
             yield conn
         return
@@ -1227,7 +1327,7 @@ def _build_safe_event_reason(
         "quarantine_count": int(quarantine_count),
         "reason_code": str(reason_code),
         "source_classification": str(source_classification),
-        "timestamp": recorded_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": recorded_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -1241,17 +1341,16 @@ def load_existing_match_hashes(
 ) -> dict[str, str]:
     """Loads persisted {external_match_id: match_hash} for a club/platform/game_version scope."""
     norm_version = game_version.upper()
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT external_match_id, match_hash
                 FROM public.fc27_matches
                 WHERE club_id = %s AND platform = %s AND game_version = %s
                 """,
-                (club_id, platform, norm_version),
-            )
-            return {str(row[0]): str(row[1]) for row in cur.fetchall()}
+            (club_id, platform, norm_version),
+        )
+        return {str(row[0]): str(row[1]) for row in cur.fetchall()}
 
 
 def load_processed_payload_hashes(
@@ -1263,17 +1362,16 @@ def load_processed_payload_hashes(
 ) -> set[str]:
     """Loads persisted export batch payload_sha256 values for a club/platform/game_version scope."""
     norm_version = game_version.upper()
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT payload_sha256
                 FROM public.fc27_export_batches
                 WHERE club_id = %s AND platform = %s AND game_version = %s
                 """,
-                (club_id, platform, norm_version),
-            )
-            return {str(row[0]) for row in cur.fetchall()}
+            (club_id, platform, norm_version),
+        )
+        return {str(row[0]) for row in cur.fetchall()}
 
 
 def load_import_state(
@@ -1285,38 +1383,37 @@ def load_import_state(
 ) -> FC27ImportState:
     """Loads an FC27ImportState snapshot from PostgreSQL for import planning."""
     norm_version = game_version.upper()
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT payload_sha256
                 FROM public.fc27_export_batches
                 WHERE club_id = %s AND platform = %s AND game_version = %s
                 """,
-                (club_id, platform, norm_version),
-            )
-            payload_hashes = {str(r[0]) for r in cur.fetchall()}
+            (club_id, platform, norm_version),
+        )
+        payload_hashes = {str(r[0]) for r in cur.fetchall()}
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 SELECT external_match_id, match_hash
                 FROM public.fc27_matches
                 WHERE club_id = %s AND platform = %s AND game_version = %s
                 """,
-                (club_id, platform, norm_version),
-            )
-            match_hashes = {str(r[0]): str(r[1]) for r in cur.fetchall()}
+            (club_id, platform, norm_version),
+        )
+        match_hashes = {str(r[0]): str(r[1]) for r in cur.fetchall()}
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 SELECT identity_state
                 FROM public.fc27_clubs
                 WHERE club_id = %s AND platform = %s AND game_version = %s
                 """,
-                (club_id, platform, norm_version),
-            )
-            club_row = cur.fetchone()
-            verified = bool(club_row and club_row[0] == ClubIdentityState.VERIFIED.value)
+            (club_id, platform, norm_version),
+        )
+        club_row = cur.fetchone()
+        verified = bool(club_row and club_row[0] == ClubIdentityState.VERIFIED.value)
 
     return FC27ImportState(
         processed_payload_hashes=payload_hashes,
@@ -1330,10 +1427,9 @@ def fetch_export_batch_status(
     export_id: str,
 ) -> FC27ExportBatchStatus | None:
     """Fetches the persisted metadata status of an export batch by export_id."""
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT
                     export_id, club_id, platform, game_version,
                     contract_version, schema_version, source_classification,
@@ -1344,31 +1440,31 @@ def fetch_export_batch_status(
                 FROM public.fc27_export_batches
                 WHERE export_id = %s
                 """,
-                (export_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-            categories = row[10] if isinstance(row[10], list) else json.loads(row[10])
-            return FC27ExportBatchStatus(
-                export_id=row[0],
-                club_id=row[1],
-                platform=row[2],
-                game_version=row[3],
-                contract_version=row[4],
-                schema_version=row[5],
-                source_classification=row[6],
-                supplier_role=row[7],
-                supplier_reference=row[8],
-                consent_version=row[9],
-                consented_categories=[str(c) for c in categories],
-                payload_sha256=row[11],
-                total_matches=int(row[12]),
-                accepted_matches=int(row[13]),
-                quarantined_matches=int(row[14]),
-                applied_at=row[15],
-                created_at=row[16],
-            )
+            (export_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        categories = row[10] if isinstance(row[10], list) else json.loads(row[10])
+        return FC27ExportBatchStatus(
+            export_id=row[0],
+            club_id=row[1],
+            platform=row[2],
+            game_version=row[3],
+            contract_version=row[4],
+            schema_version=row[5],
+            source_classification=row[6],
+            supplier_role=row[7],
+            supplier_reference=row[8],
+            consent_version=row[9],
+            consented_categories=[str(c) for c in categories],
+            payload_sha256=row[11],
+            total_matches=int(row[12]),
+            accepted_matches=int(row[13]),
+            quarantined_matches=int(row[14]),
+            applied_at=row[15],
+            created_at=row[16],
+        )
 
 
 def _insert_quarantine_row_in_tx(
@@ -1401,7 +1497,7 @@ def _insert_quarantine_row_in_tx(
         raise ValueError("record_hash must be lowercase 64-character hex when provided")
 
     clean_paths = _sanitize_diagnostic_paths(diagnostic_paths)
-    now = quarantined_at or datetime.now(timezone.utc)
+    now = quarantined_at or datetime.now(UTC)
     exp = expires_at or (now + timedelta(days=DEFAULT_QUARANTINE_RETENTION_DAYS))
     norm_version = game_version.upper()
     db_source_classification = (
@@ -1555,10 +1651,14 @@ def review_quarantine_record(
         raise ValueError(f"invalid review_status '{review_status}'")
     clean_reviewer = reviewed_by.strip()
     if not clean_reviewer or len(clean_reviewer) > 128 or "@" in clean_reviewer:
-        raise ValueError("reviewed_by must be a non-empty pseudonymous identifier without email syntax")
+        raise ValueError(
+            "reviewed_by must be a non-empty pseudonymous identifier without email syntax"
+        )
     if review_notes is not None:
         if len(review_notes) > 500 or "@" in review_notes:
-            raise ValueError("review_notes must be <= 500 characters and must not contain email addresses")
+            raise ValueError(
+                "review_notes must be <= 500 characters and must not contain email addresses"
+            )
         lowered_notes = review_notes.lower()
         for prohibited in (
             "password",
@@ -1576,7 +1676,7 @@ def review_quarantine_record(
             if prohibited in lowered_notes:
                 raise ValueError(f"prohibited term '{prohibited}' in review_notes")
     corr_id = correlation_id or uuid.uuid4()
-    now = reviewed_at or datetime.now(timezone.utc)
+    now = reviewed_at or datetime.now(UTC)
 
     with _managed_connection(conn_or_uri) as conn:
         if enforce_posture:
@@ -1595,14 +1695,23 @@ def review_quarantine_record(
                       AND expires_at > %s
                     RETURNING club_id, platform, game_version, export_id, source_classification, reason_code
                     """,
-                    (review_status, clean_reviewer, now, review_notes, quarantine_id, now),
+                    (
+                        review_status,
+                        clean_reviewer,
+                        now,
+                        review_notes,
+                        quarantine_id,
+                        now,
+                    ),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise FC27RepositoryError(
                         f"quarantine record '{quarantine_id}' not found, already reviewed, or expired"
                     )
-                club_id, platform, game_version, export_id, source_cls, reason_code = row
+                club_id, platform, game_version, export_id, source_cls, reason_code = (
+                    row
+                )
 
             event_reason = _build_safe_event_reason(
                 export_id=export_id,
@@ -1640,7 +1749,7 @@ def purge_expired_quarantine_records(
     enforce_posture: bool = True,
 ) -> FC27QuarantinePurgeResult:
     """Purges expired quarantine records via the owner-owned SECURITY DEFINER function and emits fc27.quarantine.expired."""
-    eval_now = now or datetime.now(timezone.utc)
+    eval_now = now or datetime.now(UTC)
     corr_id = correlation_id or uuid.uuid4()
     purged_ids: list[str] = []
     event_ids: list[int] = []
@@ -1702,80 +1811,73 @@ def purge_expired_quarantine_records(
     )
 
 
-def _validate_discord_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validates that a Discord job payload is metadata-only, privacy-safe, and within 4096 bytes."""
-    required_keys = {
-        "club_id",
-        "export_id",
-        "game_version",
-        "goals_against",
-        "goals_for",
-        "match_hash",
-        "match_ref",
-        "match_type",
-        "opponent_name",
-        "platform",
-        "played_at",
-        "result",
-    }
-    actual_keys = set(payload.keys())
-    if not required_keys.issubset(actual_keys):
-        missing = sorted(required_keys - actual_keys)
-        raise ValueError(f"post_new_results payload missing required keys: {missing}")
-    extra_keys = actual_keys - required_keys
-    if extra_keys:
-        raise ValueError(f"post_new_results payload contains unsupported keys: {sorted(extra_keys)}")
+class FC27PostNewResultsPayload(BaseModel):
+    """Minimal, versioned ``post_new_results`` queue payload.
 
-    sensitive_paths = scan_for_sensitive_fields(dict(payload))
-    if sensitive_paths:
+    A future consumer loads authoritative match details from PostgreSQL by ``match_ref``.
+    The payload therefore carries only durable, privacy-safe identifiers and never
+    duplicated match results, mutable opponent labels, raw provider data, or secrets.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["fc27-post-new-results-v1"]
+    event_type: Literal["post_new_results"]
+    match_ref: str = Field(min_length=1, max_length=64)
+    club_id: str = Field(min_length=1, max_length=64)
+    platform: str = Field(min_length=1, max_length=32)
+    game_version: str = Field(min_length=1, max_length=16)
+    match_type: str = Field(min_length=1, max_length=32)
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the ordered JSON-serializable payload mapping."""
+        return {
+            "schema_version": self.schema_version,
+            "event_type": self.event_type,
+            "match_ref": self.match_ref,
+            "club_id": self.club_id,
+            "platform": self.platform,
+            "game_version": self.game_version,
+            "match_type": self.match_type,
+        }
+
+
+POST_NEW_RESULTS_PAYLOAD_KEYS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "event_type",
+    "match_ref",
+    "club_id",
+    "platform",
+    "game_version",
+    "match_type",
+)
+
+
+def _validate_discord_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the minimal versioned ``post_new_results`` payload and return it normalized.
+
+    Rejects any missing, additional, or malformed field, sensitive content, Discord
+    mentions, prohibited URLs, and payloads above 4096 bytes.
+    """
+    actual_keys = set(payload.keys())
+    required_keys = set(POST_NEW_RESULTS_PAYLOAD_KEYS)
+    if actual_keys != required_keys:
+        missing = sorted(required_keys - actual_keys)
+        extra = sorted(actual_keys - required_keys)
+        raise ValueError(
+            f"post_new_results payload keys invalid; missing={missing} extra={extra}"
+        )
+
+    normalized = FC27PostNewResultsPayload.model_validate(dict(payload)).to_payload()
+
+    if scan_for_sensitive_fields(normalized):
         raise ValueError("prohibited sensitive fields detected in Discord job payload")
 
-    match_ref = str(payload["match_ref"]).strip()
-    if not PSEUDONYM_MATCH_REF_RE.fullmatch(match_ref):
-        raise ValueError("match_ref in Discord job payload must be a pseudonymized match reference")
+    if not PSEUDONYM_MATCH_REF_RE.fullmatch(normalized["match_ref"]):
+        raise ValueError(
+            "match_ref in Discord job payload must be a pseudonymized match reference"
+        )
 
-    match_hash = str(payload["match_hash"]).strip()
-    if not HEX_SHA256_RE.fullmatch(match_hash):
-        raise ValueError("match_hash in Discord job payload must be lowercase 64-character hex")
-
-    club_id = str(payload["club_id"]).strip()
-    platform = str(payload["platform"]).strip()
-    game_version = str(payload["game_version"]).strip().upper()
-    match_type = str(payload["match_type"]).strip()
-    played_at = str(payload["played_at"]).strip()
-    result = str(payload["result"]).strip()
-    opponent_name = str(payload["opponent_name"]).strip()
-    export_id = str(payload["export_id"]).strip()
-    goals_for = int(payload["goals_for"])
-    goals_against = int(payload["goals_against"])
-    if (
-        not club_id
-        or not platform
-        or not game_version
-        or not match_type
-        or not played_at
-        or not result
-        or not opponent_name
-        or not export_id
-        or goals_for < 0
-        or goals_against < 0
-    ):
-        raise ValueError("Discord job payload metadata fields must be valid and non-empty")
-
-    normalized: dict[str, Any] = {
-        "club_id": club_id,
-        "export_id": export_id,
-        "game_version": game_version,
-        "goals_against": goals_against,
-        "goals_for": goals_for,
-        "match_hash": match_hash,
-        "match_ref": match_ref,
-        "match_type": match_type,
-        "opponent_name": opponent_name,
-        "platform": platform,
-        "played_at": played_at,
-        "result": result,
-    }
     serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     if len(serialized.encode("utf-8")) > 4096:
         raise ValueError("Discord job payload exceeds 4096-byte limit")
@@ -1788,27 +1890,18 @@ def _discord_job_payloads_equivalent(
     existing_payload: Mapping[str, Any],
     expected_payload: Mapping[str, Any],
 ) -> bool:
-    """Checks whether an existing post_new_results job payload is equivalent to expected_payload.
+    """Return True only when the complete canonical versioned payloads are identical.
 
-    Compares all match identity and result fields while allowing export_id or match_type casing
-    to reflect the initial batch that persisted the match.
+    Deterministic canonical JSON makes key order irrelevant while treating any missing
+    field, additional field, changed field value, changed type, or changed schema version
+    as materially different.
     """
-    invariant_keys = (
-        "club_id",
-        "game_version",
-        "goals_against",
-        "goals_for",
-        "match_hash",
-        "match_ref",
-        "opponent_name",
-        "platform",
-        "played_at",
-        "result",
-    )
-    for k in invariant_keys:
-        if existing_payload.get(k) != expected_payload.get(k):
-            return False
-    return True
+    try:
+        existing = canonicalize_for_hashing(dict(existing_payload))
+        expected = canonicalize_for_hashing(dict(expected_payload))
+    except (TypeError, ValueError):
+        return False
+    return existing == expected
 
 
 def persist_player_alias_fingerprints_in_tx(
@@ -1827,7 +1920,7 @@ def persist_player_alias_fingerprints_in_tx(
     if not observations:
         return FC27FingerprintPersistenceResult()
 
-    now = (observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (observed_at or datetime.now(UTC)).astimezone(UTC)
     normalized_obs: list[FC27AliasFingerprintObservation] = []
     for item in observations:
         if isinstance(item, FC27AliasFingerprintObservation):
@@ -1840,7 +1933,9 @@ def persist_player_alias_fingerprints_in_tx(
                 )
             )
         else:
-            raise ValueError("unsupported alias fingerprint observation type")
+            raise ValueError(  # noqa: TRY004 - public parser contract raises ValueError
+                "unsupported alias fingerprint observation type"
+            )
 
     seen_by_pseudonym: dict[str, str] = {}
     seen_by_hmac: dict[str, str] = {}
@@ -1850,7 +1945,9 @@ def persist_player_alias_fingerprints_in_tx(
     for obs in normalized_obs:
         existing_hmac = seen_by_pseudonym.get(obs.pseudonym)
         existing_pseudo = seen_by_hmac.get(obs.gamertag_hmac)
-        if existing_hmac is not None and not compare_digest_constant_time(existing_hmac, obs.gamertag_hmac):
+        if existing_hmac is not None and not compare_digest_constant_time(
+            existing_hmac, obs.gamertag_hmac
+        ):
             raise FC27FingerprintCollisionError(
                 f"in-batch fingerprint collision for pseudonym {obs.pseudonym}"
             )
@@ -1898,7 +1995,9 @@ def persist_player_alias_fingerprints_in_tx(
 
             db_pseudo = str(rows[0][0])
             db_hmac = str(rows[0][1])
-            if db_pseudo != obs.pseudonym or not compare_digest_constant_time(db_hmac, obs.gamertag_hmac):
+            if db_pseudo != obs.pseudonym or not compare_digest_constant_time(
+                db_hmac, obs.gamertag_hmac
+            ):
                 raise FC27FingerprintCollisionError(
                     f"persisted fingerprint collision detected for pseudonym {obs.pseudonym}"
                 )
@@ -1945,38 +2044,39 @@ def fetch_player_alias_fingerprints(
     conn_or_uri: psycopg.Connection | str | Any,
 ) -> list[dict[str, Any]]:
     """Fetches persisted player alias fingerprint rows ordered by pseudonym."""
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT pseudonym, gamertag_hmac, last_seen_at, created_at, updated_at
                 FROM public.fc27_player_alias_fingerprints
                 ORDER BY pseudonym ASC
                 """
-            )
-            return [
-                {
-                    "pseudonym": str(row[0]),
-                    "gamertag_hmac": str(row[1]),
-                    "last_seen_at": row[2],
-                    "created_at": row[3],
-                    "updated_at": row[4],
-                }
-                for row in cur.fetchall()
-            ]
+        )
+        return [
+            {
+                "pseudonym": str(row[0]),
+                "gamertag_hmac": str(row[1]),
+                "last_seen_at": row[2],
+                "created_at": row[3],
+                "updated_at": row[4],
+            }
+            for row in cur.fetchall()
+        ]
 
 
 def _build_post_new_results_payload(
     match: FC27SuppliedMatch,
     *,
-    match_hash: str,
     club_id: str,
     platform: str,
     game_version: str,
-    export_id: str,
     match_type_override: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Builds `(idempotency_key, normalized_payload)` for a `post_new_results` Discord job."""
+    """Build ``(idempotency_key, normalized_payload)`` for a ``post_new_results`` Discord job.
+
+    The payload is intentionally minimal and versioned: a consumer must load authoritative
+    match details from PostgreSQL by ``match_ref``.
+    """
     raw_mid = str(match.external_match_id).strip()
     match_ref = (
         raw_mid
@@ -1984,21 +2084,18 @@ def _build_post_new_results_payload(
         else pseudonymize_match_ref(raw_mid, club_id=club_id)
     )
     idempotency_key = f"fc27:post_new_results:{match_ref}"
-    eff_match_type = str(match_type_override or match.match_type or "leagueMatch").strip()
+    eff_match_type = str(
+        match_type_override or match.match_type or "leagueMatch"
+    ).strip()
     payload = _validate_discord_job_payload(
         {
-            "club_id": club_id,
-            "export_id": export_id,
-            "game_version": game_version.upper(),
-            "goals_against": int(match.goals_against),
-            "goals_for": int(match.goals_for),
-            "match_hash": match_hash,
+            "schema_version": POST_NEW_RESULTS_SCHEMA_VERSION,
+            "event_type": POST_NEW_RESULTS_EVENT_TYPE,
             "match_ref": match_ref,
-            "match_type": eff_match_type,
-            "opponent_name": str(match.opponent_name),
+            "club_id": club_id,
             "platform": platform,
-            "played_at": match.played_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "result": str(match.result),
+            "game_version": game_version.upper(),
+            "match_type": eff_match_type,
         }
     )
     return idempotency_key, payload
@@ -2026,21 +2123,19 @@ def enqueue_post_new_results_jobs_in_tx(
         `existing_equivalent_count` without inserting or mutating the existing job.
       - Otherwise raises `FC27JobIdempotencyConflictError` to abort the transaction.
     """
-    now = (enqueued_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (enqueued_at or datetime.now(UTC)).astimezone(UTC)
     norm_version = game_version.upper()
     inserted_count = 0
     existing_equivalent_count = 0
     enqueued_ids: list[int] = []
 
     with conn.cursor() as cur:
-        for match, mhash in accepted_matches:
+        for match, _match_hash in accepted_matches:
             idempotency_key, expected_payload = _build_post_new_results_payload(
                 match,
-                match_hash=mhash,
                 club_id=club_id,
                 platform=platform,
                 game_version=norm_version,
-                export_id=export_id,
                 match_type_override=match_type_override,
             )
             cur.execute(
@@ -2060,11 +2155,14 @@ def enqueue_post_new_results_jobs_in_tx(
                     if isinstance(raw_db_payload, Mapping)
                     else json.loads(str(raw_db_payload))
                 )
-                if db_job_type != "post_new_results" or not _discord_job_payloads_equivalent(
-                    db_payload, expected_payload
+                if (
+                    db_job_type != "post_new_results"
+                    or not _discord_job_payloads_equivalent(
+                        db_payload, expected_payload
+                    )
                 ):
                     raise FC27JobIdempotencyConflictError(
-                        f"conflicting Discord job already exists for idempotency_key '{idempotency_key}'"
+                        "conflicting post_new_results payload for existing idempotency key"
                     )
                 existing_equivalent_count += 1
                 continue
@@ -2092,14 +2190,12 @@ def enqueue_post_new_results_jobs_in_tx(
             enqueued_ids.append(int(inserted_row[0]))
             inserted_count += 1
 
-        for match, mhash in duplicate_matches:
+        for match, _match_hash in duplicate_matches:
             idempotency_key, expected_payload = _build_post_new_results_payload(
                 match,
-                match_hash=mhash,
                 club_id=club_id,
                 platform=platform,
                 game_version=norm_version,
-                export_id=export_id,
                 match_type_override=match_type_override,
             )
             cur.execute(
@@ -2119,11 +2215,14 @@ def enqueue_post_new_results_jobs_in_tx(
                     if isinstance(raw_db_payload, Mapping)
                     else json.loads(str(raw_db_payload))
                 )
-                if db_job_type != "post_new_results" or not _discord_job_payloads_equivalent(
-                    db_payload, expected_payload
+                if (
+                    db_job_type != "post_new_results"
+                    or not _discord_job_payloads_equivalent(
+                        db_payload, expected_payload
+                    )
                 ):
                     raise FC27JobIdempotencyConflictError(
-                        f"conflicting Discord job already exists for idempotency_key '{idempotency_key}'"
+                        "conflicting post_new_results payload for existing idempotency key"
                     )
                 existing_equivalent_count += 1
 
@@ -2170,10 +2269,9 @@ def fetch_discord_jobs(
     conn_or_uri: psycopg.Connection | str | Any,
 ) -> list[dict[str, Any]]:
     """Fetches persisted Discord job rows ordered by job_id ascending."""
-    with _managed_connection(conn_or_uri) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT
                     job_id, job_type, idempotency_key, payload, state,
                     attempt_count, available_at, claimed_at, claim_owner,
@@ -2181,34 +2279,34 @@ def fetch_discord_jobs(
                 FROM public.fc27_discord_jobs
                 ORDER BY job_id ASC
                 """
+        )
+        results: list[dict[str, Any]] = []
+        for row in cur.fetchall():
+            raw_payload = row[3]
+            payload_dict = (
+                dict(raw_payload)
+                if isinstance(raw_payload, Mapping)
+                else json.loads(str(raw_payload))
             )
-            results: list[dict[str, Any]] = []
-            for row in cur.fetchall():
-                raw_payload = row[3]
-                payload_dict = (
-                    dict(raw_payload)
-                    if isinstance(raw_payload, Mapping)
-                    else json.loads(str(raw_payload))
-                )
-                results.append(
-                    {
-                        "id": int(row[0]),
-                        "job_id": int(row[0]),
-                        "job_type": str(row[1]),
-                        "idempotency_key": str(row[2]),
-                        "payload": payload_dict,
-                        "state": str(row[4]),
-                        "attempt_count": int(row[5]),
-                        "available_at": row[6],
-                        "claimed_at": row[7],
-                        "claim_owner": row[8],
-                        "lease_expires_at": row[9],
-                        "last_error_category": row[10],
-                        "created_at": row[11],
-                        "completed_at": row[12],
-                    }
-                )
-            return results
+            results.append(
+                {
+                    "id": int(row[0]),
+                    "job_id": int(row[0]),
+                    "job_type": str(row[1]),
+                    "idempotency_key": str(row[2]),
+                    "payload": payload_dict,
+                    "state": str(row[4]),
+                    "attempt_count": int(row[5]),
+                    "available_at": row[6],
+                    "claimed_at": row[7],
+                    "claim_owner": row[8],
+                    "lease_expires_at": row[9],
+                    "last_error_category": row[10],
+                    "created_at": row[11],
+                    "completed_at": row[12],
+                }
+            )
+        return results
 
 
 def apply_export_plan(
@@ -2221,7 +2319,8 @@ def apply_export_plan(
     enforce_posture: bool = True,
     quarantine_conflicts: bool = True,
     source_classification_override: Literal["AUTHORIZED_CAPTURE"] | None = None,
-    alias_fingerprints: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]] | None = None,
+    alias_fingerprints: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]]
+    | None = None,
     enqueue_discord_jobs: bool = False,
     match_type_override: str | None = None,
     emit_domain_events: bool = True,
@@ -2247,15 +2346,20 @@ def apply_export_plan(
     club_id = envelope.club.club_id
     platform = envelope.club.platform
     game_version = envelope.game_version.upper()
-    if source_classification_override is not None and source_classification_override != "AUTHORIZED_CAPTURE":
-        raise FC27RepositoryError(f"unsupported source_classification_override '{source_classification_override}'")
+    if (
+        source_classification_override is not None
+        and source_classification_override != "AUTHORIZED_CAPTURE"
+    ):
+        raise FC27RepositoryError(
+            f"unsupported source_classification_override '{source_classification_override}'"
+        )
     source_cls = source_classification_override or envelope.source_classification
     db_source_cls = (
         "USER_SUPPLIED_EXPORT"
         if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA"
         else source_cls
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Pre-check sensitive fields on dumped envelope as defense-in-depth
     sensitive_paths = scan_for_sensitive_fields(envelope.model_dump())
@@ -2370,11 +2474,13 @@ def apply_export_plan(
                 processed_payload_hashes=processed_payload_hashes,
                 existing_match_hashes=existing_match_hashes,
             )
-            revalidated_plan = plan_fc27_user_export_import(envelope, existing_state=locked_state)
+            revalidated_plan = plan_fc27_user_export_import(
+                envelope, existing_state=locked_state
+            )
 
             # Check per-match hashes for any replay conflict (even if payload_sha256 is new)
-            conflicting_matches: list[ tuple[int, FC27SuppliedMatch, str] ] = []
-            accepted_matches: list[ tuple[FC27SuppliedMatch, str] ] = []
+            conflicting_matches: list[tuple[int, FC27SuppliedMatch, str]] = []
+            accepted_matches: list[tuple[FC27SuppliedMatch, str]] = []
             duplicate_matches: list[str] = []
             duplicate_match_tuples: list[tuple[FC27SuppliedMatch, str]] = []
 
@@ -2436,7 +2542,9 @@ def apply_export_plan(
                     accepted_records=0,
                     duplicate_records=len(duplicate_matches),
                     quarantined_records=len(q_ids),
-                    replay_conflict=bool(conflicting_matches or (plan and plan.conflicting_match_ids)),
+                    replay_conflict=bool(
+                        conflicting_matches or (plan and plan.conflicting_match_ids)
+                    ),
                     quarantine_ids=q_ids,
                     domain_event_ids=ev_ids,
                     correlation_id=str(corr_id),
@@ -2609,7 +2717,11 @@ def apply_export_plan(
                     if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA":
                         dq_status = "PROVISIONAL"
                     else:
-                        dq_status = "VERIFIED" if match.match_status == "COMPLETED" else "PROVISIONAL"
+                        dq_status = (
+                            "VERIFIED"
+                            if match.match_status == "COMPLETED"
+                            else "PROVISIONAL"
+                        )
                     cur.execute(
                         """
                         INSERT INTO public.fc27_matches (
@@ -2668,7 +2780,11 @@ def apply_export_plan(
                             raise FC27RepositoryError(
                                 "cannot persist player performance row with null required SQL metric"
                             )
-                        safe_alias = None if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA" else perf.display_alias
+                        safe_alias = (
+                            None
+                            if source_cls == "OPERATOR_CAPTURED_DISPLAYED_DATA"
+                            else perf.display_alias
+                        )
                         cur.execute(
                             """
                             INSERT INTO public.fc27_player_match_stats (

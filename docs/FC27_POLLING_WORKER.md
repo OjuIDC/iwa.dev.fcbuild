@@ -118,3 +118,55 @@ docker compose -f docker-compose.yml -f docker-compose.community-worker.yml `
 `/fc27 status` (`src/fc27_discord_bot.py`) exposes read-only polling health and repository metadata (`polling_enabled`, `worker_running`, `last_attempt_at`, `last_success_at`, `last_new_match_at`, `last_status`, `consecutive_failures`, `circuit_state`, `next_eligible_at`, `total_matches_inserted`, `total_duplicates_ignored`, `total_replay_conflicts`, `continuity_status`, `database_available`, `persisted_match_count`, `latest_match_timestamp`, `manual_match_results_available`).
 
 The Discord bot provides no command or button to trigger live polling (`DISCORD_PROVIDER_REQUESTS=0`).
+
+---
+
+## 7. C1 Activation Prerequisites: Alias-HMAC Contract and Queue Payload
+
+### 7.1 Versioned alias-HMAC normalization
+
+Player-alias fingerprinting is a purpose-specific contract, distinct from ordinary display-label and pseudonym normalization (which remains NFC-based). The authoritative version is `ALIAS_HMAC_NORMALIZATION_VERSION = "fc27-alias-hmac-nfkc-v1"` (`src/fc27_privacy.py`).
+
+`compute_alias_hmac_fingerprint` performs, in order:
+
+1. require a string input;
+2. Unicode NFKC normalization;
+3. rejection of prohibited control characters;
+4. trimming leading and trailing whitespace;
+5. collapse of internal whitespace runs to one ASCII space;
+6. Unicode casefold;
+7. enforcement of the bounded maximum length;
+8. UTF-8 encoding;
+9. `HMAC-SHA256` with the configured alias-HMAC key (minimum 32 bytes);
+10. exactly 64 lowercase hexadecimal characters.
+
+The transformation is explicitly versioned because fingerprints persisted under an earlier contract would otherwise become silently incomparable. The version is a stable, non-dynamically-derived constant and is safe to persist only as metadata when a version distinction is required. Normalized aliases, plaintext aliases, and key material are never logged or included in exceptions. The retained `fc27_player_alias_fingerprints` table was empty at remediation time, so no fingerprint data migration was required and no schema change was made.
+
+### 7.2 Minimal versioned `post_new_results` payload
+
+Each new match enqueues one job whose payload is the minimal, explicitly versioned reference below:
+
+| Field | Value |
+|---|---|
+| `schema_version` | `fc27-post-new-results-v1` |
+| `event_type` | `post_new_results` |
+| `match_ref` | privacy-safe `mref_ecf_<12hex>` match reference |
+| `club_id` | club scope |
+| `platform` | platform scope |
+| `game_version` | game-version scope |
+| `match_type` | approved match type for the poll cycle |
+
+Duplicated or mutable fields previously carried for consumer convenience (`export_id`, `played_at`, `match_hash`, `opponent_name`, `goals_for`, `goals_against`, `result`) were removed. A future consumer must load authoritative match details from PostgreSQL by `match_ref`; the scoping fields (`club_id`, `platform`, `game_version`) are retained so the reference cannot become ambiguous. Every payload is validated by the typed payload model and the authoritative sensitive-field scanner before insertion, and must remain within the 4096-byte bound.
+
+### 7.3 Canonical complete-payload idempotency
+
+For an existing `fc27_discord_jobs` row sharing the deterministic idempotency key, equivalence compares `job_type` and the complete canonical versioned payload using deterministic canonical JSON (sorted keys, compact separators). Key order is irrelevant; any missing field, additional field, changed value, changed type, or changed schema version is materially different.
+
+A materially different payload raises `FC27JobIdempotencyConflictError` with a bounded safe category that contains neither payload nor sensitive identifiers. The complete poll transaction rolls back: the match, player-stat rows, alias fingerprints, export batch/checkpoint, and Discord job are all abandoned, and the existing queue row is left unchanged. Existing jobs are never updated, replaced, or deleted to force equivalence. The polling worker remains producer-only: it does not claim, consume, complete, fail, retry, or delete jobs.
+
+### 7.4 Operational prerequisites (not satisfied by this document)
+
+- **Credential rotation remains required operationally before activation** because credentials were exposed during a readiness diagnostic run. This document does not record, repeat, or identify any exposed value, and rotation is not performed by this change.
+- Live polling remains disabled by default; the retained community worker and Discord bot remain stopped.
+- The retained development database remains at migration `0014` with Grants Policy Version `16` until the activation-readiness gate is repeated.
+- This change does not assert activation readiness; the C1 activation-readiness gate must be re-run and pass before any bounded live poll is separately authorized.

@@ -24,7 +24,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final
 
 from src.fc27_provider import FC27ProviderError, FC27TransportError
@@ -36,6 +36,7 @@ class FC27ValidationError(FC27ProviderError):
 
 class FC27PrivacyViolationError(FC27ProviderError):
     """Raised when a privacy or sensitive-field invariant is violated."""
+
 
 PRIVACY_POLICY_VERSION: Final[str] = "fc27-privacy-v1"
 EAST_COASTERS_CLUB_ID: Final[str] = "330323"
@@ -181,13 +182,17 @@ class FC27PrivacyError(FC27PrivacyViolationError):
 class FC27SensitiveFieldDetectedError(FC27PrivacyError):
     """Raised when one or more prohibited sensitive keys or values are detected."""
 
-    def __init__(self, paths_or_message: list[str] | str, paths: list[str] | None = None) -> None:
+    def __init__(
+        self, paths_or_message: list[str] | str, paths: list[str] | None = None
+    ) -> None:
         if isinstance(paths_or_message, str):
             raw_paths = paths or []
             safe_paths = [str(p)[:128] for p in raw_paths[:20]]
             self.paths = safe_paths
             super().__init__(
-                f"{paths_or_message}: {', '.join(safe_paths)}" if safe_paths else paths_or_message
+                f"{paths_or_message}: {', '.join(safe_paths)}"
+                if safe_paths
+                else paths_or_message
             )
         else:
             safe_paths = [str(p)[:128] for p in paths_or_message[:20]]
@@ -210,6 +215,13 @@ class FC27FingerprintCollisionError(FC27PrivacyError):
 
 
 MIN_ALIAS_HMAC_KEY_BYTES: Final[int] = 32
+
+# Stable, purpose-specific alias-HMAC normalization contract version. This value is
+# persisted with fingerprint/job metadata only when a version distinction is required;
+# it must never be derived dynamically. Changing the transformation below requires a
+# new version identifier because previously stored fingerprints would otherwise become
+# silently incomparable.
+ALIAS_HMAC_NORMALIZATION_VERSION: Final[str] = "fc27-alias-hmac-nfkc-v1"
 
 
 def reject_control_characters(value: str, *, field_name: str = "input") -> str:
@@ -250,9 +262,26 @@ def normalize_hmac_input(
     field_name: str = "hmac_input",
     max_len: int = MAX_SAFE_TEXT_LENGTH,
 ) -> bytes:
-    """Normalize an input string deterministically (NFC + casefold + collapsed whitespace) into UTF-8 bytes."""
-    norm = normalize_whitespace_and_casefold(value, field_name=field_name, max_len=max_len)
-    return norm.encode("utf-8")
+    """Normalize alias-HMAC input under the versioned ``ALIAS_HMAC_NORMALIZATION_VERSION`` contract.
+
+    The contract is: Unicode NFKC, control-character rejection, trim, collapse internal
+    whitespace runs to one ASCII space, casefold, bounded length, UTF-8. This is deliberately
+    purpose-specific for alias fingerprinting and is not the display-label or pseudonym
+    normalization contract.
+    """
+    if not isinstance(value, str):
+        raise FC27ValidationError(f"Field '{field_name}' must be a string")
+    normalized_unicode = unicodedata.normalize("NFKC", value)
+    reject_control_characters(normalized_unicode, field_name=field_name)
+    collapsed = re.sub(r"\s+", " ", normalized_unicode).strip()
+    if not collapsed:
+        raise FC27ValidationError(f"Field '{field_name}' cannot be empty")
+    collapsed = collapsed.casefold()
+    if len(collapsed) > max_len:
+        raise FC27ValidationError(
+            f"Field '{field_name}' exceeds maximum length of {max_len} characters"
+        )
+    return collapsed.encode("utf-8")
 
 
 def compute_alias_hmac_fingerprint(
@@ -263,15 +292,20 @@ def compute_alias_hmac_fingerprint(
 ) -> str:
     """Compute a privacy-safe 64-character lowercase hex HMAC-SHA256 fingerprint for a raw player alias.
 
-    Normalizes the raw alias with Unicode NFC, control-character rejection, collapsed whitespace,
-    trimming, and casefolding before computing ``HMAC-SHA256``. Rejects already-pseudonymized
+    Normalizes the raw alias under ``ALIAS_HMAC_NORMALIZATION_VERSION`` (Unicode NFKC,
+    control-character rejection, trimming, internal whitespace collapse, casefolding, bounded
+    length, UTF-8) before computing ``HMAC-SHA256``. Rejects already-pseudonymized
     ``plr_ecf_<12hex>`` or ``mref_ecf_<12hex>`` tokens and never includes the plaintext alias or
     key material in any error message.
     """
     if str(club_id).strip() != EAST_COASTERS_CLUB_ID:
-        raise FC27ValidationError("Unsupported club_id for East Coasters alias fingerprinting")
+        raise FC27ValidationError(
+            "Unsupported club_id for East Coasters alias fingerprinting"
+        )
     if not isinstance(raw_identifier, str):
-        raise FC27ValidationError("Raw player alias for HMAC fingerprint must be a string")
+        raise FC27ValidationError(
+            "Raw player alias for HMAC fingerprint must be a string"
+        )
 
     msg_bytes = normalize_hmac_input(
         raw_identifier,
@@ -279,9 +313,9 @@ def compute_alias_hmac_fingerprint(
         max_len=MAX_SAFE_TEXT_LENGTH,
     )
     norm_check = msg_bytes.decode("utf-8")
-    if PSEUDONYM_PLAYER_REF_RE.fullmatch(norm_check) or PSEUDONYM_MATCH_REF_RE.fullmatch(
+    if PSEUDONYM_PLAYER_REF_RE.fullmatch(
         norm_check
-    ):
+    ) or PSEUDONYM_MATCH_REF_RE.fullmatch(norm_check):
         raise FC27ValidationError(
             "Cannot compute alias HMAC fingerprint from an already pseudonymized reference"
         )
@@ -378,7 +412,9 @@ def scan_for_sensitive_fields(
 ) -> list[str]:
     """Recursively scan nested mappings and sequences for prohibited sensitive keys."""
     if _depth > MAX_SCAN_DEPTH:
-        raise FC27ValidationError(f"Payload nesting depth exceeds maximum of {MAX_SCAN_DEPTH}")
+        raise FC27ValidationError(
+            f"Payload nesting depth exceeds maximum of {MAX_SCAN_DEPTH}"
+        )
     found: list[str] = []
     if isinstance(payload, Mapping):
         for k, v in payload.items():
@@ -439,7 +475,9 @@ def pseudonymize_east_coasters_identifier(
         raise FC27ContractError(
             "Pseudonymization is scoped exclusively to East Coasters (330323)"
         )
-    text = unicodedata.normalize("NFC", str(raw_identifier if raw_identifier is not None else "")).strip()
+    text = unicodedata.normalize(
+        "NFC", str(raw_identifier if raw_identifier is not None else "")
+    ).strip()
     if not text:
         raise FC27SchemaValidationError("Player source identifier cannot be empty")
     if len(text) > MAX_SAFE_TEXT_LENGTH:
@@ -450,7 +488,9 @@ def pseudonymize_east_coasters_identifier(
     if PSEUDONYM_PLAYER_REF_RE.fullmatch(text):
         return text
     normalized_token = re.sub(r"\s+", " ", text).strip().casefold()
-    domain_bytes = f"fc27-ecf-{EAST_COASTERS_CLUB_ID}-player-v1:{normalized_token}".encode("utf-8")
+    domain_bytes = (
+        f"fc27-ecf-{EAST_COASTERS_CLUB_ID}-player-v1:{normalized_token}".encode()
+    )
     digest12 = hashlib.sha256(domain_bytes).hexdigest()[:12]
     return f"plr_ecf_{digest12}"
 
@@ -461,7 +501,9 @@ def pseudonymize_match_ref(
     club_id: str = EAST_COASTERS_CLUB_ID,
 ) -> str:
     """Deterministically pseudonymize an external match identifier into `mref_ecf_<12hex>`."""
-    raw = unicodedata.normalize("NFC", str(external_match_id if external_match_id is not None else "")).strip()
+    raw = unicodedata.normalize(
+        "NFC", str(external_match_id if external_match_id is not None else "")
+    ).strip()
     if not raw:
         raise FC27ValidationError("external_match_id cannot be empty")
     if len(raw) > MAX_IDENTIFIER_LENGTH:
@@ -473,7 +515,7 @@ def pseudonymize_match_ref(
         return raw
     clean_club = str(club_id or EAST_COASTERS_CLUB_ID).strip()
     digest12 = hashlib.sha256(
-        f"fc27-ecf-{clean_club}-match-v1:{raw}".encode("utf-8")
+        f"fc27-ecf-{clean_club}-match-v1:{raw}".encode()
     ).hexdigest()[:12]
     return f"mref_ecf_{digest12}"
 
@@ -511,7 +553,9 @@ class FC27PseudonymCollisionDetector:
         token_basis = re.sub(r"\s+", " ", cleaned).strip().casefold()
         source_sha = hashlib.sha256(token_basis.encode("utf-8")).hexdigest()
         existing_sha = self._pseudonym_to_source_sha256.get(pseudonym)
-        if existing_sha is not None and not hmac.compare_digest(existing_sha, source_sha):
+        if existing_sha is not None and not hmac.compare_digest(
+            existing_sha, source_sha
+        ):
             raise FC27PseudonymCollisionError(
                 "PSEUDONYM_COLLISION: batch rejected for human review"
             )
@@ -522,7 +566,9 @@ class FC27PseudonymCollisionDetector:
         if not PSEUDONYM_PLAYER_REF_RE.fullmatch(str(pseudonym)):
             raise FC27PrivacyError("Invalid pseudonym format; expected plr_ecf_<12hex>")
         token_basis = (
-            re.sub(r"\s+", " ", unicodedata.normalize("NFC", source_token)).strip().casefold()
+            re.sub(r"\s+", " ", unicodedata.normalize("NFC", source_token))
+            .strip()
+            .casefold()
             if source_token is not None
             else pseudonym
         )
@@ -547,11 +593,12 @@ class FC27PseudonymCollisionDetector:
 def canonicalize_for_hashing(obj: Any) -> str:
     """Produce a deterministic canonical JSON string for SHA-256 hashing."""
     from enum import Enum
+
     from pydantic import BaseModel
 
     def _default(o: Any) -> Any:
         if isinstance(o, datetime):
-            utc_dt = o.astimezone(timezone.utc) if o.tzinfo else o.replace(tzinfo=timezone.utc)
+            utc_dt = o.astimezone(UTC) if o.tzinfo else o.replace(tzinfo=UTC)
             return utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         if isinstance(o, Enum):
             return o.value
@@ -584,7 +631,11 @@ def compute_match_hash(
     source_classification: str = "USER_SUPPLIED_EXPORT",
 ) -> str:
     """Compute a deterministic SHA-256 record hash for a match with club/platform/version scoping."""
-    optional_operator_fields = ("match_type", "data_quality_status", "source_classification")
+    optional_operator_fields = (
+        "match_type",
+        "data_quality_status",
+        "source_classification",
+    )
     if hasattr(match_data, "model_dump"):
         d = match_data.model_dump(exclude={"source_record_hash"})
         for k in optional_operator_fields:
@@ -649,7 +700,9 @@ def normalize_identifier(
     max_len: int = MAX_IDENTIFIER_LENGTH,
 ) -> str:
     """Validate and normalize an ASCII identifier (`[A-Za-z0-9_.:-]+`)."""
-    cleaned = validate_safe_text(value, field_name, max_len=max_len, reject_formula=True)
+    cleaned = validate_safe_text(
+        value, field_name, max_len=max_len, reject_formula=True
+    )
     if not SAFE_IDENTIFIER_RE.fullmatch(cleaned):
         raise FC27ValidationError(
             f"Field '{field_name}' contains invalid identifier characters"
@@ -677,11 +730,15 @@ def normalize_display_label(
     """Validate a bounded safe display label, suppressing Discord mentions and rejecting URLs/formulas."""
     cleaned = validate_safe_text(text, field_name, max_len=max_len, reject_formula=True)
     if contains_discord_mention(cleaned):
-        raise FC27PrivacyError(f"Field '{field_name}' contains a prohibited Discord mention")
+        raise FC27PrivacyError(
+            f"Field '{field_name}' contains a prohibited Discord mention"
+        )
     if contains_prohibited_url(cleaned):
         raise FC27PrivacyError(f"Field '{field_name}' contains a prohibited URL")
     if POSTGRES_URI_SECRET_RE.search(cleaned):
-        raise FC27PrivacyError(f"Field '{field_name}' contains a prohibited connection URI")
+        raise FC27PrivacyError(
+            f"Field '{field_name}' contains a prohibited connection URI"
+        )
     return re.sub(r"\s+", " ", cleaned)
 
 
@@ -689,7 +746,9 @@ def validate_safe_display_alias(alias: str | None) -> str | None:
     """Validate an optional local display alias without permitting sensitive tokens or formulas."""
     if alias is None:
         return None
-    cleaned = validate_safe_text(alias, "display_alias", max_len=48, reject_formula=True)
+    cleaned = validate_safe_text(
+        alias, "display_alias", max_len=48, reject_formula=True
+    )
     if not SAFE_DISPLAY_ALIAS_RE.fullmatch(cleaned):
         raise FC27ValidationError(
             "display_alias may only contain letters, digits, spaces, underscores, dots, or hyphens (1-48 chars)"
@@ -731,7 +790,9 @@ def contains_prohibited_url(text: str) -> bool:
 def reject_prohibited_url(text: str, *, field_name: str = "text") -> str:
     """Raise `FC27PrivacyError` if text contains a prohibited URL token."""
     if contains_prohibited_url(text):
-        raise FC27PrivacyError(f"Field '{field_name}' contains a prohibited external URL")
+        raise FC27PrivacyError(
+            f"Field '{field_name}' contains a prohibited external URL"
+        )
     return text
 
 
@@ -759,21 +820,12 @@ def redact_sensitive_text(
 
 
 __all__ = [
+    "ALIAS_HMAC_NORMALIZATION_VERSION",
     "DISCORD_MENTION_RE",
     "EAST_COASTERS_CLUB_ID",
     "EAST_COASTERS_CLUB_NAME",
     "EAST_COASTERS_GAME_VERSION",
     "EAST_COASTERS_PLATFORM",
-    "FC27ContractError",
-    "FC27FingerprintCollisionError",
-    "FC27FormulaInjectionError",
-    "FC27PrivacyError",
-    "FC27PrivacyViolationError",
-    "FC27PseudonymCollisionDetector",
-    "FC27PseudonymCollisionError",
-    "FC27SchemaValidationError",
-    "FC27SensitiveFieldDetectedError",
-    "FC27ValidationError",
     "FORMULA_PREFIXES",
     "HEX_SHA256_RE",
     "MAX_IDENTIFIER_LENGTH",
@@ -789,6 +841,16 @@ __all__ = [
     "SAFE_DISPLAY_ALIAS_RE",
     "SAFE_IDENTIFIER_RE",
     "URL_TOKEN_RE",
+    "FC27ContractError",
+    "FC27FingerprintCollisionError",
+    "FC27FormulaInjectionError",
+    "FC27PrivacyError",
+    "FC27PrivacyViolationError",
+    "FC27PseudonymCollisionDetector",
+    "FC27PseudonymCollisionError",
+    "FC27SchemaValidationError",
+    "FC27SensitiveFieldDetectedError",
+    "FC27ValidationError",
     "_canonicalize_for_hashing",
     "_is_sensitive_key",
     "_normalize_club_name",

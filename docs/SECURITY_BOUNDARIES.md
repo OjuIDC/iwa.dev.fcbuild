@@ -50,6 +50,11 @@ This document is the authoritative security boundary specification for `iwa.dev.
 - **Kill Switch**: Controlled by `APPROVAL_CLI_HMAC_ENABLED` (`False` by default in `src/settings.py`; historical `src/graph_api.py` superseded in Stage B3).
 - **Canonical Payload**: Signs RFC-8785 canonical JSON over `SIGNED_FIELDS` (`thread_id`, `decision`, `owner`, `selection`, `candidate_id`, `player_id`, `notes`, `package_version`, `nonce`, `issued_at`, `expires_at`).
 
+### 3.3 FC27 Player-Alias Fingerprinting (C1 Revenue Path)
+- **Purpose-Specific, Versioned Contract**: `compute_alias_hmac_fingerprint` (`src/fc27_privacy.py`) applies the stable, non-dynamically-derived `ALIAS_HMAC_NORMALIZATION_VERSION = "fc27-alias-hmac-nfkc-v1"` contract: Unicode NFKC, control-character rejection, trim, internal whitespace collapse, casefold, bounded length, UTF-8, then `HMAC-SHA256` producing 64 lowercase hex characters. Ordinary display-label and pseudonym normalization remains NFC-based and is not interchangeable with this contract.
+- **No Leakage**: Normalized aliases, plaintext aliases, and key material are never logged or included in exception messages.
+- **Producer-Only Queue**: The `fc27_discord_jobs` `post_new_results` payload is the minimal versioned reference `fc27-post-new-results-v1` (`schema_version`, `event_type`, `match_ref`, `club_id`, `platform`, `game_version`, `match_type`). Idempotency compares the complete canonical payload; any material difference aborts the whole poll transaction. `fc27_poll_writer` can `SELECT` and `INSERT` jobs but cannot claim, complete, update, or delete them.
+
 ---
 
 ## 4. Single-Transaction Evidence Binding & Lock Hierarchy
