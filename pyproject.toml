@@ -57,6 +57,8 @@ markers = [
 [tool.pyrefly]
 disable-search-path-heuristics = true
 search-path = ["."]
+# Optional runtime extras installed only in their container/test environments.
+ignore-missing-imports = ["discord", "discord.*", "pandas"]
 
 [tool.pyright]
 extraPaths = ["."]

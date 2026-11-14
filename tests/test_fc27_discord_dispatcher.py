@@ -7,8 +7,9 @@ import json
 import sys
 import time
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 import pytest
@@ -65,6 +66,16 @@ ALLOWED_GUILD_ID = "123456789012345678"
 ALLOWED_CHANNEL_ID = "234567890123456789"
 ALLOWED_ROLE_ID = "345678901234567890"
 
+
+
+def _fetch_one(
+    conn: psycopg.Connection[Any],
+    query: LiteralString,
+    params: tuple[Any, ...] | None = None,
+) -> tuple[Any, ...]:
+    row = conn.execute(query, params).fetchone()
+    assert row is not None, f"expected exactly one row for query: {query.strip()}"
+    return row
 
 def _seed_worker_matches_and_jobs(
     monkeypatch: pytest.MonkeyPatch,
@@ -151,9 +162,7 @@ def test_01_default_disabled_fails_closed(
     assert transport.sent_messages == []
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        pending_count = conn.execute(
-            "SELECT COUNT(*) FROM public.fc27_discord_jobs WHERE state = 'pending'"
-        ).fetchone()[0]
+        pending_count = _fetch_one(conn, "SELECT COUNT(*) FROM public.fc27_discord_jobs WHERE state = 'pending'")[0]
     assert pending_count == 2
 
 
@@ -345,8 +354,7 @@ def test_07_end_to_end_five_pending_jobs_from_worker_dispatched_and_idempotent(
 
     # Verify persisted DB rows transitioned cleanly to completed
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT job_id, state, claim_owner, claimed_at, lease_expires_at,
                    attempt_count, last_error_category, completed_at
             FROM public.fc27_discord_jobs
@@ -505,9 +513,7 @@ def test_10_expired_lease_recovery_and_completion(
     assert len(transport.sent_messages) == 1
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        state, attempts, err_cat = conn.execute(
-            "SELECT state, attempt_count, last_error_category FROM public.fc27_discord_jobs"
-        ).fetchone()
+        state, attempts, err_cat = _fetch_one(conn, "SELECT state, attempt_count, last_error_category FROM public.fc27_discord_jobs")
     assert state == "completed"
     assert attempts == 2
     assert err_cat is None
@@ -572,9 +578,7 @@ def test_11_restart_after_send_idempotency_prevents_duplicate_post(
     assert len(transport.sent_messages) == 1
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        state, attempts = conn.execute(
-            "SELECT state, attempt_count FROM public.fc27_discord_jobs"
-        ).fetchone()
+        state, attempts = _fetch_one(conn, "SELECT state, attempt_count FROM public.fc27_discord_jobs")
     assert state == "completed"
     assert attempts == 2
 
@@ -608,12 +612,10 @@ def test_12_transient_discord_failure_retries_with_backoff_then_succeeds(
     assert res1.audit_entries[-1].error_category == "DISCORD_RATE_LIMITED"
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        state, err_cat, attempts, future_avail = conn.execute(
-            """
+        state, err_cat, attempts, future_avail = _fetch_one(conn, """
             SELECT state, last_error_category, attempt_count, (available_at > clock_timestamp())
             FROM public.fc27_discord_jobs
-            """
-        ).fetchone()
+            """)
     assert state == "pending"
     assert err_cat == "DISCORD_RATE_LIMITED"
     assert attempts == 1
@@ -645,9 +647,7 @@ def test_12_transient_discord_failure_retries_with_backoff_then_succeeds(
     assert len(transport.sent_messages) == 1
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        state, err_cat, attempts = conn.execute(
-            "SELECT state, last_error_category, attempt_count FROM public.fc27_discord_jobs"
-        ).fetchone()
+        state, err_cat, attempts = _fetch_one(conn, "SELECT state, last_error_category, attempt_count FROM public.fc27_discord_jobs")
     assert state == "completed"
     assert err_cat is None
     assert attempts == 2
@@ -669,8 +669,7 @@ def test_13_exhausted_retry_ceiling_marks_failed_permanently(
             (j1,),
         )
         # Job 2: claimed at attempt_count = 10 with short lease that expires before cleanup
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE public.fc27_discord_jobs
             SET state = 'claimed',
                 claim_owner = 'old-worker',
@@ -706,14 +705,8 @@ def test_13_exhausted_retry_ceiling_marks_failed_permanently(
     assert res.messages_sent == 0
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        row1 = conn.execute(
-            "SELECT state, last_error_category, attempt_count, claim_owner FROM public.fc27_discord_jobs WHERE job_id = %s",
-            (j1,),
-        ).fetchone()
-        row2 = conn.execute(
-            "SELECT state, last_error_category, attempt_count, claim_owner FROM public.fc27_discord_jobs WHERE job_id = %s",
-            (j2,),
-        ).fetchone()
+        row1 = _fetch_one(conn, "SELECT state, last_error_category, attempt_count, claim_owner FROM public.fc27_discord_jobs WHERE job_id = %s", (j1,))
+        row2 = _fetch_one(conn, "SELECT state, last_error_category, attempt_count, claim_owner FROM public.fc27_discord_jobs WHERE job_id = %s", (j2,))
     assert row1 == ("failed", "DISCORD_TRANSIENT_FAILURE", 10, None)
     assert row2 == ("failed", "LEASE_EXPIRED_MAX_ATTEMPTS", 10, None)
 
@@ -748,13 +741,11 @@ def test_14_unknown_job_type_left_untouched_and_audited_without_crash(
     assert skipped[0].job_type == "evaluate_suggestions"
 
     with psycopg.connect(pg_db_migrated.discord_reader) as conn:
-        eval_row = conn.execute(
-            """
+        eval_row = _fetch_one(conn, """
             SELECT state, attempt_count, claim_owner, last_error_category
             FROM public.fc27_discord_jobs
             WHERE job_type = 'evaluate_suggestions'
-            """
-        ).fetchone()
+            """)
     assert eval_row == ("pending", 0, None, None)
 
 
@@ -764,8 +755,7 @@ def test_15_malformed_or_boundary_violating_payload_fails_closed(
     """Malformed, cross-club, sensitive-key, or mismatched-idempotency payloads fail closed without breaking sibling jobs."""
     bad_mref = pseudonymize_match_ref("996099", club_id=EAST_COASTERS_CLUB_ID)
     with psycopg.connect(pg_db_migrated.poll_writer) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO public.fc27_discord_jobs (job_type, idempotency_key, payload, state)
             VALUES
               ('post_new_results', 'bad-empty', '{"unexpected":"payload"}'::jsonb, 'pending'),
@@ -920,9 +910,7 @@ def test_18_privacy_and_output_sanitization_zero_pii_or_secrets(
     _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=996301)
 
     with psycopg.connect(pg_db_migrated.admin) as conn:
-        match_id, raw_ext_id, raw_export_id = conn.execute(
-            "SELECT match_id::text, external_match_id, export_id FROM public.fc27_matches LIMIT 1"
-        ).fetchone()
+        match_id, raw_ext_id, raw_export_id = _fetch_one(conn, "SELECT match_id::text, external_match_id, export_id FROM public.fc27_matches LIMIT 1")
         conn.execute(
             "UPDATE public.fc27_matches SET opponent_name = 'Rival @everyone FC'",
         )
@@ -1011,11 +999,11 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
             super().__init__(404)
 
     fake_discord = types.ModuleType("discord")
-    fake_discord.Embed = _FakeEmbed
-    fake_discord.AllowedMentions = _FakeAllowedMentions
-    fake_discord.HTTPException = _FakeHTTPException
-    fake_discord.Forbidden = _FakeForbidden
-    fake_discord.NotFound = _FakeNotFound
+    setattr(fake_discord, "Embed", _FakeEmbed)
+    setattr(fake_discord, "AllowedMentions", _FakeAllowedMentions)
+    setattr(fake_discord, "HTTPException", _FakeHTTPException)
+    setattr(fake_discord, "Forbidden", _FakeForbidden)
+    setattr(fake_discord, "NotFound", _FakeNotFound)
     monkeypatch.setitem(sys.modules, "discord", fake_discord)
 
     class _FakeChannel:
@@ -1039,9 +1027,12 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
             self.sent.append(msg_obj)
             return msg_obj
 
-        async def history(self, *, limit: int = 50):
-            del limit
-            for m in reversed(self.sent):
+        async def history(self, *, limit: int | None = 50, after: Any = None):
+            del after
+            messages = list(reversed(self.sent))
+            if limit is not None:
+                messages = messages[:limit]
+            for m in messages:
                 yield m
 
     class _FakeClient:
@@ -1143,11 +1134,11 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
         dispatch_enabled=True,
     )
     fake_app_commands = types.SimpleNamespace()
-    fake_discord.app_commands = fake_app_commands
-    fake_discord.Intents = types.SimpleNamespace(none=lambda: types.SimpleNamespace(guilds=False))
-    fake_discord.Client = object
-    fake_discord.Object = lambda id: types.SimpleNamespace(id=id)
-    fake_discord.Interaction = object
+    setattr(fake_discord, "app_commands", fake_app_commands)
+    setattr(fake_discord, "Intents", types.SimpleNamespace(none=lambda: types.SimpleNamespace(guilds=False)))
+    setattr(fake_discord, "Client", object)
+    setattr(fake_discord, "Object", lambda id: types.SimpleNamespace(id=id))
+    setattr(fake_discord, "Interaction", object)
     with pytest.raises(FC27DiscordError):
         run_discord_gateway_bot(bot_cfg, token="fake-token-1234567890")
 
@@ -1193,3 +1184,350 @@ def test_20_cli_status_and_compose_dispatcher_contract(
     assert "FC27_DISCORD_MAX_JOBS_PER_CYCLE=5" in example_env
     assert "FC27_DISCORD_LEASE_MINUTES=5" in example_env
     assert "FC27_DISCORD_SINGLE_FLIGHT=true" in example_env
+
+
+def test_21_gateway_history_is_time_bounded_and_timed_out_sends_are_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery scans paginate back to job creation and transport failures/timeouts defer instead of duplicating."""
+
+    class _FakeHTTPException(Exception):
+        def __init__(self, status: int = 0, *, retry_after: float | None = None) -> None:
+            super().__init__(f"HTTP {status}")
+            self.status = status
+            self.retry_after = retry_after
+
+    class _FakeForbidden(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(403)
+
+    class _FakeNotFound(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(404)
+
+    class _FakeEmbed:
+        def __init__(self, *, title: str, description: str) -> None:
+            self.title = title
+            self.description = description
+            self.fields: list[Any] = []
+            self.footer = None
+
+        def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
+            self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
+
+        def set_footer(self, *, text: str) -> None:
+            self.footer = types.SimpleNamespace(text=text)
+
+    class _FakeAllowedMentions:
+        @classmethod
+        def none(cls) -> _FakeAllowedMentions:
+            return cls()
+
+    fake_discord = types.ModuleType("discord")
+    setattr(fake_discord, "Embed", _FakeEmbed)
+    setattr(fake_discord, "AllowedMentions", _FakeAllowedMentions)
+    setattr(fake_discord, "HTTPException", _FakeHTTPException)
+    setattr(fake_discord, "Forbidden", _FakeForbidden)
+    setattr(fake_discord, "NotFound", _FakeNotFound)
+    monkeypatch.setitem(sys.modules, "discord", fake_discord)
+
+    created = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    match_ref = "mref_ecf_000000000777"
+    bot_id = 111222333
+    unrelated = [
+        types.SimpleNamespace(
+            id=str(i),
+            author=types.SimpleNamespace(id=bot_id),
+            content=f"other {i}",
+            embeds=[],
+        )
+        for i in range(60)
+    ]
+    matching = types.SimpleNamespace(
+        id="999",
+        author=types.SimpleNamespace(id=bot_id),
+        content="",
+        embeds=[
+            types.SimpleNamespace(
+                footer=types.SimpleNamespace(text=f"ref:{match_ref}"),
+                description="",
+                fields=[],
+            )
+        ],
+    )
+
+    class _Channel:
+        def __init__(
+            self,
+            *,
+            error: Exception | None = None,
+            cancel_flag: list[bool] | None = None,
+        ) -> None:
+            self.error = error
+            self.cancel_flag = cancel_flag
+            self.observed_limit: int | None = 50
+            self.observed_after: Any = None
+
+        async def history(self, *, limit: int | None = 50, after: Any = None):
+            self.observed_limit = limit
+            self.observed_after = after
+            if self.error is not None:
+                raise self.error
+            for msg in unrelated:
+                yield msg
+            yield matching
+
+        async def send(self, *, content: str, embed: Any, allowed_mentions: Any) -> Any:
+            assert allowed_mentions is not None
+            try:
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                if self.cancel_flag is not None:
+                    self.cancel_flag.append(True)
+                raise
+            return types.SimpleNamespace(id="1000")
+
+    class _FakeClient:
+        def __init__(self, channel: _Channel) -> None:
+            self.user = types.SimpleNamespace(id=bot_id)
+            self._channel = channel
+
+        def get_channel(self, cid: int) -> Any:
+            return self._channel if cid == int(RESULTS_CHANNEL_ID) else None
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        channel = _Channel()
+        transport = DiscordGatewayChannelTransport(
+            _FakeClient(channel), loop, timeout_seconds=2.0
+        )
+        found = await asyncio.to_thread(
+            transport.find_existing_notification,
+            channel_id=RESULTS_CHANNEL_ID,
+            match_ref=match_ref,
+            idempotency_key=f"fc27:post_new_results:{match_ref}",
+            not_before=created,
+        )
+        assert found == "999"
+        assert channel.observed_limit is None
+        assert channel.observed_after == created - timedelta(seconds=5)
+
+        forbidden_channel = _Channel(error=_FakeForbidden())
+        forbidden_transport = DiscordGatewayChannelTransport(
+            _FakeClient(forbidden_channel), loop, timeout_seconds=2.0
+        )
+        with pytest.raises(FC27DiscordDispatchTransportError) as history_err:
+            await asyncio.to_thread(
+                forbidden_transport.find_existing_notification,
+                channel_id=RESULTS_CHANNEL_ID,
+                match_ref=match_ref,
+                idempotency_key=f"fc27:post_new_results:{match_ref}",
+                not_before=created,
+            )
+        assert history_err.value.category == "DISCORD_HISTORY_FORBIDDEN"
+        assert history_err.value.retryable is True
+
+        cancelled: list[bool] = []
+        slow_channel = _Channel(cancel_flag=cancelled)
+        slow_transport = DiscordGatewayChannelTransport(
+            _FakeClient(slow_channel), loop, timeout_seconds=0.05
+        )
+        message = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key=f"fc27:post_new_results:{match_ref}",
+            match_ref=match_ref,
+            content="Test notification",
+            embed=__import__("src.fc27_discord_bot", fromlist=["FC27DiscordEmbed"]).FC27DiscordEmbed(
+                title="East Coasters — WIN 2 - 0 vs Test FC",
+                description="Test summary",
+                fields={"Match Reference": f"`{match_ref}`"},
+            ),
+        )
+        with pytest.raises(FC27DiscordDispatchTransportError) as send_err:
+            await asyncio.to_thread(
+                slow_transport.send_notification,
+                channel_id=RESULTS_CHANNEL_ID,
+                message=message,
+            )
+        assert send_err.value.category == "DISCORD_TIMEOUT"
+        assert send_err.value.retryable is True
+        await asyncio.sleep(0.1)
+        assert cancelled == [True]
+
+    asyncio.run(_run())
+
+
+def test_22_history_lookup_failure_defers_delivery_instead_of_duplicating(
+    monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+) -> None:
+    """A failed recovery history lookup releases the job for retry and never publishes blindly."""
+    _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=996601)
+    with psycopg.connect(pg_db_migrated.player_dev_writer) as conn:
+        conn.execute(
+            "UPDATE public.fc27_discord_jobs SET attempt_count = 1, state = 'pending'"
+        )
+        conn.commit()
+
+    class _FailingHistoryTransport(SyntheticDiscordNotificationTransport):
+        def find_existing_notification(
+            self,
+            *,
+            channel_id: str,
+            match_ref: str,
+            idempotency_key: str,
+            not_before: datetime | None = None,
+        ) -> str | None:
+            del channel_id, match_ref, idempotency_key, not_before
+            raise FC27DiscordDispatchTransportError(
+                "history unavailable",
+                category="DISCORD_HISTORY_LOOKUP_FAILED",
+                retryable=True,
+            )
+
+    transport = _FailingHistoryTransport()
+    res = run_discord_dispatch_cycle(
+        config=_enabled_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert res.jobs_claimed == 1
+    assert res.jobs_retried == 1
+    assert res.messages_sent == 0
+    assert transport.sent_messages == []
+    assert res.audit_entries[-1].action == "RETRIED_PENDING"
+    assert res.audit_entries[-1].error_category == "DISCORD_HISTORY_LOOKUP_FAILED"
+
+    with psycopg.connect(pg_db_migrated.discord_reader) as conn:
+        state, err_cat, attempts = _fetch_one(conn, "SELECT state, last_error_category, attempt_count FROM public.fc27_discord_jobs")
+    assert state == "pending"
+    assert err_cat == "DISCORD_HISTORY_LOOKUP_FAILED"
+    assert attempts == 2
+
+
+def test_23_claim_lost_before_send_is_skipped_not_published(
+    monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+) -> None:
+    """A claim reassigned during recovery scanning is never used to publish a stale duplicate."""
+    _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=996701)
+    with psycopg.connect(pg_db_migrated.player_dev_writer) as conn:
+        conn.execute(
+            "UPDATE public.fc27_discord_jobs SET attempt_count = 1, state = 'pending'"
+        )
+        conn.commit()
+    with psycopg.connect(pg_db_migrated.discord_reader) as conn:
+        job_id = _fetch_one(conn, "SELECT job_id FROM public.fc27_discord_jobs")[0]
+
+    class _StealingClaimTransport(SyntheticDiscordNotificationTransport):
+        def find_existing_notification(
+            self,
+            *,
+            channel_id: str,
+            match_ref: str,
+            idempotency_key: str,
+            not_before: datetime | None = None,
+        ) -> str | None:
+            del channel_id, match_ref, idempotency_key, not_before
+            with psycopg.connect(pg_db_migrated.player_dev_writer) as conn:
+                conn.execute(
+                    """
+                    UPDATE public.fc27_discord_jobs
+                    SET claim_owner = 'thief-worker'
+                    WHERE job_id = %s
+                    """,
+                    (job_id,),
+                )
+                conn.commit()
+            return None
+
+    transport = _StealingClaimTransport()
+    res = run_discord_dispatch_cycle(
+        config=_enabled_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert res.jobs_claimed == 1
+    assert res.messages_sent == 0
+    assert transport.sent_messages == []
+    assert any(
+        e.action == "LEASE_LOST" and e.error_category == "LEASE_LOST_BEFORE_SEND"
+        for e in res.audit_entries
+    )
+    with psycopg.connect(pg_db_migrated.discord_reader) as conn:
+        owner, state = _fetch_one(conn, "SELECT claim_owner, state FROM public.fc27_discord_jobs WHERE job_id = %s", (job_id,))
+    assert owner == "thief-worker"
+    assert state == "claimed"
+
+
+def test_24_replay_quarantine_with_pseudonymized_match_ref_blocks_publish(
+    monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+) -> None:
+    """Worker replay quarantines keyed by pseudonymized match ref fail closed for already-queued jobs."""
+    _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=996801)
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        payload = _fetch_one(conn, "SELECT payload FROM public.fc27_discord_jobs LIMIT 1")[0]
+        pseudonymized_ref = str(payload["match_ref"])
+        conn.execute(
+            """
+            INSERT INTO public.fc27_quarantine_records (
+                club_id, platform, game_version, external_match_id, export_id,
+                source_classification, anomaly_category, reason_code, payload_sha256, review_status
+            ) VALUES (%s, 'common-gen5', 'FC27', %s, %s, 'COMMUNITY_RESEARCH_DERIVED',
+                      'REPLAY_CONFLICT', 'DISCORD_JOB_IDEMPOTENCY_CONFLICT', %s, 'PENDING_REVIEW')
+            """,
+            (EAST_COASTERS_CLUB_ID, pseudonymized_ref, "conflicting-export-999", "c" * 64),
+        )
+        conn.commit()
+
+    transport = SyntheticDiscordNotificationTransport()
+    res = run_discord_dispatch_cycle(
+        config=_enabled_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert res.jobs_claimed == 1
+    assert res.jobs_failed == 1
+    assert res.messages_sent == 0
+    assert transport.sent_messages == []
+    assert res.audit_entries[-1].error_category == "REPLAY_CONFLICT_QUARANTINED"
+
+
+def test_25_unrenderable_unknown_job_audit_key_cannot_block_cycle(
+    monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+) -> None:
+    """An unsupported job with a formula-like idempotency key is audited with a placeholder and never aborts dispatch."""
+    _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=996901)
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        conn.execute(
+            """
+            INSERT INTO public.fc27_discord_jobs (job_type, idempotency_key, payload, state)
+            VALUES ('evaluate_suggestions', '=eval:test', '{"schema_version":"v1"}'::jsonb, 'pending')
+            """
+        )
+        conn.commit()
+
+    transport = SyntheticDiscordNotificationTransport()
+    res = run_discord_dispatch_cycle(
+        config=_enabled_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert res.jobs_skipped_unknown_type == 1
+    assert res.jobs_completed == 1
+    assert res.messages_sent == 1
+    skipped = [e for e in res.audit_entries if e.action == "SKIPPED_UNKNOWN_JOB_TYPE"]
+    assert len(skipped) == 1
+    assert skipped[0].job_type == "evaluate_suggestions"
+    assert skipped[0].idempotency_key == "[UNRENDERABLE]"
+
+    with psycopg.connect(pg_db_migrated.discord_reader) as conn:
+        eval_row = _fetch_one(conn, """
+            SELECT state, attempt_count, claim_owner
+            FROM public.fc27_discord_jobs
+            WHERE job_type = 'evaluate_suggestions'
+            """)
+    assert eval_row == ("pending", 0, None)
+

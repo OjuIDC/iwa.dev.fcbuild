@@ -34,7 +34,7 @@ import re
 import socket
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Final, Literal, Mapping, Protocol, Sequence
 
@@ -101,6 +101,8 @@ DEFAULT_POLL_INTERVAL_SECONDS: Final[float] = 15.0
 DEFAULT_QUERY_TIMEOUT_MS: Final[int] = 5000
 MAX_DISCORD_PLAYER_SUMMARY_LINES: Final[int] = 8
 CHANNEL_HISTORY_DEDUP_LIMIT: Final[int] = 50
+CHANNEL_HISTORY_MAX_SCAN: Final[int] = 1000
+CHANNEL_HISTORY_LOOKBEHIND_SECONDS: Final[int] = 5
 
 _SAFE_ERROR_CATEGORY_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z0-9_]{1,64}$")
 _SAFE_CLAIM_OWNER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -215,12 +217,12 @@ class FC27DiscordDispatchTransportError(FC27DiscordDispatchError):
     ) -> None:
         super().__init__(message)
         self.category = _sanitize_error_category(category)
-        self.retryable = bool(retryable)
+        self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
 
 
 def _sanitize_error_category(category: str | None, *, default: str = "DISPATCH_ERROR") -> str:
-    raw = str(category or "").strip().upper()
+    raw = (category or "").strip().upper()
     raw = re.sub(r"[^A-Z0-9_]", "_", raw)
     raw = re.sub(r"_+", "_", raw).strip("_")
     if not raw or not _SAFE_ERROR_CATEGORY_RE.fullmatch(raw):
@@ -376,7 +378,7 @@ def assert_sql_is_discord_job_queue_allowed(query: str) -> None:
     - ``UPDATE public.fc27_discord_jobs`` (with optional ``WITH`` CTEs over ``fc27_discord_jobs``)
       assigning only lifecycle columns in ``PERMITTED_DISCORD_JOBS_UPDATE_COLUMNS``.
     """
-    raw = str(query or "")
+    raw = query or ""
     cleaned = _strip_sql_comments_and_trailing_semicolon(raw)
     if not cleaned:
         raise FC27DiscordDispatchAccessDeniedError("Empty SQL query is forbidden")
@@ -506,7 +508,7 @@ class GuardedDiscordJobQueueConnection:
                     f"Dispatcher queue connection must use '{ROLE_PLAYER_DEV_WRITER}', got '{role_name}'"
                 )
         self._conn = conn
-        self._query_timeout_ms = int(query_timeout_ms)
+        self._query_timeout_ms = query_timeout_ms
 
     @property
     def query_timeout_ms(self) -> int:
@@ -582,15 +584,15 @@ class FC27DiscordDispatchConfig:
     claim_owner_prefix: str = "fc27-discord-dispatcher"
 
     def __post_init__(self) -> None:
-        if not 1 <= int(self.max_jobs_per_cycle) <= 25:
+        if not 1 <= self.max_jobs_per_cycle <= 25:
             raise FC27DiscordDispatchValidationError(
                 f"max_jobs_per_cycle must be between 1 and 25, got {self.max_jobs_per_cycle}"
             )
-        if not 1 <= int(self.lease_minutes) <= 60:
+        if not 1 <= self.lease_minutes <= 60:
             raise FC27DiscordDispatchValidationError(
                 f"lease_minutes must be between 1 and 60, got {self.lease_minutes}"
             )
-        if not 1 <= int(self.max_attempts) <= 10:
+        if not 1 <= self.max_attempts <= 10:
             raise FC27DiscordDispatchValidationError(
                 f"max_attempts must be between 1 and 10, got {self.max_attempts}"
             )
@@ -598,16 +600,16 @@ class FC27DiscordDispatchConfig:
             raise FC27DiscordDispatchValidationError(
                 f"poll_interval_seconds must be between 0.05 and 300.0, got {self.poll_interval_seconds}"
             )
-        if int(self.retry_backoff_seconds) < 0 or int(self.retry_backoff_seconds) > 86400:
+        if self.retry_backoff_seconds < 0 or self.retry_backoff_seconds > 86400:
             raise FC27DiscordDispatchValidationError(
                 f"retry_backoff_seconds must be between 0 and 86400, got {self.retry_backoff_seconds}"
             )
-        if int(self.query_timeout_ms) < 250 or int(self.query_timeout_ms) > 30000:
+        if self.query_timeout_ms < 250 or self.query_timeout_ms > 30000:
             raise FC27DiscordDispatchValidationError(
                 f"query_timeout_ms must be between 250 and 30000, got {self.query_timeout_ms}"
             )
         if self.results_channel_id is not None:
-            clean_chan = str(self.results_channel_id).strip()
+            clean_chan = self.results_channel_id.strip()
             if not _SNOWFLAKE_RE.fullmatch(clean_chan):
                 raise FC27DiscordDispatchValidationError(
                     "results_channel_id must be a positive numeric Discord snowflake ID"
@@ -765,8 +767,14 @@ class DiscordNotificationTransport(Protocol):
         channel_id: str,
         match_ref: str,
         idempotency_key: str,
+        not_before: datetime | None = None,
     ) -> str | None:
-        """Return an existing Discord message ID if ``match_ref`` was already posted."""
+        """Return an existing Discord message ID if ``match_ref`` was already posted.
+
+        ``not_before`` bounds the recovery scan to messages that could belong to the
+        job (typically its ``created_at``). Implementations must defer rather than
+        report "not found" when the channel history cannot be checked.
+        """
 
     def send_notification(
         self,
@@ -793,7 +801,9 @@ class SyntheticDiscordNotificationTransport:
         channel_id: str,
         match_ref: str,
         idempotency_key: str,
+        not_before: datetime | None = None,
     ) -> str | None:
+        del not_before
         for msg_id, msg in reversed(self._channel_history.get(channel_id, [])):
             if msg.idempotency_key == idempotency_key or msg.match_ref == match_ref:
                 return msg_id
@@ -872,15 +882,40 @@ class DiscordGatewayChannelTransport:
         *,
         channel_id: str,
         match_ref: str,
+        not_before: datetime | None,
     ) -> str | None:
+        import discord
+
         channel = await self._resolve_channel(channel_id)
-        if not hasattr(channel, "history"):
-            return None
+        history_lookup = getattr(channel, "history", None)
+        if history_lookup is None:
+            raise FC27DiscordDispatchTransportError(
+                "Configured Discord results channel does not support history lookup; "
+                "absence of a prior notification cannot be proven",
+                category="DISCORD_HISTORY_UNAVAILABLE",
+                retryable=False,
+            )
         bot_user = getattr(self._client, "user", None)
         bot_id = getattr(bot_user, "id", None)
         marker = f"ref:{match_ref}"
+        history_kwargs: dict[str, Any] = {}
+        if not_before is not None:
+            history_kwargs["after"] = not_before - timedelta(
+                seconds=CHANNEL_HISTORY_LOOKBEHIND_SECONDS
+            )
+            history_kwargs["limit"] = None
+        else:
+            history_kwargs["limit"] = CHANNEL_HISTORY_DEDUP_LIMIT
+        scanned = 0
         try:
-            async for msg in channel.history(limit=CHANNEL_HISTORY_DEDUP_LIMIT):
+            async for msg in history_lookup(**history_kwargs):
+                scanned += 1
+                if scanned > CHANNEL_HISTORY_MAX_SCAN:
+                    raise FC27DiscordDispatchTransportError(
+                        "Discord channel history recovery scan exceeded its bounded message limit",
+                        category="DISCORD_HISTORY_INCOMPLETE",
+                        retryable=True,
+                    )
                 if bot_id is not None and getattr(getattr(msg, "author", None), "id", None) != bot_id:
                     continue
                 content = str(getattr(msg, "content", "") or "")
@@ -894,11 +929,66 @@ class DiscordGatewayChannelTransport:
                     for fld in getattr(emb, "fields", ()) or ():
                         if match_ref in str(getattr(fld, "value", "") or ""):
                             return str(msg.id)
-        except Exception:
-            # History lookup is a best-effort duplicate guard; fail open so send attempts can still proceed,
-            # while never raising raw exception text containing secrets.
-            return None
+        except FC27DiscordDispatchTransportError:
+            raise
+        except discord.Forbidden as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord bot lacks permission to read results channel history; "
+                "duplicate-delivery safety cannot be established",
+                category="DISCORD_HISTORY_FORBIDDEN",
+                retryable=True,
+            ) from exc
+        except discord.NotFound as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Configured Discord results channel was not found during history lookup",
+                category="DISCORD_CHANNEL_NOT_FOUND",
+                retryable=False,
+            ) from exc
+        except discord.HTTPException as exc:
+            status = getattr(exc, "status", 0) or 0
+            retry_after = getattr(exc, "retry_after", None)
+            if status == 429:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord API rate limited history lookup",
+                    category="DISCORD_RATE_LIMITED",
+                    retryable=True,
+                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+                ) from exc
+            raise FC27DiscordDispatchTransportError(
+                f"Discord history lookup failed with HTTP status {status}",
+                category="DISCORD_HISTORY_LOOKUP_FAILED",
+                retryable=True,
+            ) from exc
+        except Exception as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord history lookup failed before delivery state could be established",
+                category="DISCORD_HISTORY_LOOKUP_FAILED",
+                retryable=True,
+            ) from exc
         return None
+
+    async def _async_find_existing_bounded(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        not_before: datetime | None,
+    ) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                self._async_find_existing(
+                    channel_id=channel_id,
+                    match_ref=match_ref,
+                    not_before=not_before,
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord history lookup timed out and was cancelled before completion",
+                category="DISCORD_HISTORY_TIMEOUT",
+                retryable=True,
+            ) from exc
 
     async def _async_send(
         self,
@@ -956,7 +1046,7 @@ class DiscordGatewayChannelTransport:
                 category="DISCORD_PAYLOAD_REJECTED",
                 retryable=False,
             ) from exc
-        except (TimeoutError, asyncio.TimeoutError, OSError) as exc:
+        except (TimeoutError, OSError) as exc:
             raise FC27DiscordDispatchTransportError(
                 "Network or timeout failure while publishing Discord notification",
                 category="DISCORD_TRANSIENT_FAILURE",
@@ -964,19 +1054,53 @@ class DiscordGatewayChannelTransport:
             ) from exc
         return str(sent.id)
 
+    async def _async_send_bounded(
+        self,
+        *,
+        channel_id: str,
+        message: FC27PostNewResultsMessage,
+    ) -> str:
+        try:
+            return await asyncio.wait_for(
+                self._async_send(channel_id=channel_id, message=message),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord send timed out and was cancelled before completion",
+                category="DISCORD_TIMEOUT",
+                retryable=True,
+            ) from exc
+
+    def _run_loop_coroutine(self, coro: Any, *, operation: str) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout=self._timeout_seconds + 5.0)
+        except TimeoutError:
+            future.cancel()
+            raise FC27DiscordDispatchTransportError(
+                f"Discord {operation} exceeded its transport deadline; delivery state is unconfirmed",
+                category="DISCORD_TIMEOUT",
+                retryable=True,
+            )
+
     def find_existing_notification(
         self,
         *,
         channel_id: str,
         match_ref: str,
         idempotency_key: str,
+        not_before: datetime | None = None,
     ) -> str | None:
         del idempotency_key
-        fut = asyncio.run_coroutine_threadsafe(
-            self._async_find_existing(channel_id=channel_id, match_ref=match_ref),
-            self._loop,
+        return self._run_loop_coroutine(
+            self._async_find_existing_bounded(
+                channel_id=channel_id,
+                match_ref=match_ref,
+                not_before=not_before,
+            ),
+            operation="history lookup",
         )
-        return fut.result(timeout=self._timeout_seconds)
 
     def send_notification(
         self,
@@ -984,11 +1108,10 @@ class DiscordGatewayChannelTransport:
         channel_id: str,
         message: FC27PostNewResultsMessage,
     ) -> str:
-        fut = asyncio.run_coroutine_threadsafe(
-            self._async_send(channel_id=channel_id, message=message),
-            self._loop,
+        return self._run_loop_coroutine(
+            self._async_send_bounded(channel_id=channel_id, message=message),
+            operation="send",
         )
-        return fut.result(timeout=self._timeout_seconds)
 
 
 def try_acquire_dispatch_advisory_lock(
@@ -1028,15 +1151,15 @@ def cleanup_expired_discord_job_leases(
     Only processes ``permitted_job_types`` (default: ``('post_new_results',)``).
     Returns ``(recovered_to_pending_count, failed_exhausted_count)``.
     """
-    if not 1 <= int(max_attempts) <= 10:
+    if not 1 <= max_attempts <= 10:
         raise FC27DiscordDispatchValidationError("max_attempts must be 1..10")
-    job_types_list = [str(jt) for jt in permitted_job_types]
+    job_types_list = list(permitted_job_types)
 
     recovered_pending = 0
     failed_exhausted = 0
     with queue_conn.cursor() as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(queue_conn.query_timeout_ms)}"
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
         )
         cur.execute(
             """
@@ -1054,7 +1177,7 @@ def cleanup_expired_discord_job_leases(
               AND attempt_count >= %s
             RETURNING job_id
             """,
-            (job_types_list, int(max_attempts)),
+            (job_types_list, max_attempts),
         )
         failed_exhausted += len(cur.fetchall())
 
@@ -1074,7 +1197,7 @@ def cleanup_expired_discord_job_leases(
               AND attempt_count < %s
             RETURNING job_id
             """,
-            (job_types_list, int(max_attempts)),
+            (job_types_list, max_attempts),
         )
         recovered_pending = len(cur.fetchall())
 
@@ -1095,11 +1218,19 @@ def cleanup_expired_discord_job_leases(
               AND attempt_count >= 1
             RETURNING job_id
             """,
-            (job_types_list, int(max_attempts)),
+            (job_types_list, max_attempts),
         )
         failed_exhausted += len(cur.fetchall())
 
     return recovered_pending, failed_exhausted
+
+
+def _safe_audit_value(value: Any, *, fallback: str, max_len: int) -> str:
+    """Render an audit-only value without letting one malformed row abort the cycle."""
+    try:
+        return validate_safe_text(str(value), field_name="audit_value", max_len=max_len)
+    except Exception:
+        return fallback
 
 
 def audit_pending_non_permitted_jobs(
@@ -1113,10 +1244,10 @@ def audit_pending_non_permitted_jobs(
     Leaves rows completely untouched and emits safe audit records so unimplemented
     or unknown ``job_type`` entries never crash or silently stall the dispatcher.
     """
-    job_types_list = [str(jt) for jt in permitted_job_types]
+    job_types_list = list(permitted_job_types)
     with queue_conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(queue_conn.query_timeout_ms)}"
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
         )
         cur.execute(
             """
@@ -1127,21 +1258,18 @@ def audit_pending_non_permitted_jobs(
             ORDER BY available_at ASC, job_id ASC
             LIMIT %s
             """,
-            (job_types_list, int(limit)),
+            (job_types_list, limit),
         )
         rows = cur.fetchall()
 
     entries: list[FC27DiscordDispatchAuditEntry] = []
     for row in rows:
-        safe_job_type = validate_safe_text(
-            str(row["job_type"]), field_name="job_type", max_len=64
+        safe_job_type = _safe_audit_value(
+            row["job_type"], fallback="[UNRENDERABLE]", max_len=64
         )
-        try:
-            safe_key = validate_safe_text(
-                str(row["idempotency_key"]), field_name="idempotency_key", max_len=256
-            )
-        except Exception:
-            safe_key = "INVALID_IDEMPOTENCY_KEY"
+        safe_key = _safe_audit_value(
+            row["idempotency_key"], fallback="[UNRENDERABLE]", max_len=256
+        )
         entries.append(
             FC27DiscordDispatchAuditEntry(
                 job_id=int(row["job_id"]),
@@ -1166,22 +1294,22 @@ def claim_discord_jobs_batch(
     permitted_job_types: Sequence[str] = tuple(PERMITTED_DISPATCH_JOB_TYPES),
 ) -> list[FC27ClaimedDiscordJob]:
     """Atomically lease up to ``max_jobs`` available ``pending`` jobs using ``SKIP LOCKED``."""
-    clean_owner = str(claim_owner or "").strip()
+    clean_owner = (claim_owner or "").strip()
     if not _SAFE_CLAIM_OWNER_RE.fullmatch(clean_owner):
         raise FC27DiscordDispatchValidationError(
             "claim_owner must match ^[A-Za-z0-9_.:-]{1,128}$"
         )
-    if not 1 <= int(max_jobs) <= 25:
+    if not 1 <= max_jobs <= 25:
         raise FC27DiscordDispatchValidationError("max_jobs must be 1..25")
-    if not 1 <= int(lease_minutes) <= 60:
+    if not 1 <= lease_minutes <= 60:
         raise FC27DiscordDispatchValidationError("lease_minutes must be 1..60")
-    if not 1 <= int(max_attempts) <= 10:
+    if not 1 <= max_attempts <= 10:
         raise FC27DiscordDispatchValidationError("max_attempts must be 1..10")
 
-    job_types_list = [str(jt) for jt in permitted_job_types]
+    job_types_list = list(permitted_job_types)
     with queue_conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(queue_conn.query_timeout_ms)}"
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
         )
         cur.execute(
             """
@@ -1221,10 +1349,10 @@ def claim_discord_jobs_batch(
             """,
             (
                 job_types_list,
-                int(max_attempts),
-                int(max_jobs),
+                max_attempts,
+                max_jobs,
                 clean_owner,
-                int(lease_minutes),
+                lease_minutes,
             ),
         )
         rows = cur.fetchall()
@@ -1262,7 +1390,7 @@ def complete_discord_job(
     """Mark a claimed Discord job ``completed`` if still owned by ``claim_owner``."""
     with queue_conn.cursor() as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(queue_conn.query_timeout_ms)}"
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
         )
         cur.execute(
             """
@@ -1276,7 +1404,41 @@ def complete_discord_job(
               AND claim_owner = %s
             RETURNING job_id
             """,
-            (int(job_id), str(claim_owner)),
+            (job_id, claim_owner),
+        )
+        row = cur.fetchone()
+    return row is not None
+
+
+def renew_discord_job_lease(
+    queue_conn: GuardedDiscordJobQueueConnection,
+    *,
+    job_id: int,
+    claim_owner: str,
+    lease_minutes: int = DEFAULT_LEASE_MINUTES,
+) -> bool:
+    """Extend a still-owned, unexpired claim immediately before delivery.
+
+    Returns ``False`` when the claim was already recovered or reassigned. Callers
+    must not send a notification for a job whose lease could not be renewed.
+    """
+    if not 1 <= lease_minutes <= 60:
+        raise FC27DiscordDispatchValidationError("lease_minutes must be 1..60")
+    with queue_conn.cursor() as cur:
+        cur.execute(
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
+        )
+        cur.execute(
+            """
+            UPDATE public.fc27_discord_jobs
+            SET lease_expires_at = clock_timestamp() + make_interval(mins => %s)
+            WHERE job_id = %s
+              AND state = 'claimed'
+              AND claim_owner = %s
+              AND lease_expires_at > clock_timestamp()
+            RETURNING job_id
+            """,
+            (lease_minutes, job_id, claim_owner),
         )
         row = cur.fetchone()
     return row is not None
@@ -1295,12 +1457,12 @@ def release_or_fail_discord_job(
 ) -> Literal["released_pending", "failed", "lease_lost"]:
     """Release a retryable job back to ``pending`` with backoff, or mark permanently ``failed``."""
     clean_cat = _sanitize_error_category(error_category)
-    bounded_backoff = max(0, min(86400, int(backoff_seconds)))
-    will_retry = bool(retryable) and int(current_attempt_count) < int(max_attempts)
+    bounded_backoff = max(0, min(86400, backoff_seconds))
+    will_retry = retryable and current_attempt_count < max_attempts
 
     with queue_conn.cursor() as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(queue_conn.query_timeout_ms)}"
+            f"SET LOCAL statement_timeout = {queue_conn.query_timeout_ms}"
         )
         if will_retry:
             cur.execute(
@@ -1318,7 +1480,7 @@ def release_or_fail_discord_job(
                   AND claim_owner = %s
                 RETURNING job_id
                 """,
-                (clean_cat, bounded_backoff, int(job_id), str(claim_owner)),
+                (clean_cat, bounded_backoff, job_id, claim_owner),
             )
             row = cur.fetchone()
             return "released_pending" if row is not None else "lease_lost"
@@ -1338,7 +1500,7 @@ def release_or_fail_discord_job(
               AND claim_owner = %s
             RETURNING job_id
             """,
-            (clean_cat, int(job_id), str(claim_owner)),
+            (clean_cat, job_id, claim_owner),
         )
         row = cur.fetchone()
         return "failed" if row is not None else "lease_lost"
@@ -1409,9 +1571,9 @@ def _resolve_match_type_from_db_and_payload(
     payload_match_type: str,
     supplier_reference: str | None,
 ) -> str:
-    clean_payload_mt = str(payload_match_type or "").strip()
+    clean_payload_mt = (payload_match_type or "").strip()
     if supplier_reference:
-        sup = str(supplier_reference).strip()
+        sup = supplier_reference.strip()
         if ":" in sup:
             suffix = sup.rsplit(":", 1)[-1].strip()
             if suffix in _MATCH_TYPE_LABELS:
@@ -1441,7 +1603,7 @@ def load_authoritative_match_for_job(
 
     with readonly_conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            f"SET LOCAL statement_timeout = {int(DEFAULT_QUERY_TIMEOUT_MS)}"
+            f"SET LOCAL statement_timeout = {DEFAULT_QUERY_TIMEOUT_MS}"
         )
         cur.execute(
             """
@@ -1523,6 +1685,7 @@ def load_authoritative_match_for_job(
               AND q.review_status IN ('PENDING_REVIEW', 'REJECTED_PERMANENT')
               AND (
                   q.external_match_id = %s
+                  OR q.external_match_id = %s
                   OR (q.export_id IS NOT NULL AND q.export_id = %s)
                   OR (q.external_match_id IS NULL AND q.export_id IS NULL AND q.anomaly_category = 'REPLAY_CONFLICT')
               )
@@ -1534,6 +1697,7 @@ def load_authoritative_match_for_job(
                 validated.platform,
                 validated.game_version,
                 raw_ext_id,
+                validated.match_ref,
                 raw_export_id,
             ),
         )
@@ -1624,7 +1788,7 @@ def load_authoritative_match_for_job(
 
 
 def _sanitize_opponent_display(raw_name: str) -> str:
-    suppressed = suppress_discord_mentions(str(raw_name or "").strip())
+    suppressed = suppress_discord_mentions((raw_name or "").strip())
     if contains_prohibited_url(suppressed):
         raise _JobVerificationError(
             "PRIVACY_VALIDATION_FAILED",
@@ -1648,7 +1812,7 @@ def build_post_new_results_notification(
     extra_forbidden_tokens: Sequence[str] = (),
 ) -> FC27PostNewResultsMessage:
     """Build and sanitize the Discord notification payload for one authoritative match."""
-    clean_channel = str(channel_id or "").strip()
+    clean_channel = (channel_id or "").strip()
     if not _SNOWFLAKE_RE.fullmatch(clean_channel):
         raise _JobVerificationError(
             "INVALID_RESULTS_CHANNEL",
@@ -1970,6 +2134,23 @@ def run_discord_dispatch_cycle(
         jobs_claimed = len(claimed_jobs)
 
         # 4. Process each claimed job individually without holding open DB write locks during I/O.
+        def _record_lease_lost(
+            job: FC27ClaimedDiscordJob,
+            match_ref: str | None,
+            category: str,
+        ) -> None:
+            audit_entries.append(
+                FC27DiscordDispatchAuditEntry(
+                    job_id=job.job_id,
+                    job_type=job.job_type,
+                    idempotency_key=job.idempotency_key,
+                    match_ref=match_ref,
+                    action="LEASE_LOST",
+                    error_category=category,
+                    attempt_count=job.attempt_count,
+                )
+            )
+
         for job in claimed_jobs:
             match_ref = (
                 str(job.payload.get("match_ref")).strip()
@@ -1990,7 +2171,7 @@ def run_discord_dispatch_cycle(
                     dict.fromkeys(
                         t
                         for t in (*extra_forbidden, *secret_tokens_to_scrub)
-                        if t and len(str(t).strip()) >= 6
+                        if t and len(t.strip()) >= 6
                     )
                 )
                 message = build_post_new_results_notification(
@@ -2008,10 +2189,22 @@ def run_discord_dispatch_cycle(
                     job.attempt_count > 1
                     or job.last_error_category == "LEASE_EXPIRED"
                 ):
+                    # Recovery history scans can be slow; re-establish ownership first.
+                    if not renew_discord_job_lease(
+                        queue_conn,
+                        job_id=job.job_id,
+                        claim_owner=eff_claim_owner,
+                        lease_minutes=config.lease_minutes,
+                    ):
+                        queue_conn.commit()
+                        _record_lease_lost(job, match_ref, "LEASE_LOST_BEFORE_HISTORY")
+                        continue
+                    queue_conn.commit()
                     existing_msg_id = transport.find_existing_notification(
                         channel_id=config.results_channel_id,
                         match_ref=match_data.match_ref,
                         idempotency_key=job.idempotency_key,
+                        not_before=job.created_at,
                     )
 
                 if existing_msg_id is not None:
@@ -2049,6 +2242,18 @@ def run_discord_dispatch_cycle(
                             )
                         )
                     continue
+
+                # The lease must cover the publish operation itself; skip stale claims.
+                if not renew_discord_job_lease(
+                    queue_conn,
+                    job_id=job.job_id,
+                    claim_owner=eff_claim_owner,
+                    lease_minutes=config.lease_minutes,
+                ):
+                    queue_conn.commit()
+                    _record_lease_lost(job, match_ref, "LEASE_LOST_BEFORE_SEND")
+                    continue
+                queue_conn.commit()
 
                 discord_msg_id = transport.send_notification(
                     channel_id=config.results_channel_id,
@@ -2123,7 +2328,7 @@ def run_discord_dispatch_cycle(
                 if exc.retry_after_seconds is not None:
                     backoff = max(
                         config.retry_backoff_seconds,
-                        min(3600, int(round(exc.retry_after_seconds))),
+                        min(3600, round(exc.retry_after_seconds)),
                     )
                 outcome = release_or_fail_discord_job(
                     queue_conn,
@@ -2319,6 +2524,8 @@ async def run_discord_dispatcher_loop(
 
 __all__ = [
     "CHANNEL_HISTORY_DEDUP_LIMIT",
+    "CHANNEL_HISTORY_LOOKBEHIND_SECONDS",
+    "CHANNEL_HISTORY_MAX_SCAN",
     "DEFAULT_LEASE_MINUTES",
     "DEFAULT_MAX_ATTEMPTS",
     "DEFAULT_MAX_JOBS_PER_CYCLE",
@@ -2356,6 +2563,7 @@ __all__ = [
     "load_authoritative_match_for_job",
     "release_dispatch_advisory_lock",
     "release_or_fail_discord_job",
+    "renew_discord_job_lease",
     "resolve_discord_job_writer_uri",
     "resolve_discord_readonly_uri",
     "run_discord_dispatch_cycle",
