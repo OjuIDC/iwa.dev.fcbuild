@@ -900,6 +900,7 @@ def compute_match_equivalence_hash(
         "game_version": proj["game_version"],
         "external_match_id": proj["external_match_id"],
         "played_at": proj["played_at"],
+        "match_type": proj["match_type"],
         "result": proj["result"],
         "goals_for": proj["goals_for"],
         "goals_against": proj["goals_against"],
