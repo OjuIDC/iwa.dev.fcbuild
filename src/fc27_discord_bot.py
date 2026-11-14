@@ -361,6 +361,10 @@ class FC27DiscordBotConfig(BaseModel):
     captain_role_ids: frozenset[str] = Field(default_factory=frozenset)
     admin_role_ids: frozenset[str] = Field(default_factory=frozenset)
     results_channel_id: str | None = None
+    dispatch_enabled: bool = False
+    dispatch_max_jobs_per_cycle: int = Field(default=5, ge=1, le=25)
+    dispatch_lease_minutes: int = Field(default=5, ge=1, le=60)
+    dispatch_single_flight: bool = True
     allow_direct_messages: bool = False
     slash_commands_only: bool = True
     administrator_permission_required: bool = False
@@ -418,6 +422,10 @@ class FC27DiscordBotConfig(BaseModel):
                 raise FC27DiscordAuthzError(
                     f"Invalid Discord results_channel_id: '{self.results_channel_id}'"
                 )
+        if self.dispatch_enabled and not self.results_channel_id:
+            raise FC27DiscordDisabledError(
+                "FC27_DISCORD_RESULTS_CHANNEL_ID must be non-empty when FC27_DISCORD_DISPATCH_ENABLED=true"
+            )
         if self.enabled:
             if self.require_application_id and not self.application_id:
                 raise FC27DiscordDisabledError(
@@ -451,8 +459,18 @@ class FC27DiscordBotConfig(BaseModel):
             captain_roles = settings.get_fc27_discord_captain_role_ids(strict=strict)
             admin_roles = settings.get_fc27_discord_admin_role_ids(strict=strict)
             results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
+            dispatch_enabled = settings.is_fc27_discord_dispatch_enabled(strict=strict)
+            dispatch_max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
+            dispatch_lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
+            dispatch_single_flight = settings.is_fc27_discord_single_flight_enabled(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
+        if dispatch_enabled and not results_chan:
+            if strict:
+                raise FC27DiscordDisabledError(
+                    "FC27_DISCORD_RESULTS_CHANNEL_ID must be configured when FC27_DISCORD_DISPATCH_ENABLED=true"
+                )
+            dispatch_enabled = False
         return cls(
             enabled=enabled,
             application_id=app_id,
@@ -464,6 +482,10 @@ class FC27DiscordBotConfig(BaseModel):
             captain_role_ids=captain_roles,
             admin_role_ids=admin_roles,
             results_channel_id=results_chan,
+            dispatch_enabled=dispatch_enabled,
+            dispatch_max_jobs_per_cycle=dispatch_max_jobs,
+            dispatch_lease_minutes=dispatch_lease_mins,
+            dispatch_single_flight=dispatch_single_flight,
         )
 
 
@@ -2703,6 +2725,30 @@ def run_discord_gateway_bot(
     if gateway_runner is not None:
         return int(gateway_runner(bot_service, resolved_token))
 
+    dispatch_cfg = None
+    if config.dispatch_enabled:
+        from src.fc27_discord_dispatcher import (
+            DiscordGatewayChannelTransport,
+            FC27DiscordDispatchConfig,
+            resolve_discord_job_writer_uri,
+            resolve_discord_readonly_uri,
+            run_discord_dispatcher_loop,
+        )
+
+        dispatch_cfg = FC27DiscordDispatchConfig(
+            enabled=True,
+            results_channel_id=config.results_channel_id,
+            max_jobs_per_cycle=config.dispatch_max_jobs_per_cycle,
+            lease_minutes=config.dispatch_lease_minutes,
+            single_flight=config.dispatch_single_flight,
+        )
+        try:
+            writer_uri = resolve_discord_job_writer_uri(required=True)
+            readonly_uri = resolve_discord_readonly_uri(required=True)
+            settings.validate_fc27_role_uri_separation(readonly_uri, writer_uri)
+        except ConfigError as exc:
+            raise FC27DiscordError(str(exc)) from exc
+
     import asyncio
     import signal
     import discord
@@ -2735,6 +2781,10 @@ def run_discord_gateway_bot(
             print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}", flush=True)
             print(
                 f"DISCORD_DATABASE_WRITE_ACCESS={'YES' if DISCORD_DATABASE_WRITE_ACCESS else 'NO'}",
+                flush=True,
+            )
+            print(
+                f"DISCORD_DISPATCH_ENABLED={'YES' if config.dispatch_enabled else 'NO'}",
                 flush=True,
             )
 
@@ -2811,21 +2861,51 @@ def run_discord_gateway_bot(
             except (NotImplementedError, RuntimeError, ValueError):
                 signal.signal(sig, lambda *_a: loop.call_soon_threadsafe(_on_signal))
 
+        dispatch_stop_event: asyncio.Event | None = None
+        dispatch_task: asyncio.Task[None] | None = None
+        if config.dispatch_enabled:
+            assert dispatch_cfg is not None
+            dispatch_stop_event = asyncio.Event()
+            dispatch_transport = DiscordGatewayChannelTransport(client, loop)
+            dispatch_task = asyncio.create_task(
+                run_discord_dispatcher_loop(
+                    config=dispatch_cfg,
+                    transport=dispatch_transport,
+                    wait_until_ready_fn=client.wait_until_ready,
+                    stop_event=dispatch_stop_event,
+                    secret_tokens_to_scrub=(resolved_token,),
+                )
+            )
+
         start_task = asyncio.create_task(client.start(resolved_token, reconnect=True))
-        done, _ = await asyncio.wait(
-            {start_task, stop_future},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if stop_future in done:
-            print("DISCORD_BOT_SHUTDOWN=CLEAN", flush=True)
-            await client.close()
-            try:
-                await asyncio.wait_for(start_task, timeout=10.0)
-            except Exception:
-                pass
+        try:
+            done, _ = await asyncio.wait(
+                {start_task, stop_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_future in done:
+                print("DISCORD_BOT_SHUTDOWN=CLEAN", flush=True)
+                await client.close()
+                try:
+                    await asyncio.wait_for(start_task, timeout=10.0)
+                except Exception:
+                    pass
+                return 0
+            await start_task
             return 0
-        await start_task
-        return 0
+        finally:
+            if dispatch_stop_event is not None:
+                dispatch_stop_event.set()
+            if dispatch_task is not None:
+                if not dispatch_task.done():
+                    try:
+                        await asyncio.wait_for(dispatch_task, timeout=5.0)
+                    except (asyncio.TimeoutError, Exception):
+                        dispatch_task.cancel()
+                        try:
+                            await dispatch_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
     return asyncio.run(_runner())
 
