@@ -18,7 +18,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 16
+GRANTS_POLICY_VERSION = 17
 
 
 def _compute_grants_sha256() -> str:
@@ -26,7 +26,7 @@ def _compute_grants_sha256() -> str:
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
 
-GRANTS_POLICY = GrantsPolicy(version=16, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=17, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -245,12 +245,17 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
             has_0013 = False
 
         if has_0013:
-            manual_tables = (
+            cur.execute("SELECT 1 FROM schema_migrations WHERE version LIKE '0016%'")
+            has_0016 = cur.fetchone() is not None
+            manual_tables_list = [
                 "fc27_manual_matches",
                 "fc27_manual_match_players",
                 "fc27_manual_match_events",
                 "fc27_manual_match_audit",
-            )
+            ]
+            if has_0016:
+                manual_tables_list.append("fc27_roster")
+            manual_tables = tuple(manual_tables_list)
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
             has_writer_role = cur.fetchone() is not None
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay'")
@@ -290,10 +295,14 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                             violations.append(f"relay_{priv.lower()}_on_{tbl}")
 
             if has_writer_role:
-                # fc27_match_results_writer cannot DELETE from fc27_manual_matches or fc27_manual_match_audit
+                # fc27_match_results_writer cannot DELETE from fc27_manual_matches, fc27_manual_match_audit, or fc27_roster
                 cur.execute("SELECT has_table_privilege('fc27_match_results_writer', 'public.fc27_manual_matches', 'DELETE')")
                 if cur.fetchone()[0]:
                     violations.append("writer_delete_on_fc27_manual_matches")
+                if has_0016:
+                    cur.execute("SELECT has_table_privilege('fc27_match_results_writer', 'public.fc27_roster', 'DELETE')")
+                    if cur.fetchone()[0]:
+                        violations.append("writer_delete_on_fc27_roster")
                 for priv in ("UPDATE", "DELETE"):
                     cur.execute("SELECT has_table_privilege('fc27_match_results_writer', 'public.fc27_manual_match_audit', %s)", (priv,))
                     if cur.fetchone()[0]:
@@ -447,6 +456,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     "fc27_manual_match_players": set(),
                     "fc27_manual_match_events": set(),
                     "fc27_manual_match_audit": set(),
+                    "fc27_roster": set(),
                 },
                 "fc27_player_dev_writer": {
                     "fc27_player_links": {"SELECT", "INSERT", "UPDATE"},
@@ -455,6 +465,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     "fc27_player_suggestions": {"SELECT", "INSERT", "UPDATE"},
                     "fc27_suggestion_assessments": {"SELECT", "INSERT"},
                     "fc27_discord_jobs": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_roster": {"SELECT", "INSERT", "UPDATE"},
                     "fc27_player_alias_fingerprints": {"SELECT"},
                     "fc27_clubs": {"SELECT"},
                     "fc27_export_batches": {"SELECT"},
@@ -476,6 +487,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     "fc27_manual_match_players": {"SELECT"},
                     "fc27_manual_match_events": {"SELECT"},
                     "fc27_manual_match_audit": {"SELECT"},
+                    "fc27_roster": {"SELECT"},
                     "fc27_player_alias_fingerprints": {"SELECT"},
                     "fc27_player_links": {"SELECT"},
                     "fc27_build_catalog": {"SELECT"},

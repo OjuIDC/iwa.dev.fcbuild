@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 from typing import Any
 
 import psycopg
@@ -16,8 +18,11 @@ from src.fc27_discord_bot import (
     assert_discord_output_sanitized,
 )
 from src.fc27_match_results import (
+    BRAND_COLOR_DRAW,
     BRAND_COLOR_ELECTRIC_BLUE,
+    BRAND_COLOR_LOSS,
     BRAND_COLOR_SILVER,
+    BRAND_COLOR_WIN,
     EAST_COASTERS_FOOTER_TEXT,
     EAST_COASTERS_FOUNDED_TEXT,
     EAST_COASTERS_FULL_NAME,
@@ -25,12 +30,18 @@ from src.fc27_match_results import (
     GuardedMatchResultsWriterConnection,
     InMemoryDiscordChannelAdapter,
     MANUAL_MATCH_RESULT,
+    ManualMatchDetail,
+    ManualMatchPlayerDetail,
     MatchDeleteConfirmationView,
     MatchResultsConcurrencyError,
     MatchResultsNotFoundError,
     MatchResultsPaginationView,
     MatchResultsPostureError,
     MatchResultsValidationError,
+    UNRESOLVED_PLAYER_DISPLAY_NAME,
+    build_result_content,
+    build_result_embed,
+    clean_opponent,
     create_scheduled_match,
     edit_match_result,
     fetch_latest_manual_result,
@@ -39,19 +50,26 @@ from src.fc27_match_results import (
     fetch_manual_results_page,
     fetch_manual_top_scorers,
     format_scorers_summary,
+    get_player_name,
+    list_roster_players,
+    normalize_competition_label,
     normalize_display_label,
     parse_kickoff_datetime,
     parse_player_stats_input,
     parse_scorers_input,
     reconcile_scorers_and_player_stats,
     record_match_result,
+    rename_roster_player,
     render_empty_match_results_embed,
     render_match_result_embed,
     render_matchday_embed,
     render_player_stats_embed,
     render_results_page_embed,
+    render_roster_embed,
     render_top_scorers_embed,
+    resolve_player_names,
     soft_delete_match,
+    upsert_roster_player,
     validate_bounded_int,
     validate_discord_snowflake,
     validate_safe_text,
@@ -388,7 +406,7 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
     assert r_matchday.ephemeral is False
     assert (
         r_matchday.embeds[0].title
-        == f"MATCHDAY | {EAST_COASTERS_SHORT_NAME} vs Harbor City FC"
+        == f"📅 MATCHDAY — {EAST_COASTERS_SHORT_NAME} vs Harbor City FC"
     )
     assert channel_adapter.post_count == 1
     assert channel_adapter.edit_count == 0
@@ -419,7 +437,7 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
     )
     assert r_result.status == "OK"
     assert r_result.ephemeral is False
-    assert "56%" in r_result.embeds[0].fields["Team Match Statistics"]
+    assert "56%" in r_result.embeds[0].fields["📊 Team Stats"]
     # Existing Matchday card edited in place (no duplicate post)
     assert channel_adapter.post_count == 1
     assert channel_adapter.edit_count == 1
@@ -467,7 +485,8 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
     )
     assert r_last.status == "OK"
     last_embed = r_last.embeds[0]
-    assert f"{EAST_COASTERS_SHORT_NAME} 5 - 2 Harbor City FC" in last_embed.title
+    assert "WIN 5-2 vs Harbor City FC" in last_embed.title
+    assert f"**{EAST_COASTERS_SHORT_NAME}** 5-2 **Harbor City FC**" in last_embed.description
 
     # 6. Retrieve match by ID (`/fc27 match match_id=1`) and by opponent
     r_match = service.handle_slash_command(
@@ -480,16 +499,14 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
     )
     assert r_match.status == "OK"
     match_embed = r_match.embeds[0]
+    assert "Lao (2), Jay (2), Sam (1)" in match_embed.fields["⚽ Scorers"]
+    assert match_embed.fields["⭐ MOTM"] == "Lao"
+    assert "Possession: **58%**" in match_embed.fields["📊 Team Stats"]
+    assert "Tackles: **14**" in match_embed.fields["📊 Team Stats"]
+    assert "Passes: **134**" in match_embed.fields["📊 Team Stats"]
     assert (
-        "Scorers: `Lao (2), Jay (2), Sam (1)`" in match_embed.fields["Goals & Honours"]
-    )
-    assert "Man of the Match: `Lao`" in match_embed.fields["Goals & Honours"]
-    assert "Possession: `58%`" in match_embed.fields["Team Match Statistics"]
-    assert "Tackles: `14`" in match_embed.fields["Team Match Statistics"]
-    assert "Passes: `134`" in match_embed.fields["Team Match Statistics"]
-    assert (
-        "**Lao**: 2G | 1A | 4 TKL | 32 PAS | 84% ACC"
-        in match_embed.fields["Player Performances"]
+        "• **Lao**: 2G | 1A | 4 TKL | 32 PAS | 84% ACC"
+        in match_embed.fields["👥 Players"]
     )
 
     r_match_opp = service.handle_slash_command(
@@ -781,7 +798,7 @@ def test_results_pagination_topscorers_playerstats_and_soft_delete(
         match_id=6,
     )
     assert r_match6.status == "ERROR"
-    assert "Match #6 was not found" in r_match6.content
+    assert "Match #6 not found. Use /results to list matches." in r_match6.content
 
     with psycopg.connect(pg_db_migrated.app) as conn:
         assert fetch_manual_match(conn, match_id=6) is None
@@ -888,3 +905,462 @@ def test_discord_ui_pagination_and_delete_confirmation_views_offline(
         assert del_view.completed is True
 
     asyncio.run(_exercise_views())
+
+
+# ==============================================================================
+# 8. P0 CANONICAL RESULTS, PLAYER ROSTER, AND HARDENING TESTS
+# ==============================================================================
+
+
+def test_p0_clean_opponent_and_competition_labels() -> None:
+    """Verify opponent cleaning and raw EA competition token translation."""
+    assert clean_opponent("Real_Madrid_FC") == "Real Madrid FC"
+    assert clean_opponent("phoenix_united_sc") == "Phoenix United SC"
+    assert clean_opponent("east_coasters_xi") == "East Coasters XI"
+    assert clean_opponent("Rival [mention-suppressed] FC") == "Rival [mention-suppressed] FC"
+
+    assert normalize_competition_label("leagueMatch") == "League Match"
+    assert normalize_competition_label("playoffMatch") == "Playoff Match"
+    assert normalize_competition_label("friendlyMatch") == "Friendly Match"
+    assert normalize_competition_label("UNKNOWN") == "League Match"
+    assert normalize_competition_label(None) == "League Match"
+
+
+def test_p0_build_result_content_colors_omission_splitting_and_zero_jargon() -> None:
+    """Verify canonical content, embed outcome colors, missing-field omission, player chunk splitting, and zero internal jargon."""
+    now = datetime(2026, 5, 1, 20, 0, tzinfo=timezone.utc)
+    sched = ManualMatchDetail(
+        match_id=10,
+        club_id="330323",
+        platform="common-gen5",
+        game_version="FC27",
+        opponent="Harbor City FC",
+        opponent_normalized="harbor city fc",
+        match_date="2026-05-01",
+        match_time="8PM EST",
+        status="SCHEDULED",
+        competition="leagueMatch",
+        created_by="1",
+        updated_by="1",
+        created_at=now,
+        updated_at=now,
+        revision=1,
+    )
+    assert build_result_content(sched) == "📅 MATCHDAY — East Coasters FC vs Harbor City FC"
+    sched_emb = build_result_embed(sched)
+    assert getattr(sched_emb.color, "value", sched_emb.color) == BRAND_COLOR_ELECTRIC_BLUE
+
+    def _make_ft(match_id: int, home: int, away: int, players: tuple[ManualMatchPlayerDetail, ...] = ()) -> ManualMatchDetail:
+        return ManualMatchDetail(
+            match_id=match_id,
+            club_id="330323",
+            platform="common-gen5",
+            game_version="FC27",
+            opponent="Phoenix_Club_FC",
+            opponent_normalized="phoenix club fc",
+            match_date="2026-05-01",
+            match_time="8:00 PM EST",
+            home_score=home,
+            away_score=away,
+            status="FULL_TIME",
+            competition="leagueMatch",
+            formation=None,
+            created_by="1",
+            updated_by="1",
+            created_at=now,
+            updated_at=now,
+            revision=1,
+            players=players,
+        )
+
+    win_match = _make_ft(11, 3, 1)
+    assert build_result_content(win_match) == "✅ FULL TIME — East Coasters FC 3-1 Phoenix Club FC"
+    win_emb = build_result_embed(win_match)
+    assert getattr(win_emb.color, "value", win_emb.color) == BRAND_COLOR_WIN
+    # Optional fields omitted cleanly when missing
+    field_names = [f.name for f in win_emb.fields]
+    assert "⭐ MOTM" not in field_names
+    assert "⚽ Scorers" not in field_names
+    assert "📊 Team Stats" not in field_names
+    assert "📝 Notes" not in field_names
+    assert "👥 Players" not in field_names
+    assert [f.value for f in win_emb.fields if f.name == "🏆 Competition"] == ["League Match"]
+
+    loss_emb = build_result_embed(_make_ft(12, 1, 2))
+    assert getattr(loss_emb.color, "value", loss_emb.color) == BRAND_COLOR_LOSS
+    draw_emb = build_result_embed(_make_ft(13, 2, 2))
+    assert getattr(draw_emb.color, "value", draw_emb.color) == BRAND_COLOR_DRAW
+
+    # Large roster > 1024 chars splits cleanly across 👥 Players and 👥 Players (cont.)
+    many_players = tuple(
+        ManualMatchPlayerDetail(
+            normalized_display_label=f"long player name number {i:02d}",
+            safe_display_label=f"Long Player Name Number {i:02d}",
+            position="CM",
+            goals=1 if i == 0 else 0,
+            assists=2,
+            tackles=5,
+            passes=42,
+            passes_completed=38,
+            passes_attempted=42,
+            pass_accuracy=90,
+            shots=3,
+            saves=0,
+            rating=Decimal("8.4"),
+        )
+        for i in range(28)
+    )
+    split_emb = build_result_embed(_make_ft(14, 2, 0, players=many_players))
+    split_names = [f.name for f in split_emb.fields]
+    assert "👥 Players" in split_names
+    assert "👥 Players (cont.)" in split_names
+    for fld in split_emb.fields:
+        assert len(fld.value) <= 1024
+
+    rendered_all = "\n".join(
+        [
+            build_result_content(win_match),
+            split_emb.title or "",
+            split_emb.description or "",
+            getattr(split_emb.footer, "text", "") or "",
+            *(f"{f.name}: {f.value}" for f in split_emb.fields),
+        ]
+    )
+    for forbidden in (
+        "mref_ecf_",
+        "plr_ecf_",
+        "ref:",
+        "UNKNOWN",
+        "None",
+        "null",
+        "N/A",
+        "leagueMatch",
+        "COMMUNITY_RESEARCH_DERIVED",
+        "VERIFIED",
+        "COMPLETED",
+        "Match Reference",
+        "Source & Quality",
+        "Provenance",
+    ):
+        assert forbidden not in rendered_all
+
+
+def test_p0_roster_commands_rename_unresolved_and_single_query_batch_resolution(
+    pg_db_migrated, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify /setplayer, /roster, /renameplayer, unresolved warning + Unnamed Player, and single-query batch resolution."""
+    service = FC27DiscordBotService(
+        _build_match_results_bot_config(),
+        db_conn_or_uri=pg_db_migrated.app,
+        writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+
+    r1 = service.handle_slash_command(
+        "setplayer",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        player_id="plr_ecf_aaaaaaaaaaaa",
+        player_name="Lao",
+        position="CM",
+        discord_user_id="123456789012345678",
+    )
+    assert r1.status == "OK"
+    assert "Lao" in r1.content
+
+    r2 = service.handle_slash_command(
+        "setplayer",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[CAPTAIN_ROLE_ID],
+        player_id="plr_ecf_bbbbbbbbbbbb",
+        player_name="Jay",
+        position="ST",
+    )
+    assert r2.status == "OK"
+
+    # /roster lists active players cleanly without raw plr_ecf_ tokens
+    r_roster = service.handle_slash_command(
+        "roster",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+    )
+    assert r_roster.status == "OK"
+    roster_text = "\n".join(r_roster.embeds[0].fields.values())
+    assert "Lao" in roster_text and "Jay" in roster_text
+    assert "plr_ecf_" not in roster_text
+
+    # Single-query batch resolution (zero N+1 queries)
+    class _CountingConn:
+        def __init__(self, real_conn: Any) -> None:
+            self._real = real_conn
+            self.execute_count = 0
+
+        def cursor(self) -> Any:
+            outer = self
+            inner_cur = self._real.cursor()
+
+            class _Cur:
+                def __enter__(self) -> _Cur:
+                    inner_cur.__enter__()
+                    return self
+
+                def __exit__(self, *args: Any) -> Any:
+                    return inner_cur.__exit__(*args)
+
+                def execute(self, sql: Any, params: Any = None) -> Any:
+                    outer.execute_count += 1
+                    return inner_cur.execute(sql, params)
+
+                def fetchall(self) -> Any:
+                    return inner_cur.fetchall()
+
+            return _Cur()
+
+    with psycopg.connect(pg_db_migrated.app) as app_conn:
+        counting = _CountingConn(app_conn)
+        resolved = resolve_player_names(
+            counting,
+            ["plr_ecf_aaaaaaaaaaaa", "plr_ecf_bbbbbbbbbbbb", "plr_ecf_cccccccccccc"],
+        )
+        assert counting.execute_count == 1
+        assert resolved == {
+            "plr_ecf_aaaaaaaaaaaa": "Lao",
+            "plr_ecf_bbbbbbbbbbbb": "Jay",
+        }
+        with caplog.at_level(logging.WARNING):
+            fallback_name = get_player_name("plr_ecf_cccccccccccc", roster_map=resolved)
+        assert fallback_name == UNRESOLVED_PLAYER_DISPLAY_NAME
+        assert any("fc27_roster_unresolved_player" in rec.message for rec in caplog.records)
+
+    # Record a match with registered player_id-linked row + two unresolved Unnamed Player rows
+    with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
+        with wconn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.fc27_manual_matches (
+                    club_id, platform, game_version, opponent, opponent_normalized,
+                    match_date, match_time, home_score, away_score, status,
+                    competition, formation, created_by, updated_by
+                ) VALUES ('330323', 'common-gen5', 'FC27', 'Harbor City FC', 'harbor city fc',
+                          '2026-05-02', '8PM EST', 3, 1, 'FULL_TIME',
+                          'League Match', '4-2-3-1', '1', '1')
+                RETURNING match_id
+                """
+            )
+            mid = int(cur.fetchone()[0])
+            cur.execute(
+                """
+                INSERT INTO public.fc27_manual_match_players (
+                    match_id, player_id, normalized_display_label, safe_display_label,
+                    position, goals, assists
+                ) VALUES
+                    (%s, 'plr_ecf_bbbbbbbbbbbb', 'jay', 'Jay', 'ST', 2, 0),
+                    (%s, 'plr_ecf_cccccccccccc', 'plr_ecf_cccccccccccc', 'plr_ecf_cccccccccccc', 'CM', 1, 0),
+                    (%s, 'plr_ecf_dddddddddddd', 'plr_ecf_dddddddddddd', 'plr_ecf_dddddddddddd', 'RB', 0, 1)
+                """,
+                (mid, mid, mid),
+            )
+        wconn.commit()
+
+    # /renameplayer updates Jay -> Jay V2 and propagates to match reads
+    r_ren = service.handle_slash_command(
+        "renameplayer",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        player_name="Jay",
+        new_name="Jay V2",
+    )
+    assert r_ren.status == "OK"
+    assert "Jay V2" in r_ren.content
+
+    r_match = service.handle_slash_command(
+        "match",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+        opponent="Harbor City FC",
+    )
+    assert r_match.status == "OK"
+    match_blob = "\n".join(r_match.embeds[0].fields.values())
+    assert "Jay V2" in match_blob
+    assert "Unnamed Player" in match_blob
+    assert "plr_ecf_" not in match_blob
+
+
+def test_p0_admin_only_deletematch_matchday_defaults_idempotency_and_queries(
+    pg_db_migrated,
+) -> None:
+    """Verify Admin-only /deletematch, /matchday defaults, interaction_id idempotency, /results opponent filter, and /topscorers default 5."""
+    service = FC27DiscordBotService(
+        _build_match_results_bot_config(),
+        db_conn_or_uri=pg_db_migrated.app,
+        writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+
+    # /matchday defaults time to 8PM EST and competition to League Match; duplicate interaction_id is idempotent
+    r_md1 = service.handle_slash_command(
+        "matchday",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        opponent="Metro United",
+        date_str="2026-05-05",
+        interaction_id="999000111222333444",
+    )
+    assert r_md1.status == "OK"
+    assert r_md1.content == "📅 MATCHDAY — East Coasters FC vs Metro United"
+    assert "8PM EST" in r_md1.embeds[0].fields["📅 Kickoff"]
+    assert r_md1.embeds[0].fields["🏆 Competition"] == "League Match"
+
+    r_md_dup = service.handle_slash_command(
+        "matchday",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        opponent="Metro United",
+        date_str="2026-05-05",
+        interaction_id="999000111222333444",
+    )
+    assert r_md_dup.status == "OK"
+    assert r_md_dup.embeds[0].description == r_md1.embeds[0].description
+
+    # /result duplicate interaction_id is idempotent
+    r_res1 = service.handle_slash_command(
+        "result",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[CAPTAIN_ROLE_ID],
+        opponent="Metro United",
+        our_score=3,
+        opponent_score=1,
+        scorers="P1 x1, P2 x1, P3 x1",
+        player_stats="P4: 1 assist; P5: 1 assist; P6: 1 assist",
+        competition="playoffMatch",
+        formation="4-3-3",
+        interaction_id="999000111222333555",
+    )
+    assert r_res1.status == "OK"
+    assert "Playoff Match" in r_res1.embeds[0].fields["🏆 Competition"]
+    assert "4-3-3" in r_res1.embeds[0].fields["🏆 Competition"]
+
+    r_res_dup = service.handle_slash_command(
+        "result",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[CAPTAIN_ROLE_ID],
+        opponent="Metro United",
+        our_score=3,
+        opponent_score=1,
+        interaction_id="999000111222333555",
+    )
+    assert r_res_dup.status == "OK"
+    assert r_res_dup.embeds[0].description == r_res1.embeds[0].description
+
+    # Seed extra matches for opponent filtering and /results page_size capping
+    service.handle_slash_command(
+        "matchday",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        opponent="Metro City",
+        date_str="2026-05-06",
+    )
+    service.handle_slash_command(
+        "result",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[MANAGER_ROLE_ID],
+        opponent="Coastal FC",
+        our_score=2,
+        opponent_score=2,
+    )
+
+    r_filtered = service.handle_slash_command(
+        "results",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+        opponent="Metro",
+        page_size=25,
+    )
+    assert r_filtered.status == "OK"
+    assert r_filtered.row_count == 2  # playoff result vs Metro United + scheduled match vs Metro City
+
+    with psycopg.connect(pg_db_migrated.app) as conn:
+        from src.fc27_match_results import fetch_manual_results_page
+
+        capped_page = fetch_manual_results_page(conn, page_size=25)
+        assert capped_page.page_size == 10
+
+    r_last_metro = service.handle_slash_command(
+        "lastresult",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+        opponent="Metro United",
+    )
+    assert r_last_metro.status == "OK"
+    assert "Metro United" in r_last_metro.content
+
+    # /topscorers defaults to 5 entries even with 6 players recorded
+    r_top = service.handle_slash_command(
+        "topscorers",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+    )
+    assert r_top.status == "OK"
+    assert r_top.row_count == 5
+
+    # Missing match ID gives clear guidance message
+    r_missing = service.handle_slash_command(
+        "match",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=UNAUTHORIZED_USER_ID,
+        match_id=9999,
+    )
+    assert r_missing.status == "ERROR"
+    assert r_missing.content == "Match #9999 not found. Use /results to list matches."
+
+    # /deletematch denies Manager & Captain, allows Admin (role ID or is_admin=True)
+    for non_admin_role in (MANAGER_ROLE_ID, CAPTAIN_ROLE_ID):
+        denied = service.handle_slash_command(
+            "deletematch",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=APPROVED_CHANNEL_ID,
+            user_id=AUTHORIZED_USER_ID,
+            user_role_ids=[non_admin_role],
+            match_id=1,
+            confirm_delete=True,
+            is_admin=False,
+        )
+        assert denied.status == "REJECTED_UNAUTHORIZED"
+        assert denied.ephemeral is True
+        assert denied.content == PERMISSION_DENIED_MESSAGE
+
+    admin_perm_ok = service.handle_slash_command(
+        "deletematch",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=AUTHORIZED_USER_ID,
+        user_role_ids=[REGULAR_ROLE_ID],
+        match_id=1,
+        confirm_delete=True,
+        is_admin=True,
+    )
+    assert admin_perm_ok.status == "OK"
+    assert admin_perm_ok.ephemeral is True
+    assert "soft-deleted" in admin_perm_ok.content

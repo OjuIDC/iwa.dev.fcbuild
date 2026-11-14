@@ -28,6 +28,7 @@ Security & Least-Privilege Boundaries:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import re
@@ -37,6 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Final, Literal, Mapping, Protocol, Sequence
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
@@ -52,6 +54,21 @@ from src.fc27_discord_bot import (
     MAX_DISCORD_CONTENT_LENGTH,
     MAX_DISCORD_FIELD_VALUE_LENGTH,
     assert_discord_output_sanitized,
+)
+from src.fc27_match_results import (
+    EAST_COASTERS_FOOTER_TEXT,
+    EAST_COASTERS_SHORT_NAME,
+    ManualMatchDetail,
+    ManualMatchPlayerDetail,
+    ParsedScorerEntry,
+    build_result_content,
+    build_result_embed,
+    clean_opponent,
+    get_player_name,
+    normalize_competition_label,
+    normalize_display_label,
+    normalize_formation_label,
+    resolve_player_names,
 )
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
@@ -670,7 +687,7 @@ class FC27ClaimedDiscordJob:
 
 @dataclass(frozen=True)
 class FC27AuthoritativePlayerSummary:
-    """Pseudonymized player contribution summary loaded from PostgreSQL (never aliases)."""
+    """Resolved player contribution summary loaded from PostgreSQL (never aliases or external IDs)."""
 
     local_player_reference: str
     position: str
@@ -681,6 +698,8 @@ class FC27AuthoritativePlayerSummary:
     passes_attempted: int
     tackles_won: int
     saves: int
+    display_name: str = "Unnamed Player"
+    shots: int = 0
 
 
 @dataclass(frozen=True)
@@ -883,6 +902,7 @@ class DiscordGatewayChannelTransport:
         channel_id: str,
         match_ref: str,
         not_before: datetime | None,
+        message: FC27PostNewResultsMessage | None = None,
     ) -> str | None:
         import discord
 
@@ -898,6 +918,11 @@ class DiscordGatewayChannelTransport:
         bot_user = getattr(self._client, "user", None)
         bot_id = getattr(bot_user, "id", None)
         marker = f"ref:{match_ref}"
+        expected_content = message.content if message is not None else None
+        expected_title = message.embed.title if message is not None else None
+        expected_played = (
+            message.embed.fields.get("📅 Played") if message is not None else None
+        )
         history_kwargs: dict[str, Any] = {}
         if not_before is not None:
             history_kwargs["after"] = not_before - timedelta(
@@ -924,11 +949,31 @@ class DiscordGatewayChannelTransport:
                 for emb in getattr(msg, "embeds", ()) or ():
                     footer_txt = str(getattr(getattr(emb, "footer", None), "text", "") or "")
                     desc_txt = str(getattr(emb, "description", "") or "")
+                    title_txt = str(getattr(emb, "title", "") or "")
                     if match_ref in footer_txt or marker in footer_txt or match_ref in desc_txt:
                         return str(msg.id)
+                    played_match = False
                     for fld in getattr(emb, "fields", ()) or ():
-                        if match_ref in str(getattr(fld, "value", "") or ""):
+                        fld_name = str(getattr(fld, "name", "") or "")
+                        fld_val = str(getattr(fld, "value", "") or "")
+                        if match_ref in fld_val:
                             return str(msg.id)
+                        if (
+                            expected_played is not None
+                            and fld_name == "📅 Played"
+                            and fld_val == expected_played
+                        ):
+                            played_match = True
+                    if (
+                        expected_title is not None
+                        and title_txt == expected_title
+                        and (
+                            expected_played is None
+                            or played_match
+                            or (expected_content is not None and content == expected_content)
+                        )
+                    ):
+                        return str(msg.id)
         except FC27DiscordDispatchTransportError:
             raise
         except discord.Forbidden as exc:
@@ -973,6 +1018,7 @@ class DiscordGatewayChannelTransport:
         channel_id: str,
         match_ref: str,
         not_before: datetime | None,
+        message: FC27PostNewResultsMessage | None = None,
     ) -> str | None:
         try:
             return await asyncio.wait_for(
@@ -980,6 +1026,7 @@ class DiscordGatewayChannelTransport:
                     channel_id=channel_id,
                     match_ref=match_ref,
                     not_before=not_before,
+                    message=message,
                 ),
                 timeout=self._timeout_seconds,
             )
@@ -1003,9 +1050,11 @@ class DiscordGatewayChannelTransport:
             title=message.embed.title,
             description=message.embed.description,
         )
+        if message.embed.color is not None:
+            embed.color = message.embed.color
         for fk, fv in message.embed.fields.items():
             embed.add_field(name=fk, value=fv, inline=False)
-        embed.set_footer(text=f"ref:{message.match_ref}")
+        embed.set_footer(text=message.embed.footer_text or EAST_COASTERS_FOOTER_TEXT)
 
         try:
             sent = await channel.send(
@@ -1091,6 +1140,7 @@ class DiscordGatewayChannelTransport:
         match_ref: str,
         idempotency_key: str,
         not_before: datetime | None = None,
+        message: FC27PostNewResultsMessage | None = None,
     ) -> str | None:
         del idempotency_key
         return self._run_loop_coroutine(
@@ -1098,6 +1148,7 @@ class DiscordGatewayChannelTransport:
                 channel_id=channel_id,
                 match_ref=match_ref,
                 not_before=not_before,
+                message=message,
             ),
             operation="history lookup",
         )
@@ -1722,6 +1773,7 @@ def load_authoritative_match_for_job(
                 s.position,
                 s.goals,
                 s.assists,
+                s.shots,
                 s.passes_completed,
                 s.passes_attempted,
                 s.tackles_won,
@@ -1735,7 +1787,7 @@ def load_authoritative_match_for_job(
         )
         stat_rows = cur.fetchall()
 
-    players: list[FC27AuthoritativePlayerSummary] = []
+    player_refs: list[str] = []
     for sr in stat_rows:
         pref = str(sr["local_player_reference"]).strip()
         if not PSEUDONYM_PLAYER_REF_RE.fullmatch(pref):
@@ -1743,6 +1795,13 @@ def load_authoritative_match_for_job(
                 "PRIVACY_VALIDATION_FAILED",
                 "Player row contains non-pseudonymous local_player_reference",
             )
+        player_refs.append(pref)
+
+    roster_map = resolve_player_names(readonly_conn, player_refs)
+
+    players: list[FC27AuthoritativePlayerSummary] = []
+    for sr in stat_rows:
+        pref = str(sr["local_player_reference"]).strip()
         rating_raw = sr["provider_rating"]
         rating_val = float(rating_raw) if isinstance(rating_raw, Decimal) else float(rating_raw)
         players.append(
@@ -1756,6 +1815,8 @@ def load_authoritative_match_for_job(
                 passes_attempted=int(sr["passes_attempted"]),
                 tackles_won=int(sr["tackles_won"]),
                 saves=int(sr["saves"]),
+                display_name=get_player_name(pref, roster_map=roster_map),
+                shots=int(sr.get("shots", 0) or 0),
             )
         )
 
@@ -1781,10 +1842,16 @@ def load_authoritative_match_for_job(
         players=tuple(players),
     )
 
-    forbidden_tokens: list[str] = [raw_match_uuid, raw_export_id, EAST_COASTERS_CLUB_ID]
+    forbidden_tokens: list[str] = [
+        raw_match_uuid,
+        raw_export_id,
+        EAST_COASTERS_CLUB_ID,
+        validated.match_ref,
+        *player_refs,
+    ]
     if raw_ext_id and raw_ext_id != validated.match_ref:
         forbidden_tokens.append(raw_ext_id)
-    return match_data, tuple(forbidden_tokens)
+    return match_data, tuple(dict.fromkeys(forbidden_tokens))
 
 
 def _sanitize_opponent_display(raw_name: str) -> str:
@@ -1804,6 +1871,150 @@ def _sanitize_opponent_display(raw_name: str) -> str:
     return cleaned
 
 
+try:
+    _DISPATCH_EASTERN_TZ = ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover - fallback when tzdata is unavailable
+    _DISPATCH_EASTERN_TZ = timezone(timedelta(hours=-5))  # type: ignore[assignment]
+
+_INTERNAL_JARGON_SUBSTRINGS: Final[tuple[str, ...]] = (
+    "mref_ecf_",
+    "plr_ecf_",
+    "ref:",
+    "leagueMatch",
+    "COMMUNITY_RESEARCH_DERIVED",
+    "Match Reference",
+    "Source & Quality",
+    "Provenance",
+)
+
+_INTERNAL_JARGON_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:UNKNOWN|VERIFIED|COMPLETED)\b|(?:\bN/A\b)"
+)
+
+
+def _to_canonical_manual_match_detail(
+    match_data: FC27AuthoritativeMatchData,
+    *,
+    opponent_display: str,
+) -> ManualMatchDetail:
+    """Adapt an authoritative provider match record to the canonical ManualMatchDetail view model."""
+    played_utc = (
+        match_data.played_at.replace(tzinfo=timezone.utc)
+        if match_data.played_at.tzinfo is None
+        else match_data.played_at.astimezone(timezone.utc)
+    )
+    played_local = played_utc.astimezone(_DISPATCH_EASTERN_TZ)
+    match_date = played_local.strftime("%Y-%m-%d")
+    tz_abbr = played_local.strftime("%Z") or "EST"
+    match_time = f"{played_local.strftime('%I:%M %p').lstrip('0')} {tz_abbr}"
+    comp_label = normalize_competition_label(match_data.match_type)
+    form_label = normalize_formation_label(match_data.formation)
+
+    scorer_totals: dict[str, tuple[str, int]] = {}
+    player_details: list[ManualMatchPlayerDetail] = []
+    total_shots = 0
+    total_passes_completed = 0
+    total_passes_attempted = 0
+    total_tackles = 0
+
+    for player in match_data.players:
+        raw_name = (player.display_name or "").strip()
+        if not raw_name or PSEUDONYM_PLAYER_REF_RE.fullmatch(raw_name):
+            safe_name = "Unnamed Player"
+        else:
+            _, safe_name = normalize_display_label(raw_name, field_name="Player")
+        norm_name = safe_name.lower()
+
+        pos_clean: str | None = (player.position or "").strip().upper()
+        if not pos_clean or pos_clean in {"UNKNOWN", "NONE", "NULL", "N/A", "-"}:
+            pos_clean = None
+
+        rating_dec: Decimal | None = None
+        if player.provider_rating and player.provider_rating > 0:
+            rating_dec = Decimal(f"{player.provider_rating:.1f}")
+
+        pass_acc: int | None = None
+        if player.passes_attempted > 0:
+            pass_acc = round(100 * player.passes_completed / player.passes_attempted)
+
+        p_shots = getattr(player, "shots", 0) or 0
+        total_shots += max(0, int(p_shots))
+        total_passes_completed += max(0, int(player.passes_completed))
+        total_passes_attempted += max(0, int(player.passes_attempted))
+        total_tackles += max(0, int(player.tackles_won))
+
+        if player.goals > 0:
+            prev_name, prev_goals = scorer_totals.get(norm_name, (safe_name, 0))
+            scorer_totals[norm_name] = (prev_name, prev_goals + int(player.goals))
+
+        player_details.append(
+            ManualMatchPlayerDetail(
+                normalized_display_label=norm_name,
+                safe_display_label=safe_name,
+                player_id=None,
+                position=pos_clean,
+                goals=max(0, int(player.goals)),
+                assists=max(0, int(player.assists)),
+                tackles=player.tackles_won if player.tackles_won > 0 else None,
+                passes=player.passes_completed if player.passes_completed > 0 else None,
+                passes_completed=max(0, int(player.passes_completed)),
+                passes_attempted=max(0, int(player.passes_attempted)),
+                pass_accuracy=pass_acc,
+                shots=p_shots if p_shots > 0 else None,
+                saves=max(0, int(player.saves)),
+                rating=rating_dec,
+            )
+        )
+
+    ordered_scorers = sorted(
+        scorer_totals.items(),
+        key=lambda item: (-item[1][1], item[1][0].lower()),
+    )
+    scorer_entries = tuple(
+        ParsedScorerEntry(
+            normalized_display_label=norm_k,
+            safe_display_label=disp_v,
+            goals=g_count,
+            display_order=idx,
+        )
+        for idx, (norm_k, (disp_v, g_count)) in enumerate(ordered_scorers)
+    )
+
+    team_pass_acc: int | None = (
+        round(100 * total_passes_completed / total_passes_attempted)
+        if total_passes_attempted > 0
+        else None
+    )
+
+    return ManualMatchDetail(
+        match_id=0,
+        club_id=match_data.club_id,
+        platform=match_data.platform,
+        game_version=match_data.game_version,
+        opponent=opponent_display,
+        opponent_normalized=opponent_display.lower(),
+        kickoff_at=played_utc,
+        match_date=match_date,
+        match_time=match_time,
+        home_score=int(match_data.goals_for),
+        away_score=int(match_data.goals_against),
+        status="FULL_TIME",
+        competition=comp_label,
+        formation=form_label,
+        shots=total_shots if total_shots > 0 else None,
+        passes=total_passes_completed if total_passes_completed > 0 else None,
+        pass_accuracy=team_pass_acc,
+        tackles=total_tackles if total_tackles > 0 else None,
+        created_by="system",
+        updated_by="system",
+        created_at=played_utc,
+        updated_at=played_utc,
+        revision=1,
+        scorers=scorer_entries,
+        players=tuple(player_details),
+    )
+
+
 def build_post_new_results_notification(
     match_data: FC27AuthoritativeMatchData,
     *,
@@ -1811,7 +2022,7 @@ def build_post_new_results_notification(
     idempotency_key: str,
     extra_forbidden_tokens: Sequence[str] = (),
 ) -> FC27PostNewResultsMessage:
-    """Build and sanitize the Discord notification payload for one authoritative match."""
+    """Build and sanitize the canonical Discord notification payload for one authoritative match."""
     clean_channel = (channel_id or "").strip()
     if not _SNOWFLAKE_RE.fullmatch(clean_channel):
         raise _JobVerificationError(
@@ -1819,56 +2030,41 @@ def build_post_new_results_notification(
             "Configured results_channel_id is invalid",
         )
 
-    opponent_safe = _sanitize_opponent_display(match_data.opponent_name)
-    match_type_label = _MATCH_TYPE_LABELS.get(
-        match_data.match_type, validate_safe_text(match_data.match_type, field_name="match_type", max_len=32)
+    opponent_safe = clean_opponent(_sanitize_opponent_display(match_data.opponent_name))
+    detail = _to_canonical_manual_match_detail(
+        match_data,
+        opponent_display=opponent_safe,
     )
-    played_utc = match_data.played_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    scoreline = f"{match_data.goals_for} - {match_data.goals_against}"
-    result_upper = match_data.result.upper()
+    content = build_result_content(detail)
+    d_embed = build_result_embed(detail)
 
-    title = (
-        f"{EAST_COASTERS_CLUB_NAME} — {result_upper} {scoreline} vs {opponent_safe}"
-    )[:256]
-    description = (
-        f"New **{match_type_label}** result recorded for {EAST_COASTERS_CLUB_NAME}.\n"
-        f"**Scoreline:** `{scoreline}` ({result_upper}) vs **{opponent_safe}**\n"
-        f"**Played At:** `{played_utc}` | **Formation:** `{match_data.formation}` | "
-        f"**Status:** `{match_data.match_status}`"
-    )
+    field_map: dict[str, str] = {}
+    for fld in getattr(d_embed, "fields", ()) or ():
+        fname = str(getattr(fld, "name", "") or "").strip()
+        fval = str(getattr(fld, "value", "") or "").strip()
+        if fname and fval:
+            field_map[fname] = fval[:MAX_DISCORD_FIELD_VALUE_LENGTH]
 
-    player_lines: list[str] = []
-    for player in match_data.players[:MAX_DISCORD_PLAYER_SUMMARY_LINES]:
-        player_lines.append(
-            f"`{player.local_player_reference}` ({player.position}) — "
-            f"G:{player.goals} A:{player.assists} | "
-            f"P:{player.passes_completed}/{player.passes_attempted} | "
-            f"T:{player.tackles_won} | S:{player.saves} | "
-            f"Rating:{player.provider_rating:.2f}"
-        )
-    roster_text = (
-        "\n".join(player_lines)
-        if player_lines
-        else "No pseudonymized player stats recorded for this match."
-    )
-    if len(roster_text) > MAX_DISCORD_FIELD_VALUE_LENGTH:
-        roster_text = roster_text[: MAX_DISCORD_FIELD_VALUE_LENGTH - 3] + "..."
+    raw_color = getattr(d_embed, "color", None)
+    color_val: int | None = None
+    if raw_color is not None:
+        c_int = getattr(raw_color, "value", raw_color)
+        if isinstance(c_int, int) and not isinstance(c_int, bool):
+            color_val = c_int
 
-    fields: dict[str, str] = {
-        "Match Reference": f"`{match_data.match_ref}`",
-        "Competition": f"{match_type_label} (`{match_data.match_type}`)",
-        "Source & Quality": f"`{match_data.source_classification}` / `{match_data.data_quality_status}`",
-        "Roster Summary (Pseudonymous)": roster_text,
-    }
+    footer_obj = getattr(d_embed, "footer", None)
+    footer_txt = (
+        str(getattr(footer_obj, "text", "") or "").strip()
+        if footer_obj is not None
+        else ""
+    ) or EAST_COASTERS_FOOTER_TEXT
 
     embed = FC27DiscordEmbed(
-        title=title,
-        description=description,
-        fields=fields,
-    )
-    content = (
-        f"**{EAST_COASTERS_CLUB_NAME}** {match_type_label} result (`{result_upper} {scoreline}` "
-        f"vs {opponent_safe}) — `{match_data.match_ref}`"
+        title=str(getattr(d_embed, "title", "") or EAST_COASTERS_SHORT_NAME)[:256],
+        description=str(getattr(d_embed, "description", "") or EAST_COASTERS_SHORT_NAME)[:1800],
+        fields=field_map,
+        color=color_val,
+        footer_text=footer_txt,
     )
 
     msg = FC27PostNewResultsMessage(
@@ -1879,17 +2075,30 @@ def build_post_new_results_notification(
         embed=embed,
     )
 
+    combined_forbidden = tuple(
+        dict.fromkeys(
+            tok
+            for tok in (
+                *extra_forbidden_tokens,
+                match_data.match_ref,
+                *(p.local_player_reference for p in match_data.players),
+            )
+            if tok and len(tok.strip()) >= 6
+        )
+    )
+
     all_texts = [
         msg.content,
         msg.embed.title,
         msg.embed.description,
+        msg.embed.footer_text or "",
         *msg.embed.fields.keys(),
         *msg.embed.fields.values(),
     ]
     for text_item in all_texts:
         try:
             assert_discord_output_sanitized(
-                text_item, forbidden_tokens=extra_forbidden_tokens
+                text_item, forbidden_tokens=combined_forbidden
             )
         except FC27DiscordPrivacyError as exc:
             raise _JobVerificationError(
@@ -1900,6 +2109,17 @@ def build_post_new_results_notification(
             raise _JobVerificationError(
                 "PRIVACY_VALIDATION_FAILED",
                 "Outgoing notification contains prohibited URL token",
+            )
+        for bad_sub in _INTERNAL_JARGON_SUBSTRINGS:
+            if bad_sub in text_item:
+                raise _JobVerificationError(
+                    "PRIVACY_VALIDATION_FAILED",
+                    f"Outgoing notification contains prohibited internal token: {bad_sub}",
+                )
+        if _INTERNAL_JARGON_WORD_RE.search(text_item):
+            raise _JobVerificationError(
+                "PRIVACY_VALIDATION_FAILED",
+                "Outgoing notification contains prohibited status or missing-value placeholder",
             )
 
     return msg
@@ -2200,12 +2420,22 @@ def run_discord_dispatch_cycle(
                         _record_lease_lost(job, match_ref, "LEASE_LOST_BEFORE_HISTORY")
                         continue
                     queue_conn.commit()
-                    existing_msg_id = transport.find_existing_notification(
-                        channel_id=config.results_channel_id,
-                        match_ref=match_data.match_ref,
-                        idempotency_key=job.idempotency_key,
-                        not_before=job.created_at,
-                    )
+                    find_kwargs: dict[str, Any] = {
+                        "channel_id": config.results_channel_id,
+                        "match_ref": match_data.match_ref,
+                        "idempotency_key": job.idempotency_key,
+                        "not_before": job.created_at,
+                    }
+                    try:
+                        sig_params = inspect.signature(transport.find_existing_notification).parameters
+                        if "message" in sig_params or any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD
+                            for p in sig_params.values()
+                        ):
+                            find_kwargs["message"] = message
+                    except (TypeError, ValueError):
+                        pass
+                    existing_msg_id = transport.find_existing_notification(**find_kwargs)
 
                 if existing_msg_id is not None:
                     completed_ok = complete_discord_job(

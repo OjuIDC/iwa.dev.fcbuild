@@ -250,8 +250,8 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
-    """Verifies Grants Policy Version 16 least-privilege separation for Migration 0012, 0013, and 0014 tables."""
-    assert GRANTS_POLICY.version == 16
+    """Verifies Grants Policy Version 17 least-privilege separation for Migration 0012, 0013, 0014, and 0016 tables."""
+    assert GRANTS_POLICY.version == 17
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",
@@ -301,11 +301,12 @@ STAGE_C_TABLES = (
 
 
 def test_migration_0014_fresh_and_idempotent(pg_db):
-    """Validates fresh migration 0001..0015, grants policy 16, postconditions, and second-run no-op."""
+    """Validates fresh migration 0001..0016, grants policy 17, postconditions, and second-run no-op."""
     applied_first = migrate(pg_db.migrator)
     assert "0014_fc27_player_development.sql" in applied_first
     assert "0015_fc27_player_development_fixups.sql" in applied_first
-    assert len(applied_first) == 15
+    assert "0016_fc27_canonical_roster_and_legacy_matches.sql" in applied_first
+    assert len(applied_first) == 16
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -318,9 +319,8 @@ def test_migration_0014_fresh_and_idempotent(pg_db):
 
 
 def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_db, monkeypatch):
-    """Validates upgrade from 0013 to 0014 with seeded provider and manual Match Results data."""
+    """Validates upgrade from 0013 to 0015 with seeded provider and manual Match Results data."""
     from src.fc27_backup_restore import inspect_database_state_for_manifest
-    from src.fc27_match_results import create_scheduled_match, record_match_result
     from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
     from tests.test_fc27_polling_worker import (
         _build_validated_envelope,
@@ -345,23 +345,41 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
     assert res.poll_status == "NEW_MATCHES_PERSISTED"
     assert res.inserted_match_count == 2
 
-    sched = create_scheduled_match(
-        pg_db.match_results_writer,
-        opponent="Harbor City",
-        match_date="2026-04-19",
-        match_time="21:30 UTC",
-        actor_discord_user_id="345678901234567890",
-    )
-    record_match_result(
-        pg_db.match_results_writer,
-        opponent="Harbor City",
-        home_score=3,
-        away_score=1,
-        actor_discord_user_id="345678901234567890",
-        scorers="Lao x2, Jay",
-        motm="Lao",
-        match_id=sched.match_id,
-    )
+    # Seed a legacy pre-0016 manual Match Results row directly using 0013 columns.
+    with psycopg.connect(pg_db.match_results_writer, autocommit=True) as wconn:
+        seed_id = wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_matches (
+                opponent, opponent_normalized, match_date, match_time,
+                home_score, away_score, status, motm_display_label, motm_normalized_label,
+                created_by, updated_by
+            )
+            VALUES (
+                'Harbor City', 'harbor city', '2026-04-19', '21:30 UTC',
+                3, 1, 'FULL_TIME', 'Lao', 'lao',
+                '345678901234567890', '345678901234567890'
+            )
+            RETURNING match_id
+            """
+        ).fetchone()[0]
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_players (
+                match_id, normalized_display_label, safe_display_label, goals, assists
+            )
+            VALUES (%s, 'lao', 'Lao', 2, 0), (%s, 'jay', 'Jay', 1, 0)
+            """,
+            (seed_id, seed_id),
+        )
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_events (
+                match_id, event_type, normalized_display_label, safe_display_label, event_count, display_order
+            )
+            VALUES (%s, 'GOAL', 'lao', 'Lao', 2, 0), (%s, 'GOAL', 'jay', 'Jay', 1, 1)
+            """,
+            (seed_id, seed_id),
+        )
 
     _, mig_cnt_before, counts_before, hashes_before = inspect_database_state_for_manifest(pg_db.admin)
     assert mig_cnt_before == 13
@@ -369,8 +387,8 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
     assert counts_before.fc27_player_match_stats == 12
     assert counts_before.fc27_manual_matches == 1
 
-    # Upgrade from 0013 through latest (0014 + 0015 fixups)
-    applied_upgrade = migrate(pg_db.migrator)
+    # Upgrade from 0013 through 0015 fixups
+    applied_upgrade = migrate(pg_db.migrator, target="0015")
     assert applied_upgrade == [
         "0014_fc27_player_development.sql",
         "0015_fc27_player_development_fixups.sql",
@@ -388,12 +406,86 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
-        with conn.cursor() as cur:
-            for tbl in STAGE_C_TABLES:
-                cur.execute(f"SELECT count(*) FROM public.{tbl}")
-                assert cur.fetchone()[0] == 0, f"expected {tbl} to be empty after 0014 upgrade"
 
-    # Second run after upgrade is a no-op
+
+def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, monkeypatch):
+    """Validates upgrade 0015->0016 preserves existing numeric IDs, migrates mref_ecf_* matches, and is idempotent."""
+    from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
+    from tests.test_fc27_polling_worker import (
+        _build_validated_envelope,
+        _enable_all_polling_gates,
+    )
+
+    migrate(pg_db.migrator, target="0015")
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(count=2, start_id=993001, players_per_match=4)
+    res = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db.app,
+        fetch_matches_fn=lambda: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.inserted_match_count == 2
+
+    # Seed pre-0016 numeric manual match #1 using 0013 schema columns.
+    with psycopg.connect(pg_db.match_results_writer, autocommit=True) as wconn:
+        existing_match_id = wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_matches (
+                opponent, opponent_normalized, home_score, away_score,
+                status, created_by, updated_by
+            )
+            VALUES (
+                'Harbor City FC', 'harbor city fc', 2, 0,
+                'FULL_TIME', '345678901234567890', '345678901234567890'
+            )
+            RETURNING match_id
+            """
+        ).fetchone()[0]
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_players (
+                match_id, normalized_display_label, safe_display_label, goals, assists
+            )
+            VALUES (%s, 'lao', 'Lao', 2, 0)
+            """,
+            (existing_match_id,),
+        )
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_events (
+                match_id, event_type, normalized_display_label, safe_display_label, event_count, display_order
+            )
+            VALUES (%s, 'GOAL', 'lao', 'Lao', 2, 0)
+            """,
+            (existing_match_id,),
+        )
+    assert existing_match_id == 1
+
+    applied_upgrade = migrate(pg_db.migrator)
+    assert applied_upgrade == ["0016_fc27_canonical_roster_and_legacy_matches.sql"]
+
+    with psycopg.connect(pg_db.admin) as conn:
+        assert verify_postconditions(conn) == []
+        row_existing = conn.execute(
+            "SELECT match_id, opponent, legacy_ref FROM public.fc27_manual_matches WHERE match_id = 1"
+        ).fetchone()
+        assert row_existing == (1, "Harbor City FC", None)
+
+        migrated_rows = conn.execute(
+            "SELECT match_id, legacy_ref FROM public.fc27_manual_matches WHERE legacy_ref IS NOT NULL ORDER BY match_id ASC"
+        ).fetchall()
+        assert len(migrated_rows) == 2
+        assert all(str(r[1]).startswith("mref_ecf_") and int(r[0]) >= 2 for r in migrated_rows)
+
+        migrated_players = conn.execute(
+            "SELECT COUNT(*) FROM public.fc27_manual_match_players WHERE player_id LIKE 'plr_ecf_%'"
+        ).fetchone()[0]
+        assert migrated_players == 8
+
+    # Idempotent no-op re-run
     assert migrate(pg_db.migrator) == []
 
 
@@ -794,6 +886,7 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             "fc27_manual_match_players",
             "fc27_manual_match_events",
             "fc27_manual_match_audit",
+            "fc27_roster",
             *STAGE_C_TABLES,
         ):
             reader_conn.execute(f"SELECT count(*) FROM public.{readable_tbl}")
@@ -816,6 +909,7 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             "fc27_manual_match_players",
             "fc27_manual_match_events",
             "fc27_manual_match_audit",
+            "fc27_roster",
             *legacy_tables,
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -839,6 +933,9 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
                 "VALUES ('plr_ecf_0123456789ab', %s)",
                 ("c" * 64,),
             )
+        pd_conn.execute("SELECT count(*) FROM public.fc27_roster")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute("DELETE FROM public.fc27_roster")
         for no_access_tbl in (
             "fc27_quarantine_records",
             "fc27_manual_matches",

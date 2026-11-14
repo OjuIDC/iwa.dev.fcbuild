@@ -1,4 +1,4 @@
--- grants-policy-version: 16
+-- grants-policy-version: 17
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -391,9 +391,21 @@ BEGIN
         END IF;
     END IF;
 
+    -- Canonical Player Roster table (0016)
+    IF to_regclass('public.fc27_roster') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_roster FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_roster FROM fc27_relay';
+        END IF;
+        GRANT SELECT ON public.fc27_roster TO fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_roster TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
     -- =========================================================================
     -- Migration 0014: Player Development, Linking, Build Catalog, Suggestions,
-    -- and Discord Job Queue Roles (Grants Policy Version 16)
+    -- and Discord Job Queue Roles (Grants Policy Version 17)
     -- =========================================================================
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
         EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fc27_poll_writer';
@@ -508,6 +520,15 @@ BEGIN
     IF to_regclass('public.fc27_manual_match_audit') IS NOT NULL THEN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
             EXECUTE 'GRANT SELECT ON public.fc27_manual_match_audit TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_roster') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_roster TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_roster TO fc27_player_dev_writer';
         END IF;
     END IF;
 
