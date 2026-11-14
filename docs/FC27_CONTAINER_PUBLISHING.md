@@ -68,7 +68,7 @@ Four official Docker Hub `python:3.11*-slim*` candidates were evaluated locally 
 ### 3.1 Preserved Runtime Contracts
 Both remediated images (`fc27-community-worker` and `fc27-discord-bot`) preserve every runtime contract under `--network none --read-only --cap-drop=ALL --security-opt=no-new-privileges:true`:
 - Non-root user `10001:65534` (`uid=10001(app) gid=65534(nogroup)`).
-- Pinned upstream community provider archive `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (in `fc27-community-worker`) and `discord.py==2.7.1` (in `fc27-discord-bot`).
+- Pinned upstream community provider archive `1erkandogan/fc27-clubs-api@26a5ff12ea793042bd776a858c74f3f44dd427f5` (in `fc27-community-worker`) and the required core runtime dependency `discord.py==2.7.1` (declared in `requirements.txt` and installed in `Dockerfile.discord`).
 - `FC27_COMMUNITY_POLL_INTERVAL_SECONDS=43200` (`12` hours, `ONCE_EVERY_12_HOURS`), `FC27_RECOMMENDATIONS_ENABLED=false`, and `DISPATCH_ENABLED=false`.
 - Clean `--status` readiness output and clean `SIGTERM` shutdown (`exit 0`).
 

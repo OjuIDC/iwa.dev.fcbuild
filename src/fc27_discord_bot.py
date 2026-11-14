@@ -996,8 +996,8 @@ class FC27DiscordBotService:
         ):
             assert_discord_output_sanitized(text, forbidden_tokens=self._secret_tokens)
         for field in d_embed.fields:
-            assert_discord_output_sanitized(field.name, forbidden_tokens=self._secret_tokens)
-            assert_discord_output_sanitized(field.value, forbidden_tokens=self._secret_tokens)
+            assert_discord_output_sanitized(field.name or "", forbidden_tokens=self._secret_tokens)
+            assert_discord_output_sanitized(field.value or "", forbidden_tokens=self._secret_tokens)
         if self._discord_channel_adapter is None:
             return match_detail
 
@@ -2789,8 +2789,8 @@ def run_discord_gateway_bot(
         if missing != "discord" and not missing.startswith("discord."):
             raise
         raise FC27DiscordDisabledError(
-            "Optional dependency 'discord.py' is not installed. "
-            "Install the gateway extra with: pip install '.[discord]'"
+            "Required dependency 'discord.py' is not installed. "
+            "Install runtime dependencies with: pip install -r requirements.txt"
         ) from exc
 
     intents = discord.Intents.none()

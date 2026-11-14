@@ -55,9 +55,9 @@ SOFTWARE.
 
 ---
 
-## 2. `Rapptz/discord.py` (Optional Read-Only Discord Bot Dependency)
+## 2. `Rapptz/discord.py` (Required Read-Only Discord Bot Dependency)
 
 - **Upstream Repository**: https://github.com/Rapptz/discord.py
-- **Pinned Version**: `2.7.1` (`pyproject.toml` `[project.optional-dependencies].discord`, `Dockerfile.discord`)
+- **Pinned Version**: `2.7.1` (`requirements.txt`, `pyproject.toml` `[project].dependencies`, `Dockerfile.discord`)
 - **Upstream License**: `MIT`
-- **Usage Scope**: Used exclusively in `src/fc27_discord_bot.py` and `Dockerfile.discord` for the optional, disabled-by-default (`FC27_DISCORD_BOT_ENABLED=false`) read-only East Coasters slash-command bot under the `fc27-discord` Compose profile. It has zero EA provider access (`DISCORD_PROVIDER_REQUESTS=0`), zero database write access, and requires secret-file token delivery plus explicit guild and channel allowlists.
+- **Usage Scope**: Required runtime dependency of `src/fc27_discord_bot.py`, declared in `requirements.txt` and `pyproject.toml` and installed explicitly in `Dockerfile.discord` for the disabled-by-default (`FC27_DISCORD_BOT_ENABLED=false`) read-only East Coasters slash-command bot under the `fc27-discord` Compose profile. The bot service remains opt-in. It has zero EA provider access (`DISCORD_PROVIDER_REQUESTS=0`), zero database write access, and requires secret-file token delivery plus explicit guild and channel allowlists.

@@ -20,7 +20,7 @@ This guide covers setting up a local development environment for `iwa.dev.fcbuil
   ```
 
 ### Dependency Files
-- `requirements.txt` — Core runtime dependencies (pinned identically in `pyproject.toml`, enforced by `tests/test_packaging.py`).
+- `requirements.txt` — Core runtime dependencies (pinned identically in `pyproject.toml`, enforced by `tests/test_packaging.py`). This includes `discord.py==2.7.1`; Discord support is a required runtime dependency, while the bot itself remains disabled by default.
 - `requirements-dev.txt` — Test and static validation tools (`pytest`, `httpx`, `pyyaml`, etc.).
 
 > **Packaging Rule**: If you modify `requirements.txt`, you must update `[project].dependencies` in `pyproject.toml` to match (`tests/test_packaging.py` enforces exact equality).

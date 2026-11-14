@@ -9,6 +9,7 @@ The East Coasters FC27 Discord bot (`src/fc27_discord_bot.py`, `src/fc27_match_r
 ## Security & Governance Invariants
 
 - **Disabled by default**: `FC27_DISCORD_BOT_ENABLED=false`.
+- **Required dependency**: `discord.py==2.7.1` is a core runtime dependency declared in `requirements.txt` and `pyproject.toml` (`[project].dependencies`), and is installed in `Dockerfile.discord`. The bot service remains opt-in behind `FC27_DISCORD_BOT_ENABLED` and the `fc27-discord` Compose profile.
 - **Zero provider authority**: `DISCORD_PROVIDER_REQUESTS = 0`; the bot cannot trigger live EA or community-provider calls.
 - **Strict domain separation**:
   - Provider/import analytics commands use `GuardedDiscordReadOnlyConnection` (`DISCORD_DATABASE_WRITE_ACCESS = False`), enforcing `SELECT`-only access to `public.fc27_*` tables and blocking `public.checkpoints*`, `public.recommendation_approvals`, and `public.dispatch_outbox`. `docker-compose.discord.yml` also wires the dedicated `SELECT`-only `fc27_discord_reader` role (`FC27_DISCORD_READER_URI_FILE`) and the dedicated player-development writer role `fc27_player_dev_writer` (`FC27_PLAYER_DEV_WRITER_URI_FILE` for `migrations/0014_fc27_player_development.sql` tables).

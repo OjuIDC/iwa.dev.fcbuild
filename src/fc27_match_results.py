@@ -25,124 +25,126 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Callable, Iterator, Literal, Sequence
+from typing import Any, Callable, Iterator, Literal, Sequence, TYPE_CHECKING
 
-try:
+if TYPE_CHECKING:
     import discord
-except ModuleNotFoundError:  # pragma: no cover - fallback when optional discord extra is absent
+else:
+    try:
+        import discord
+    except ModuleNotFoundError:  # pragma: no cover - defensive fallback when discord.py is unavailable
+        class _EmbedField:
+            def __init__(self, name: str, value: str, inline: bool = False) -> None:
+                self.name = str(name)
+                self.value = str(value)
+                self.inline = bool(inline)
 
-    class _EmbedField:
-        def __init__(self, name: str, value: str, inline: bool = False) -> None:
-            self.name = str(name)
-            self.value = str(value)
-            self.inline = bool(inline)
+        class _EmbedFooter:
+            def __init__(self, text: str | None = None) -> None:
+                self.text = text
 
-    class _EmbedFooter:
-        def __init__(self, text: str | None = None) -> None:
-            self.text = text
+        class _ShimEmbed:
+            def __init__(
+                self,
+                *,
+                title: str | None = None,
+                description: str | None = None,
+                color: int | None = None,
+            ) -> None:
+                self.title = title
+                self.description = description
+                self.color = color
+                self.fields: list[_EmbedField] = []
+                self.footer = _EmbedFooter(None)
 
-    class _ShimEmbed:
-        def __init__(
-            self,
-            *,
-            title: str | None = None,
-            description: str | None = None,
-            color: int | None = None,
-        ) -> None:
-            self.title = title
-            self.description = description
-            self.color = color
-            self.fields: list[_EmbedField] = []
-            self.footer = _EmbedFooter(None)
+            def add_field(self, *, name: str, value: str, inline: bool = False) -> _ShimEmbed:
+                self.fields.append(_EmbedField(name=name, value=value, inline=inline))
+                return self
 
-        def add_field(self, *, name: str, value: str, inline: bool = False) -> _ShimEmbed:
-            self.fields.append(_EmbedField(name=name, value=value, inline=inline))
-            return self
+            def set_footer(self, *, text: str) -> _ShimEmbed:
+                self.footer = _EmbedFooter(text=str(text))
+                return self
 
-        def set_footer(self, *, text: str) -> _ShimEmbed:
-            self.footer = _EmbedFooter(text=str(text))
-            return self
+        class _ShimButtonStyle:
+            primary: int = 1
+            secondary: int = 2
+            success: int = 3
+            danger: int = 4
 
-    class _ShimButtonStyle:
-        primary: int = 1
-        secondary: int = 2
-        success: int = 3
-        danger: int = 4
+        class _ShimAllowedMentions:
+            @classmethod
+            def none(cls) -> _ShimAllowedMentions:
+                return cls()
 
-    class _ShimAllowedMentions:
-        @classmethod
-        def none(cls) -> _ShimAllowedMentions:
-            return cls()
+        class _ShimButton:
+            def __init__(
+                self,
+                *,
+                label: str = "",
+                style: int = _ShimButtonStyle.secondary,
+                disabled: bool = False,
+                view: Any = None,
+                func: Callable[..., Any] | None = None,
+            ) -> None:
+                self.label = label
+                self.style = style
+                self.disabled = disabled
+                self._view = view
+                self._func = func
 
-    class _ShimButton:
-        def __init__(
-            self,
-            *,
-            label: str = "",
-            style: int = _ShimButtonStyle.secondary,
-            disabled: bool = False,
-            view: Any = None,
-            func: Callable[..., Any] | None = None,
-        ) -> None:
-            self.label = label
-            self.style = style
-            self.disabled = disabled
-            self._view = view
-            self._func = func
+            async def callback(self, interaction: Any) -> Any:
+                if self._func is None:
+                    return None
+                return await self._func(self._view, interaction, self)
 
-        async def callback(self, interaction: Any) -> Any:
-            if self._func is None:
-                return None
-            return await self._func(self._view, interaction, self)
+            async def __call__(self, interaction: Any, *args: Any) -> Any:
+                return await self.callback(interaction)
 
-        async def __call__(self, interaction: Any, *args: Any) -> Any:
-            return await self.callback(interaction)
+        def _shim_ui_button(
+            *, label: str = "", style: int = _ShimButtonStyle.secondary, disabled: bool = False
+        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+            def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+                setattr(func, "_shim_button_spec", (label, style, disabled))
+                return func
 
-    def _shim_ui_button(
-        *, label: str = "", style: int = _ShimButtonStyle.secondary, disabled: bool = False
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            setattr(func, "_shim_button_spec", (label, style, disabled))
-            return func
+            return _decorator
 
-        return _decorator
+        class _ShimView:
+            def __init__(self, *, timeout: float | None = 180.0) -> None:
+                self.timeout = timeout
+                self.children: list[_ShimButton] = []
+                self._stopped = False
+                for attr_name in dir(self.__class__):
+                    attr_val = getattr(self.__class__, attr_name, None)
+                    spec = getattr(attr_val, "_shim_button_spec", None)
+                    if spec is not None and callable(attr_val):
+                        lbl, sty, dis = spec
+                        btn = _ShimButton(
+                            label=lbl,
+                            style=sty,
+                            disabled=dis,
+                            view=self,
+                            func=attr_val,
+                        )
+                        setattr(self, attr_name, btn)
+                        self.children.append(btn)
 
-    class _ShimView:
-        def __init__(self, *, timeout: float | None = 180.0) -> None:
-            self.timeout = timeout
-            self.children: list[_ShimButton] = []
-            self._stopped = False
-            for attr_name in dir(self.__class__):
-                attr_val = getattr(self.__class__, attr_name, None)
-                spec = getattr(attr_val, "_shim_button_spec", None)
-                if spec is not None and callable(attr_val):
-                    lbl, sty, dis = spec
-                    btn = _ShimButton(
-                        label=lbl,
-                        style=sty,
-                        disabled=dis,
-                        view=self,
-                        func=attr_val,
-                    )
-                    setattr(self, attr_name, btn)
-                    self.children.append(btn)
+            def stop(self) -> None:
+                self._stopped = True
 
-        def stop(self) -> None:
-            self._stopped = True
+        class _ShimUINamespace:
+            View = _ShimView
+            Button = _ShimButton
+            button = staticmethod(_shim_ui_button)
 
-    class _ShimUINamespace:
-        View = _ShimView
-        Button = _ShimButton
-        button = staticmethod(_shim_ui_button)
+        class _DiscordModuleShim:
+            Embed = _ShimEmbed
+            ButtonStyle = _ShimButtonStyle
+            AllowedMentions = _ShimAllowedMentions
+            Interaction = Any
+            ui = _ShimUINamespace
 
-    class _DiscordModuleShim:
-        Embed = _ShimEmbed
-        ButtonStyle = _ShimButtonStyle
-        AllowedMentions = _ShimAllowedMentions
-        Interaction = Any
-        ui = _ShimUINamespace
-
-    discord = _DiscordModuleShim()  # type: ignore[assignment]
+        discord = _DiscordModuleShim()  # type: ignore[assignment]
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field
@@ -2877,7 +2879,7 @@ class MatchResultsPaginationView(discord.ui.View):
     async def on_timeout(self) -> None:
         for child in self.children:
             if hasattr(child, "disabled"):
-                child.disabled = True
+                setattr(child, "disabled", True)
         if self.message is not None and hasattr(self.message, "edit"):
             try:
                 await self.message.edit(view=self)
@@ -2906,7 +2908,7 @@ class MatchDeleteConfirmationView(discord.ui.View):
     def _disable_all(self) -> None:
         for child in self.children:
             if hasattr(child, "disabled"):
-                child.disabled = True
+                setattr(child, "disabled", True)
 
     @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger)
     async def confirm_button(
