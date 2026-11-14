@@ -969,6 +969,9 @@ class DiscordGatewayChannelTransport:
                             expected_content is None or content == expected_content
                         )
                         if expected_played is not None:
+                            # Require BOTH title AND Played field to match for identity.
+                            # Do not accept headline equality alone, as two matches against
+                            # the same opponent with the same score would be treated as one.
                             if played_match and content_matches:
                                 return str(msg.id)
                         elif expected_content is not None and content == expected_content:

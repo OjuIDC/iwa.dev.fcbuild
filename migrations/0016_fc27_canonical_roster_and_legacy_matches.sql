@@ -205,3 +205,151 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fc27_manual_match_players_match_label
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fc27_manual_match_players_match_pid
     ON public.fc27_manual_match_players (match_id, player_id)
     WHERE player_id IS NOT NULL;
+
+-- 4. Backfill eligible legacy matches from fc27_matches into fc27_manual_matches.
+-- Exclude quarantined matches (REJECTED quality or active quarantine blocks).
+-- Sanitize opponent names to remove Discord mentions (@everyone, @here, role/user mentions).
+DO $$
+DECLARE
+    v_club_id text := '330323';
+    v_platform text := 'common-gen5';
+    v_game_version text := 'FC27';
+    v_inserted_count integer := 0;
+    v_skipped_quarantine integer := 0;
+    v_skipped_duplicate integer := 0;
+BEGIN
+    -- Insert eligible legacy matches that don't already have a legacy_ref mapping.
+    INSERT INTO public.fc27_manual_matches (
+        club_id,
+        platform,
+        game_version,
+        opponent,
+        opponent_normalized,
+        kickoff_at,
+        match_date,
+        match_time,
+        home_score,
+        away_score,
+        status,
+        motm_display_label,
+        motm_normalized_label,
+        possession,
+        shots,
+        shots_on_target,
+        passes,
+        pass_accuracy,
+        corners,
+        tackles,
+        fouls,
+        notes,
+        discord_guild_id,
+        discord_channel_id,
+        discord_message_id,
+        legacy_ref,
+        competition,
+        formation,
+        source_classification,
+        created_by,
+        updated_by,
+        revision,
+        created_at,
+        updated_at
+    )
+    SELECT
+        m.club_id,
+        m.platform,
+        m.game_version,
+        -- Sanitize opponent name: remove @everyone, @here, and Discord mention patterns.
+        regexp_replace(
+            regexp_replace(
+                regexp_replace(
+                    COALESCE(m.opponent_name, 'Unknown Opponent'),
+                    '@everyone|@here',
+                    '',
+                    'gi'
+                ),
+                '<@!?[0-9]+>',
+                '',
+                'g'
+            ),
+            '<@&[0-9]+>',
+            '',
+            'g'
+        ),
+        lower(btrim(
+            regexp_replace(
+                regexp_replace(
+                    regexp_replace(
+                        COALESCE(m.opponent_name, 'Unknown Opponent'),
+                        '@everyone|@here',
+                        '',
+                        'gi'
+                    ),
+                    '<@!?[0-9]+>',
+                    '',
+                    'g'
+                ),
+                '<@&[0-9]+>',
+                '',
+                'g'
+            )
+        )),
+        m.played_at,
+        to_char(m.played_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
+        to_char(m.played_at AT TIME ZONE 'UTC', 'HH24:MI'),
+        m.goals_for,
+        m.goals_against,
+        'COMPLETED',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        m.formation,
+        'Legacy import from fc27_matches',
+        m.club_id,
+        m.platform,
+        m.discord_message_id,
+        m.external_match_id,
+        'League Match',
+        m.formation,
+        'COMMUNITY_RESEARCH_DERIVED',
+        'migration_0016',
+        'migration_0016',
+        1,
+        now(),
+        now()
+    FROM public.fc27_matches m
+    WHERE m.club_id = v_club_id
+      AND m.platform = v_platform
+      AND m.game_version = v_game_version
+      AND m.data_quality_status != 'REJECTED'
+      AND NOT EXISTS (
+          -- Skip if this match is already mapped via legacy_ref.
+          SELECT 1 FROM public.fc27_manual_matches mm
+          WHERE mm.legacy_ref = m.external_match_id
+      )
+      AND NOT EXISTS (
+          -- Skip if this match, its export batch, or club-wide REPLAY_CONFLICT is actively quarantined.
+          SELECT 1 FROM public.fc27_quarantine_records q
+          WHERE q.club_id = m.club_id
+            AND q.platform = m.platform
+            AND q.game_version = m.game_version
+            AND q.review_status IN ('PENDING_REVIEW', 'REJECTED_PERMANENT')
+            AND (
+                q.external_match_id = m.external_match_id
+                OR (q.export_id IS NOT NULL AND q.export_id = m.export_id)
+                OR (q.external_match_id IS NULL AND q.export_id IS NULL AND q.anomaly_category = 'REPLAY_CONFLICT')
+            )
+      )
+    ON CONFLICT (legacy_ref) WHERE legacy_ref IS NOT NULL DO NOTHING;
+
+    GET DIAGNOSTICS v_inserted_count = ROW_COUNT;
+
+    -- Log summary (visible in migration logs).
+    RAISE NOTICE 'Migration 0016: Backfilled % legacy matches from fc27_matches to fc27_manual_matches', v_inserted_count;
+END $$;

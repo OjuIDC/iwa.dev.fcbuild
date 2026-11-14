@@ -60,6 +60,7 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_matches",
     "fc27_player_match_stats",
     "fc27_quarantine_records",
+    "fc27_roster",
     "fc27_manual_matches",
     "fc27_manual_match_players",
     "fc27_manual_match_events",
@@ -206,6 +207,7 @@ class FC27BackupTableCounts(BaseModel):
     fc27_match_team_stats: int = Field(..., ge=0)
     fc27_player_match_stats: int = Field(..., ge=0)
     fc27_quarantine_records: int = Field(..., ge=0)
+    fc27_roster: int = Field(default=0, ge=0)
     fc27_manual_matches: int = Field(default=0, ge=0)
     fc27_manual_match_players: int = Field(default=0, ge=0)
     fc27_manual_match_events: int = Field(default=0, ge=0)
@@ -229,6 +231,7 @@ class FC27BackupRecordHashes(BaseModel):
     player_stats_sha256: str = Field(..., min_length=64, max_length=64)
     combined_records_sha256: str = Field(..., min_length=64, max_length=64)
     match_record_hashes: tuple[str, ...] = ()
+    fc27_roster_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_matches_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_players_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_events_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
@@ -414,6 +417,23 @@ def inspect_database_state_for_manifest(
             )
             _quarantine_row = cur.fetchone()
             quarantine_cnt = int(_quarantine_row[0]) if _quarantine_row else 0
+
+            cur.execute(
+                """
+                SELECT player_id,
+                       display_name,
+                       display_name_normalized,
+                       position,
+                       discord_user_id,
+                       active,
+                       created_at,
+                       updated_at
+                  FROM public.fc27_roster
+                 ORDER BY player_id ASC
+                """
+            )
+            roster_rows = cur.fetchall()
+            roster_cnt = len(roster_rows)
 
             cur.execute(
                 """
@@ -649,6 +669,19 @@ def inspect_database_state_for_manifest(
         }
         for r in manual_audit_rows
     ]
+    canonical_roster = [
+        {
+            "player_id": str(r[0]),
+            "display_name": str(r[1]),
+            "display_name_normalized": str(r[2]),
+            "position": str(r[3]) if r[3] is not None else None,
+            "discord_user_id": str(r[4]) if r[4] is not None else None,
+            "active": bool(r[5]),
+            "created_at": r[6].astimezone(timezone.utc).isoformat() if isinstance(r[6], datetime) else str(r[6]),
+            "updated_at": r[7].astimezone(timezone.utc).isoformat() if isinstance(r[7], datetime) else str(r[7]),
+        }
+        for r in roster_rows
+    ]
     canonical_migration_ledger = {
         "schema_migrations": [
             {"version": str(r[0]), "checksum": str(r[1])} for r in migration_rows
@@ -669,6 +702,9 @@ def inspect_database_state_for_manifest(
     players_digest = _sha256_bytes(
         json.dumps(canonical_players, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
+    roster_digest = _sha256_bytes(
+        json.dumps(canonical_roster, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
     manual_matches_digest = _sha256_bytes(
         json.dumps(canonical_manual_matches, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
@@ -686,7 +722,7 @@ def inspect_database_state_for_manifest(
     )
     combined_digest = _sha256_bytes(
         (
-            f"{matches_digest}:{players_digest}:{manual_matches_digest}:"
+            f"{matches_digest}:{players_digest}:{roster_digest}:{manual_matches_digest}:"
             f"{manual_players_digest}:{manual_events_digest}:{manual_audit_digest}"
         ).encode("utf-8")
     )
@@ -700,6 +736,7 @@ def inspect_database_state_for_manifest(
         fc27_match_team_stats=matches_cnt,
         fc27_player_match_stats=player_cnt,
         fc27_quarantine_records=quarantine_cnt,
+        fc27_roster=roster_cnt,
         fc27_manual_matches=manual_matches_cnt,
         fc27_manual_match_players=manual_players_cnt,
         fc27_manual_match_events=manual_events_cnt,
@@ -718,6 +755,7 @@ def inspect_database_state_for_manifest(
         player_stats_sha256=players_digest,
         combined_records_sha256=combined_digest,
         match_record_hashes=tuple(str(r[7]) for r in match_rows),
+        fc27_roster_sha256=roster_digest,
         manual_matches_sha256=manual_matches_digest,
         manual_players_sha256=manual_players_digest,
         manual_events_sha256=manual_events_digest,

@@ -293,6 +293,7 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
         "fc27_matches",
         "fc27_player_match_stats",
         "fc27_quarantine_records",
+        "fc27_roster",
         "fc27_manual_matches",
         "fc27_manual_match_players",
         "fc27_manual_match_events",

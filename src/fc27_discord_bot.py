@@ -3235,9 +3235,21 @@ def run_discord_gateway_bot(
             "Guild, channel, and role allowlists must all be non-empty for Gateway mode"
         )
 
+    # Create a channel adapter for syncing match cards if writer DB is available
+    channel_adapter = None
+    if config.dispatch_enabled:
+        try:
+            from src.fc27_discord_dispatcher import DiscordGatewayChannelTransport
+            # The transport will be created later in the gateway setup_hook
+            # For now, create a placeholder that will be replaced
+            channel_adapter = None  # Will be set in setup_hook
+        except ImportError:
+            pass
+
     bot_service = service or FC27DiscordBotService(
         config,
         secret_tokens_to_scrub=(resolved_token,),
+        discord_channel_adapter=channel_adapter,
     )
 
     if gateway_runner is not None:
@@ -3321,6 +3333,8 @@ def run_discord_gateway_bot(
                 loop = asyncio.get_running_loop()
                 stop_event = asyncio.Event()
                 transport = DiscordGatewayChannelTransport(self, loop)
+                # Wire up the channel adapter for match card syncing
+                bot_service._discord_channel_adapter = transport
                 task = asyncio.create_task(
                     run_discord_dispatcher_loop(
                         config=dispatch_cfg,

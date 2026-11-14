@@ -525,12 +525,16 @@ class ParsedPlayerStatEntry(BaseModel):
 
     normalized_display_label: str
     safe_display_label: str
+    position: str | None = None
     goals: int | None = Field(default=None, ge=0, le=30)
     assists: int | None = Field(default=None, ge=0, le=30)
     tackles: int | None = Field(default=None, ge=0, le=200)
     passes: int | None = Field(default=None, ge=0, le=1000)
+    passes_completed: int = Field(default=0, ge=0, le=1000)
+    passes_attempted: int = Field(default=0, ge=0, le=1000)
     pass_accuracy: int | None = Field(default=None, ge=0, le=100)
     shots: int | None = Field(default=None, ge=0, le=100)
+    saves: int = Field(default=0, ge=0, le=200)
     rating: Decimal | None = Field(default=None)
 
 
@@ -541,12 +545,17 @@ class ManualMatchPlayerRecordInput(BaseModel):
 
     normalized_display_label: str
     safe_display_label: str
+    player_id: str | None = None
+    position: str | None = None
     goals: int = Field(default=0, ge=0, le=30)
     assists: int = Field(default=0, ge=0, le=30)
     tackles: int | None = Field(default=None, ge=0, le=200)
     passes: int | None = Field(default=None, ge=0, le=1000)
+    passes_completed: int = Field(default=0, ge=0, le=1000)
+    passes_attempted: int = Field(default=0, ge=0, le=1000)
     pass_accuracy: int | None = Field(default=None, ge=0, le=100)
     shots: int | None = Field(default=None, ge=0, le=100)
+    saves: int = Field(default=0, ge=0, le=200)
     rating: Decimal | None = Field(default=None)
 
 
@@ -859,12 +868,17 @@ def reconcile_scorers_and_player_stats(
             ManualMatchPlayerRecordInput(
                 normalized_display_label=norm_label,
                 safe_display_label=safe_label,
+                player_id=None,  # Will be resolved from roster if unambiguous
+                position=p_entry.position if p_entry else None,
                 goals=goals_val,
                 assists=p_entry.assists if (p_entry and p_entry.assists is not None) else 0,
                 tackles=p_entry.tackles if p_entry else None,
                 passes=p_entry.passes if p_entry else None,
+                passes_completed=p_entry.passes_completed if p_entry else 0,
+                passes_attempted=p_entry.passes_attempted if p_entry else 0,
                 pass_accuracy=p_entry.pass_accuracy if p_entry else None,
                 shots=p_entry.shots if p_entry else None,
+                saves=p_entry.saves if p_entry else 0,
                 rating=p_entry.rating if p_entry else None,
             )
         )
@@ -1609,6 +1623,7 @@ def rename_roster_player(
                 )
                 row = cur.fetchone()
                 assert row is not None
+                # Update player stat labels
                 cur.execute(
                     """
                     UPDATE public.fc27_manual_match_players
@@ -1618,6 +1633,31 @@ def rename_roster_player(
                     WHERE player_id = %s
                     """,
                     (safe_new, norm_new, resolved_pid),
+                )
+                # Update scorer event labels for this player
+                cur.execute(
+                    """
+                    UPDATE public.fc27_manual_match_events
+                    SET safe_display_label = %s,
+                        normalized_display_label = %s
+                    WHERE normalized_display_label = %s
+                      AND match_id IN (
+                          SELECT DISTINCT match_id
+                          FROM public.fc27_manual_match_players
+                          WHERE player_id = %s
+                      )
+                    """,
+                    (safe_new, norm_new, norm_new, resolved_pid),
+                )
+                # Update MOTM labels where this player was MOTM
+                cur.execute(
+                    """
+                    UPDATE public.fc27_manual_matches
+                    SET motm_display_label = %s,
+                        motm_normalized_label = %s
+                    WHERE motm_normalized_label = %s
+                    """,
+                    (safe_new, norm_new, norm_new),
                 )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
@@ -1846,26 +1886,36 @@ def _replace_match_players_and_events(
                 match_id,
                 normalized_display_label,
                 safe_display_label,
+                player_id,
+                position,
                 goals,
                 assists,
                 tackles,
                 passes,
+                passes_completed,
+                passes_attempted,
                 pass_accuracy,
                 shots,
+                saves,
                 rating,
                 source_classification
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'MANUAL_MATCH_RESULT')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'MANUAL_MATCH_RESULT')
             """,
             (
                 match_id,
                 player.normalized_display_label,
                 player.safe_display_label,
+                player.player_id,
+                player.position,
                 player.goals,
                 player.assists,
                 player.tackles,
                 player.passes,
+                player.passes_completed,
+                player.passes_attempted,
                 player.pass_accuracy,
                 player.shots,
+                player.saves,
                 player.rating,
             ),
         )
@@ -3524,10 +3574,25 @@ def render_roster_embed(players: Sequence[RosterPlayerRecord]) -> discord.Embed:
         for idx, p in enumerate(players, start=1):
             pos_part = f" ({p.position})" if p.position else ""
             lines.append(f"`{idx}.` **{p.display_name}**{pos_part}")
-        blob = "\n".join(lines)
-        if len(blob) > 1024:
-            blob = blob[:1021] + "..."
-        embed.add_field(name=f"Active Players ({len(players)})", value=blob, inline=False)
+        # Split into chunks of 1024 chars with unique field names
+        chunks: list[str] = []
+        current_chunk: list[str] = []
+        current_len = 0
+        for line in lines:
+            line_len = len(line) + 1  # +1 for newline
+            if current_len + line_len > 1024 and current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = [line]
+                current_len = line_len
+            else:
+                current_chunk.append(line)
+                current_len += line_len
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+
+        for idx, chunk in enumerate(chunks, start=1):
+            field_name = f"Active Players ({len(players)})" if idx == 1 else f"Active Players (cont. {idx})"
+            embed.add_field(name=field_name, value=chunk, inline=False)
     embed.set_footer(text=EAST_COASTERS_FOOTER_TEXT)
     return embed
 
@@ -3565,11 +3630,25 @@ def render_results_page_embed(page_data: ManualMatchResultsPage) -> discord.Embe
                 lines.append(
                     f"#{m.match_id} — {date_part} — {EAST_COASTERS_SHORT_NAME} vs {opp_clean} — SCHEDULED"
                 )
-        embed.add_field(
-            name="Matches (Newest First)",
-            value="\n\n".join(lines)[:1024],
-            inline=False,
-        )
+        # Split into chunks of 1024 chars with unique field names
+        chunks: list[str] = []
+        current_chunk: list[str] = []
+        current_len = 0
+        for line in lines:
+            line_len = len(line) + 2  # +2 for double newline
+            if current_len + line_len > 1024 and current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = [line]
+                current_len = line_len
+            else:
+                current_chunk.append(line)
+                current_len += line_len
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+
+        for idx, chunk in enumerate(chunks, start=1):
+            field_name = "Matches (Newest First)" if idx == 1 else f"Matches (cont. {idx})"
+            embed.add_field(name=field_name, value=chunk, inline=False)
     embed.set_footer(text=EAST_COASTERS_FOOTER_TEXT)
     return embed
 
