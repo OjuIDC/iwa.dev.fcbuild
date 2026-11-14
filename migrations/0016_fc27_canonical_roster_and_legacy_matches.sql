@@ -226,8 +226,6 @@ BEGIN
         opponent,
         opponent_normalized,
         kickoff_at,
-        match_date,
-        match_time,
         home_score,
         away_score,
         status,
@@ -295,8 +293,6 @@ BEGIN
             )
         )),
         m.played_at,
-        to_char(m.played_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
-        to_char(m.played_at AT TIME ZONE 'UTC', 'HH24:MI'),
         m.goals_for,
         m.goals_against,
         'COMPLETED',
