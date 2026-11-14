@@ -113,6 +113,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
         "fc27_match_team_stats": 10,
         "fc27_player_match_stats": 60,
         "fc27_quarantine_records": 0,
+        "fc27_roster": 0,
         "fc27_manual_matches": 0,
         "fc27_manual_match_players": 0,
         "fc27_manual_match_events": 0,
