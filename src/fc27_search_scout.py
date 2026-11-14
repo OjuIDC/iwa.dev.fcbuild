@@ -145,6 +145,8 @@ ALLOWED_SOURCE_CLASSIFICATIONS: frozenset[str] = frozenset(
         "EAST_COASTERS_NORMALIZED_EVIDENCE",
         "USER_SUPPLIED_EXPORT",
         "OPERATOR_CAPTURED_DISPLAYED_DATA",
+        "COMMUNITY_RESEARCH_DERIVED",
+        "AUTHORIZED_CAPTURE",
         "APPROVED_PROVIDER_API",
         "NORMALIZED_REPOSITORY_READ",
         "SYNTHETIC_FIXTURE",
@@ -1417,9 +1419,11 @@ def _normalize_candidate_dict(candidate: Any) -> dict[str, Any]:
                 {
                     "player_ref": p.local_player_ref,
                     "position": p.position_code,
-                    "role": p.role_name,
+                    "role": None if p.role_name in (None, "", "UNKNOWN") else p.role_name,
                     "role_focus": None,
-                    "build_reference": p.build_reference,
+                    "build_reference": (
+                        None if p.build_reference in (None, "", "UNKNOWN") else p.build_reference
+                    ),
                     "started": True if idx < 11 else None,
                     "minutes_played": p.minutes_played,
                     "match_rating": p.match_rating,
@@ -1748,13 +1752,18 @@ def build_fc27_search_context(
                     or "CM"
                 ).strip()
                 role_val = app_item.get("role") or app_item.get("role_name")
+                if isinstance(role_val, str) and role_val.strip() in ("", "UNKNOWN"):
+                    role_val = None
+                build_ref_val = app_item.get("build_reference")
+                if isinstance(build_ref_val, str) and build_ref_val.strip() in ("", "UNKNOWN"):
+                    build_ref_val = None
                 norm_apps.append(
                     FC27NormalizedPlayerAppearance(
                         player_ref=p_ref,
                         position=pos,
                         role=role_val,
                         role_focus=app_item.get("role_focus"),
-                        build_reference=app_item.get("build_reference"),
+                        build_reference=build_ref_val,
                         started=app_item.get("started"),
                         minutes_played=app_item.get("minutes_played", 90),
                         match_rating=app_item.get("match_rating"),

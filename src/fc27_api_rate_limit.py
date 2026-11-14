@@ -435,6 +435,9 @@ class FC27AdapterCircuitBreaker:
         self._server_error_count: int = 0
         self._half_open_probe_authorized: bool = False
         self._half_open_probe_in_flight: bool = False
+        self._reset_count: int = 0
+        self._last_reset_authorization_reference: str | None = None
+        self._last_reset_at_monotonic: float | None = None
         self._lock = threading.Lock()
 
     @property
@@ -529,7 +532,8 @@ class FC27AdapterCircuitBreaker:
 
     def authorize_half_open_probe(self, *, authorization_reference: str) -> None:
         """Transitions an approved provider from OPEN to HALF_OPEN for exactly one authorized test probe."""
-        if not authorization_reference.strip():
+        clean_ref = authorization_reference.strip()
+        if not clean_ref or len(clean_ref) > 128 or "@" in clean_ref:
             raise FC27ProviderError("authorization_reference is required to authorize a HALF_OPEN probe")
         with self._lock:
             if not self._approved_provider_selected:
@@ -537,10 +541,13 @@ class FC27AdapterCircuitBreaker:
             self._state = FC27CircuitState.HALF_OPEN
             self._half_open_probe_authorized = True
             self._half_open_probe_in_flight = False
+            self._last_reset_authorization_reference = clean_ref
+            self._last_reset_at_monotonic = self._clock()
 
     def manual_reset(self, *, authorization_reference: str) -> None:
         """Manually resets the circuit breaker to CLOSED for an approved provider."""
-        if not authorization_reference.strip():
+        clean_ref = authorization_reference.strip()
+        if not clean_ref or len(clean_ref) > 128 or "@" in clean_ref:
             raise FC27ProviderError("authorization_reference is required for manual circuit breaker reset")
         with self._lock:
             if not self._approved_provider_selected:
@@ -552,6 +559,9 @@ class FC27AdapterCircuitBreaker:
             self._server_error_count = 0
             self._half_open_probe_authorized = False
             self._half_open_probe_in_flight = False
+            self._reset_count += 1
+            self._last_reset_authorization_reference = clean_ref
+            self._last_reset_at_monotonic = self._clock()
 
     def safe_metadata(self) -> Dict[str, object]:
         with self._lock:
@@ -562,6 +572,9 @@ class FC27AdapterCircuitBreaker:
                 "ea_automatic_half_open": False,
                 "timeout_count": self._timeout_count,
                 "server_error_count": self._server_error_count,
+                "reset_count": self._reset_count,
+                "last_reset_authorization_reference": self._last_reset_authorization_reference,
+                "last_reset_at_monotonic": self._last_reset_at_monotonic,
                 "raw_response_stored": False,
             }
 

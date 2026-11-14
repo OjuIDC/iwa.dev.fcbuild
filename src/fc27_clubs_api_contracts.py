@@ -1339,7 +1339,13 @@ def normalize_matches_payload(
                 if isinstance(club_players_map, Mapping):
                     raw_players = [
                         {"memberKey": k, **(v if isinstance(v, Mapping) else {})}
-                        for k, v in club_players_map.items()
+                        for k, v in sorted(
+                            club_players_map.items(),
+                            key=lambda kv: (
+                                pseudonymize_east_coasters_identifier(str(kv[0])),
+                                str(kv[0]),
+                            ),
+                        )
                     ]
             if not isinstance(raw_players, list):
                 raise FC27SchemaValidationError("Match players container must be a list or club-keyed mapping")
@@ -1451,6 +1457,20 @@ def normalize_matches_payload(
                         saves=p_saves,
                     )
                 )
+
+            if len(player_schemas) > 1:
+                paired_players = sorted(
+                    zip(player_schemas, supplied_perfs, strict=True),
+                    key=lambda pair: (
+                        pair[0].local_player_reference,
+                        pair[0].position,
+                        pair[0].minutes_played,
+                        pair[0].goals,
+                        pair[0].assists,
+                    ),
+                )
+                player_schemas = [pair[0] for pair in paired_players]
+                supplied_perfs = [pair[1] for pair in paired_players]
 
         allowed_match_top_keys = {
             "matchId",

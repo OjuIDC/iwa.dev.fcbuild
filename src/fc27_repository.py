@@ -39,11 +39,15 @@ from src.fc27_privacy import (
     FC27FingerprintCollisionError,
     FC27SensitiveFieldDetectedError,
     canonicalize_for_hashing,
+    canonicalize_match_type_for_equivalence,
     compare_digest_constant_time,
+    compare_match_equivalence_v1,
     compute_match_hash,
     compute_payload_sha256,
     contains_discord_mention,
     contains_prohibited_url,
+    is_community_provider_provenance,
+    project_match_equivalence_v1,
     pseudonymize_match_ref,
     scan_for_sensitive_fields,
 )
@@ -285,7 +289,12 @@ class FC27SuppliedMatch(BaseModel):
     ) = None
     data_quality_status: Literal["PROVISIONAL", "VERIFIED", "INCOMPLETE"] | None = None
     source_classification: (
-        Literal["USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"] | None
+        Literal[
+            "USER_SUPPLIED_EXPORT",
+            "OPERATOR_CAPTURED_DISPLAYED_DATA",
+            "COMMUNITY_RESEARCH_DERIVED",
+        ]
+        | None
     ) = None
 
     @field_validator("opponent_name")
@@ -410,6 +419,7 @@ class FC27UserExportEnvelope(BaseModel):
     source_classification: Literal[
         "USER_SUPPLIED_EXPORT",
         "OPERATOR_CAPTURED_DISPLAYED_DATA",
+        "COMMUNITY_RESEARCH_DERIVED",
     ] = "USER_SUPPLIED_EXPORT"
     data_classification: Literal["SYNTHETIC", "OPERATOR_PRIVATE"] | None = None
     real_player_data: bool | None = None
@@ -471,6 +481,10 @@ class FC27ImportState(BaseModel):
     processed_payload_hashes: set[str] = Field(default_factory=set)
     existing_match_hashes: dict[str, str] = Field(
         default_factory=dict, description="match_id -> record_hash"
+    )
+    existing_match_projections: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="match_id -> fc27-match-equivalence-v1 canonical projection",
     )
     club_identity_verified: bool = False
 
@@ -618,6 +632,17 @@ def parse_fc27_user_export_json(
         )
 
     envelope = FC27UserExportEnvelope.model_validate(raw_dict)
+    if is_community_provider_provenance(
+        source_classification=envelope.source_classification,
+        supplier_reference=envelope.supplier_attestation.supplier_reference,
+        export_id=envelope.export_id,
+    ) or any(
+        m.source_classification == "COMMUNITY_RESEARCH_DERIVED"
+        for m in envelope.matches
+    ):
+        raise ValueError(
+            "reserved community-provider provenance markers are forbidden in external user exports"
+        )
     max_allowed = now.timestamp() + CLOCK_SKEW_TOLERANCE_SECONDS
     if envelope.generated_at.timestamp() > max_allowed:
         raise ValueError(
@@ -634,6 +659,8 @@ def plan_fc27_user_export_import(
     envelope: FC27UserExportEnvelope,
     existing_state: FC27ImportState | None = None,
     evaluation_time: datetime | None = None,
+    *,
+    match_type_override: str | None = None,
 ) -> FC27UserExportImportPlan:
     """Pure function producing a deterministic import plan without performing persistence."""
     state = existing_state or FC27ImportState()
@@ -688,7 +715,7 @@ def plan_fc27_user_export_import(
         )
 
     eligible_matches = 0
-    for match in envelope.matches:
+    for idx, match in enumerate(envelope.matches):
         mid = match.external_match_id
         mhash = compute_match_hash(
             match,
@@ -703,18 +730,39 @@ def plan_fc27_user_export_import(
             if existing_hash == mhash:
                 duplicate_ids.append(mid)
             else:
-                conflicting_ids.append(mid)
-                can_apply = False
-                diagnostics.append(
-                    {
-                        "code": "MATCH_RECORD_CONFLICT",
-                        "path": f"matches[{mid}]",
-                        "detail": (
-                            f"match data changed from previously imported hash '{existing_hash}' "
-                            f"to '{mhash}' without explicit versioning"
-                        ),
-                    }
-                )
+                existing_proj = state.existing_match_projections.get(mid)
+                diff_paths: list[str] | None = None
+                if existing_proj is not None:
+                    incoming_proj = project_match_equivalence_v1(
+                        match,
+                        club_id=envelope.club.club_id,
+                        platform=envelope.club.platform,
+                        game_version=envelope.game_version,
+                        source_classification=envelope.source_classification,
+                        supplier_reference=envelope.supplier_attestation.supplier_reference,
+                        export_id=envelope.export_id,
+                        match_type_override=match_type_override,
+                    )
+                    diff_paths = compare_match_equivalence_v1(
+                        existing_proj,
+                        incoming_proj,
+                        match_index=idx,
+                    )
+                if diff_paths is not None and len(diff_paths) == 0:
+                    duplicate_ids.append(mid)
+                else:
+                    conflicting_ids.append(mid)
+                    can_apply = False
+                    diagnostics.append(
+                        {
+                            "code": "MATCH_RECORD_CONFLICT",
+                            "path": f"matches[{mid}]",
+                            "detail": (
+                                f"match data changed from previously imported hash '{existing_hash}' "
+                                f"to '{mhash}' without explicit versioning"
+                            ),
+                        }
+                    )
         else:
             accepted_ids.append(mid)
             if match.match_status == "COMPLETED":
@@ -965,6 +1013,14 @@ def build_export_envelope_for_persistence(
     generated_at: datetime,
     provider_id: str = "fc27-community-provider",
     source_reference: str = "fc27-community-v1",
+    source_classification: Literal[
+        "USER_SUPPLIED_EXPORT",
+        "OPERATOR_CAPTURED_DISPLAYED_DATA",
+        "COMMUNITY_RESEARCH_DERIVED",
+    ] = "COMMUNITY_RESEARCH_DERIVED",
+    supplier_role: Literal[
+        "CLUB_MANAGER", "CLUB_ADMIN", "DATA_STEWARD"
+    ] = "DATA_STEWARD",
 ) -> FC27UserExportEnvelope:
     """Builds a validated `FC27UserExportEnvelope` with non-null SQL performance metrics for PostgreSQL apply."""
     sql_ready_matches: list[FC27SuppliedMatch] = []
@@ -975,7 +1031,7 @@ def build_export_envelope_for_persistence(
                 p.model_copy(
                     update={
                         "display_alias": None,
-                        "role": _default_role_for_position(p.position),
+                        "role": p.role if p.role and p.role != "UNKNOWN" else "UNKNOWN",
                         "minutes_played": p.minutes_played
                         if p.minutes_played is not None
                         else 90,
@@ -999,19 +1055,22 @@ def build_export_envelope_for_persistence(
                         if p.shots_on_target is not None
                         else 0,
                         "saves": p.saves if p.saves is not None else 0,
-                        "possession_losses": 2,
+                        "possession_losses": p.possession_losses
+                        if p.possession_losses is not None
+                        else 0,
                         "provider_rating": p.provider_rating
                         if p.provider_rating is not None
                         else 7.0,
-                        "build_reference": _default_build_for_position(p.position),
+                        "build_reference": p.build_reference,
                     }
                 )
             )
+        sql_perfs.sort(key=lambda item: (item.local_player_reference, item.position))
         sql_ready_matches.append(
             m.model_copy(
                 update={
                     "player_performances": sql_perfs,
-                    "source_classification": "USER_SUPPLIED_EXPORT",
+                    "source_classification": source_classification,
                 }
             )
         )
@@ -1034,7 +1093,7 @@ def build_export_envelope_for_persistence(
             source_reference=source_reference,
         ),
         "supplier_attestation": FC27SupplierAttestation(
-            supplier_role="CLUB_MANAGER",
+            supplier_role=supplier_role,
             supplier_reference=source_reference,
             attested_at=generated_at,
             authority_scope=[
@@ -1062,7 +1121,7 @@ def build_export_envelope_for_persistence(
         ),
         "club_statistics": None,
         "matches": sql_ready_matches,
-        "source_classification": "USER_SUPPLIED_EXPORT",
+        "source_classification": source_classification,
     }
     temp_hash_dict = {
         **env_dict,
@@ -1116,11 +1175,37 @@ class FC27PostureViolationError(FC27RepositoryError):
 
 
 class FC27ReplayConflictError(FC27RepositoryError):
-    """Raised when an external match ID is replayed with a modified record hash."""
+    """Raised when an external match ID is replayed with conflicting immutable facts."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        conflict_count: int = 1,
+        quarantine_ids: Sequence[str] = (),
+        conflict_match_refs: Sequence[str] = (),
+    ) -> None:
+        super().__init__(message)
+        self.conflict_count = max(1, int(conflict_count))
+        self.quarantine_ids = tuple(quarantine_ids)
+        self.conflict_match_refs = tuple(conflict_match_refs)
 
 
 class FC27JobIdempotencyConflictError(FC27RepositoryError):
     """Raised when an existing Discord job shares an idempotency_key with a conflicting job_type or payload."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        conflict_count: int = 1,
+        match_ref: str | None = None,
+        quarantine_ids: Sequence[str] = (),
+    ) -> None:
+        super().__init__(message)
+        self.conflict_count = max(1, int(conflict_count))
+        self.match_ref = match_ref
+        self.quarantine_ids = tuple(quarantine_ids)
 
 
 class FC27AliasFingerprintObservation(BaseModel):
@@ -1226,10 +1311,12 @@ class FC27ExportApplyResult(BaseModel):
     accepted_records: int = 0
     duplicate_records: int = 0
     quarantined_records: int = 0
+    replay_conflict_records: int = 0
     player_stat_records: int = 0
     idempotent_duplicate: bool = False
     replay_conflict: bool = False
     quarantine_ids: list[str] = Field(default_factory=list)
+    conflict_match_refs: list[str] = Field(default_factory=list)
     domain_event_ids: list[int] = Field(default_factory=list)
     fingerprints_inserted: int = 0
     fingerprints_refreshed: int = 0
@@ -1374,6 +1461,369 @@ def load_processed_payload_hashes(
         return {str(row[0]) for row in cur.fetchall()}
 
 
+def _extract_persisted_match_type_from_supplier_ref(
+    supplier_reference: str | None,
+) -> tuple[str | None, bool]:
+    """Extract explicit persisted match-type provenance from ``fc27-community-*:<match_type>``.
+
+    Returns ``(canonical_type, authoritative)`` where ``authoritative`` is ``True`` only
+    when ``supplier_reference`` carries an explicit non-empty ``:<match_type>`` suffix.
+    Bare ``fc27-community-v1`` / ``demo-fixture-loopback-v1`` or user-export references
+    return ``(None, False)`` so the caller verifies ``match_type`` cryptographically
+    against the persisted ``match_hash`` rather than assuming ``LEAGUE``.
+    """
+    if supplier_reference:
+        clean = str(supplier_reference).strip()
+        if clean.startswith("fc27-community-") and ":" in clean:
+            raw_suffix = clean.rsplit(":", 1)[1].strip()
+            if not raw_suffix:
+                return None, False
+            canonical = canonicalize_match_type_for_equivalence(raw_suffix)
+            return canonical, canonical is not None
+    return None, False
+
+
+def _recover_persisted_match_type_from_match_hash(
+    *,
+    stored_match_hash: str,
+    club_id: str,
+    platform: str,
+    game_version: str,
+    external_match_id: str,
+    played_at: datetime,
+    result: str,
+    goals_for: int,
+    goals_against: int,
+    opponent_name: str,
+    formation: str,
+    match_status: str,
+    persisted_source_classification: str,
+    persisted_data_quality_status: str | None,
+    ordered_players: Sequence[Mapping[str, Any]],
+) -> tuple[str | None, bool]:
+    """Cryptographically verify the persisted ``match_type`` against ``fc27_matches.match_hash``.
+
+    ``public.fc27_matches`` stores ``match_hash`` (computed over the original ``FC27SuppliedMatch``
+    including ``match_type`` and ``stat_id``-ordered ``player_performances``) without a separate
+    ``match_type`` column. Checking candidate envelopes against ``stored_match_hash`` with
+    constant-time SHA-256 comparison establishes the exact persisted ``match_type`` for both
+    historical ``comm_eval_*`` rows and ``USER_SUPPLIED_EXPORT`` rows without guessing.
+
+    Returns ``(recovered_match_type, match_type_unverified)``:
+    - ``(concrete_or_none_type, False)`` when ``stored_match_hash`` is cryptographically verified;
+    - ``(None, True)`` when ``stored_match_hash`` cannot be verified, forcing ``compare_match_equivalence_v1``
+      to fail closed on ``match_type``.
+    """
+    if not stored_match_hash:
+        return None, True
+
+    base_perfs: list[dict[str, Any]] = []
+    for p in ordered_players:
+        base_perfs.append(
+            {
+                "local_player_reference": str(p["local_player_reference"]),
+                "display_alias": p.get("display_alias"),
+                "position": str(p["position"]),
+                "role": str(p.get("role") or "UNKNOWN"),
+                "minutes_played": int(p["minutes_played"]),
+                "goals": int(p["goals"]),
+                "assists": int(p["assists"]),
+                "passes_attempted": int(p["passes_attempted"]),
+                "passes_completed": int(p["passes_completed"]),
+                "tackles_attempted": int(p["tackles_attempted"]),
+                "tackles_won": int(p["tackles_won"]),
+                "interceptions": int(p["interceptions"]),
+                "shots": int(p["shots"]),
+                "shots_on_target": int(p["shots_on_target"]),
+                "saves": int(p["saves"]),
+                "possession_losses": int(p["possession_losses"]),
+                "provider_rating": float(p["provider_rating"]),
+                "build_reference": p.get("build_reference"),
+            }
+        )
+
+    cs_expected = goals_against == 0
+    perf_variants: list[list[dict[str, Any]]] = [
+        [{**bp, "clean_sheet": cs_expected} for bp in base_perfs],
+        base_perfs,
+    ]
+    if base_perfs:
+        perf_variants.append(
+            [{**bp, "clean_sheet": not cs_expected} for bp in base_perfs]
+        )
+
+    lineup_variants: list[list[str]] = [[]]
+    first_eleven = [str(p["local_player_reference"]) for p in ordered_players[:11]]
+    if first_eleven and len(first_eleven) == len(set(first_eleven)):
+        lineup_variants.append(first_eleven)
+
+    env_src_variants: tuple[str, ...] = (
+        ("USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA")
+        if persisted_source_classification == "USER_SUPPLIED_EXPORT"
+        else (persisted_source_classification,)
+    )
+
+    dqs_variants: list[str | None] = []
+    for dqs_cand in (
+        "PROVISIONAL",
+        persisted_data_quality_status,
+        None,
+        "VERIFIED",
+        "INCOMPLETE",
+    ):
+        if dqs_cand not in dqs_variants:
+            dqs_variants.append(dqs_cand)
+
+    mt_variants: tuple[str | None, ...] = (
+        "LEAGUE",
+        "PLAYOFF",
+        "FRIENDLY",
+        "CUP",
+        "PRACTICE",
+        None,
+        "UNKNOWN",
+    )
+
+    for env_src in env_src_variants:
+        match_src_variants: list[str | None] = []
+        for m_src_cand in (env_src, None, "USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"):
+            if m_src_cand not in match_src_variants:
+                match_src_variants.append(m_src_cand)
+
+        for lineup_opt in lineup_variants:
+            for perfs_opt in perf_variants:
+                for dqs_opt in dqs_variants:
+                    for m_src_opt in match_src_variants:
+                        for mt_opt in mt_variants:
+                            cand_match: dict[str, Any] = {
+                                "external_match_id": external_match_id,
+                                "played_at": played_at,
+                                "result": result,
+                                "goals_for": goals_for,
+                                "goals_against": goals_against,
+                                "opponent_name": opponent_name,
+                                "formation": formation,
+                                "lineup": lineup_opt,
+                                "player_performances": perfs_opt,
+                                "match_status": match_status,
+                            }
+                            if mt_opt is not None:
+                                cand_match["match_type"] = mt_opt
+                            if dqs_opt is not None:
+                                cand_match["data_quality_status"] = dqs_opt
+                            if m_src_opt is not None:
+                                cand_match["source_classification"] = m_src_opt
+
+                            cand_hash = compute_match_hash(
+                                cand_match,
+                                club_id=club_id,
+                                platform=platform,
+                                game_version=game_version,
+                                source_classification=env_src,
+                            )
+                            if compare_digest_constant_time(cand_hash, stored_match_hash):
+                                return (
+                                    canonicalize_match_type_for_equivalence(mt_opt),
+                                    False,
+                                )
+
+    return None, True
+
+
+def _load_persisted_match_projections_in_cursor(
+    cur: psycopg.Cursor[Any],
+    *,
+    club_id: str,
+    platform: str,
+    game_version: str,
+    external_match_ids: Sequence[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load `fc27-match-equivalence-v1` projections from normalized PostgreSQL tables."""
+    norm_version = game_version.upper()
+    if external_match_ids is not None:
+        id_list = [str(x) for x in external_match_ids if str(x).strip()]
+        if not id_list:
+            return {}
+        cur.execute(
+            """
+            SELECT
+                m.match_id,
+                m.external_match_id,
+                m.export_id,
+                m.played_at,
+                m.result,
+                m.goals_for,
+                m.goals_against,
+                m.opponent_name,
+                m.formation,
+                m.match_status,
+                m.source_classification,
+                m.match_hash,
+                m.data_quality_status,
+                b.supplier_reference
+            FROM public.fc27_matches AS m
+            LEFT JOIN public.fc27_export_batches AS b
+                ON b.export_id = m.export_id
+            WHERE m.club_id = %s
+              AND m.platform = %s
+              AND m.game_version = %s
+              AND m.external_match_id = ANY(%s)
+            """,
+            (club_id, platform, norm_version, id_list),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT
+                m.match_id,
+                m.external_match_id,
+                m.export_id,
+                m.played_at,
+                m.result,
+                m.goals_for,
+                m.goals_against,
+                m.opponent_name,
+                m.formation,
+                m.match_status,
+                m.source_classification,
+                m.match_hash,
+                m.data_quality_status,
+                b.supplier_reference
+            FROM public.fc27_matches AS m
+            LEFT JOIN public.fc27_export_batches AS b
+                ON b.export_id = m.export_id
+            WHERE m.club_id = %s
+              AND m.platform = %s
+              AND m.game_version = %s
+            """,
+            (club_id, platform, norm_version),
+        )
+    match_rows = cur.fetchall()
+    if not match_rows:
+        return {}
+
+    match_uuids = [row[0] for row in match_rows]
+    cur.execute(
+        """
+        SELECT
+            match_id,
+            local_player_reference,
+            display_alias,
+            position,
+            minutes_played,
+            goals,
+            assists,
+            passes_attempted,
+            passes_completed,
+            tackles_attempted,
+            tackles_won,
+            interceptions,
+            shots,
+            shots_on_target,
+            saves,
+            possession_losses,
+            provider_rating,
+            role,
+            build_reference
+        FROM public.fc27_player_match_stats
+        WHERE match_id = ANY(%s)
+        ORDER BY match_id, stat_id ASC
+        """,
+        (match_uuids,),
+    )
+    players_by_match_uuid: dict[Any, list[dict[str, Any]]] = {}
+    for p_row in cur.fetchall():
+        players_by_match_uuid.setdefault(p_row[0], []).append(
+            {
+                "local_player_reference": str(p_row[1]),
+                "display_alias": str(p_row[2]) if p_row[2] is not None else None,
+                "position": str(p_row[3]),
+                "minutes_played": int(p_row[4]),
+                "goals": int(p_row[5]),
+                "assists": int(p_row[6]),
+                "passes_attempted": int(p_row[7]),
+                "passes_completed": int(p_row[8]),
+                "tackles_attempted": int(p_row[9]),
+                "tackles_won": int(p_row[10]),
+                "interceptions": int(p_row[11]),
+                "shots": int(p_row[12]),
+                "shots_on_target": int(p_row[13]),
+                "saves": int(p_row[14]),
+                "possession_losses": int(p_row[15]),
+                "provider_rating": float(p_row[16]),
+                "role": str(p_row[17]) if p_row[17] is not None else "UNKNOWN",
+                "build_reference": str(p_row[18]) if p_row[18] is not None else None,
+            }
+        )
+
+    projections: dict[str, dict[str, Any]] = {}
+    for m_row in match_rows:
+        m_uuid = m_row[0]
+        ext_id = str(m_row[1])
+        exp_id = str(m_row[2]) if m_row[2] is not None else None
+        played_at_val = m_row[3]
+        result_str = str(m_row[4])
+        gf_val = int(m_row[5])
+        ga_val = int(m_row[6])
+        opp_name = str(m_row[7])
+        form_str = str(m_row[8] or "UNKNOWN")
+        status_str = str(m_row[9] or "COMPLETED")
+        persisted_source_classification = str(m_row[10] or "USER_SUPPLIED_EXPORT")
+        stored_mhash = str(m_row[11] or "")
+        persisted_dqs = str(m_row[12]) if m_row[12] is not None else None
+        sup_ref = str(m_row[13]) if m_row[13] is not None else None
+        ordered_players = players_by_match_uuid.get(m_uuid, [])
+
+        explicit_mt, mt_authoritative = _extract_persisted_match_type_from_supplier_ref(
+            sup_ref
+        )
+        if mt_authoritative:
+            recovered_mt = explicit_mt
+            mt_unverified = False
+        else:
+            recovered_mt, mt_unverified = _recover_persisted_match_type_from_match_hash(
+                stored_match_hash=stored_mhash,
+                club_id=club_id,
+                platform=platform,
+                game_version=norm_version,
+                external_match_id=ext_id,
+                played_at=played_at_val,
+                result=result_str,
+                goals_for=gf_val,
+                goals_against=ga_val,
+                opponent_name=opp_name,
+                formation=form_str,
+                match_status=status_str,
+                persisted_source_classification=persisted_source_classification,
+                persisted_data_quality_status=persisted_dqs,
+                ordered_players=ordered_players,
+            )
+
+        projections[ext_id] = project_match_equivalence_v1(
+            {
+                "external_match_id": ext_id,
+                "played_at": played_at_val,
+                "result": result_str,
+                "goals_for": gf_val,
+                "goals_against": ga_val,
+                "opponent_name": opp_name,
+                "formation": form_str,
+                "match_status": status_str,
+                "source_classification": persisted_source_classification,
+                "match_type": recovered_mt,
+                "player_performances": ordered_players,
+            },
+            club_id=club_id,
+            platform=platform,
+            game_version=norm_version,
+            source_classification=persisted_source_classification,
+            supplier_reference=sup_ref,
+            export_id=exp_id,
+            match_type_unverified=mt_unverified,
+        )
+    return projections
+
+
 def load_import_state(
     conn_or_uri: psycopg.Connection | str | Any,
     *,
@@ -1403,6 +1853,16 @@ def load_import_state(
             (club_id, platform, norm_version),
         )
         match_hashes = {str(r[0]): str(r[1]) for r in cur.fetchall()}
+        match_projections = (
+            _load_persisted_match_projections_in_cursor(
+                cur,
+                club_id=club_id,
+                platform=platform,
+                game_version=norm_version,
+            )
+            if match_hashes
+            else {}
+        )
 
         cur.execute(
             """
@@ -1418,6 +1878,7 @@ def load_import_state(
     return FC27ImportState(
         processed_payload_hashes=payload_hashes,
         existing_match_hashes=match_hashes,
+        existing_match_projections=match_projections,
         club_identity_verified=verified,
     )
 
@@ -1485,8 +1946,9 @@ def _insert_quarantine_row_in_tx(
     correlation_id: uuid.UUID,
     quarantined_at: datetime | None = None,
     expires_at: datetime | None = None,
+    emit_domain_events: bool = True,
 ) -> FC27QuarantineRecordResult:
-    """Internal helper to insert a sanitized quarantine record and emit fc27.match.quarantined in an active transaction."""
+    """Internal helper to insert a sanitized quarantine record and optionally emit fc27.match.quarantined in an active transaction."""
     if anomaly_category not in ALLOWED_ANOMALY_CATEGORIES:
         raise ValueError(f"unsupported anomaly_category '{anomaly_category}'")
     if not _SAFE_REASON_CODE_RE.fullmatch(reason_code):
@@ -1544,30 +2006,32 @@ def _insert_quarantine_row_in_tx(
         q_at = q_row[1]
         q_exp = q_row[2]
 
-    event_reason = _build_safe_event_reason(
-        export_id=export_id,
-        club_id=club_id,
-        platform=platform,
-        game_version=norm_version,
-        source_classification=source_classification,
-        accepted_count=0,
-        duplicate_count=0,
-        quarantine_count=1,
-        reason_code=reason_code,
-        recorded_at=now,
-    )
-    event_id = record_event(
-        conn,
-        event_type="fc27.match.quarantined",
-        entity_type="fc27_quarantine",
-        entity_id=quarantine_id,
-        actor=actor,
-        correlation_id=correlation_id,
-        visibility="ops",
-        scope_club_id=club_id,
-        to_status="PENDING_REVIEW",
-        reason=event_reason,
-    )
+    event_id: int | None = None
+    if emit_domain_events:
+        event_reason = _build_safe_event_reason(
+            export_id=export_id,
+            club_id=club_id,
+            platform=platform,
+            game_version=norm_version,
+            source_classification=source_classification,
+            accepted_count=0,
+            duplicate_count=0,
+            quarantine_count=1,
+            reason_code=reason_code,
+            recorded_at=now,
+        )
+        event_id = record_event(
+            conn,
+            event_type="fc27.match.quarantined",
+            entity_type="fc27_quarantine",
+            entity_id=quarantine_id,
+            actor=actor,
+            correlation_id=correlation_id,
+            visibility="ops",
+            scope_club_id=club_id,
+            to_status="PENDING_REVIEW",
+            reason=event_reason,
+        )
 
     return FC27QuarantineRecordResult(
         quarantine_id=quarantine_id,
@@ -1587,6 +2051,73 @@ def _insert_quarantine_row_in_tx(
         expires_at=q_exp,
         domain_event_id=event_id,
     )
+
+
+def fetch_quarantine_records(
+    conn_or_uri: psycopg.Connection | str | Any,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    platform: str = EAST_COASTERS_PLATFORM,
+    game_version: str = "FC27",
+    review_status: str | None = None,
+    anomaly_category: str | None = None,
+) -> list[FC27QuarantineRecordResult]:
+    """Read-only query returning sanitized quarantine metadata records for operator review."""
+    norm_version = game_version.upper()
+    clauses = ["club_id = %s", "platform = %s", "game_version = %s"]
+    params: list[Any] = [club_id, platform, norm_version]
+    if review_status is not None:
+        clauses.append("review_status = %s")
+        params.append(review_status)
+    if anomaly_category is not None:
+        clauses.append("anomaly_category = %s")
+        params.append(anomaly_category)
+    where_sql = " AND ".join(clauses)
+
+    with _managed_connection(conn_or_uri) as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT quarantine_id, club_id, platform, game_version, external_match_id,
+                   export_id, source_classification, anomaly_category, reason_code,
+                   diagnostic_paths, payload_sha256, record_hash, review_status,
+                   quarantined_at, expires_at
+              FROM public.fc27_quarantine_records
+             WHERE {where_sql}
+             ORDER BY quarantined_at DESC, quarantine_id DESC
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+
+    results: list[FC27QuarantineRecordResult] = []
+    for row in rows:
+        raw_paths = row[9]
+        paths = (
+            [str(p) for p in raw_paths]
+            if isinstance(raw_paths, list)
+            else [str(p) for p in json.loads(raw_paths)]
+        )
+        results.append(
+            FC27QuarantineRecordResult(
+                quarantine_id=str(row[0]),
+                club_id=str(row[1]),
+                platform=str(row[2]),
+                game_version=str(row[3]),
+                external_match_id=str(row[4]) if row[4] is not None else None,
+                export_id=str(row[5]) if row[5] is not None else None,
+                source_classification=str(row[6]),
+                anomaly_category=str(row[7]),
+                reason_code=str(row[8]),
+                diagnostic_paths=paths,
+                payload_sha256=str(row[10]),
+                record_hash=str(row[11]) if row[11] is not None else None,
+                review_status=str(row[12]),
+                quarantined_at=row[13],
+                expires_at=row[14],
+                domain_event_id=None,
+            )
+        )
+    return results
 
 
 def insert_quarantine_record(
@@ -2162,7 +2693,9 @@ def enqueue_post_new_results_jobs_in_tx(
                     )
                 ):
                     raise FC27JobIdempotencyConflictError(
-                        "conflicting post_new_results payload for existing idempotency key"
+                        "conflicting post_new_results payload for existing idempotency key",
+                        conflict_count=1,
+                        match_ref=str(expected_payload["match_ref"]),
                     )
                 existing_equivalent_count += 1
                 continue
@@ -2222,7 +2755,9 @@ def enqueue_post_new_results_jobs_in_tx(
                     )
                 ):
                     raise FC27JobIdempotencyConflictError(
-                        "conflicting post_new_results payload for existing idempotency key"
+                        "conflicting post_new_results payload for existing idempotency key",
+                        conflict_count=1,
+                        match_ref=str(expected_payload["match_ref"]),
                     )
                 existing_equivalent_count += 1
 
@@ -2324,6 +2859,8 @@ def apply_export_plan(
     enqueue_discord_jobs: bool = False,
     match_type_override: str | None = None,
     emit_domain_events: bool = True,
+    include_equivalence_diff_paths: bool = False,
+    pseudonymize_quarantine_match_id: bool = False,
 ) -> FC27ExportApplyResult:
     """Atomically applies a validated FC 27 export envelope and plan to PostgreSQL.
 
@@ -2428,6 +2965,23 @@ def apply_export_plan(
                 )
                 existing_match_hashes = {str(r[0]): str(r[1]) for r in cur.fetchall()}
 
+                candidate_overlap_ids = [
+                    m.external_match_id
+                    for m in envelope.matches
+                    if m.external_match_id in existing_match_hashes
+                ]
+                existing_match_projections = (
+                    _load_persisted_match_projections_in_cursor(
+                        cur,
+                        club_id=club_id,
+                        platform=platform,
+                        game_version=game_version,
+                        external_match_ids=candidate_overlap_ids,
+                    )
+                    if candidate_overlap_ids
+                    else {}
+                )
+
             # Step 3: Check export_id collision with a different payload hash
             if envelope.export_id in existing_batches_by_id:
                 existing_batch_sha = existing_batches_by_id[envelope.export_id]
@@ -2450,6 +3004,7 @@ def apply_export_plan(
                             actor=actor,
                             correlation_id=corr_id,
                             quarantined_at=now,
+                            emit_domain_events=emit_domain_events,
                         )
                         q_ids.append(q_res.quarantine_id)
                         if q_res.domain_event_id is not None:
@@ -2462,6 +3017,7 @@ def apply_export_plan(
                         game_version=game_version,
                         payload_sha256=envelope.payload_sha256,
                         quarantined_records=len(q_ids),
+                        replay_conflict_records=1,
                         replay_conflict=True,
                         quarantine_ids=q_ids,
                         domain_event_ids=ev_ids,
@@ -2473,13 +3029,16 @@ def apply_export_plan(
             locked_state = FC27ImportState(
                 processed_payload_hashes=processed_payload_hashes,
                 existing_match_hashes=existing_match_hashes,
+                existing_match_projections=existing_match_projections,
             )
             revalidated_plan = plan_fc27_user_export_import(
-                envelope, existing_state=locked_state
+                envelope,
+                existing_state=locked_state,
+                match_type_override=match_type_override,
             )
 
-            # Check per-match hashes for any replay conflict (even if payload_sha256 is new)
-            conflicting_matches: list[tuple[int, FC27SuppliedMatch, str]] = []
+            # Check per-match hashes & versioned immutable-fact equivalence (`fc27-match-equivalence-v1`)
+            conflicting_matches: list[tuple[int, FC27SuppliedMatch, str, list[str]]] = []
             accepted_matches: list[tuple[FC27SuppliedMatch, str]] = []
             duplicate_matches: list[str] = []
             duplicate_match_tuples: list[tuple[FC27SuppliedMatch, str]] = []
@@ -2496,9 +3055,36 @@ def apply_export_plan(
                 if mid in existing_match_hashes:
                     if existing_match_hashes[mid] == mhash:
                         duplicate_matches.append(mid)
-                        duplicate_match_tuples.append((match, mhash))
+                        duplicate_match_tuples.append((match, existing_match_hashes[mid]))
                     else:
-                        conflicting_matches.append((idx, match, mhash))
+                        existing_proj = existing_match_projections.get(mid)
+                        diff_paths: list[str] = []
+                        if existing_proj is not None:
+                            incoming_proj = project_match_equivalence_v1(
+                                match,
+                                club_id=club_id,
+                                platform=platform,
+                                game_version=game_version,
+                                source_classification=source_cls,
+                                supplier_reference=envelope.supplier_attestation.supplier_reference,
+                                export_id=envelope.export_id,
+                                match_type_override=match_type_override,
+                            )
+                            diff_paths = compare_match_equivalence_v1(
+                                existing_proj,
+                                incoming_proj,
+                                match_index=idx,
+                            )
+                        else:
+                            diff_paths = [f"matches[{idx}].match_hash"]
+
+                        if len(diff_paths) == 0:
+                            duplicate_matches.append(mid)
+                            duplicate_match_tuples.append(
+                                (match, existing_match_hashes[mid])
+                            )
+                        else:
+                            conflicting_matches.append((idx, match, mhash, diff_paths))
                 else:
                     accepted_matches.append((match, mhash))
 
@@ -2506,32 +3092,61 @@ def apply_export_plan(
             if conflicting_matches or (plan is not None and not plan.can_apply):
                 q_ids = []
                 ev_ids = []
+                conflict_refs = [
+                    pseudonymize_match_ref(m.external_match_id, club_id=club_id)
+                    for _, m, _, _ in conflicting_matches
+                ]
                 if quarantine_conflicts and conflicting_matches:
-                    for idx, match, mhash in conflicting_matches:
+                    for idx, match, mhash, diff_paths in conflicting_matches:
+                        base_paths = [
+                            f"matches[{idx}].external_match_id",
+                            f"matches[{idx}].match_hash",
+                        ]
+                        if include_equivalence_diff_paths:
+                            for dp in diff_paths:
+                                if dp not in base_paths:
+                                    candidate_paths = [*base_paths, dp]
+                                    encoded_paths = json.dumps(candidate_paths).encode("utf-8")
+                                    if (
+                                        len(candidate_paths) > 100
+                                        or len(encoded_paths) > 4096
+                                    ):
+                                        break
+                                    base_paths.append(dp)
+                        q_ext_id = (
+                            pseudonymize_match_ref(
+                                match.external_match_id, club_id=club_id
+                            )
+                            if pseudonymize_quarantine_match_id
+                            else match.external_match_id
+                        )
                         q_res = _insert_quarantine_row_in_tx(
                             conn,
                             club_id=club_id,
                             platform=platform,
                             game_version=game_version,
-                            external_match_id=match.external_match_id,
+                            external_match_id=q_ext_id,
                             export_id=envelope.export_id,
                             source_classification=source_cls,
                             anomaly_category="REPLAY_CONFLICT",
                             reason_code="MATCH_RECORD_HASH_CONFLICT",
-                            diagnostic_paths=[
-                                f"matches[{idx}].external_match_id",
-                                f"matches[{idx}].match_hash",
-                            ],
+                            diagnostic_paths=base_paths[:100],
                             payload_sha256=envelope.payload_sha256,
                             record_hash=mhash,
                             actor=actor,
                             correlation_id=corr_id,
                             quarantined_at=now,
+                            emit_domain_events=emit_domain_events,
                         )
                         q_ids.append(q_res.quarantine_id)
                         if q_res.domain_event_id is not None:
                             ev_ids.append(q_res.domain_event_id)
 
+                eff_conflict_count = (
+                    len(conflicting_matches)
+                    if conflicting_matches
+                    else len(plan.conflicting_match_ids if plan else ())
+                )
                 return FC27ExportApplyResult(
                     status="REJECTED",
                     export_id=envelope.export_id,
@@ -2542,10 +3157,14 @@ def apply_export_plan(
                     accepted_records=0,
                     duplicate_records=len(duplicate_matches),
                     quarantined_records=len(q_ids),
+                    replay_conflict_records=max(1, eff_conflict_count)
+                    if (conflicting_matches or (plan and plan.conflicting_match_ids))
+                    else 0,
                     replay_conflict=bool(
                         conflicting_matches or (plan and plan.conflicting_match_ids)
                     ),
                     quarantine_ids=q_ids,
+                    conflict_match_refs=conflict_refs,
                     domain_event_ids=ev_ids,
                     correlation_id=str(corr_id),
                     detail="Batch apply blocked due to unresolved replay conflict.",

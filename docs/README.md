@@ -44,6 +44,7 @@ pinned FC27 community provider (fc-clubs-api-community-v1 / LIVE_EA_CLUBS_COMMUN
 ## 3. Provider and Ingestion
 
 - **[`FC27_POLLING_WORKER.md`](FC27_POLLING_WORKER.md)** — Disabled-by-default single-flight polling worker (`fc27-community-worker`, `src/fc27_polling_worker.py`, `scripts/fc27_polling_worker.py`, `Dockerfile.community-worker`, `docker-compose.community-worker.yml`, `FC27_COMMUNITY_POLLING_ENABLED=false`)
+- **[`FC27_REPLAY_CONFLICT_RECONCILIATION.md`](FC27_REPLAY_CONFLICT_RECONCILIATION.md)** — Versioned immutable-fact match equivalence (`fc27-match-equivalence-v1`), historical `comm_eval_*` hash compatibility, privacy-safe polling conflict quarantine, and durable circuit-breaker recovery
 - **[`FC27_DAILY_POLLING_OPERATIONS.md`](FC27_DAILY_POLLING_OPERATIONS.md)** — 12-hour polling operations (`ONCE_EVERY_12_HOURS`, `43200s`), provider window continuity (`MAX_RESULTS=10`), and container recovery
 - **[`FC27_BACKUP_AND_RECOVERY.md`](FC27_BACKUP_AND_RECOVERY.md)** — Local PostgreSQL backup creation (`scripts/fc27_backup.py`), 7-backup retention, and disposable restore verification (`scripts/fc27_restore_verify.py`)
 - **[`FC27_PROVIDER_INTEGRATION.md`](FC27_PROVIDER_INTEGRATION.md)** — Provider contract governance, historical transport findings (standards-client HTTP `403` and headless Chromium HTTP/2 diagnostic records), and rate/cache controls
