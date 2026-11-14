@@ -496,7 +496,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     "fc27_player_suggestions": {"SELECT", "INSERT", "UPDATE"},
                     "fc27_suggestion_assessments": {"SELECT", "INSERT"},
                     "fc27_discord_jobs": {"SELECT", "INSERT", "UPDATE"},
-                    "fc27_roster": {"SELECT", "INSERT", "UPDATE"},
+                    "fc27_roster": {"SELECT"},
                     "fc27_player_alias_fingerprints": {"SELECT"},
                     "fc27_clubs": {"SELECT"},
                     "fc27_export_batches": {"SELECT"},

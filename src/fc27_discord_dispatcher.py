@@ -964,16 +964,15 @@ class DiscordGatewayChannelTransport:
                             and fld_val == expected_played
                         ):
                             played_match = True
-                    if (
-                        expected_title is not None
-                        and title_txt == expected_title
-                        and (
-                            expected_played is None
-                            or played_match
-                            or (expected_content is not None and content == expected_content)
+                    if expected_title is not None and title_txt == expected_title:
+                        content_matches = (
+                            expected_content is None or content == expected_content
                         )
-                    ):
-                        return str(msg.id)
+                        if expected_played is not None:
+                            if played_match and content_matches:
+                                return str(msg.id)
+                        elif expected_content is not None and content == expected_content:
+                            return str(msg.id)
         except FC27DiscordDispatchTransportError:
             raise
         except discord.Forbidden as exc:

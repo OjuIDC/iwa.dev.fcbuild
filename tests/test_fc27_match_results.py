@@ -42,10 +42,12 @@ from src.fc27_match_results import (
     build_result_content,
     build_result_embed,
     clean_opponent,
+    coerce_public_match_id,
     create_scheduled_match,
     edit_match_result,
     fetch_latest_manual_result,
     fetch_manual_match,
+    fetch_manual_match_by_legacy_ref,
     fetch_manual_player_stats,
     fetch_manual_results_page,
     fetch_manual_top_scorers,
@@ -116,7 +118,7 @@ def test_scorer_parser_supported_formats() -> None:
         ("Lao", "lao", 2),
         ("Jay", "jay", 1),
     ]
-    assert format_scorers_summary(parsed_a) == "Lao (2), Jay (1)"
+    assert format_scorers_summary(parsed_a) == "Lao x2, Jay x1"
 
     parsed_b = parse_scorers_input("Lao (2), Jay (1)", home_score=3)
     assert [
@@ -271,10 +273,31 @@ def test_input_validation_bounds_and_privacy_guards() -> None:
     with pytest.raises(MatchResultsValidationError):
         validate_discord_snowflake("not_a_snowflake")
 
-    dt = parse_kickoff_datetime("2026-04-20", "20:30")
-    assert dt is not None
-    assert dt.year == 2026 and dt.month == 4 and dt.day == 20
-    assert dt.hour == 20 and dt.minute == 30
+    # April 20 is in EDT (UTC-4), so 20:30 local Eastern converts to 00:30 UTC the next day
+    dt_edt = parse_kickoff_datetime("2026-04-20", "20:30")
+    assert dt_edt == datetime(2026, 4, 21, 0, 30, tzinfo=timezone.utc)
+
+    # January is in EST (UTC-5), July default 8:00 PM is in EDT (UTC-4), explicit UTC preserved
+    dt_est = parse_kickoff_datetime("2026-01-15", "20:30")
+    assert dt_est == datetime(2026, 1, 16, 1, 30, tzinfo=timezone.utc)
+    dt_summer_default = parse_kickoff_datetime("2026-07-15", None)
+    assert dt_summer_default == datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc)
+    dt_utc = parse_kickoff_datetime("2026-07-15", "20:30 UTC")
+    assert dt_utc == datetime(2026, 7, 15, 20, 30, tzinfo=timezone.utc)
+
+    # Spring-forward DST gap (2026-03-08 02:30 America/New_York does not exist) must raise
+    with pytest.raises(MatchResultsValidationError, match="Eastern Daylight Saving Time gap"):
+        parse_kickoff_datetime("2026-03-08", "2:30 AM")
+
+    # Fall-back DST ambiguous time (2026-11-01 01:30 occurs twice) requires explicit EDT/EST
+    with pytest.raises(MatchResultsValidationError, match="ambiguous"):
+        parse_kickoff_datetime("2026-11-01", "1:30 AM")
+    assert parse_kickoff_datetime("2026-11-01", "1:30 AM EDT") == datetime(
+        2026, 11, 1, 5, 30, tzinfo=timezone.utc
+    )
+    assert parse_kickoff_datetime("2026-11-01", "1:30 AM EST") == datetime(
+        2026, 11, 1, 6, 30, tzinfo=timezone.utc
+    )
 
     # Forbidden tokens, mentions, or links in player or opponent names
     for forbidden_label in (
@@ -499,13 +522,13 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
     )
     assert r_match.status == "OK"
     match_embed = r_match.embeds[0]
-    assert "Lao (2), Jay (2), Sam (1)" in match_embed.fields["⚽ Scorers"]
+    assert "Lao x2, Jay x2, Sam x1" in match_embed.fields["⚽ Scorers"]
     assert match_embed.fields["⭐ MOTM"] == "Lao"
-    assert "Possession: **58%**" in match_embed.fields["📊 Team Stats"]
-    assert "Tackles: **14**" in match_embed.fields["📊 Team Stats"]
-    assert "Passes: **134**" in match_embed.fields["📊 Team Stats"]
+    assert "Possession 58%" in match_embed.fields["📊 Team Stats"]
+    assert "Tackles 14" in match_embed.fields["📊 Team Stats"]
+    assert "Passes 134" in match_embed.fields["📊 Team Stats"]
     assert (
-        "• **Lao**: 2G | 1A | 4 TKL | 32 PAS | 84% ACC"
+        "Lao — 2G 1A | 32 Passes (84%) | 4 Tackles"
         in match_embed.fields["👥 Players"]
     )
 
@@ -1222,7 +1245,7 @@ def test_p0_admin_only_deletematch_matchday_defaults_idempotency_and_queries(
     )
     assert r_md1.status == "OK"
     assert r_md1.content == "📅 MATCHDAY — East Coasters FC vs Metro United"
-    assert "8PM EST" in r_md1.embeds[0].fields["📅 Kickoff"]
+    assert "8:00 PM EDT" in r_md1.embeds[0].fields["📅 Kickoff"]
     assert r_md1.embeds[0].fields["🏆 Competition"] == "League Match"
 
     r_md_dup = service.handle_slash_command(
@@ -1370,3 +1393,120 @@ def test_p0_admin_only_deletematch_matchday_defaults_idempotency_and_queries(
     assert admin_perm_ok.status == "OK"
     assert admin_perm_ok.ephemeral is True
     assert "soft-deleted" in admin_perm_ok.content
+
+
+def test_canonical_embed_contract_format_and_numeric_match_id_isolation(pg_db_migrated) -> None:
+    """Verify exact canonical scorer/team/player format contract and internal-only legacy_ref isolation."""
+    now = datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc)
+    detail = ManualMatchDetail(
+        match_id=14,
+        club_id="330323",
+        platform="common-gen5",
+        game_version="FC27",
+        opponent="Metro United",
+        opponent_normalized="metro united",
+        kickoff_at=now,
+        match_date="2026-07-15",
+        match_time="8:00 PM EDT",
+        home_score=4,
+        away_score=1,
+        status="FULL_TIME",
+        motm_display_label="Lao",
+        motm_normalized_label="lao",
+        possession=58,
+        shots=12,
+        shots_on_target=7,
+        passes=342,
+        pass_accuracy=84,
+        tackles=18,
+        corners=5,
+        competition="League Match",
+        created_by="345678901234567890",
+        updated_by="345678901234567890",
+        created_at=now,
+        updated_at=now,
+        revision=1,
+        scorers=parse_scorers_input("Lao x3, Jay", home_score=4),
+        players=(
+            ManualMatchPlayerDetail(
+                normalized_display_label="lao",
+                safe_display_label="Lao",
+                position="ST",
+                goals=3,
+                assists=1,
+                passes_completed=25,
+                passes_attempted=30,
+                tackles=2,
+                rating=Decimal("10.00"),
+            ),
+            ManualMatchPlayerDetail(
+                normalized_display_label="jay",
+                safe_display_label="Jay",
+                goals=1,
+                assists=0,
+            ),
+        ),
+    )
+    emb = build_result_embed(detail)
+    emb_fields = {str(f.name): str(f.value) for f in emb.fields}
+    assert emb_fields["⚽ Scorers"] == "Lao x3, Jay x1"
+    assert (
+        emb_fields["📊 Team Stats"]
+        == "Possession 58% • Shots 12 (7 on target) • Passes 342 (84%) • Tackles 18 • Corners 5"
+    )
+    assert "Lao (ST) — 3G 1A | 25/30 Passes | 2 Tackles | 10.00 ⭐" in emb_fields["👥 Players"]
+
+    assert coerce_public_match_id(14) == 14
+    assert coerce_public_match_id("#14") == 14
+    for invalid_mid in ("mref_ecf_000000000001", "0", "-1", 0, -5, True, "abc"):
+        with pytest.raises(MatchResultsValidationError) as exc_info:
+            coerce_public_match_id(invalid_mid)  # type: ignore[arg-type]
+        assert "mref_ecf_" not in str(exc_info.value)
+
+    with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
+        inserted = conn.execute(
+            """
+            INSERT INTO public.fc27_manual_matches (
+                opponent, opponent_normalized, home_score, away_score,
+                status, legacy_ref, created_by, updated_by
+            )
+            VALUES (
+                'Legacy Internal FC', 'legacy internal fc', 2, 1,
+                'FULL_TIME', 'mref_ecf_0123456789ab', '345678901234567890', '345678901234567890'
+            )
+            RETURNING match_id
+            """
+        ).fetchone()
+        assert inserted is not None and int(inserted[0]) > 0
+
+        with pytest.raises(MatchResultsValidationError) as exc_lookup:
+            fetch_manual_match(conn, match_id="mref_ecf_0123456789ab")
+        assert "mref_ecf_" not in str(exc_lookup.value)
+
+        internal_found = fetch_manual_match_by_legacy_ref(conn, "mref_ecf_0123456789ab")
+        assert internal_found is not None
+        assert internal_found.match_id == int(inserted[0])
+        assert internal_found.legacy_ref == "mref_ecf_0123456789ab"
+
+        with pytest.raises(MatchResultsValidationError):
+            record_match_result(
+                pg_db_migrated.match_results_writer,
+                opponent="Legacy Internal FC",
+                home_score=1,
+                away_score=0,
+                actor_discord_user_id="345678901234567890",
+                match_id="mref_ecf_0123456789ab",
+            )
+        with pytest.raises(MatchResultsValidationError):
+            edit_match_result(
+                pg_db_migrated.match_results_writer,
+                actor_discord_user_id="345678901234567890",
+                match_id="mref_ecf_0123456789ab",
+                home_score=3,
+            )
+        with pytest.raises(MatchResultsValidationError):
+            soft_delete_match(
+                pg_db_migrated.match_results_writer,
+                match_id="mref_ecf_0123456789ab",
+                actor_discord_user_id="345678901234567890",
+            )

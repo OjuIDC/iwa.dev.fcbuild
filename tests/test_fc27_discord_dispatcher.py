@@ -21,6 +21,7 @@ from src.fc27_discord_bot import (
     DISCORD_PROVIDER_REQUESTS,
     FC27DiscordBotConfig,
     FC27DiscordDisabledError,
+    FC27DiscordEmbed,
     FC27DiscordError,
     PSEUDONYM_PLAYER_REF_RE,
     run_discord_gateway_bot,
@@ -981,7 +982,7 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
             self.title = title
             self.description = description
             self.fields: list[Any] = []
-            self.footer = None
+            self.footer: Any = None
 
         def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
             self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
@@ -1235,7 +1236,7 @@ def test_21_gateway_history_is_time_bounded_and_timed_out_sends_are_cancelled(
             self.title = title
             self.description = description
             self.fields: list[Any] = []
-            self.footer = None
+            self.footer: Any = None
 
         def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
             self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
@@ -1628,3 +1629,129 @@ def test_26_dispatcher_batch_resolves_fc27_roster_and_renders_canonical_notifica
         "Provenance",
     ):
         assert bad not in full_text
+
+
+def test_27_async_find_existing_requires_played_timestamp_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical dedup lookup must check 📅 Played so repeat opponent+score matches are not skipped."""
+
+    class _FakeHTTPException(Exception):
+        def __init__(self, status: int = 0) -> None:
+            super().__init__(f"HTTP {status}")
+            self.status = status
+
+    class _FakeForbidden(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(403)
+
+    class _FakeNotFound(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(404)
+
+    class _FakeEmbed:
+        def __init__(self, *, title: str, description: str) -> None:
+            self.title = title
+            self.description = description
+            self.fields: list[Any] = []
+            self.footer: Any = None
+
+        def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
+            self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
+
+        def set_footer(self, *, text: str) -> None:
+            self.footer = types.SimpleNamespace(text=text)
+
+    class _FakeAllowedMentions:
+        @classmethod
+        def none(cls) -> _FakeAllowedMentions:
+            return cls()
+
+    fake_discord = types.ModuleType("discord")
+    setattr(fake_discord, "Embed", _FakeEmbed)
+    setattr(fake_discord, "AllowedMentions", _FakeAllowedMentions)
+    setattr(fake_discord, "HTTPException", _FakeHTTPException)
+    setattr(fake_discord, "Forbidden", _FakeForbidden)
+    setattr(fake_discord, "NotFound", _FakeNotFound)
+    monkeypatch.setitem(sys.modules, "discord", fake_discord)
+
+    bot_id = 111222333
+    shared_content = "✅ FULL TIME — East Coasters FC 3-1 Metro United"
+    shared_title = "⚽ FULL TIME — WIN 3-1 vs Metro United"
+    prior_msg = types.SimpleNamespace(
+        id="8801",
+        author=types.SimpleNamespace(id=bot_id),
+        content=shared_content,
+        embeds=[
+            types.SimpleNamespace(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                footer=types.SimpleNamespace(text="East Coasters FC • Est. 2016"),
+                fields=[types.SimpleNamespace(name="📅 Played", value="2026-05-01 • 8:00 PM EDT")],
+            )
+        ],
+    )
+
+    class _Channel:
+        async def history(self, *, limit: int | None = 50, after: Any = None):
+            yield prior_msg
+
+        async def send(self, **kwargs: Any) -> Any:
+            return types.SimpleNamespace(id="8802")
+
+    class _Client:
+        def __init__(self) -> None:
+            self.user = types.SimpleNamespace(id=bot_id)
+            self._channel = _Channel()
+
+        def get_channel(self, cid: int) -> Any:
+            return self._channel if cid == int(RESULTS_CHANNEL_ID) else None
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        transport = DiscordGatewayChannelTransport(_Client(), loop, timeout_seconds=2.0)
+        not_before = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+
+        later_match_msg = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key="fc27:post_new_results:mref_ecf_222222222222",
+            match_ref="mref_ecf_222222222222",
+            content=shared_content,
+            embed=FC27DiscordEmbed(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                fields={"📅 Played": "2026-05-08 • 8:00 PM EDT"},
+            ),
+        )
+        found_later = await asyncio.to_thread(
+            transport.find_existing_notification,
+            channel_id=RESULTS_CHANNEL_ID,
+            match_ref=later_match_msg.match_ref,
+            idempotency_key=later_match_msg.idempotency_key,
+            not_before=not_before,
+            message=later_match_msg,
+        )
+        assert found_later is None
+
+        retry_same_msg = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key="fc27:post_new_results:mref_ecf_111111111111",
+            match_ref="mref_ecf_111111111111",
+            content=shared_content,
+            embed=FC27DiscordEmbed(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                fields={"📅 Played": "2026-05-01 • 8:00 PM EDT"},
+            ),
+        )
+        found_retry = await asyncio.to_thread(
+            transport.find_existing_notification,
+            channel_id=RESULTS_CHANNEL_ID,
+            match_ref=retry_same_msg.match_ref,
+            idempotency_key=retry_same_msg.idempotency_key,
+            not_before=not_before,
+            message=retry_same_msg,
+        )
+        assert found_retry == "8801"
+
+    asyncio.run(_run())

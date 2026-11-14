@@ -528,7 +528,7 @@ BEGIN
             EXECUTE 'GRANT SELECT ON public.fc27_roster TO fc27_discord_reader';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
-            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.fc27_roster TO fc27_player_dev_writer';
+            EXECUTE 'GRANT SELECT ON public.fc27_roster TO fc27_player_dev_writer';
         END IF;
     END IF;
 

@@ -425,7 +425,7 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
 
 
 def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, monkeypatch):
-    """Validates upgrade 0015->0016 preserves existing numeric IDs, migrates mref_ecf_* matches, and is idempotent."""
+    """Validates upgrade 0015->0016 preserves manual IDs and provider provenance without cross-domain copies, and is idempotent."""
     from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
     from tests.test_fc27_polling_worker import (
         _build_validated_envelope,
@@ -490,16 +490,38 @@ def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, mo
         ).fetchone()
         assert row_existing == (1, "Harbor City FC", None)
 
-        migrated_rows = conn.execute(
-            "SELECT match_id, legacy_ref FROM public.fc27_manual_matches WHERE legacy_ref IS NOT NULL ORDER BY match_id ASC"
-        ).fetchall()
-        assert len(migrated_rows) == 2
-        assert all(str(r[1]).startswith("mref_ecf_") and int(r[0]) >= 2 for r in migrated_rows)
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_manual_matches")) == 1
+        assert (
+            _scalar(
+                conn.execute(
+                    "SELECT COUNT(*) FROM public.fc27_manual_matches WHERE legacy_ref IS NOT NULL"
+                )
+            )
+            == 0
+        )
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_manual_match_players")) == 1
+        assert (
+            _scalar(
+                conn.execute(
+                    "SELECT COUNT(*) FROM public.fc27_manual_match_players WHERE player_id LIKE 'plr_ecf_%'"
+                )
+            )
+            == 0
+        )
 
-        migrated_players = _scalar(conn.execute(
-            "SELECT COUNT(*) FROM public.fc27_manual_match_players WHERE player_id LIKE 'plr_ecf_%'"
-        ))
-        assert migrated_players == 8
+        # Provider matches & stats remain strictly separated with intact provenance
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_matches")) == 2
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats")) == 8
+        prov_vals = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT source_classification FROM public.fc27_matches"
+            ).fetchall()
+        }
+        assert prov_vals == {"COMMUNITY_RESEARCH_DERIVED"}
+
+        # Canonical roster table starts empty and ready for explicit /fc27 setplayer registrations
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_roster")) == 0
 
     # Idempotent no-op re-run
     assert migrate(pg_db.migrator) == []
@@ -975,6 +997,15 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             )
         pd_conn.execute("SELECT count(*) FROM public.fc27_roster")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute(
+                "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized) "
+                "VALUES ('p_ro_deny', 'ReadOnly', 'readonly')"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute(
+                "UPDATE public.fc27_roster SET display_name = 'Nope' WHERE player_id = 'p_ro_deny'"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
             pd_conn.execute("DELETE FROM public.fc27_roster")
         for no_access_tbl in (
             "fc27_quarantine_records",
@@ -990,3 +1021,42 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
                         psycopg.sql.Identifier(no_access_tbl)
                     )
                 )
+
+    # 4. Least-privilege fc27_roster enforcement across match_results_writer, app, dispatch, and relay
+    with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as mrw_conn:
+        mrw_conn.execute(
+            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position) "
+            "VALUES ('p_lao_matrix', 'Lao', 'lao', 'ST')"
+        )
+        mrw_conn.execute(
+            "UPDATE public.fc27_roster SET position = 'CAM' WHERE player_id = 'p_lao_matrix'"
+        )
+        assert (
+            _scalar(
+                mrw_conn.execute(
+                    "SELECT position FROM public.fc27_roster WHERE player_id = 'p_lao_matrix'"
+                )
+            )
+            == "CAM"
+        )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            mrw_conn.execute("DELETE FROM public.fc27_roster WHERE player_id = 'p_lao_matrix'")
+
+    with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
+        assert _scalar(app_conn.execute("SELECT COUNT(*) FROM public.fc27_roster")) == 1
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute(
+                "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized) "
+                "VALUES ('p_app_deny', 'AppDeny', 'appdeny')"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute(
+                "UPDATE public.fc27_roster SET position = 'GK' WHERE player_id = 'p_lao_matrix'"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute("DELETE FROM public.fc27_roster")
+
+    for no_roster_uri in (pg_db_migrated.dispatch, pg_db_migrated.relay):
+        with psycopg.connect(no_roster_uri, autocommit=True) as isolated_conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                isolated_conn.execute("SELECT count(*) FROM public.fc27_roster")

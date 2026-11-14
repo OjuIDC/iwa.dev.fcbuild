@@ -19,10 +19,12 @@ Non-negotiable boundaries:
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import io
 import json
+import logging
 import math
 import re
 import threading
@@ -62,6 +64,7 @@ from src.fc27_community_provider import (
 )
 from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_match_results import (
+    DEFAULT_MATCHDAY_TIME,
     EAST_COASTERS_FOOTER_TEXT,
     EAST_COASTERS_FULL_NAME,
     EAST_COASTERS_SHORT_NAME,
@@ -79,6 +82,8 @@ from src.fc27_match_results import (
     RosterPlayerRecord,
     build_result_content,
     build_result_embed,
+    clean_opponent,
+    coerce_public_match_id,
     create_scheduled_match,
     edit_match_result,
     fetch_latest_manual_result,
@@ -87,6 +92,11 @@ from src.fc27_match_results import (
     fetch_manual_results_page,
     fetch_manual_top_scorers,
     list_roster_players,
+    normalize_display_label,
+    normalize_roster_player_id,
+    parse_kickoff_datetime,
+    parse_player_stats_input,
+    parse_scorers_input,
     record_match_result,
     record_unauthorized_write_attempt,
     rename_roster_player,
@@ -101,6 +111,8 @@ from src.fc27_match_results import (
     soft_delete_match,
     update_match_discord_message_link,
     upsert_roster_player,
+    validate_bounded_int,
+    validate_safe_text,
 )
 from src.fc27_pandas_view import (
     FC27PandasView,
@@ -174,6 +186,8 @@ def _default_director_provider(
             director_generated_at=analyst_rep.analysis_generated_at,
         )
     )
+
+LOGGER = logging.getLogger(__name__)
 
 DISCORD_BOT_VERSION: Final[str] = "1.0.0"
 DISCORD_PROVIDER_REQUESTS: Final[int] = 0
@@ -1066,6 +1080,294 @@ class FC27DiscordBotService:
             require_dedicated_writer_role=self._require_dedicated_writer_role,
         )
 
+    def _match_results_write_authorized(
+        self,
+        cmd_clean: str,
+        *,
+        user_role_ids: Sequence[str | int] | None,
+        is_admin: bool,
+    ) -> bool:
+        """Return whether the caller holds the required role or admin authorization for a P0 write."""
+        caller_role_set = {
+            str(r).strip() for r in (user_role_ids or ()) if str(r).strip().isdecimal()
+        }
+        if cmd_clean == "deletematch":
+            admin_roles = self._config.admin_role_ids
+            return bool(is_admin or (admin_roles and (caller_role_set & admin_roles)))
+        writer_roles = self._config.match_results_writer_role_ids
+        return bool(writer_roles and (caller_role_set & writer_roles))
+
+    def _has_preflight_validation_error(
+        self,
+        cmd_clean: str,
+        cmd_kwargs: Mapping[str, Any],
+    ) -> bool:
+        """Synchronously detect pure input validation errors before calling `defer()`."""
+        if cmd_clean not in MATCH_RESULTS_SUBCOMMANDS:
+            return False
+        if cmd_clean == "deletematch":
+            return True
+        try:
+            if cmd_clean == "match":
+                mid = cmd_kwargs.get("match_id")
+                opp = cmd_kwargs.get("opponent")
+                if mid is None and (opp is None or not str(opp).strip()):
+                    return True
+                if mid is not None:
+                    coerce_public_match_id(mid)
+                if opp is not None and str(opp).strip():
+                    clean_opponent(str(opp).replace("_", " "))
+                return False
+
+            if cmd_clean == "setplayer":
+                normalize_roster_player_id(str(cmd_kwargs.get("player_id") or ""))
+                normalize_display_label(
+                    str(cmd_kwargs.get("player_name") or ""), field_name="Player name"
+                )
+                return False
+
+            if cmd_clean == "renameplayer":
+                validate_safe_text(
+                    cmd_kwargs.get("player_name") or cmd_kwargs.get("player_id") or "",
+                    field_name="Player",
+                    max_length=64,
+                    allow_none=False,
+                )
+                normalize_display_label(
+                    str(cmd_kwargs.get("new_name") or ""), field_name="New name"
+                )
+                return False
+
+            if cmd_clean == "matchday":
+                clean_opponent(str(cmd_kwargs.get("opponent") or ""))
+                parse_kickoff_datetime(
+                    str(cmd_kwargs.get("date_str") or ""),
+                    cmd_kwargs.get("time_str") or DEFAULT_MATCHDAY_TIME,
+                )
+                validate_safe_text(
+                    cmd_kwargs.get("notes"),
+                    field_name="Notes",
+                    max_length=250,
+                    allow_none=True,
+                )
+                return False
+
+            if cmd_clean == "result":
+                coerce_public_match_id(cmd_kwargs.get("match_id"))
+                clean_opponent(str(cmd_kwargs.get("opponent") or ""))
+                our_score_v = validate_bounded_int(
+                    cmd_kwargs.get("our_score"),
+                    field_name="Home score",
+                    minimum=0,
+                    maximum=30,
+                    allow_none=False,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("opponent_score"),
+                    field_name="Away score",
+                    minimum=0,
+                    maximum=30,
+                    allow_none=False,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("possession"),
+                    field_name="Possession",
+                    minimum=0,
+                    maximum=100,
+                )
+                shots_v = validate_bounded_int(
+                    cmd_kwargs.get("shots"), field_name="Shots", minimum=0, maximum=200
+                )
+                sot_v = validate_bounded_int(
+                    cmd_kwargs.get("shots_on_target"),
+                    field_name="Shots on target",
+                    minimum=0,
+                    maximum=200,
+                )
+                if sot_v is not None and (shots_v is None or sot_v > shots_v):
+                    return True
+                validate_bounded_int(
+                    cmd_kwargs.get("passes"), field_name="Passes", minimum=0, maximum=2000
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("pass_accuracy"),
+                    field_name="Pass accuracy",
+                    minimum=0,
+                    maximum=100,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("corners"), field_name="Corners", minimum=0, maximum=100
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("tackles"), field_name="Tackles", minimum=0, maximum=500
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("fouls"), field_name="Fouls", minimum=0, maximum=200
+                )
+                motm_raw = cmd_kwargs.get("motm")
+                if (
+                    motm_raw is not None
+                    and str(motm_raw).strip()
+                    and str(motm_raw).strip().upper() != "N/A"
+                ):
+                    normalize_display_label(str(motm_raw), field_name="MOTM")
+                parse_scorers_input(cmd_kwargs.get("scorers"), home_score=our_score_v)
+                parse_player_stats_input(cmd_kwargs.get("player_stats"))
+                return False
+
+            if cmd_clean == "editresult":
+                coerce_public_match_id(cmd_kwargs.get("match_id"))
+                editable_keys = (
+                    "opponent",
+                    "our_score",
+                    "opponent_score",
+                    "scorers",
+                    "motm",
+                    "competition",
+                    "formation",
+                    "possession",
+                    "shots",
+                    "shots_on_target",
+                    "passes",
+                    "pass_accuracy",
+                    "corners",
+                    "tackles",
+                    "fouls",
+                    "player_stats",
+                )
+                if not any(cmd_kwargs.get(k) is not None for k in editable_keys):
+                    return True
+                if cmd_kwargs.get("opponent") is not None:
+                    clean_opponent(str(cmd_kwargs.get("opponent")))
+                our_score_e = validate_bounded_int(
+                    cmd_kwargs.get("our_score"),
+                    field_name="Home score",
+                    minimum=0,
+                    maximum=30,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("opponent_score"),
+                    field_name="Away score",
+                    minimum=0,
+                    maximum=30,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("possession"),
+                    field_name="Possession",
+                    minimum=0,
+                    maximum=100,
+                )
+                shots_e = validate_bounded_int(
+                    cmd_kwargs.get("shots"), field_name="Shots", minimum=0, maximum=200
+                )
+                sot_e = validate_bounded_int(
+                    cmd_kwargs.get("shots_on_target"),
+                    field_name="Shots on target",
+                    minimum=0,
+                    maximum=200,
+                )
+                if sot_e is not None and shots_e is not None and sot_e > shots_e:
+                    return True
+                validate_bounded_int(
+                    cmd_kwargs.get("passes"), field_name="Passes", minimum=0, maximum=2000
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("pass_accuracy"),
+                    field_name="Pass accuracy",
+                    minimum=0,
+                    maximum=100,
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("corners"), field_name="Corners", minimum=0, maximum=100
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("tackles"), field_name="Tackles", minimum=0, maximum=500
+                )
+                validate_bounded_int(
+                    cmd_kwargs.get("fouls"), field_name="Fouls", minimum=0, maximum=200
+                )
+                motm_e = cmd_kwargs.get("motm")
+                if (
+                    motm_e is not None
+                    and str(motm_e).strip()
+                    and str(motm_e).strip().upper() != "N/A"
+                ):
+                    normalize_display_label(str(motm_e), field_name="MOTM")
+                if cmd_kwargs.get("scorers") is not None:
+                    parse_scorers_input(cmd_kwargs.get("scorers"), home_score=our_score_e)
+                if cmd_kwargs.get("player_stats") is not None:
+                    parse_player_stats_input(cmd_kwargs.get("player_stats"))
+                return False
+
+            if cmd_clean == "playerstats":
+                validate_safe_text(
+                    cmd_kwargs.get("player_name") or "",
+                    field_name="Player",
+                    max_length=64,
+                    allow_none=False,
+                )
+                return False
+
+            if cmd_clean in {"results", "lastresult"}:
+                opp_r = cmd_kwargs.get("opponent")
+                if opp_r is not None and str(opp_r).strip():
+                    clean_opponent(str(opp_r).replace("_", " "))
+                return False
+        except (MatchResultsValidationError, ValueError):
+            return True
+        return False
+
+    def resolve_defer_ephemeral(
+        self,
+        subcommand: str,
+        *,
+        guild_id: str | int | None,
+        channel_id: str | int | None,
+        user_role_ids: Sequence[str | int] | None = None,
+        is_slash_interaction: bool = True,
+        raw_argument: str | None = None,
+        is_admin: bool = False,
+        default_ephemeral: bool = False,
+        **cmd_kwargs: Any,
+    ) -> bool:
+        """Determine before `defer()` whether the interaction response must be ephemeral."""
+        if default_ephemeral:
+            return True
+        cmd_raw = (subcommand or "").strip().lower()
+        cmd_clean = DISCORD_SUBCOMMAND_ALIASES.get(cmd_raw, cmd_raw)
+        if not self._config.enabled or not is_slash_interaction or guild_id is None:
+            return True
+        gid_str = str(guild_id).strip()
+        cid_str = str(channel_id or "").strip()
+        if gid_str not in self._config.allowed_guild_ids:
+            return True
+        if cid_str not in self._config.allowed_channel_ids:
+            return True
+        if self._config.allowed_role_ids:
+            caller_roles = {str(r).strip() for r in (user_role_ids or ())}
+            if not (caller_roles & self._config.allowed_role_ids):
+                return True
+        if raw_argument:
+            arg_lower = raw_argument.lower()
+            if (
+                "http://" in arg_lower
+                or "https://" in arg_lower
+                or "select " in arg_lower
+                or ";" in arg_lower
+                or "--" in arg_lower
+            ):
+                return True
+        if cmd_clean not in SUPPORTED_DISCORD_SUBCOMMANDS:
+            return True
+        if cmd_clean == "deletematch":
+            return True
+        if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
+            if not self._match_results_write_authorized(
+                cmd_clean, user_role_ids=user_role_ids, is_admin=is_admin
+            ):
+                return True
+        return self._has_preflight_validation_error(cmd_clean, cmd_kwargs)
+
     def handle_slash_command(
         self,
         subcommand: str,
@@ -1251,17 +1553,9 @@ class FC27DiscordBotService:
             )
 
         if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
-            caller_role_set = {
-                str(r).strip() for r in (user_role_ids or ()) if str(r).strip().isdecimal()
-            }
-            if cmd_clean == "deletematch":
-                admin_roles = self._config.admin_role_ids
-                authorized_write = bool(
-                    is_admin or (admin_roles and (caller_role_set & admin_roles))
-                )
-            else:
-                writer_roles = self._config.match_results_writer_role_ids
-                authorized_write = bool(writer_roles and (caller_role_set & writer_roles))
+            authorized_write = self._match_results_write_authorized(
+                cmd_clean, user_role_ids=user_role_ids, is_admin=is_admin
+            )
             if not authorized_write:
                 record_unauthorized_write_attempt(
                     self._resolve_writer_conn_or_uri(required=False),
@@ -1460,12 +1754,7 @@ class FC27DiscordBotService:
         confirm_delete: bool = False,
     ) -> FC27DiscordResponse:
         def _coerce_numeric_match_id(raw_mid: int | str | None) -> int | None:
-            if raw_mid is None or isinstance(raw_mid, int):
-                return raw_mid
-            cleaned_mid = raw_mid.strip().lstrip("#")
-            if cleaned_mid.isdigit() and int(cleaned_mid) > 0:
-                return int(cleaned_mid)
-            raise MatchResultsValidationError("match_id must be a positive numeric match ID.")
+            return coerce_public_match_id(raw_mid)
 
         if cmd == "setplayer":
             writer_target = self._resolve_writer_conn_or_uri(required=True)
@@ -1510,7 +1799,7 @@ class FC27DiscordBotService:
                 writer_target,
                 opponent=opponent or "",
                 match_date=date_str or "",
-                match_time=time_str or "8PM EST",
+                match_time=time_str or DEFAULT_MATCHDAY_TIME,
                 competition=competition or "League Match",
                 formation=formation,
                 interaction_id=interaction_id,
@@ -1721,12 +2010,12 @@ class FC27DiscordBotService:
                 )
 
             if cmd == "match":
-                found = fetch_manual_match(guarded, match_id=match_id, opponent=opponent)
+                numeric_match_id = _coerce_numeric_match_id(match_id)
+                found = fetch_manual_match(guarded, match_id=numeric_match_id, opponent=opponent)
                 if found is None:
-                    if match_id is not None:
-                        clean_ref = str(match_id).strip().lstrip("#")
+                    if numeric_match_id is not None:
                         raise MatchResultsNotFoundError(
-                            f"Match #{clean_ref} not found. Use /results to list matches."
+                            f"Match #{numeric_match_id} not found. Use /results to list matches."
                         )
                     raise MatchResultsNotFoundError(
                         f"No manual match found against '{opponent or ''}'. Use /results to list matches."
@@ -2823,6 +3112,109 @@ class FC27DiscordBotService:
             return ("\n".join(xml_lines).encode("utf-8"), len(rows))
 
 
+async def dispatch_interaction_response(
+    interaction: Any,
+    bot_service: FC27DiscordBotService,
+    *,
+    subcmd_name: str,
+    ephemeral_defer: bool = False,
+    discord_module: Any = None,
+    **cmd_kwargs: Any,
+) -> FC27DiscordResponse | None:
+    """Resolve ephemerality before `defer()`, run slash dispatch in a worker thread, and send followup safely."""
+    gid = str(interaction.guild_id) if getattr(interaction, "guild_id", None) is not None else None
+    cid = str(interaction.channel_id) if getattr(interaction, "channel_id", None) is not None else None
+    user_obj = getattr(interaction, "user", None)
+    uid = str(user_obj.id) if user_obj is not None else "0"
+    roles_raw = getattr(user_obj, "roles", ()) or ()
+    role_ids = tuple(str(getattr(r, "id", r)) for r in roles_raw)
+    perms = getattr(user_obj, "guild_permissions", None)
+    is_admin = bool(getattr(perms, "administrator", False))
+    interaction_id_val = str(getattr(interaction, "id", "") or "") or None
+
+    should_defer_ephemeral = bot_service.resolve_defer_ephemeral(
+        subcmd_name,
+        guild_id=gid,
+        channel_id=cid,
+        user_role_ids=role_ids,
+        is_slash_interaction=True,
+        is_admin=is_admin,
+        default_ephemeral=ephemeral_defer,
+        **cmd_kwargs,
+    )
+    await interaction.response.defer(ephemeral=should_defer_ephemeral, thinking=True)
+
+    try:
+        discord_mod = discord_module
+        if discord_mod is None:
+            try:
+                import discord as imported_discord
+
+                discord_mod = imported_discord
+            except ModuleNotFoundError:
+                discord_mod = None
+        resp = await asyncio.to_thread(
+            bot_service.handle_slash_command,
+            subcmd_name,
+            guild_id=gid,
+            channel_id=cid,
+            user_id=uid,
+            user_role_ids=role_ids,
+            is_slash_interaction=True,
+            interaction_id=interaction_id_val,
+            is_admin=is_admin,
+            **cmd_kwargs,
+        )
+        discord_embeds: list[Any] = []
+        if resp.embeds:
+            if discord_mod is None:
+                raise FC27DiscordDisabledError(
+                    "Required dependency 'discord.py' is not installed."
+                )
+            for emb in resp.embeds:
+                d_emb = discord_mod.Embed(
+                    title=emb.title,
+                    description=emb.description,
+                    color=emb.color,
+                )
+                for k, v in emb.fields.items():
+                    d_emb.add_field(name=k[:256], value=v[:1024], inline=False)
+                if emb.footer_text:
+                    d_emb.set_footer(text=emb.footer_text[:2048])
+                discord_embeds.append(d_emb)
+        kwargs: dict[str, Any] = {
+            "content": resp.content,
+            "embeds": discord_embeds,
+            "ephemeral": bool(resp.ephemeral or should_defer_ephemeral),
+        }
+        if resp.attachment is not None:
+            if discord_mod is None:
+                raise FC27DiscordDisabledError(
+                    "Required dependency 'discord.py' is not installed."
+                )
+            kwargs["file"] = discord_mod.File(
+                io.BytesIO(resp.attachment.data_bytes),
+                filename=resp.attachment.filename,
+            )
+        await interaction.followup.send(**kwargs)
+        return resp
+    except Exception as exc:
+        safe_err = redact_sensitive_text(
+            str(exc), extra_secrets=bot_service._secret_tokens
+        )
+        LOGGER.error(
+            "Unhandled post-defer exception in /fc27 %s (%s): %s",
+            subcmd_name,
+            type(exc).__name__,
+            safe_err,
+        )
+        await interaction.followup.send(
+            content="An internal error occurred while processing `/fc27`. Please try again later.",
+            ephemeral=True,
+        )
+        return None
+
+
 def run_discord_gateway_bot(
     config: FC27DiscordBotConfig,
     *,
@@ -2875,7 +3267,6 @@ def run_discord_gateway_bot(
         except ConfigError as exc:
             raise FC27DiscordError(str(exc)) from exc
 
-    import asyncio
     import signal
 
     try:
@@ -2964,48 +3355,14 @@ def run_discord_gateway_bot(
         ephemeral_defer: bool = False,
         **cmd_kwargs: Any,
     ) -> None:
-        await interaction.response.defer(ephemeral=ephemeral_defer, thinking=True)
-        gid = str(interaction.guild_id) if interaction.guild_id is not None else None
-        cid = str(interaction.channel_id) if interaction.channel_id is not None else None
-        uid = str(interaction.user.id) if interaction.user is not None else "0"
-        roles_raw = getattr(interaction.user, "roles", ()) or ()
-        role_ids = tuple(str(getattr(r, "id", r)) for r in roles_raw)
-        perms = getattr(interaction.user, "guild_permissions", None)
-        is_admin = bool(getattr(perms, "administrator", False))
-        resp = await asyncio.to_thread(
-            bot_service.handle_slash_command,
-            subcmd_name,
-            guild_id=gid,
-            channel_id=cid,
-            user_id=uid,
-            user_role_ids=role_ids,
-            is_slash_interaction=True,
-            interaction_id=str(getattr(interaction, "id", "") or "") or None,
-            is_admin=is_admin,
+        await dispatch_interaction_response(
+            interaction,
+            bot_service,
+            subcmd_name=subcmd_name,
+            ephemeral_defer=ephemeral_defer,
+            discord_module=discord,
             **cmd_kwargs,
         )
-        discord_embeds = []
-        for emb in resp.embeds:
-            d_emb = discord.Embed(
-                title=emb.title,
-                description=emb.description,
-                color=emb.color,
-            )
-            for k, v in emb.fields.items():
-                d_emb.add_field(name=k[:256], value=v[:1024], inline=False)
-            if emb.footer_text:
-                d_emb.set_footer(text=emb.footer_text[:2048])
-            discord_embeds.append(d_emb)
-        kwargs: dict[str, Any] = {
-            "content": resp.content,
-            "embeds": discord_embeds,
-        }
-        if resp.attachment is not None:
-            kwargs["file"] = discord.File(
-                io.BytesIO(resp.attachment.data_bytes),
-                filename=resp.attachment.filename,
-            )
-        await interaction.followup.send(**kwargs)
 
     def _build_p0_callback(subcmd_name: str) -> tuple[str, Any]:
         if subcmd_name == "setplayer":
@@ -3055,7 +3412,7 @@ def run_discord_gateway_bot(
                 interaction: discord.Interaction,
                 opponent: str,
                 date: str,
-                time: str = "8PM EST",
+                time: str = DEFAULT_MATCHDAY_TIME,
                 competition: str = "League Match",
                 formation: Optional[str] = None,
                 notes: Optional[str] = None,
@@ -3394,6 +3751,7 @@ __all__ = [
     "SUPPORTED_DISCORD_SUBCOMMANDS",
     "assert_discord_output_sanitized",
     "assert_sql_is_readonly_fc27_select",
+    "dispatch_interaction_response",
     "load_discord_bot_token",
     "run_discord_gateway_bot",
 ]

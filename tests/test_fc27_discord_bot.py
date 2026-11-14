@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+import types
 from typing import Any
 
 import psycopg
@@ -28,6 +30,7 @@ from src.fc27_discord_bot import (
     PSEUDONYM_PLAYER_REF_RE,
     assert_discord_output_sanitized,
     assert_sql_is_readonly_fc27_select,
+    dispatch_interaction_response,
     load_discord_bot_token,
 )
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
@@ -1080,3 +1083,201 @@ def test_57_status_exposes_c1_multi_match_rotation_fingerprints_and_discord_job_
 
     serialized = json.dumps(resp.model_dump(mode="json"))
     assert secret_hmac not in serialized
+
+
+def test_58_dispatch_interaction_response_ephemeral_defer_and_post_defer_safety(
+    pg_db_migrated,
+) -> None:
+    """58. Verify pre-defer ephemerality resolution, post-defer safety without double-ack, and legacy_ref rejection."""
+    writer_role_id = "777000111222333444"
+    admin_role_id = "888000111222333444"
+    cfg = _build_enabled_config(
+        manager_role_ids=frozenset({writer_role_id}),
+        admin_role_ids=frozenset({admin_role_id}),
+        max_user_commands_per_minute=60,
+        max_guild_commands_per_minute=120,
+    )
+    svc = FC27DiscordBotService(
+        cfg,
+        db_conn_or_uri=pg_db_migrated.discord_reader,
+        writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+        require_dedicated_writer_role=False,
+    )
+
+    class _FakeEmbed:
+        def __init__(self, *, title: str, description: str, color: int) -> None:
+            self.title = title
+            self.description = description
+            self.color = color
+            self.fields: list[tuple[str, str, bool]] = []
+            self.footer_text: str | None = None
+
+        def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
+            self.fields.append((name, value, inline))
+
+        def set_footer(self, *, text: str) -> None:
+            self.footer_text = text
+
+    class _FakeFile:
+        def __init__(self, fp: Any, *, filename: str) -> None:
+            self.fp = fp
+            self.filename = filename
+
+    fake_discord = types.SimpleNamespace(Embed=_FakeEmbed, File=_FakeFile)
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.defer_calls: list[dict[str, Any]] = []
+            self.send_message_calls: list[dict[str, Any]] = []
+
+        async def defer(self, *, ephemeral: bool = False, thinking: bool = True) -> None:
+            self.defer_calls.append({"ephemeral": ephemeral, "thinking": thinking})
+
+        async def send_message(self, *args: Any, **kwargs: Any) -> None:
+            self.send_message_calls.append({"args": args, "kwargs": kwargs})
+
+    class _FakeFollowup:
+        def __init__(self) -> None:
+            self.send_calls: list[dict[str, Any]] = []
+
+        async def send(self, **kwargs: Any) -> None:
+            self.send_calls.append(kwargs)
+
+    def _make_interaction(
+        *,
+        role_ids: tuple[str, ...] = (),
+        is_admin: bool = False,
+        guild_id: str = APPROVED_GUILD_ID,
+        channel_id: str = APPROVED_CHANNEL_ID,
+    ) -> Any:
+        return types.SimpleNamespace(
+            id="999888777666555444",
+            guild_id=int(guild_id),
+            channel_id=int(channel_id),
+            user=types.SimpleNamespace(
+                id=int(APPROVED_USER_ID),
+                roles=[types.SimpleNamespace(id=int(rid)) for rid in role_ids],
+                guild_permissions=types.SimpleNamespace(administrator=is_admin),
+            ),
+            response=_FakeResponse(),
+            followup=_FakeFollowup(),
+        )
+
+    async def _run_checks() -> None:
+        # 1. Public read command -> non-ephemeral defer + non-ephemeral followup
+        ix_pub = _make_interaction()
+        r_pub = await dispatch_interaction_response(
+            ix_pub, svc, subcmd_name="status", discord_module=fake_discord
+        )
+        assert r_pub is not None and r_pub.status == "OK"
+        assert ix_pub.response.defer_calls == [{"ephemeral": False, "thinking": True}]
+        assert ix_pub.response.send_message_calls == []
+        assert len(ix_pub.followup.send_calls) == 1
+        assert ix_pub.followup.send_calls[0]["ephemeral"] is False
+
+        # 2. Pre-flight authz failure (unauthorized write) -> ephemeral defer + ephemeral followup
+        ix_unauth = _make_interaction(role_ids=())
+        r_unauth = await dispatch_interaction_response(
+            ix_unauth,
+            svc,
+            subcmd_name="result",
+            discord_module=fake_discord,
+            opponent="Harbor City",
+            our_score=2,
+            opponent_score=1,
+        )
+        assert r_unauth is not None and r_unauth.status == "REJECTED_UNAUTHORIZED"
+        assert ix_unauth.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert len(ix_unauth.followup.send_calls) == 1
+        assert ix_unauth.followup.send_calls[0]["ephemeral"] is True
+
+        # 3. Pre-flight validation failure (/match with mref_ecf_*) -> ephemeral defer & no echo
+        ix_bad_mid = _make_interaction()
+        r_bad_mid = await dispatch_interaction_response(
+            ix_bad_mid,
+            svc,
+            subcmd_name="match",
+            discord_module=fake_discord,
+            match_id="mref_ecf_000000000001",
+        )
+        assert r_bad_mid is not None and r_bad_mid.status == "ERROR"
+        assert "mref_ecf_" not in r_bad_mid.content
+        assert r_bad_mid.content == "Match ID must be a positive number (e.g., 1). Use /results to list matches."
+        assert ix_bad_mid.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_bad_mid.followup.send_calls[0]["ephemeral"] is True
+
+        # 4. Pre-flight validation failure (/matchday DST gap) -> ephemeral defer
+        ix_dst_gap = _make_interaction(role_ids=(writer_role_id,))
+        r_dst_gap = await dispatch_interaction_response(
+            ix_dst_gap,
+            svc,
+            subcmd_name="matchday",
+            discord_module=fake_discord,
+            opponent="Harbor City",
+            date_str="2026-03-08",
+            time_str="2:30 AM",
+        )
+        assert r_dst_gap is not None and r_dst_gap.status == "ERROR"
+        assert ix_dst_gap.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_dst_gap.followup.send_calls[0]["ephemeral"] is True
+
+        # 5. deletematch always defers ephemerally
+        ix_del = _make_interaction(role_ids=(admin_role_id,), is_admin=True)
+        r_del = await dispatch_interaction_response(
+            ix_del,
+            svc,
+            subcmd_name="deletematch",
+            discord_module=fake_discord,
+            match_id="mref_ecf_000000000001",
+            confirm_delete=False,
+        )
+        assert r_del is not None and r_del.status == "ERROR"
+        assert "mref_ecf_" not in r_del.content
+        assert ix_del.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_del.followup.send_calls[0]["ephemeral"] is True
+
+        # 6. Post-defer unhandled exception -> safe ephemeral followup, zero double-ack
+        ix_boom = _make_interaction()
+        orig_handler = svc.handle_slash_command
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("postgresql://fc27_app:topsecret@127.0.0.1/db crashed")
+
+        svc.handle_slash_command = _boom  # type: ignore[method-assign]
+        try:
+            r_boom = await dispatch_interaction_response(
+                ix_boom, svc, subcmd_name="status", discord_module=fake_discord
+            )
+        finally:
+            svc.handle_slash_command = orig_handler  # type: ignore[method-assign]
+        assert r_boom is None
+        assert len(ix_boom.response.defer_calls) == 1
+        assert ix_boom.response.send_message_calls == []
+        assert len(ix_boom.followup.send_calls) == 1
+        assert ix_boom.followup.send_calls[0]["ephemeral"] is True
+        assert "topsecret" not in ix_boom.followup.send_calls[0]["content"]
+
+    asyncio.run(_run_checks())
+
+    # 7. Reject mref_ecf_* directly across /match, /result, /editresult, /deletematch without echo
+    subcmd_cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("match", {}),
+        ("result", {"opponent": "Metro", "our_score": 2, "opponent_score": 1}),
+        ("editresult", {"our_score": 3}),
+        ("deletematch", {"confirm_delete": True}),
+    )
+    for subcmd, extra_kwargs in subcmd_cases:
+        resp = svc.handle_slash_command(
+            subcmd,
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=APPROVED_CHANNEL_ID,
+            user_id=APPROVED_USER_ID,
+            user_role_ids=[writer_role_id, admin_role_id],
+            is_admin=True,
+            match_id="mref_ecf_000000000001",
+            **extra_kwargs,
+        )
+        assert resp.status == "ERROR"
+        assert resp.ephemeral is True
+        assert resp.content == "Match ID must be a positive number (e.g., 1). Use /results to list matches."
+        assert "mref_ecf_" not in resp.content

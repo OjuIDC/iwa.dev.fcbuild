@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Generator, Literal, Sequence, TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     import discord
@@ -174,7 +175,8 @@ BRAND_COLOR_WIN: int = 0x22C55E
 BRAND_COLOR_LOSS: int = 0xEF4444
 BRAND_COLOR_DRAW: int = 0xEAB308
 
-DEFAULT_MATCHDAY_TIME: str = "8PM EST"
+EASTERN_TZ = ZoneInfo("America/New_York")
+DEFAULT_MATCHDAY_TIME: str = "8:00 PM"
 DEFAULT_COMPETITION_LABEL: str = "League Match"
 UNRESOLVED_PLAYER_DISPLAY_NAME: str = "Unnamed Player"
 
@@ -420,29 +422,35 @@ def validate_bounded_int(
     return value
 
 
+def _strip_known_tz_suffix(raw_time: str) -> tuple[str, str | None]:
+    t_raw = " ".join((raw_time or "").strip().split())
+    upper_t = t_raw.upper()
+    for suffix, zone_tag in (
+        (" UTC", "UTC"),
+        (" EST", "EST"),
+        (" EDT", "EDT"),
+        (" ET", "ET"),
+    ):
+        if upper_t.endswith(suffix):
+            return (t_raw[: -len(suffix)].strip(), zone_tag)
+    return (t_raw, None)
+
+
 def parse_kickoff_datetime(
     match_date: str | None, match_time: str | None
 ) -> datetime | None:
-    """Parse optional date and kickoff time strings (24h, 12h AM/PM, UTC/EST/EDT) into UTC."""
+    """Parse optional date and kickoff time (`America/New_York` EST/EDT by default, or explicit UTC) into UTC."""
     if not match_date:
         return None
     d_str = " ".join(match_date.strip().split())
-    t_raw = " ".join((match_time or "00:00").strip().split())
-    tz_offset_hours = 0
-    upper_t = t_raw.upper()
-    if upper_t.endswith(" UTC"):
-        t_clean = t_raw[:-4].strip()
-    elif upper_t.endswith(" EST"):
-        t_clean = t_raw[:-4].strip()
-        tz_offset_hours = -5
-    elif upper_t.endswith(" EDT"):
-        t_clean = t_raw[:-4].strip()
-        tz_offset_hours = -4
-    else:
-        t_clean = t_raw
-    from datetime import timedelta
+    eff_raw = (match_time or "").strip() or DEFAULT_MATCHDAY_TIME
+    t_clean, explicit_zone = _strip_known_tz_suffix(eff_raw)
+    if not t_clean:
+        raise MatchResultsValidationError(
+            "Date and time must form a valid kickoff (YYYY-MM-DD and HH:MM or e.g. 8:00 PM)."
+        )
 
-    tz = timezone(timedelta(hours=tz_offset_hours))
+    parsed: datetime | None = None
     for fmt in (
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %I:%M %p",
@@ -452,12 +460,51 @@ def parse_kickoff_datetime(
     ):
         try:
             parsed = datetime.strptime(f"{d_str} {t_clean}", fmt)
-            return parsed.replace(tzinfo=tz).astimezone(timezone.utc)
+            break
         except ValueError:
             continue
-    raise MatchResultsValidationError(
-        "Date and time must form a valid kickoff (YYYY-MM-DD and HH:MM or e.g. 8PM EST)."
-    )
+
+    if parsed is None:
+        raise MatchResultsValidationError(
+            "Date and time must form a valid kickoff (YYYY-MM-DD and HH:MM or e.g. 8:00 PM)."
+        )
+
+    if explicit_zone == "UTC":
+        return parsed.replace(tzinfo=timezone.utc)
+
+    dt0 = parsed.replace(tzinfo=EASTERN_TZ, fold=0)
+    dt1 = parsed.replace(tzinfo=EASTERN_TZ, fold=1)
+    utc0 = dt0.astimezone(timezone.utc)
+    utc1 = dt1.astimezone(timezone.utc)
+
+    # Reject spring-forward DST gap times that do not exist in America/New_York.
+    if utc0.astimezone(EASTERN_TZ).replace(tzinfo=None) != parsed:
+        raise MatchResultsValidationError(
+            "Kickoff time falls in a nonexistent Eastern Daylight Saving Time gap for America/New_York."
+        )
+
+    # On fall-back DST transition day, disambiguate via explicit EDT/EST or reject bare ambiguous times.
+    if utc0 != utc1:
+        if explicit_zone == "EDT":
+            return utc0
+        if explicit_zone == "EST":
+            return utc1
+        raise MatchResultsValidationError(
+            "Kickoff time is ambiguous during the Eastern Daylight Saving Time transition; specify EDT, EST, or UTC."
+        )
+
+    return utc0
+
+
+def _normalize_match_time_display(raw_time: str, kickoff_utc: datetime | None) -> str:
+    """Format kickoff time label with explicit `UTC` or date-aware Eastern (`EST`/`EDT`)."""
+    t_clean, explicit_zone = _strip_known_tz_suffix(raw_time)
+    if explicit_zone == "UTC":
+        return f"{t_clean} UTC"
+    if kickoff_utc is not None:
+        tz_abbr = kickoff_utc.astimezone(EASTERN_TZ).tzname() or "ET"
+        return f"{t_clean} {tz_abbr}"
+    return t_clean
 
 
 class ParsedScorerEntry(BaseModel):
@@ -590,12 +637,12 @@ def parse_scorers_input(
 
 
 def format_scorers_summary(scorers: Sequence[ParsedScorerEntry]) -> str:
-    """Render canonical scorer summary (`Lao (2), Jay (1)` or empty string)."""
+    """Render canonical scorer summary (`Lao x3, Jay x1` or empty string)."""
     if not scorers:
         return ""
     ordered = sorted(scorers, key=lambda s: (s.display_order, s.normalized_display_label))
     return ", ".join(
-        f"{_sanitize_player_display(s.safe_display_label)} ({s.goals})" for s in ordered
+        f"{_sanitize_player_display(s.safe_display_label)} x{s.goals}" for s in ordered
     )
 
 
@@ -1664,6 +1711,12 @@ def create_scheduled_match(
         else None
     )
     kickoff_dt = parse_kickoff_datetime(safe_date, safe_time)
+    assert safe_time is not None
+    safe_time = validate_safe_text(
+        _normalize_match_time_display(safe_time, kickoff_dt),
+        field_name="Time",
+        max_length=32,
+    )
 
     with open_guarded_match_results_writer_connection(
         conn_or_uri, require_dedicated_writer_role=require_dedicated_writer_role
@@ -1838,7 +1891,7 @@ def record_match_result(
     tackles: int | None = None,
     fouls: int | None = None,
     player_stats: str | None = None,
-    match_id: int | None = None,
+    match_id: int | str | None = None,
     interaction_id: str | None = None,
     discord_guild_id: str | None = None,
     discord_channel_id: str | None = None,
@@ -1849,6 +1902,7 @@ def record_match_result(
     require_dedicated_writer_role: bool = True,
 ) -> ManualMatchDetail:
     """Record a `FULL_TIME` match result, updating a targeted `SCHEDULED` match or creating a new one."""
+    target_match_id = coerce_public_match_id(match_id)
     safe_opponent = clean_opponent(opponent)
     opponent_norm = safe_opponent.lower()
     safe_comp = normalize_competition_label(competition)
@@ -1934,7 +1988,7 @@ def record_match_result(
                         return _hydrate_manual_match(cur, existing_inter_row)
 
                 target_row: tuple[Any, ...] | None = None
-                if match_id is not None:
+                if target_match_id is not None:
                     cur.execute(
                         f"""
                         SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
@@ -1942,14 +1996,14 @@ def record_match_result(
                         WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                         FOR UPDATE
                         """,
-                        (match_id, club_id),
+                        (target_match_id, club_id),
                     )
                     target_row = cur.fetchone()
                     if target_row is None:
-                        raise MatchResultsNotFoundError(f"Match #{match_id} was not found.")
+                        raise MatchResultsNotFoundError(f"Match #{target_match_id} was not found.")
                     if str(target_row[11]) != "SCHEDULED":
                         raise MatchResultsValidationError(
-                            f"Match #{match_id} is already FULL_TIME; use /fc27 editresult to modify it."
+                            f"Match #{target_match_id} is already FULL_TIME; use /fc27 editresult to modify it."
                         )
                 else:
                     cur.execute(
@@ -2173,7 +2227,7 @@ def edit_match_result(
     conn_or_uri: Any,
     *,
     actor_discord_user_id: str,
-    match_id: int | None = None,
+    match_id: int | str | None = None,
     opponent: str | None = None,
     home_score: int | None = None,
     away_score: int | None = None,
@@ -2195,6 +2249,7 @@ def edit_match_result(
     require_dedicated_writer_role: bool = True,
 ) -> ManualMatchDetail:
     """Apply a partial update to an existing manual match with optimistic concurrency."""
+    target_match_id = coerce_public_match_id(match_id)
     provided_any = any(
         val is not None
         for val in (
@@ -2228,7 +2283,7 @@ def edit_match_result(
     ) as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                if match_id is not None:
+                if target_match_id is not None:
                     cur.execute(
                         f"""
                         SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
@@ -2236,7 +2291,7 @@ def edit_match_result(
                         WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                         FOR UPDATE
                         """,
-                        (match_id, club_id),
+                        (target_match_id, club_id),
                     )
                 else:
                     cur.execute(
@@ -2255,8 +2310,8 @@ def edit_match_result(
                     )
                 row = cur.fetchone()
                 if row is None:
-                    if match_id is not None:
-                        raise MatchResultsNotFoundError(f"Match #{match_id} was not found.")
+                    if target_match_id is not None:
+                        raise MatchResultsNotFoundError(f"Match #{target_match_id} was not found.")
                     raise MatchResultsNotFoundError("No editable manual match was found.")
 
                 existing = _hydrate_manual_match(cur, row)
@@ -2673,7 +2728,7 @@ def update_match_discord_message_link(
 def soft_delete_match(
     conn_or_uri: Any,
     *,
-    match_id: int,
+    match_id: int | str,
     actor_discord_user_id: str,
     reason: str | None = None,
     expected_revision: int | None = None,
@@ -2681,6 +2736,9 @@ def soft_delete_match(
     require_dedicated_writer_role: bool = True,
 ) -> ManualMatchDetail:
     """Soft-delete a manual match by setting `deleted_at`, `deleted_by`, and `delete_reason`."""
+    target_match_id = coerce_public_match_id(match_id)
+    if target_match_id is None:
+        raise MatchResultsValidationError(_PUBLIC_MATCH_ID_ERROR)
     actor_id = validate_discord_snowflake(actor_discord_user_id, field_name="actor")
     safe_reason = validate_safe_text(
         reason, field_name="Delete reason", max_length=200, allow_none=True
@@ -2698,17 +2756,17 @@ def soft_delete_match(
                     WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                     FOR UPDATE
                     """,
-                    (match_id, club_id),
+                    (target_match_id, club_id),
                 )
                 row = cur.fetchone()
                 if row is None:
                     raise MatchResultsNotFoundError(
-                        f"Match #{match_id} was not found or is already deleted."
+                        f"Match #{target_match_id} was not found or is already deleted."
                     )
                 prev_rev = int(row[31])
                 if expected_revision is not None and prev_rev != expected_revision:
                     raise MatchResultsConcurrencyError(
-                        f"Optimistic concurrency conflict on Match #{match_id}."
+                        f"Optimistic concurrency conflict on Match #{target_match_id}."
                     )
                 new_rev = prev_rev + 1
                 cur.execute(
@@ -2723,16 +2781,16 @@ def soft_delete_match(
                     WHERE match_id = %s AND revision = %s AND deleted_at IS NULL
                     RETURNING {_SELECT_MANUAL_MATCH_COLUMNS}
                     """,
-                    (actor_id, safe_reason, actor_id, new_rev, match_id, prev_rev),
+                    (actor_id, safe_reason, actor_id, new_rev, target_match_id, prev_rev),
                 )
                 deleted_row = cur.fetchone()
                 if deleted_row is None:
                     raise MatchResultsConcurrencyError(
-                        f"Optimistic concurrency conflict on Match #{match_id}."
+                        f"Optimistic concurrency conflict on Match #{target_match_id}."
                     )
                 _insert_audit_entry(
                     cur,
-                    match_id=match_id,
+                    match_id=target_match_id,
                     action="SOFT_DELETE_MATCH",
                     actor_discord_user_id=actor_id,
                     discord_guild_id=str(deleted_row[23]) if deleted_row[23] else None,
@@ -2824,6 +2882,30 @@ def fetch_latest_manual_result(
         return _hydrate_manual_match(cur, row)
 
 
+_PUBLIC_MATCH_ID_ERROR: str = (
+    "Match ID must be a positive number (e.g., 1). Use /results to list matches."
+)
+
+
+def coerce_public_match_id(match_id: int | str | None) -> int | None:
+    """Validate and coerce a public positive numeric Match ID without echoing raw input."""
+    if match_id is None:
+        return None
+    if isinstance(match_id, bool):
+        raise MatchResultsValidationError(_PUBLIC_MATCH_ID_ERROR)
+    if isinstance(match_id, int):
+        if match_id > 0:
+            return match_id
+        raise MatchResultsValidationError(_PUBLIC_MATCH_ID_ERROR)
+    if isinstance(match_id, str):
+        raw_mid = match_id.strip().lstrip("#")
+        if raw_mid.isascii() and raw_mid.isdigit():
+            parsed_id = int(raw_mid)
+            if parsed_id > 0:
+                return parsed_id
+    raise MatchResultsValidationError(_PUBLIC_MATCH_ID_ERROR)
+
+
 def fetch_manual_match(
     conn: Any,
     *,
@@ -2831,43 +2913,22 @@ def fetch_manual_match(
     opponent: str | None = None,
     club_id: str = EAST_COASTERS_CLUB_ID,
 ) -> ManualMatchDetail | None:
-    """Fetch a non-deleted manual match by numeric `match_id`, `legacy_ref`, or `opponent`."""
+    """Fetch a non-deleted manual match by positive numeric `match_id` or `opponent`."""
     if match_id is None and (opponent is None or not opponent.strip()):
         raise MatchResultsValidationError(
             "Provide either `match_id` or `opponent` to look up a match."
         )
     with conn.cursor() as cur:
         if match_id is not None:
-            if isinstance(match_id, int):
-                cur.execute(
-                    f"""
-                    SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
-                    FROM public.fc27_manual_matches
-                    WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
-                    """,
-                    (match_id, club_id),
-                )
-            else:
-                raw_mid = match_id.strip().lstrip("#")
-                if raw_mid.isdigit():
-                    cur.execute(
-                        f"""
-                        SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
-                        FROM public.fc27_manual_matches
-                        WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
-                        """,
-                        (int(raw_mid), club_id),
-                    )
-                else:
-                    safe_ref = validate_safe_text(raw_mid, field_name="match_id", max_length=64)
-                    cur.execute(
-                        f"""
-                        SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
-                        FROM public.fc27_manual_matches
-                        WHERE legacy_ref = %s AND club_id = %s AND deleted_at IS NULL
-                        """,
-                        (safe_ref, club_id),
-                    )
+            numeric_match_id = coerce_public_match_id(match_id)
+            cur.execute(
+                f"""
+                SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
+                FROM public.fc27_manual_matches
+                WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
+                """,
+                (numeric_match_id, club_id),
+            )
             row = cur.fetchone()
             return _hydrate_manual_match(cur, row) if row is not None else None
 
@@ -2888,6 +2949,28 @@ def fetch_manual_match(
             LIMIT 1
             """,
             (club_id, norm_opp, f"%{norm_opp}%", norm_opp),
+        )
+        row = cur.fetchone()
+        return _hydrate_manual_match(cur, row) if row is not None else None
+
+
+def fetch_manual_match_by_legacy_ref(
+    conn: Any,
+    legacy_ref: str,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+) -> ManualMatchDetail | None:
+    """Internal-only lookup of a manual match by `legacy_ref` (not for public Discord commands)."""
+    safe_ref = validate_safe_text(legacy_ref, field_name="legacy_ref", max_length=64)
+    assert safe_ref is not None
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
+            FROM public.fc27_manual_matches
+            WHERE legacy_ref = %s AND club_id = %s AND deleted_at IS NULL
+            """,
+            (safe_ref, club_id),
         )
         row = cur.fetchone()
         return _hydrate_manual_match(cur, row) if row is not None else None
@@ -3190,7 +3273,10 @@ def _format_kickoff_display(match: ManualMatchDetail) -> str:
     if match.match_date:
         return match.match_date
     if match.kickoff_at is not None:
-        return match.kickoff_at.astimezone(timezone.utc).strftime("%b %d, %Y • %H:%M UTC")
+        local_dt = match.kickoff_at.astimezone(EASTERN_TZ)
+        tz_abbr = local_dt.tzname() or "ET"
+        time_part = local_dt.strftime("%I:%M %p").lstrip("0")
+        return f"{local_dt.strftime('%Y-%m-%d')} • {time_part} {tz_abbr}"
     return ""
 
 
@@ -3216,59 +3302,71 @@ def _resolve_motm_display(match: ManualMatchDetail) -> str | None:
 def _format_team_stats_canonical(match: ManualMatchDetail) -> str | None:
     lines: list[str] = []
     if match.possession is not None:
-        lines.append(f"Possession: **{match.possession}%**")
+        lines.append(f"Possession {match.possession}%")
     if match.shots is not None:
         if match.shots_on_target is not None:
-            lines.append(f"Shots: **{match.shots}** ({match.shots_on_target} SOT)")
+            lines.append(f"Shots {match.shots} ({match.shots_on_target} on target)")
         else:
-            lines.append(f"Shots: **{match.shots}**")
+            lines.append(f"Shots {match.shots}")
     elif match.shots_on_target is not None:
-        lines.append(f"Shots on Target: **{match.shots_on_target}**")
+        lines.append(f"Shots on target {match.shots_on_target}")
     if match.passes is not None:
         if match.pass_accuracy is not None:
-            lines.append(f"Passes: **{match.passes}** ({match.pass_accuracy}% Acc)")
+            lines.append(f"Passes {match.passes} ({match.pass_accuracy}%)")
         else:
-            lines.append(f"Passes: **{match.passes}**")
+            lines.append(f"Passes {match.passes}")
     elif match.pass_accuracy is not None:
-        lines.append(f"Pass Accuracy: **{match.pass_accuracy}%**")
+        lines.append(f"Pass Accuracy {match.pass_accuracy}%")
     if match.tackles is not None:
-        lines.append(f"Tackles: **{match.tackles}**")
+        lines.append(f"Tackles {match.tackles}")
     if match.corners is not None:
-        lines.append(f"Corners: **{match.corners}**")
+        lines.append(f"Corners {match.corners}")
     if match.fouls is not None:
-        lines.append(f"Fouls: **{match.fouls}**")
+        lines.append(f"Fouls {match.fouls}")
     if not lines:
         return None
     return " • ".join(lines)
 
 
-def _format_player_line_canonical(p: ManualMatchPlayerDetail) -> str:
+def _format_player_line_canonical(
+    p: ManualMatchPlayerDetail, *, is_motm: bool = False
+) -> str:
     name = _sanitize_player_display(p.safe_display_label)
-    header = f"**{name}** ({p.position})" if p.position else f"**{name}**"
+    header = f"{name} ({p.position})" if p.position else name
     parts: list[str] = []
-    if p.goals > 0:
+    if p.goals > 0 and p.assists > 0:
+        parts.append(f"{p.goals}G {p.assists}A")
+    elif p.goals > 0:
         parts.append(f"{p.goals}G")
-    if p.assists > 0:
+    elif p.assists > 0:
         parts.append(f"{p.assists}A")
-    if p.tackles is not None and (p.tackles > 0 or p.goals > 0 or p.assists > 0):
-        parts.append(f"{p.tackles} TKL")
-    if p.passes is not None:
-        if p.passes_attempted > 0 and p.passes_completed >= 0:
-            parts.append(f"{p.passes_completed}/{p.passes_attempted} PAS")
-        else:
-            parts.append(f"{p.passes} PAS")
-    if p.pass_accuracy is not None:
-        parts.append(f"{p.pass_accuracy}% ACC")
+    if p.passes_attempted > 0 and p.passes_completed >= 0:
+        parts.append(f"{p.passes_completed}/{p.passes_attempted} Passes")
+    elif p.passes is not None and p.pass_accuracy is not None:
+        parts.append(f"{p.passes} Passes ({p.pass_accuracy}%)")
+    elif p.passes is not None:
+        parts.append(f"{p.passes} Passes")
+    elif p.pass_accuracy is not None:
+        parts.append(f"{p.pass_accuracy}% Pass Acc")
+    if p.tackles is not None and p.tackles > 0:
+        parts.append(f"{p.tackles} Tackles")
     if p.shots is not None and p.shots > 0:
-        parts.append(f"{p.shots} SH")
+        parts.append(f"{p.shots} Shots")
     if p.saves > 0:
-        parts.append(f"{p.saves} SV")
+        parts.append(f"{p.saves} Saves")
     if p.rating is not None:
-        parts.append(f"{p.rating:.1f} RTG")
-    return f"• {header}: {' | '.join(parts)}" if parts else f"• {header}"
+        rating_str = f"{float(p.rating):.2f}"
+        parts.append(f"{rating_str} ⭐" if is_motm else rating_str)
+    elif is_motm:
+        parts.append("⭐")
+    return f"{header} — {' | '.join(parts)}" if parts else header
 
 
-def _format_player_chunks_canonical(players: Sequence[ManualMatchPlayerDetail]) -> list[str]:
+def _format_player_chunks_canonical(
+    players: Sequence[ManualMatchPlayerDetail],
+    *,
+    motm_display: str | None = None,
+) -> list[str]:
     if not players:
         return []
     ordered = sorted(
@@ -3281,11 +3379,26 @@ def _format_player_chunks_canonical(players: Sequence[ManualMatchPlayerDetail]) 
             _sanitize_player_display(p.safe_display_label).lower(),
         ),
     )
+    motm_norm = (
+        motm_display.strip().lower()
+        if motm_display and motm_display.strip()
+        else None
+    )
+    motm_awarded = False
     chunks: list[str] = []
     current_lines: list[str] = []
     current_len = 0
     for p in ordered:
-        line = _format_player_line_canonical(p)
+        is_motm = False
+        if motm_norm is not None and not motm_awarded:
+            clean_name = _sanitize_player_display(p.safe_display_label)
+            if (
+                clean_name != UNRESOLVED_PLAYER_DISPLAY_NAME
+                and clean_name.lower() == motm_norm
+            ):
+                is_motm = True
+                motm_awarded = True
+        line = _format_player_line_canonical(p, is_motm=is_motm)
         line_len = len(line) + (1 if current_lines else 0)
         if current_lines and current_len + line_len > 1000:
             chunks.append("\n".join(current_lines))
@@ -3374,7 +3487,9 @@ def build_result_embed(match: ManualMatchDetail) -> discord.Embed:
     if stats_str:
         embed.add_field(name="📊 Team Stats", value=stats_str[:1024], inline=False)
 
-    player_chunks = _format_player_chunks_canonical(match.players)
+    player_chunks = _format_player_chunks_canonical(
+        match.players, motm_display=motm_name
+    )
     for idx, chunk in enumerate(player_chunks):
         field_name = "👥 Players" if idx == 0 else "👥 Players (cont.)"
         embed.add_field(name=field_name, value=chunk[:1024], inline=False)
@@ -3765,10 +3880,12 @@ __all__ = [
     "build_result_content",
     "build_result_embed",
     "clean_opponent",
+    "coerce_public_match_id",
     "create_scheduled_match",
     "edit_match_result",
     "fetch_latest_manual_result",
     "fetch_manual_match",
+    "fetch_manual_match_by_legacy_ref",
     "fetch_manual_player_stats",
     "fetch_manual_results_page",
     "fetch_manual_top_scorers",
