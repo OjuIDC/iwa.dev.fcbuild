@@ -361,6 +361,10 @@ class FC27DiscordBotConfig(BaseModel):
     captain_role_ids: frozenset[str] = Field(default_factory=frozenset)
     admin_role_ids: frozenset[str] = Field(default_factory=frozenset)
     results_channel_id: str | None = None
+    dispatch_enabled: bool = False
+    dispatch_max_jobs_per_cycle: int = Field(default=5, ge=1, le=25)
+    dispatch_lease_minutes: int = Field(default=5, ge=1, le=60)
+    dispatch_single_flight: bool = True
     allow_direct_messages: bool = False
     slash_commands_only: bool = True
     administrator_permission_required: bool = False
@@ -395,29 +399,33 @@ class FC27DiscordBotConfig(BaseModel):
                 "Discord bot must not enable privileged message_content intent"
             )
         if self.application_id is not None:
-            app_id_clean = str(self.application_id).strip()
+            app_id_clean = self.application_id.strip()
             if not app_id_clean.isdecimal() or int(app_id_clean) <= 0:
                 raise FC27DiscordAuthzError(
                     f"Invalid Discord application_id: '{self.application_id}'"
                 )
         for gid in self.allowed_guild_ids:
-            if not str(gid).isdecimal() or int(gid) <= 0:
+            if not gid.isdecimal() or int(gid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid guild ID in allowlist: '{gid}'")
         for cid in self.allowed_channel_ids:
-            if not str(cid).isdecimal() or int(cid) <= 0:
+            if not cid.isdecimal() or int(cid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid channel ID in allowlist: '{cid}'")
         for rid in self.allowed_role_ids:
-            if not str(rid).isdecimal() or int(rid) <= 0:
+            if not rid.isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid role ID in allowlist: '{rid}'")
         for rid in self.manager_role_ids | self.captain_role_ids | self.admin_role_ids:
-            if not str(rid).isdecimal() or int(rid) <= 0:
+            if not rid.isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid Match Results writer role ID: '{rid}'")
         if self.results_channel_id is not None:
-            rc_clean = str(self.results_channel_id).strip()
+            rc_clean = self.results_channel_id.strip()
             if not rc_clean.isdecimal() or int(rc_clean) <= 0:
                 raise FC27DiscordAuthzError(
                     f"Invalid Discord results_channel_id: '{self.results_channel_id}'"
                 )
+        if self.dispatch_enabled and not self.results_channel_id:
+            raise FC27DiscordDisabledError(
+                "FC27_DISCORD_RESULTS_CHANNEL_ID must be non-empty when FC27_DISCORD_DISPATCH_ENABLED=true"
+            )
         if self.enabled:
             if self.require_application_id and not self.application_id:
                 raise FC27DiscordDisabledError(
@@ -451,8 +459,18 @@ class FC27DiscordBotConfig(BaseModel):
             captain_roles = settings.get_fc27_discord_captain_role_ids(strict=strict)
             admin_roles = settings.get_fc27_discord_admin_role_ids(strict=strict)
             results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
+            dispatch_enabled = settings.is_fc27_discord_dispatch_enabled(strict=strict)
+            dispatch_max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
+            dispatch_lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
+            dispatch_single_flight = settings.is_fc27_discord_single_flight_enabled(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
+        if dispatch_enabled and not results_chan:
+            if strict:
+                raise FC27DiscordDisabledError(
+                    "FC27_DISCORD_RESULTS_CHANNEL_ID must be configured when FC27_DISCORD_DISPATCH_ENABLED=true"
+                )
+            dispatch_enabled = False
         return cls(
             enabled=enabled,
             application_id=app_id,
@@ -464,6 +482,10 @@ class FC27DiscordBotConfig(BaseModel):
             captain_role_ids=captain_roles,
             admin_role_ids=admin_roles,
             results_channel_id=results_chan,
+            dispatch_enabled=dispatch_enabled,
+            dispatch_max_jobs_per_cycle=dispatch_max_jobs,
+            dispatch_lease_minutes=dispatch_lease_mins,
+            dispatch_single_flight=dispatch_single_flight,
         )
 
 
@@ -585,7 +607,7 @@ class FC27DiscordAuditEntry(BaseModel):
 
 def assert_sql_is_readonly_fc27_select(query: str) -> None:
     """Reject any non-SELECT query or any reference to forbidden tables."""
-    text_sql = str(query or "").strip()
+    text_sql = (query or "").strip()
     if not text_sql:
         raise FC27DiscordWriteAccessDeniedError("Empty SQL query is not permitted")
     lowered = text_sql.lower()
@@ -658,7 +680,7 @@ class GuardedDiscordReadOnlyConnection:
                     f"Discord bot database role posture violation: {', '.join(violations)}"
                 )
         self._conn = conn
-        self._query_timeout_ms = int(query_timeout_ms)
+        self._query_timeout_ms = query_timeout_ms
 
     def cursor(self, *args: Any, **kwargs: Any) -> _GuardedDiscordCursor:
         return _GuardedDiscordCursor(self._conn.cursor(*args, **kwargs))
@@ -822,7 +844,7 @@ class FC27DiscordBotService:
         self._db_conn_or_uri = db_conn_or_uri
         self._writer_db_conn_or_uri = writer_db_conn_or_uri
         self._discord_channel_adapter = discord_channel_adapter
-        self._require_dedicated_writer_role = bool(require_dedicated_writer_role)
+        self._require_dedicated_writer_role = require_dedicated_writer_role
         self._polling_runtime = polling_runtime or get_default_polling_runtime()
         self._coach_provider = coach_report_provider
         self._tactics_provider = tactics_report_provider
@@ -910,10 +932,10 @@ class FC27DiscordBotService:
             guild_id_hash=_hash_snowflake_id(guild_id),
             channel_id_hash=_hash_snowflake_id(channel_id),
             user_id_hash=_hash_snowflake_id(user_id),
-            command=str(command)[:64],
-            outcome_category=str(outcome_category)[:64],
+            command=command[:64],
+            outcome_category=outcome_category[:64],
             duration_ms=elapsed_ms,
-            row_count=max(0, int(row_count)),
+            row_count=max(0, row_count),
             export_type=export_type,
         )
         self._audit_log.append(entry)
@@ -1060,7 +1082,7 @@ class FC27DiscordBotService:
     ) -> FC27DiscordResponse:
         """Authorize, rate-limit, execute, sanitize, and audit a `/fc27` slash command."""
         started = float(self._clock_fn())
-        cmd_raw = str(subcommand or "").strip().lower()
+        cmd_raw = (subcommand or "").strip().lower()
         cmd_clean = DISCORD_SUBCOMMAND_ALIASES.get(cmd_raw, cmd_raw)
 
         if not self._config.enabled:
@@ -1260,8 +1282,8 @@ class FC27DiscordBotService:
                         guild_id=gid_str,
                         channel_id=cid_str,
                         user_id=uid_str,
-                        page=max(1, int(page)),
-                        page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, int(page_size))),
+                        page=max(1, page),
+                        page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, page_size)),
                         opponent=opponent,
                         date_str=date_str,
                         time_str=time_str,
@@ -1316,8 +1338,8 @@ class FC27DiscordBotService:
             else:
                 resp = self._dispatch_authorized_subcommand(
                     cmd_clean,
-                    page=max(1, int(page)),
-                    page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, int(page_size))),
+                    page=max(1, page),
+                    page_size=min(MAX_DISCORD_ROWS_PER_PAGE, max(1, page_size)),
                 )
             assert_discord_output_sanitized(resp.content, forbidden_tokens=self._secret_tokens)
             for emb in resp.embeds:
@@ -2113,8 +2135,8 @@ class FC27DiscordBotService:
                     "next_eligible_at": str(snap.next_eligible_at or "IMMEDIATE"),
                     "schedule_lag_seconds": str(snap.schedule_lag_seconds),
                     "possible_history_gap": str(snap.possible_history_gap).lower(),
-                    "history_gap_reason": str(snap.history_gap_reason),
-                    "circuit_state": str(snap.circuit_state),
+                    "history_gap_reason": snap.history_gap_reason or "NONE",
+                    "circuit_state": snap.circuit_state,
                     "database_match_count": str(match_count),
                 },
             )
@@ -2574,28 +2596,49 @@ class FC27DiscordBotService:
     def _build_sanitized_export_rows(self, matches: Sequence[Any]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for m in matches[:MAX_DISCORD_ROWS_PER_PAGE]:
-            players = []
+            players: list[dict[str, Any]] = []
+            shots_total = 0
+            shots_on_target_total = 0
+            passes_completed_total = 0
+            passes_attempted_total = 0
+            tackles_won_total = 0
+            tackles_attempted_total = 0
             for p in m.player_appearances:
                 if not PSEUDONYM_PLAYER_REF_RE.match(str(p.player_ref)):
                     raise FC27DiscordPrivacyError(
                         f"Non-pseudonymous player reference rejected: {p.player_ref}"
                     )
+                goals = int(p.goals or 0)
+                assists = int(p.assists or 0)
+                shots = int(p.shots or 0)
+                shots_on_target = int(p.shots_on_target or 0)
+                passes_completed = int(p.passes_completed or 0)
+                passes_attempted = int(p.passes_attempted or 0)
+                tackles_won = int(p.tackles_won or 0)
+                tackles_attempted = int(p.tackles_attempted or 0)
                 players.append(
                     {
                         "local_player_reference": str(p.player_ref),
                         "position": str(p.position),
-                        "goals": int(p.goals or 0),
-                        "assists": int(p.assists or 0),
-                        "shots": int(p.shots or 0),
-                        "passes_completed": int(p.passes_completed or 0),
-                        "passes_attempted": int(p.passes_attempted or 0),
-                        "tackles_won": int(p.tackles_won or 0),
-                        "tackles_attempted": int(p.tackles_attempted or 0),
+                        "goals": goals,
+                        "assists": assists,
+                        "shots": shots,
+                        "passes_completed": passes_completed,
+                        "passes_attempted": passes_attempted,
+                        "tackles_won": tackles_won,
+                        "tackles_attempted": tackles_attempted,
                         "provider_rating": float(p.match_rating)
                         if p.match_rating is not None
                         else None,
                     }
                 )
+                shots_total += shots
+                shots_on_target_total += shots_on_target
+                passes_completed_total += passes_completed
+                passes_attempted_total += passes_attempted
+                tackles_won_total += tackles_won
+                tackles_attempted_total += tackles_attempted
+            opponent_name = m.opponent_name
             rows.append(
                 {
                     "match_id": str(m.match_id),
@@ -2614,15 +2657,23 @@ class FC27DiscordBotService:
                     "goals_against": int(m.goals_against),
                     "goal_difference": int(m.goals_for) - int(m.goals_against),
                     "opponent_club_id": "0",
-                    "opponent_name": str(m.opponent_name),
+                    "opponent_name": (
+                        str(opponent_name)
+                        if opponent_name is not None
+                        else "Unknown Opponent"
+                    ),
                     "winner_by_dnf": False,
-                    "possession_pct": None,
-                    "shots": sum(int(p["shots"]) for p in players),
-                    "shots_on_target": 0,
-                    "passes_completed": sum(int(p["passes_completed"]) for p in players),
-                    "passes_attempted": sum(int(p["passes_attempted"]) for p in players),
-                    "tackles_won": sum(int(p["tackles_won"]) for p in players),
-                    "tackles_attempted": sum(int(p["tackles_attempted"]) for p in players),
+                    "possession_pct": (
+                        float(m.possession_pct)
+                        if getattr(m, "possession_pct", None) is not None
+                        else None
+                    ),
+                    "shots": shots_total,
+                    "shots_on_target": shots_on_target_total,
+                    "passes_completed": passes_completed_total,
+                    "passes_attempted": passes_attempted_total,
+                    "tackles_won": tackles_won_total,
+                    "tackles_attempted": tackles_attempted_total,
                     "fouls": 0,
                     "players": players,
                 }
@@ -2688,7 +2739,7 @@ def run_discord_gateway_bot(
         raise FC27DiscordDisabledError("Discord bot token is missing or placeholder")
     if not config.enabled:
         raise FC27DiscordDisabledError("Discord bot is disabled")
-    if not config.application_id or not str(config.application_id).isdecimal() or int(config.application_id) <= 0:
+    if not config.application_id or not config.application_id.isdecimal() or int(config.application_id) <= 0:
         raise FC27DiscordDisabledError("Valid DISCORD_APPLICATION_ID is required for Gateway mode")
     if not config.allowed_guild_ids or not config.allowed_channel_ids or not config.allowed_role_ids:
         raise FC27DiscordDisabledError(
@@ -2701,17 +2752,64 @@ def run_discord_gateway_bot(
     )
 
     if gateway_runner is not None:
-        return int(gateway_runner(bot_service, resolved_token))
+        return gateway_runner(bot_service, resolved_token)
+
+    dispatch_cfg = None
+    if config.dispatch_enabled:
+        from src.fc27_discord_dispatcher import (
+            DiscordGatewayChannelTransport,
+            FC27DiscordDispatchConfig,
+            resolve_discord_job_writer_uri,
+            resolve_discord_readonly_uri,
+            run_discord_dispatcher_loop,
+        )
+
+        dispatch_cfg = FC27DiscordDispatchConfig(
+            enabled=True,
+            results_channel_id=config.results_channel_id,
+            max_jobs_per_cycle=config.dispatch_max_jobs_per_cycle,
+            lease_minutes=config.dispatch_lease_minutes,
+            single_flight=config.dispatch_single_flight,
+        )
+        try:
+            writer_uri = resolve_discord_job_writer_uri(required=True)
+            readonly_uri = resolve_discord_readonly_uri(required=True)
+            settings.validate_fc27_role_uri_separation(readonly_uri, writer_uri)
+        except ConfigError as exc:
+            raise FC27DiscordError(str(exc)) from exc
 
     import asyncio
     import signal
-    import discord
-    from discord import app_commands
+
+    try:
+        import discord
+        from discord import app_commands
+    except ModuleNotFoundError as exc:
+        missing = str(getattr(exc, "name", "") or "")
+        if missing != "discord" and not missing.startswith("discord."):
+            raise
+        raise FC27DiscordDisabledError(
+            "Optional dependency 'discord.py' is not installed. "
+            "Install the gateway extra with: pip install '.[discord]'"
+        ) from exc
 
     intents = discord.Intents.none()
     intents.guilds = True
 
     guild_objects = [discord.Object(id=int(gid)) for gid in sorted(config.allowed_guild_ids)]
+
+    dispatch_runtime: dict[str, Any] = {"task": None, "stop_event": None}
+
+    def _on_dispatch_task_done(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        safe_diag = redact_sensitive_text(
+            str(exc), extra_secrets=(resolved_token,)
+        )
+        print(f"DISCORD_DISPATCH_TASK_FAILED error={safe_diag}", flush=True)
 
     class _FC27ReadOnlyGatewayClient(discord.Client):
         def __init__(self) -> None:
@@ -2728,6 +2826,26 @@ def run_discord_gateway_bot(
                     f"DISCORD_GATEWAY_GUILD_SYNCED={guild_obj.id} COMMAND_COUNT={len(synced)}",
                     flush=True,
                 )
+            if config.dispatch_enabled:
+                assert dispatch_cfg is not None
+                # Created here, after discord.py login() initialized readiness, and without
+                # awaiting readiness in this hook: the loop itself waits for the ready event.
+                loop = asyncio.get_running_loop()
+                stop_event = asyncio.Event()
+                transport = DiscordGatewayChannelTransport(self, loop)
+                task = asyncio.create_task(
+                    run_discord_dispatcher_loop(
+                        config=dispatch_cfg,
+                        transport=transport,
+                        wait_until_ready_fn=self.wait_until_ready,
+                        stop_event=stop_event,
+                        secret_tokens_to_scrub=(resolved_token,),
+                    ),
+                    name="fc27-discord-dispatcher",
+                )
+                task.add_done_callback(_on_dispatch_task_done)
+                dispatch_runtime["stop_event"] = stop_event
+                dispatch_runtime["task"] = task
 
         async def on_ready(self) -> None:
             print("DISCORD_BOT_READY=YES", flush=True)
@@ -2735,6 +2853,10 @@ def run_discord_gateway_bot(
             print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}", flush=True)
             print(
                 f"DISCORD_DATABASE_WRITE_ACCESS={'YES' if DISCORD_DATABASE_WRITE_ACCESS else 'NO'}",
+                flush=True,
+            )
+            print(
+                f"DISCORD_DISPATCH_ENABLED={'YES' if config.dispatch_enabled else 'NO'}",
                 flush=True,
             )
 
@@ -2811,21 +2933,40 @@ def run_discord_gateway_bot(
             except (NotImplementedError, RuntimeError, ValueError):
                 signal.signal(sig, lambda *_a: loop.call_soon_threadsafe(_on_signal))
 
+        dispatch_stop_event: asyncio.Event | None
+        dispatch_task: asyncio.Task[None] | None
+
         start_task = asyncio.create_task(client.start(resolved_token, reconnect=True))
-        done, _ = await asyncio.wait(
-            {start_task, stop_future},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if stop_future in done:
-            print("DISCORD_BOT_SHUTDOWN=CLEAN", flush=True)
-            await client.close()
-            try:
-                await asyncio.wait_for(start_task, timeout=10.0)
-            except Exception:
-                pass
+        try:
+            done, _ = await asyncio.wait(
+                {start_task, stop_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_future in done:
+                print("DISCORD_BOT_SHUTDOWN=CLEAN", flush=True)
+                await client.close()
+                try:
+                    await asyncio.wait_for(start_task, timeout=10.0)
+                except Exception:
+                    pass
+                return 0
+            await start_task
             return 0
-        await start_task
-        return 0
+        finally:
+            dispatch_stop_event = dispatch_runtime.get("stop_event")
+            dispatch_task = dispatch_runtime.get("task")
+            if dispatch_stop_event is not None:
+                dispatch_stop_event.set()
+            if dispatch_task is not None:
+                if not dispatch_task.done():
+                    try:
+                        await asyncio.wait_for(dispatch_task, timeout=5.0)
+                    except (asyncio.TimeoutError, Exception):
+                        dispatch_task.cancel()
+                        try:
+                            await dispatch_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
     return asyncio.run(_runner())
 

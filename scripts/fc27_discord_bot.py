@@ -98,6 +98,10 @@ def main(
         print(f"DISCORD_ALLOWED_ROLE_COUNT={len(config.allowed_role_ids)}")
         print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}")
         print(f"DISCORD_DATABASE_WRITE_ACCESS={'YES' if DISCORD_DATABASE_WRITE_ACCESS else 'NO'}")
+        print(f"DISCORD_DISPATCH_ENABLED={'YES' if config.dispatch_enabled else 'NO'}")
+        print(f"DISCORD_MAX_JOBS_PER_CYCLE={config.dispatch_max_jobs_per_cycle}")
+        print(f"DISCORD_LEASE_MINUTES={config.dispatch_lease_minutes}")
+        print(f"DISCORD_SINGLE_FLIGHT={'YES' if config.dispatch_single_flight else 'NO'}")
         return 0
 
     if args.command:

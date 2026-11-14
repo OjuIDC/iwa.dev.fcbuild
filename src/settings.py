@@ -562,6 +562,84 @@ def get_fc27_discord_results_channel_id(*, strict: bool = False) -> str | None:
     return token
 
 
+def is_fc27_discord_dispatch_enabled(*, strict: bool = False) -> bool:
+    """Check if the FC27 Discord notification dispatcher is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_DISCORD_DISPATCH_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_DISCORD_DISPATCH_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+
+
+def get_fc27_discord_max_jobs_per_cycle(*, strict: bool = False) -> int:
+    """Return max pending Discord notification jobs claimed per cycle (default: 5, range 1..25)."""
+    raw = os.getenv("FC27_DISCORD_MAX_JOBS_PER_CYCLE")
+    if raw is None or not raw.strip():
+        return 5
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_MAX_JOBS_PER_CYCLE must be an integer between 1 and 25, got '{raw}'"
+            )
+        return 5
+    num = int(token)
+    if num < 1 or num > 25:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_MAX_JOBS_PER_CYCLE must be between 1 and 25, got {num}"
+            )
+        return 5
+    return num
+
+
+def get_fc27_discord_lease_minutes(*, strict: bool = False) -> int:
+    """Return Discord notification job lease duration in minutes (default: 5, range 1..60)."""
+    raw = os.getenv("FC27_DISCORD_LEASE_MINUTES")
+    if raw is None or not raw.strip():
+        return 5
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_LEASE_MINUTES must be an integer between 1 and 60, got '{raw}'"
+            )
+        return 5
+    num = int(token)
+    if num < 1 or num > 60:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_LEASE_MINUTES must be between 1 and 60, got {num}"
+            )
+        return 5
+    return num
+
+
+def is_fc27_discord_single_flight_enabled(*, strict: bool = False) -> bool:
+    """Check if Discord dispatcher single-flight coordination is enabled (default: True)."""
+    raw = os.getenv("FC27_DISCORD_SINGLE_FLIGHT")
+    if raw is None or not raw.strip():
+        return True
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_DISCORD_SINGLE_FLIGHT must be a valid boolean, got '{raw}'"
+        )
+    return True
+
+
 def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
     """Check if FC 27 bounded performance telemetry is enabled (default: False, fail-closed)."""
     raw = os.getenv("FC27_PERFORMANCE_TELEMETRY_ENABLED")

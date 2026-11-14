@@ -402,6 +402,23 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Read-only Discord bot slash-command, PostgreSQL reader, and Dockerfile.discord/compose contract tests using per-test DBs.",
         ),
         _entry(
+            "tests/test_fc27_discord_dispatcher.py",
+            "POSTGRES_PARALLEL_SAFE",
+            (
+                "postgres",
+                "docker",
+                "compose",
+                "domain",
+                "security",
+                "offline",
+                "network_forbidden",
+            ),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused", "docker-compose-focused"),
+            "FC27 Discord notification dispatcher lease, quarantine, privacy, role-isolation, and idempotency tests using per-test DBs.",
+        ),
+        _entry(
             "tests/test_fc27_match_results.py",
             "POSTGRES_PARALLEL_SAFE",
             ("postgres", "domain", "security", "offline", "network_forbidden"),
