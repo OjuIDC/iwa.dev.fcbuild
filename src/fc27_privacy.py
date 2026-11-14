@@ -39,6 +39,7 @@ class FC27PrivacyViolationError(FC27ProviderError):
 
 
 PRIVACY_POLICY_VERSION: Final[str] = "fc27-privacy-v1"
+MATCH_EQUIVALENCE_CONTRACT_VERSION: Final[str] = "fc27-match-equivalence-v1"
 EAST_COASTERS_CLUB_ID: Final[str] = "330323"
 EAST_COASTERS_CLUB_NAME: Final[str] = "East Coasters"
 EAST_COASTERS_PLATFORM: Final[str] = "common-gen5"
@@ -664,6 +665,323 @@ def compute_match_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_CANONICAL_MATCH_TYPE_EQUIVALENCE_MAP: Final[Mapping[str, str]] = {
+    "leaguematch": "LEAGUE",
+    "gametype9": "LEAGUE",
+    "league": "LEAGUE",
+    "playoffmatch": "PLAYOFF",
+    "gametype13": "PLAYOFF",
+    "playoff": "PLAYOFF",
+    "friendlymatch": "FRIENDLY",
+    "friendly": "FRIENDLY",
+    "cup": "CUP",
+    "practice": "PRACTICE",
+}
+
+_CORE_PLAYER_EQUIVALENCE_FIELDS: Final[tuple[str, ...]] = (
+    "local_player_reference",
+    "position",
+    "minutes_played",
+    "goals",
+    "assists",
+    "passes_attempted",
+    "passes_completed",
+    "tackles_attempted",
+    "tackles_won",
+    "interceptions",
+    "shots",
+    "saves",
+    "provider_rating",
+)
+
+
+def canonicalize_match_type_for_equivalence(raw_match_type: Any) -> str | None:
+    """Normalize an optional match_type token using the explicit FC27 equivalence mapping."""
+    if raw_match_type is None:
+        return None
+    cleaned = str(raw_match_type).strip()
+    if not cleaned:
+        return None
+    folded = cleaned.casefold()
+    if folded == "unknown":
+        return None
+    return _CANONICAL_MATCH_TYPE_EQUIVALENCE_MAP.get(folded, cleaned.upper())
+
+
+def is_community_provider_provenance(
+    *,
+    source_classification: str | None = None,
+    supplier_reference: str | None = None,
+    export_id: str | None = None,
+) -> bool:
+    """Return True when provenance indicates upstream community-provider polling/evaluation."""
+    cls_clean = (source_classification or "").strip().upper()
+    if cls_clean in {"COMMUNITY_RESEARCH_DERIVED", "LIVE_EA_CLUBS_COMMUNITY_CLIENT"}:
+        return True
+    sup_clean = (supplier_reference or "").strip()
+    if sup_clean.startswith("fc27-community-"):
+        return True
+    exp_clean = (export_id or "").strip()
+    return exp_clean.startswith(("comm_eval_", "comm_poll_"))
+
+
+def _normalize_utc_timestamp_for_equivalence(raw_ts: Any) -> str:
+    """Normalize a datetime or ISO-8601 string to whole-second UTC (`YYYY-MM-DDTHH:MM:SSZ`)."""
+    if isinstance(raw_ts, datetime):
+        dt = raw_ts
+    elif isinstance(raw_ts, str):
+        cleaned = raw_ts.strip()
+        if cleaned.endswith("Z"):
+            cleaned = cleaned[:-1] + "+00:00"
+        dt = datetime.fromisoformat(cleaned)
+    else:
+        raise FC27ValidationError("played_at must be a datetime or ISO-8601 string")
+    utc_dt = dt.astimezone(UTC) if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+    return utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _project_player_performance_equivalence_v1(perf: Any) -> dict[str, Any]:
+    if hasattr(perf, "model_dump"):
+        p_map: Mapping[str, Any] = perf.model_dump()
+    elif isinstance(perf, Mapping):
+        p_map = perf
+    else:
+        raise FC27ValidationError("player performance entry must be a mapping or Pydantic model")
+
+    raw_ref = str(
+        p_map.get("local_player_reference") or p_map.get("local_player_ref") or ""
+    ).strip()
+    raw_pos = str(p_map.get("position") or p_map.get("position_code") or "UNKNOWN").strip().upper()
+    raw_role = str(p_map.get("role") or "UNKNOWN").strip()
+    norm_role = "UNKNOWN" if not raw_role or raw_role.casefold() == "unknown" else raw_role
+    raw_build = str(p_map.get("build_reference") or "").strip()
+    norm_build = None if not raw_build or raw_build.casefold() == "unknown" else raw_build
+    minutes = int(p_map["minutes_played"]) if p_map.get("minutes_played") is not None else 90
+    goals = int(p_map.get("goals") or 0)
+    assists = int(p_map.get("assists") or 0)
+    passes_att = int(p_map["passes_attempted"]) if p_map.get("passes_attempted") is not None else 0
+    passes_cmp = int(p_map["passes_completed"]) if p_map.get("passes_completed") is not None else 0
+    tackles_att = (
+        int(p_map["tackles_attempted"]) if p_map.get("tackles_attempted") is not None else 0
+    )
+    tackles_won = int(p_map["tackles_won"]) if p_map.get("tackles_won") is not None else 0
+    interceptions = int(p_map["interceptions"]) if p_map.get("interceptions") is not None else 0
+    shots = int(p_map["shots"]) if p_map.get("shots") is not None else 0
+    shots_ot = int(p_map["shots_on_target"]) if p_map.get("shots_on_target") is not None else 0
+    saves = int(p_map["saves"]) if p_map.get("saves") is not None else 0
+    poss_losses = (
+        int(p_map["possession_losses"]) if p_map.get("possession_losses") is not None else 0
+    )
+    raw_rating = (
+        p_map["provider_rating"]
+        if p_map.get("provider_rating") is not None
+        else p_map.get("rating", 7.0)
+    )
+    rating_val = float(raw_rating) if raw_rating is not None else 7.0
+
+    return {
+        "local_player_reference": raw_ref,
+        "position": raw_pos,
+        "role": norm_role,
+        "build_reference": norm_build,
+        "minutes_played": minutes,
+        "goals": goals,
+        "assists": assists,
+        "passes_attempted": passes_att,
+        "passes_completed": passes_cmp,
+        "tackles_attempted": tackles_att,
+        "tackles_won": tackles_won,
+        "interceptions": interceptions,
+        "shots": shots,
+        "shots_on_target": shots_ot,
+        "saves": saves,
+        "possession_losses": poss_losses,
+        "provider_rating": f"{round(rating_val, 2):.2f}",
+    }
+
+
+def _player_equivalence_sort_key(p: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(p["local_player_reference"]),
+        str(p["position"]),
+        int(p["minutes_played"]),
+        int(p["goals"]),
+        int(p["assists"]),
+        int(p["passes_attempted"]),
+        int(p["passes_completed"]),
+        int(p["tackles_attempted"]),
+        int(p["tackles_won"]),
+        int(p["interceptions"]),
+        int(p["shots"]),
+        int(p["saves"]),
+        str(p["provider_rating"]),
+    )
+
+
+def project_match_equivalence_v1(
+    match_data: Any,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    platform: str = EAST_COASTERS_PLATFORM,
+    game_version: str = EAST_COASTERS_GAME_VERSION,
+    source_classification: str | None = None,
+    supplier_reference: str | None = None,
+    export_id: str | None = None,
+    match_type_override: str | None = None,
+) -> dict[str, Any]:
+    """Build the versioned source-independent match-fact projection (`fc27-match-equivalence-v1`)."""
+    if hasattr(match_data, "model_dump"):
+        d: Mapping[str, Any] = match_data.model_dump()
+    elif isinstance(match_data, Mapping):
+        d = match_data
+    else:
+        raise FC27ValidationError("match_data must be a mapping or Pydantic model")
+
+    raw_perfs = d.get("player_performances")
+    if raw_perfs is None:
+        raw_perfs = d.get("player_statistics", [])
+    projected_players = sorted(
+        (_project_player_performance_equivalence_v1(p) for p in raw_perfs),
+        key=_player_equivalence_sort_key,
+    )
+
+    raw_formation = str(d.get("formation") or "UNKNOWN").strip()
+    norm_formation = "UNKNOWN" if raw_formation.casefold() == "unknown" else raw_formation
+    eff_source_cls = source_classification or d.get("source_classification")
+    provider_only = is_community_provider_provenance(
+        source_classification=str(eff_source_cls) if eff_source_cls is not None else None,
+        supplier_reference=supplier_reference,
+        export_id=export_id,
+    )
+
+    return {
+        "contract_version": MATCH_EQUIVALENCE_CONTRACT_VERSION,
+        "club_id": str(club_id).strip(),
+        "platform": str(platform).strip(),
+        "game_version": str(game_version).strip().upper(),
+        "external_match_id": str(d.get("external_match_id") or d.get("match_id") or "").strip(),
+        "played_at": _normalize_utc_timestamp_for_equivalence(d["played_at"]),
+        "match_type": canonicalize_match_type_for_equivalence(
+            match_type_override if match_type_override is not None else d.get("match_type")
+        ),
+        "result": str(d["result"]).strip().upper(),
+        "goals_for": int(d["goals_for"]),
+        "goals_against": int(d["goals_against"]),
+        "opponent_name": unicodedata.normalize("NFC", str(d["opponent_name"])).strip(),
+        "match_status": str(d.get("match_status") or "COMPLETED").strip().upper(),
+        "formation": norm_formation,
+        "provider_only_capabilities": provider_only,
+        "player_performances": projected_players,
+    }
+
+
+def compute_match_equivalence_hash(
+    match_data: Any,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    platform: str = EAST_COASTERS_PLATFORM,
+    game_version: str = EAST_COASTERS_GAME_VERSION,
+) -> str:
+    """Compute a source-independent SHA-256 hash over immutable core facts (`fc27-match-equivalence-v1`)."""
+    proj = project_match_equivalence_v1(
+        match_data,
+        club_id=club_id,
+        platform=platform,
+        game_version=game_version,
+    )
+    core_players = [
+        {k: p[k] for k in _CORE_PLAYER_EQUIVALENCE_FIELDS}
+        for p in proj["player_performances"]
+    ]
+    core_payload = {
+        "contract_version": MATCH_EQUIVALENCE_CONTRACT_VERSION,
+        "club_id": proj["club_id"],
+        "platform": proj["platform"],
+        "game_version": proj["game_version"],
+        "external_match_id": proj["external_match_id"],
+        "played_at": proj["played_at"],
+        "result": proj["result"],
+        "goals_for": proj["goals_for"],
+        "goals_against": proj["goals_against"],
+        "opponent_name": proj["opponent_name"],
+        "match_status": proj["match_status"],
+        "player_performances": core_players,
+    }
+    canonical = canonicalize_for_hashing(core_payload)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compare_match_equivalence_v1(
+    existing_projection: Mapping[str, Any],
+    incoming_projection: Mapping[str, Any],
+    *,
+    match_index: int = 0,
+) -> list[str]:
+    """Compare two `fc27-match-equivalence-v1` projections and return privacy-safe differing field paths.
+
+    Returns an empty list when all immutable match identity, immutable match facts, opponent identity,
+    and canonicalized player performance facts are equivalent. Any material difference returns one or
+    more bounded field paths suitable for `public.fc27_quarantine_records.diagnostic_paths` (zero raw values).
+    """
+    prefix = f"matches[{match_index}]"
+    diffs: list[str] = []
+
+    for top_field in ("club_id", "platform", "game_version"):
+        if existing_projection.get(top_field) != incoming_projection.get(top_field):
+            diffs.append(f"{prefix}.{top_field}")
+
+    for match_field in (
+        "external_match_id",
+        "played_at",
+        "result",
+        "goals_for",
+        "goals_against",
+        "opponent_name",
+        "match_status",
+    ):
+        if existing_projection.get(match_field) != incoming_projection.get(match_field):
+            diffs.append(f"{prefix}.{match_field}")
+
+    ex_mt = existing_projection.get("match_type")
+    in_mt = incoming_projection.get("match_type")
+    if ex_mt is not None and in_mt is not None and ex_mt != in_mt:
+        diffs.append(f"{prefix}.match_type")
+
+    either_provider_only = bool(
+        existing_projection.get("provider_only_capabilities")
+        or incoming_projection.get("provider_only_capabilities")
+    )
+    ex_form = str(existing_projection.get("formation") or "UNKNOWN")
+    in_form = str(incoming_projection.get("formation") or "UNKNOWN")
+    if (
+        not either_provider_only
+        and ex_form != "UNKNOWN"
+        and in_form != "UNKNOWN"
+        and ex_form != in_form
+    ):
+        diffs.append(f"{prefix}.formation")
+
+    ex_players = list(existing_projection.get("player_performances") or [])
+    in_players = list(incoming_projection.get("player_performances") or [])
+    if len(ex_players) != len(in_players):
+        diffs.append(f"{prefix}.player_performances.length")
+        return diffs
+
+    extra_user_fields: tuple[str, ...] = (
+        ()
+        if either_provider_only
+        else ("role", "build_reference", "shots_on_target", "possession_losses")
+    )
+    fields_to_check = _CORE_PLAYER_EQUIVALENCE_FIELDS + extra_user_fields
+
+    for p_idx, (ep, ip) in enumerate(zip(ex_players, in_players, strict=True)):
+        for p_field in fields_to_check:
+            if ep.get(p_field) != ip.get(p_field):
+                diffs.append(f"{prefix}.player_performances[{p_idx}].{p_field}")
+
+    return diffs
+
+
 def validate_safe_text(
     text: str,
     field_name: str,
@@ -828,6 +1146,7 @@ __all__ = [
     "EAST_COASTERS_PLATFORM",
     "FORMULA_PREFIXES",
     "HEX_SHA256_RE",
+    "MATCH_EQUIVALENCE_CONTRACT_VERSION",
     "MAX_IDENTIFIER_LENGTH",
     "MAX_SAFE_TEXT_LENGTH",
     "MIN_ALIAS_HMAC_KEY_BYTES",
@@ -861,13 +1180,17 @@ __all__ = [
     "_validate_safe_text",
     "assert_no_sensitive_fields",
     "canonicalize_for_hashing",
+    "canonicalize_match_type_for_equivalence",
     "compare_digest_constant_time",
+    "compare_match_equivalence_v1",
     "compute_alias_hmac_fingerprint",
+    "compute_match_equivalence_hash",
     "compute_match_hash",
     "compute_payload_sha256",
     "contains_discord_mention",
     "contains_prohibited_url",
     "escape_csv_formula_cell",
+    "is_community_provider_provenance",
     "is_sensitive_key",
     "normalize_club_name",
     "normalize_display_label",
@@ -875,6 +1198,7 @@ __all__ = [
     "normalize_identifier",
     "normalize_key_for_scanning",
     "normalize_whitespace_and_casefold",
+    "project_match_equivalence_v1",
     "pseudonymize_east_coasters_identifier",
     "pseudonymize_match_ref",
     "redact_sensitive_text",

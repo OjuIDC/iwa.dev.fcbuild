@@ -93,6 +93,7 @@ from src.fc27_repository import (
     FC27ReplayConflictError,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
+    _insert_quarantine_row_in_tx,
     apply_export_plan,
     load_import_state,
     plan_fc27_user_export_import,
@@ -1217,6 +1218,7 @@ def _supplied_matches_from_normalized_records(
                     provider_rating=p.get("rating"),
                 )
             )
+        perfs.sort(key=lambda item: (item.local_player_reference, item.position))
         played_raw = rec.get("played_at")
         if isinstance(played_raw, datetime):
             played_dt = played_raw
@@ -1238,7 +1240,7 @@ def _supplied_matches_from_normalized_records(
                 match_type=str(rec.get("match_type") or "LEAGUE"),
                 match_status="COMPLETED",
                 data_quality_status="VERIFIED",
-                source_classification="OPERATOR_CAPTURED_DISPLAYED_DATA",
+                source_classification="COMMUNITY_RESEARCH_DERIVED",
             )
         )
     return supplied
@@ -1432,17 +1434,20 @@ def persist_polled_match_envelope(
     poll_ts_utc = _normalize_utc(generated_at) if generated_at is not None else deterministic_gen_dt
 
     c1_tables_ready = True
+    quarantine_table_ready = False
     try:
         cur_chk = postgres_conn_or_uri.execute(
             """
             SELECT current_user,
                    (to_regclass('public.fc27_player_alias_fingerprints') IS NOT NULL
-                    AND to_regclass('public.fc27_discord_jobs') IS NOT NULL)
+                    AND to_regclass('public.fc27_discord_jobs') IS NOT NULL),
+                   (to_regclass('public.fc27_quarantine_records') IS NOT NULL)
             """
         ).fetchone()
         if cur_chk is not None:
             db_role = str(cur_chk[0] or "")
             tables_exist = bool(cur_chk[1])
+            quarantine_table_ready = bool(cur_chk[2]) if len(cur_chk) > 2 else False
             if not tables_exist or db_role == "fc27_app":
                 c1_tables_ready = False
         if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
@@ -1456,6 +1461,8 @@ def persist_polled_match_envelope(
     eff_enqueue_jobs = bool(c1_tables_ready)
 
     with _suppress_domain_event_outbox_writes():
+        export_env: Any = None
+        eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
         try:
             if not match_envelopes and not supplied_matches:
                 tx_ctx = (
@@ -1528,7 +1535,6 @@ def persist_polled_match_envelope(
 
             from src.fc27_repository import _build_export_envelope_for_persistence
 
-            eff_export_id = f"comm_poll_{match_envelope.payload_hash[:16]}"
             export_env = _build_export_envelope_for_persistence(
                 supplied_matches,
                 export_id=eff_export_id,
@@ -1569,7 +1575,10 @@ def persist_polled_match_envelope(
                 )
                 if apply_res.status == "REJECTED" or apply_res.replay_conflict:
                     raise FC27ReplayConflictError(
-                        f"Replay conflict rejected during community poll persistence: {apply_res.detail}"
+                        f"Replay conflict rejected during community poll persistence: {apply_res.detail}",
+                        conflict_count=max(1, apply_res.replay_conflict_records),
+                        quarantine_ids=apply_res.quarantine_ids,
+                        conflict_match_refs=apply_res.conflict_match_refs,
                     )
                 _touch_persisted_polling_timestamps(
                     postgres_conn_or_uri,
@@ -1587,7 +1596,7 @@ def persist_polled_match_envelope(
                 team_stat_rows_inserted=apply_res.accepted_records,
                 player_stat_rows_inserted=apply_res.player_stat_records,
                 duplicates_ignored=apply_res.duplicate_records,
-                replay_conflicts=1 if apply_res.replay_conflict else 0,
+                replay_conflicts=apply_res.replay_conflict_records if apply_res.replay_conflict else 0,
                 idempotent_duplicate=apply_res.idempotent_duplicate,
                 export_id=eff_export_id,
                 fingerprints_inserted=apply_res.fingerprints_inserted,
@@ -1598,6 +1607,122 @@ def persist_polled_match_envelope(
                 discord_jobs_existing=apply_res.discord_jobs_existing,
                 discord_job_conflicts=apply_res.discord_job_conflicts,
             )
+        except FC27ReplayConflictError as conflict_exc:
+            if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
+                try:
+                    postgres_conn_or_uri.rollback()
+                except Exception:
+                    pass
+            if quarantine_table_ready:
+                caught_q_exc: FC27ReplayConflictError | None = None
+                q_tx = (
+                    postgres_conn_or_uri.transaction()
+                    if hasattr(postgres_conn_or_uri, "transaction")
+                    and callable(postgres_conn_or_uri.transaction)
+                    else contextlib.nullcontext()
+                )
+                with q_tx:
+                    try:
+                        if match_envelopes:
+                            persist_community_provider_batch(
+                                match_envelope,
+                                match_envelopes=match_envelopes,
+                                postgres_conn_or_uri=postgres_conn_or_uri,
+                                persist_requested=True,
+                                persistence_enabled=True,
+                                enforce_posture=enforce_posture,
+                                quarantine_conflicts=True,
+                                include_equivalence_diff_paths=True,
+                                pseudonymize_quarantine_match_id=True,
+                                generated_at=deterministic_gen_dt,
+                                alias_fingerprints=(),
+                                enqueue_discord_jobs=False,
+                                match_type_override=eff_match_type,
+                                emit_domain_events=False,
+                                source_reference=f"fc27-community-v1:{eff_match_type}",
+                            )
+                        elif export_env is not None:
+                            q_state = load_import_state(
+                                postgres_conn_or_uri,
+                                club_id=FIXED_CLUB_ID,
+                                platform=FIXED_PLATFORM,
+                                game_version=FIXED_GAME_VERSION,
+                            )
+                            q_plan = plan_fc27_user_export_import(
+                                export_env,
+                                existing_state=q_state,
+                                evaluation_time=deterministic_gen_dt,
+                            )
+                            q_apply_res = apply_export_plan(
+                                postgres_conn_or_uri,
+                                envelope=export_env,
+                                plan=q_plan,
+                                actor="fc27_community_polling_worker",
+                                enforce_posture=enforce_posture,
+                                quarantine_conflicts=True,
+                                include_equivalence_diff_paths=True,
+                                pseudonymize_quarantine_match_id=True,
+                                alias_fingerprints=(),
+                                enqueue_discord_jobs=False,
+                                match_type_override=eff_match_type,
+                                emit_domain_events=False,
+                            )
+                            raise FC27ReplayConflictError(
+                                f"Replay conflict rejected during community poll persistence: {q_apply_res.detail}",
+                                conflict_count=max(1, q_apply_res.replay_conflict_records),
+                                quarantine_ids=q_apply_res.quarantine_ids,
+                                conflict_match_refs=q_apply_res.conflict_match_refs,
+                            )
+                    except FC27ReplayConflictError as q_exc:
+                        caught_q_exc = q_exc
+                if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                    postgres_conn_or_uri.commit()
+                if caught_q_exc is not None:
+                    raise caught_q_exc from conflict_exc
+            raise
+        except FC27JobIdempotencyConflictError as job_exc:
+            if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
+                try:
+                    postgres_conn_or_uri.rollback()
+                except Exception:
+                    pass
+            if quarantine_table_ready:
+                q_tx = (
+                    postgres_conn_or_uri.transaction()
+                    if hasattr(postgres_conn_or_uri, "transaction")
+                    and callable(postgres_conn_or_uri.transaction)
+                    else contextlib.nullcontext()
+                )
+                with q_tx:
+                    q_row = _insert_quarantine_row_in_tx(
+                        postgres_conn_or_uri,
+                        club_id=FIXED_CLUB_ID,
+                        platform=FIXED_PLATFORM,
+                        game_version=FIXED_GAME_VERSION,
+                        external_match_id=job_exc.match_ref,
+                        export_id=eff_export_id,
+                        source_classification="COMMUNITY_RESEARCH_DERIVED",
+                        anomaly_category="REPLAY_CONFLICT",
+                        reason_code="DISCORD_JOB_IDEMPOTENCY_CONFLICT",
+                        diagnostic_paths=[
+                            "discord_jobs.idempotency_key",
+                            "discord_jobs.payload",
+                        ],
+                        payload_sha256=match_envelope.payload_hash,
+                        actor="fc27_community_polling_worker",
+                        correlation_id=uuid.uuid4(),
+                        quarantined_at=poll_ts_utc,
+                        emit_domain_events=False,
+                    )
+                if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
+                    postgres_conn_or_uri.commit()
+                raise FC27JobIdempotencyConflictError(
+                    str(job_exc),
+                    conflict_count=job_exc.conflict_count,
+                    match_ref=job_exc.match_ref,
+                    quarantine_ids=(q_row.quarantine_id,),
+                ) from job_exc
+            raise
         except Exception:
             if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
                 try:
@@ -1766,6 +1891,34 @@ def recover_polling_state_from_postgres(
                     )
                     if m_type and m_type in persisted_ids_by_type:
                         persisted_ids_by_type[m_type].append(ext_id)
+
+            pending_poll_conflict_count = 0
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                  FROM public.fc27_quarantine_records
+                 WHERE club_id = %s
+                   AND platform = %s
+                   AND game_version = %s
+                   AND anomaly_category = 'REPLAY_CONFLICT'
+                   AND review_status = 'PENDING_REVIEW'
+                   AND (
+                       source_classification = 'COMMUNITY_RESEARCH_DERIVED'
+                       OR LEFT(COALESCE(export_id, ''), 10) IN ('comm_poll_', 'comm_eval_')
+                   )
+                """,
+                (pol.club_id, pol.platform, pol.game_version),
+            )
+            q_conflict_row = cur.fetchone()
+            if q_conflict_row and q_conflict_row[0] is not None:
+                pending_poll_conflict_count = int(q_conflict_row[0] or 0)
+
+    if (
+        pending_poll_conflict_count > 0
+        and rt.circuit_breaker.state is not FC27CircuitState.HALF_OPEN
+        and rt.circuit_breaker.state is not FC27CircuitState.OPEN
+    ):
+        rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
 
     recovered_last_match_type: str | None = None
     per_type_last_success: dict[str, datetime] = {}
@@ -2568,6 +2721,16 @@ def run_fc27_poll_cycle(
         except Exception:
             pass
 
+        if rt.circuit_breaker.state is FC27CircuitState.OPEN:
+            return _finalize(
+                poll_status="PROVIDER_BLOCKED",
+                single_flight_acquired=False,
+                cache_status="BYPASSED_CIRCUIT_OPEN",
+                error_category="CIRCUIT_BREAKER_OPEN",
+                is_failure=True,
+                polled_match_type=active_match_type,
+            )
+
     # 5. Check minimum interval window (43200s / 12 hours)
     if rt.next_eligible_at is not None:
         norm_next_eligible = _normalize_utc(rt.next_eligible_at)
@@ -2842,9 +3005,9 @@ def run_fc27_poll_cycle(
                 elapsed_since_last_success=elapsed_since_prev_success,
                 polled_match_type=active_match_type,
             )
-        except FC27JobIdempotencyConflictError:
+        except FC27JobIdempotencyConflictError as job_exc:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
-            conflict_cnt = max(1, match_envelope.accepted_record_count)
+            conflict_cnt = max(1, int(getattr(job_exc, "conflict_count", 1)))
             rt.advisory_cache.on_poll_cycle_outcome(
                 poll_status="REPLAY_CONFLICT",
                 replay_conflict_count=conflict_cnt,
@@ -2876,9 +3039,9 @@ def run_fc27_poll_cycle(
                 elapsed_since_last_success=elapsed_since_prev_success,
                 polled_match_type=active_match_type,
             )
-        except FC27ReplayConflictError:
+        except FC27ReplayConflictError as conflict_exc:
             rt.circuit_breaker.record_failure("REPLAY_CONFLICT")
-            conflict_cnt = max(1, match_envelope.accepted_record_count)
+            conflict_cnt = max(1, int(getattr(conflict_exc, "conflict_count", 1)))
             rt.advisory_cache.on_poll_cycle_outcome(
                 poll_status="REPLAY_CONFLICT",
                 replay_conflict_count=conflict_cnt,

@@ -82,6 +82,8 @@ from src.fc27_privacy import (
     canonicalize_for_hashing,
     compute_alias_hmac_fingerprint,
     compute_match_hash,
+    pseudonymize_east_coasters_identifier,
+    pseudonymize_match_ref,
     scan_for_sensitive_fields,
 )
 from src.fc27_provider import (
@@ -1136,8 +1138,11 @@ def normalize_community_match_records(
             if seen_canonical_by_id[mid] == canonical_str:
                 duplicate_count += 1
                 continue
+            safe_mref = pseudonymize_match_ref(mid, club_id=TARGET_CLUB_ID)
             raise FC27ReplayConflictError(
-                f"Conflicting duplicate matchId '{mid}' in community match records"
+                f"Conflicting duplicate match record ({safe_mref}) in community match records",
+                conflict_count=1,
+                conflict_match_refs=(safe_mref,),
             )
         seen_canonical_by_id[mid] = canonical_str
         ea_matches.append(ea_item)
@@ -1179,11 +1184,16 @@ def normalize_community_match_records(
 
     for env, sup in zip(envelopes, supplied_matches):
         m_hash = compute_match_hash(
-            sup,
+            sup.model_copy(
+                update={
+                    "data_quality_status": "VERIFIED",
+                    "source_classification": "COMMUNITY_RESEARCH_DERIVED",
+                }
+            ),
             club_id=TARGET_CLUB_ID,
             platform=TARGET_PLATFORM,
             game_version=TARGET_GAME_VERSION,
-            source_classification="USER_SUPPLIED_EXPORT",
+            source_classification="COMMUNITY_RESEARCH_DERIVED",
         )
         player_rows: List[Dict[str, Any]] = []
         for p_stat in env.player_statistics:
@@ -1589,7 +1599,13 @@ def _execute_bounded_fc_clubs_api_call(
                         if isinstance(club_p, Mapping):
                             p_rows: List[Dict[str, Any]] = []
                             fc_ev_mod = getattr(fc_clubs_api, "events", None)
-                            for raw_pid, p_stats in club_p.items():
+                            for raw_pid, p_stats in sorted(
+                                club_p.items(),
+                                key=lambda kv: (
+                                    pseudonymize_east_coasters_identifier(str(kv[0])),
+                                    str(kv[0]),
+                                ),
+                            ):
                                 if not isinstance(p_stats, Mapping):
                                     continue
                                 ev_decoded: Dict[str, Any] = {}
@@ -2072,6 +2088,8 @@ def persist_community_provider_batch(
     persistence_enabled: Optional[bool] = None,
     enforce_posture: bool = False,
     quarantine_conflicts: bool = False,
+    include_equivalence_diff_paths: bool = False,
+    pseudonymize_quarantine_match_id: bool = False,
     export_id: Optional[str] = None,
     generated_at: Optional[datetime] = None,
     alias_fingerprints: Optional[Sequence[FC27AliasFingerprintObservation]] = None,
@@ -2141,10 +2159,15 @@ def persist_community_provider_batch(
         enqueue_discord_jobs=enqueue_discord_jobs,
         match_type_override=eff_match_type,
         emit_domain_events=emit_domain_events,
+        include_equivalence_diff_paths=include_equivalence_diff_paths,
+        pseudonymize_quarantine_match_id=pseudonymize_quarantine_match_id,
     )
     if apply_res.status == "REJECTED" or apply_res.replay_conflict:
         raise FC27ReplayConflictError(
-            f"Replay conflict rejected during community batch persistence: {apply_res.detail}"
+            f"Replay conflict rejected during community batch persistence: {apply_res.detail}",
+            conflict_count=max(1, apply_res.replay_conflict_records),
+            quarantine_ids=apply_res.quarantine_ids,
+            conflict_match_refs=apply_res.conflict_match_refs,
         )
 
     return FC27CommunityPersistenceApplySummary(
@@ -2153,7 +2176,7 @@ def persist_community_provider_batch(
         team_stat_rows_inserted=apply_res.accepted_records,
         player_stat_rows_inserted=apply_res.player_stat_records,
         duplicates_ignored=apply_res.duplicate_records,
-        replay_conflicts=1 if apply_res.replay_conflict else 0,
+        replay_conflicts=apply_res.replay_conflict_records if apply_res.replay_conflict else 0,
         idempotent_duplicate=apply_res.idempotent_duplicate,
         export_id=eff_export_id,
         fingerprints_inserted=apply_res.fingerprints_inserted,
@@ -2223,9 +2246,17 @@ def run_analytics_from_persisted_community_records(
                 {
                     "player_ref": p.local_player_ref,
                     "position": pos,
-                    "role": p.role_name or _default_role_for_position(pos),
+                    "role": (
+                        p.role_name
+                        if p.role_name not in (None, "", "UNKNOWN")
+                        else None
+                    ),
                     "role_focus": "Balanced",
-                    "build_reference": p.build_reference or _default_build_for_position(pos),
+                    "build_reference": (
+                        p.build_reference
+                        if p.build_reference not in (None, "", "UNKNOWN")
+                        else None
+                    ),
                     "started": idx < 11,
                     "minutes_played": p.minutes_played if p.minutes_played is not None else 90,
                     "match_rating": p.match_rating,
