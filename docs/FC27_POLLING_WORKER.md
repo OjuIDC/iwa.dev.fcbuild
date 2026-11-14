@@ -170,3 +170,14 @@ A materially different payload raises `FC27JobIdempotencyConflictError` with a b
 - Live polling remains disabled by default; the retained community worker and Discord bot remain stopped.
 - The retained development database remains at migration `0014` with Grants Policy Version `16` until the activation-readiness gate is repeated.
 - This change does not assert activation readiness; the C1 activation-readiness gate must be re-run and pass before any bounded live poll is separately authorized.
+
+---
+
+## 8. Live Polling Replay-Conflict Reconciliation (`fc27-match-equivalence-v1`)
+
+See [`FC27_REPLAY_CONFLICT_RECONCILIATION.md`](FC27_REPLAY_CONFLICT_RECONCILIATION.md) for the complete specification of:
+
+- versioned immutable-fact equivalence (`MATCH_EQUIVALENCE_CONTRACT_VERSION = "fc27-match-equivalence-v1"` in `src/fc27_privacy.py`);
+- backward compatibility with retained `comm_eval_*` stored `match_hash` digests without rewriting retained PostgreSQL rows;
+- sanitized `PENDING_REVIEW` `REPLAY_CONFLICT` quarantine persistence (`public.fc27_quarantine_records`) and exact `replay_conflict_count` accounting on materially different match facts;
+- restart-durable circuit-breaker tripping when unresolved polling replay-conflict quarantine rows exist, audited `manual_reset(authorization_reference=...)`, and post-merge operator prerequisites before any separately authorized second canary.
