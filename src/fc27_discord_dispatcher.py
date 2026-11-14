@@ -1136,9 +1136,12 @@ def audit_pending_non_permitted_jobs(
         safe_job_type = validate_safe_text(
             str(row["job_type"]), field_name="job_type", max_len=64
         )
-        safe_key = validate_safe_text(
-            str(row["idempotency_key"]), field_name="idempotency_key", max_len=256
-        )
+        try:
+            safe_key = validate_safe_text(
+                str(row["idempotency_key"]), field_name="idempotency_key", max_len=256
+            )
+        except Exception:
+            safe_key = "INVALID_IDEMPOTENCY_KEY"
         entries.append(
             FC27DiscordDispatchAuditEntry(
                 job_id=int(row["job_id"]),
