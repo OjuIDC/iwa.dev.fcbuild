@@ -2719,7 +2719,15 @@ def run_fc27_poll_cycle(
                 is_failure=True,
             )
         except Exception:
-            pass
+            rt.circuit_breaker.record_failure("DATABASE_STATE_RECOVERY_ERROR")
+            return _finalize(
+                poll_status="PROVIDER_BLOCKED",
+                single_flight_acquired=False,
+                cache_status="BYPASSED_STATE_RECOVERY_ERROR",
+                error_category="DATABASE_STATE_RECOVERY_ERROR",
+                is_failure=True,
+                polled_match_type=active_match_type,
+            )
 
         if rt.circuit_breaker.state is FC27CircuitState.OPEN:
             return _finalize(
