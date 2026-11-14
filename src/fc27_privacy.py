@@ -828,6 +828,7 @@ def project_match_equivalence_v1(
     supplier_reference: str | None = None,
     export_id: str | None = None,
     match_type_override: str | None = None,
+    match_type_unverified: bool = False,
 ) -> dict[str, Any]:
     """Build the versioned source-independent match-fact projection (`fc27-match-equivalence-v1`)."""
     if hasattr(match_data, "model_dump"):
@@ -848,10 +849,15 @@ def project_match_equivalence_v1(
     raw_formation = str(d.get("formation") or "UNKNOWN").strip()
     norm_formation = "UNKNOWN" if raw_formation.casefold() == "unknown" else raw_formation
     eff_source_cls = source_classification or d.get("source_classification")
-    provider_only = is_community_provider_provenance(
+    already_projected = d.get("contract_version") == MATCH_EQUIVALENCE_CONTRACT_VERSION
+    provider_only = bool(d.get("provider_only_capabilities")) or is_community_provider_provenance(
         source_classification=str(eff_source_cls) if eff_source_cls is not None else None,
         supplier_reference=supplier_reference,
         export_id=export_id,
+    )
+    unverified_mt = bool(
+        (match_type_unverified or (already_projected and d.get("match_type_unverified")))
+        and match_type_override is None
     )
 
     return {
@@ -864,6 +870,7 @@ def project_match_equivalence_v1(
         "match_type": canonicalize_match_type_for_equivalence(
             match_type_override if match_type_override is not None else d.get("match_type")
         ),
+        "match_type_unverified": unverified_mt,
         "result": str(d["result"]).strip().upper(),
         "goals_for": int(d["goals_for"]),
         "goals_against": int(d["goals_against"]),
@@ -878,16 +885,49 @@ def project_match_equivalence_v1(
 def compute_match_equivalence_hash(
     match_data: Any,
     *,
-    club_id: str = EAST_COASTERS_CLUB_ID,
-    platform: str = EAST_COASTERS_PLATFORM,
-    game_version: str = EAST_COASTERS_GAME_VERSION,
+    club_id: str | None = None,
+    platform: str | None = None,
+    game_version: str | None = None,
+    match_type_override: str | None = None,
 ) -> str:
     """Compute a source-independent SHA-256 hash over immutable core facts (`fc27-match-equivalence-v1`)."""
+    already_projected = (
+        isinstance(match_data, Mapping)
+        and match_data.get("contract_version") == MATCH_EQUIVALENCE_CONTRACT_VERSION
+    )
+    eff_club_id = (
+        club_id
+        if club_id is not None
+        else (
+            str(match_data["club_id"])
+            if already_projected and match_data.get("club_id")
+            else EAST_COASTERS_CLUB_ID
+        )
+    )
+    eff_platform = (
+        platform
+        if platform is not None
+        else (
+            str(match_data["platform"])
+            if already_projected and match_data.get("platform")
+            else EAST_COASTERS_PLATFORM
+        )
+    )
+    eff_game_version = (
+        game_version
+        if game_version is not None
+        else (
+            str(match_data["game_version"])
+            if already_projected and match_data.get("game_version")
+            else EAST_COASTERS_GAME_VERSION
+        )
+    )
     proj = project_match_equivalence_v1(
         match_data,
-        club_id=club_id,
-        platform=platform,
-        game_version=game_version,
+        club_id=eff_club_id,
+        platform=eff_platform,
+        game_version=eff_game_version,
+        match_type_override=match_type_override,
     )
     core_players = [
         {k: p[k] for k in _CORE_PLAYER_EQUIVALENCE_FIELDS}
@@ -945,7 +985,14 @@ def compare_match_equivalence_v1(
 
     ex_mt = existing_projection.get("match_type")
     in_mt = incoming_projection.get("match_type")
-    if ex_mt is not None and in_mt is not None and ex_mt != in_mt:
+    if (
+        bool(existing_projection.get("match_type_unverified"))
+        or bool(incoming_projection.get("match_type_unverified"))
+        or ex_mt != in_mt
+    ):
+        # `match_type` is an immutable match fact. Unverified persisted match-type
+        # evidence or a one-sided/cross-type difference fails closed rather than
+        # treating a missing value as an unconstrained wildcard.
         diffs.append(f"{prefix}.match_type")
 
     either_provider_only = bool(

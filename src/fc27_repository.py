@@ -46,6 +46,7 @@ from src.fc27_privacy import (
     compute_payload_sha256,
     contains_discord_mention,
     contains_prohibited_url,
+    is_community_provider_provenance,
     project_match_equivalence_v1,
     pseudonymize_match_ref,
     scan_for_sensitive_fields,
@@ -631,6 +632,17 @@ def parse_fc27_user_export_json(
         )
 
     envelope = FC27UserExportEnvelope.model_validate(raw_dict)
+    if is_community_provider_provenance(
+        source_classification=envelope.source_classification,
+        supplier_reference=envelope.supplier_attestation.supplier_reference,
+        export_id=envelope.export_id,
+    ) or any(
+        m.source_classification == "COMMUNITY_RESEARCH_DERIVED"
+        for m in envelope.matches
+    ):
+        raise ValueError(
+            "reserved community-provider provenance markers are forbidden in external user exports"
+        )
     max_allowed = now.timestamp() + CLOCK_SKEW_TOLERANCE_SECONDS
     if envelope.generated_at.timestamp() > max_allowed:
         raise ValueError(
@@ -647,6 +659,8 @@ def plan_fc27_user_export_import(
     envelope: FC27UserExportEnvelope,
     existing_state: FC27ImportState | None = None,
     evaluation_time: datetime | None = None,
+    *,
+    match_type_override: str | None = None,
 ) -> FC27UserExportImportPlan:
     """Pure function producing a deterministic import plan without performing persistence."""
     state = existing_state or FC27ImportState()
@@ -727,6 +741,7 @@ def plan_fc27_user_export_import(
                         source_classification=envelope.source_classification,
                         supplier_reference=envelope.supplier_attestation.supplier_reference,
                         export_id=envelope.export_id,
+                        match_type_override=match_type_override,
                     )
                     diff_paths = compare_match_equivalence_v1(
                         existing_proj,
@@ -1448,13 +1463,171 @@ def load_processed_payload_hashes(
 
 def _extract_persisted_match_type_from_supplier_ref(
     supplier_reference: str | None,
-) -> str | None:
-    if not supplier_reference:
-        return None
-    clean = str(supplier_reference).strip()
-    if ":" in clean and clean.startswith("fc27-community-"):
-        return canonicalize_match_type_for_equivalence(clean.rsplit(":", 1)[1])
-    return None
+) -> tuple[str | None, bool]:
+    """Extract explicit persisted match-type provenance from ``fc27-community-*:<match_type>``.
+
+    Returns ``(canonical_type, authoritative)`` where ``authoritative`` is ``True`` only
+    when ``supplier_reference`` carries an explicit non-empty ``:<match_type>`` suffix.
+    Bare ``fc27-community-v1`` / ``demo-fixture-loopback-v1`` or user-export references
+    return ``(None, False)`` so the caller verifies ``match_type`` cryptographically
+    against the persisted ``match_hash`` rather than assuming ``LEAGUE``.
+    """
+    if supplier_reference:
+        clean = str(supplier_reference).strip()
+        if clean.startswith("fc27-community-") and ":" in clean:
+            raw_suffix = clean.rsplit(":", 1)[1].strip()
+            if not raw_suffix:
+                return None, False
+            canonical = canonicalize_match_type_for_equivalence(raw_suffix)
+            return canonical, canonical is not None
+    return None, False
+
+
+def _recover_persisted_match_type_from_match_hash(
+    *,
+    stored_match_hash: str,
+    club_id: str,
+    platform: str,
+    game_version: str,
+    external_match_id: str,
+    played_at: datetime,
+    result: str,
+    goals_for: int,
+    goals_against: int,
+    opponent_name: str,
+    formation: str,
+    match_status: str,
+    persisted_source_classification: str,
+    persisted_data_quality_status: str | None,
+    ordered_players: Sequence[Mapping[str, Any]],
+) -> tuple[str | None, bool]:
+    """Cryptographically verify the persisted ``match_type`` against ``fc27_matches.match_hash``.
+
+    ``public.fc27_matches`` stores ``match_hash`` (computed over the original ``FC27SuppliedMatch``
+    including ``match_type`` and ``stat_id``-ordered ``player_performances``) without a separate
+    ``match_type`` column. Checking candidate envelopes against ``stored_match_hash`` with
+    constant-time SHA-256 comparison establishes the exact persisted ``match_type`` for both
+    historical ``comm_eval_*`` rows and ``USER_SUPPLIED_EXPORT`` rows without guessing.
+
+    Returns ``(recovered_match_type, match_type_unverified)``:
+    - ``(concrete_or_none_type, False)`` when ``stored_match_hash`` is cryptographically verified;
+    - ``(None, True)`` when ``stored_match_hash`` cannot be verified, forcing ``compare_match_equivalence_v1``
+      to fail closed on ``match_type``.
+    """
+    if not stored_match_hash:
+        return None, True
+
+    base_perfs: list[dict[str, Any]] = []
+    for p in ordered_players:
+        base_perfs.append(
+            {
+                "local_player_reference": str(p["local_player_reference"]),
+                "display_alias": p.get("display_alias"),
+                "position": str(p["position"]),
+                "role": str(p.get("role") or "UNKNOWN"),
+                "minutes_played": int(p["minutes_played"]),
+                "goals": int(p["goals"]),
+                "assists": int(p["assists"]),
+                "passes_attempted": int(p["passes_attempted"]),
+                "passes_completed": int(p["passes_completed"]),
+                "tackles_attempted": int(p["tackles_attempted"]),
+                "tackles_won": int(p["tackles_won"]),
+                "interceptions": int(p["interceptions"]),
+                "shots": int(p["shots"]),
+                "shots_on_target": int(p["shots_on_target"]),
+                "saves": int(p["saves"]),
+                "possession_losses": int(p["possession_losses"]),
+                "provider_rating": float(p["provider_rating"]),
+                "build_reference": p.get("build_reference"),
+            }
+        )
+
+    cs_expected = goals_against == 0
+    perf_variants: list[list[dict[str, Any]]] = [
+        [{**bp, "clean_sheet": cs_expected} for bp in base_perfs],
+        base_perfs,
+    ]
+    if base_perfs:
+        perf_variants.append(
+            [{**bp, "clean_sheet": not cs_expected} for bp in base_perfs]
+        )
+
+    lineup_variants: list[list[str]] = [[]]
+    first_eleven = [str(p["local_player_reference"]) for p in ordered_players[:11]]
+    if first_eleven and len(first_eleven) == len(set(first_eleven)):
+        lineup_variants.append(first_eleven)
+
+    env_src_variants: tuple[str, ...] = (
+        ("USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA")
+        if persisted_source_classification == "USER_SUPPLIED_EXPORT"
+        else (persisted_source_classification,)
+    )
+
+    dqs_variants: list[str | None] = []
+    for dqs_cand in (
+        "PROVISIONAL",
+        persisted_data_quality_status,
+        None,
+        "VERIFIED",
+        "INCOMPLETE",
+    ):
+        if dqs_cand not in dqs_variants:
+            dqs_variants.append(dqs_cand)
+
+    mt_variants: tuple[str | None, ...] = (
+        "LEAGUE",
+        "PLAYOFF",
+        "FRIENDLY",
+        "CUP",
+        "PRACTICE",
+        None,
+        "UNKNOWN",
+    )
+
+    for env_src in env_src_variants:
+        match_src_variants: list[str | None] = []
+        for m_src_cand in (env_src, None, "USER_SUPPLIED_EXPORT", "OPERATOR_CAPTURED_DISPLAYED_DATA"):
+            if m_src_cand not in match_src_variants:
+                match_src_variants.append(m_src_cand)
+
+        for lineup_opt in lineup_variants:
+            for perfs_opt in perf_variants:
+                for dqs_opt in dqs_variants:
+                    for m_src_opt in match_src_variants:
+                        for mt_opt in mt_variants:
+                            cand_match: dict[str, Any] = {
+                                "external_match_id": external_match_id,
+                                "played_at": played_at,
+                                "result": result,
+                                "goals_for": goals_for,
+                                "goals_against": goals_against,
+                                "opponent_name": opponent_name,
+                                "formation": formation,
+                                "lineup": lineup_opt,
+                                "player_performances": perfs_opt,
+                                "match_status": match_status,
+                            }
+                            if mt_opt is not None:
+                                cand_match["match_type"] = mt_opt
+                            if dqs_opt is not None:
+                                cand_match["data_quality_status"] = dqs_opt
+                            if m_src_opt is not None:
+                                cand_match["source_classification"] = m_src_opt
+
+                            cand_hash = compute_match_hash(
+                                cand_match,
+                                club_id=club_id,
+                                platform=platform,
+                                game_version=game_version,
+                                source_classification=env_src,
+                            )
+                            if compare_digest_constant_time(cand_hash, stored_match_hash):
+                                return (
+                                    canonicalize_match_type_for_equivalence(mt_opt),
+                                    False,
+                                )
+
+    return None, True
 
 
 def _load_persisted_match_projections_in_cursor(
@@ -1485,6 +1658,8 @@ def _load_persisted_match_projections_in_cursor(
                 m.formation,
                 m.match_status,
                 m.source_classification,
+                m.match_hash,
+                m.data_quality_status,
                 b.supplier_reference
             FROM public.fc27_matches AS m
             LEFT JOIN public.fc27_export_batches AS b
@@ -1511,6 +1686,8 @@ def _load_persisted_match_projections_in_cursor(
                 m.formation,
                 m.match_status,
                 m.source_classification,
+                m.match_hash,
+                m.data_quality_status,
                 b.supplier_reference
             FROM public.fc27_matches AS m
             LEFT JOIN public.fc27_export_batches AS b
@@ -1531,6 +1708,7 @@ def _load_persisted_match_projections_in_cursor(
         SELECT
             match_id,
             local_player_reference,
+            display_alias,
             position,
             minutes_played,
             goals,
@@ -1549,7 +1727,7 @@ def _load_persisted_match_projections_in_cursor(
             build_reference
         FROM public.fc27_player_match_stats
         WHERE match_id = ANY(%s)
-        ORDER BY match_id, local_player_reference
+        ORDER BY match_id, stat_id ASC
         """,
         (match_uuids,),
     )
@@ -1558,22 +1736,23 @@ def _load_persisted_match_projections_in_cursor(
         players_by_match_uuid.setdefault(p_row[0], []).append(
             {
                 "local_player_reference": str(p_row[1]),
-                "position": str(p_row[2]),
-                "minutes_played": int(p_row[3]),
-                "goals": int(p_row[4]),
-                "assists": int(p_row[5]),
-                "passes_attempted": int(p_row[6]),
-                "passes_completed": int(p_row[7]),
-                "tackles_attempted": int(p_row[8]),
-                "tackles_won": int(p_row[9]),
-                "interceptions": int(p_row[10]),
-                "shots": int(p_row[11]),
-                "shots_on_target": int(p_row[12]),
-                "saves": int(p_row[13]),
-                "possession_losses": int(p_row[14]),
-                "provider_rating": float(p_row[15]),
-                "role": str(p_row[16]) if p_row[16] is not None else "UNKNOWN",
-                "build_reference": str(p_row[17]) if p_row[17] is not None else None,
+                "display_alias": str(p_row[2]) if p_row[2] is not None else None,
+                "position": str(p_row[3]),
+                "minutes_played": int(p_row[4]),
+                "goals": int(p_row[5]),
+                "assists": int(p_row[6]),
+                "passes_attempted": int(p_row[7]),
+                "passes_completed": int(p_row[8]),
+                "tackles_attempted": int(p_row[9]),
+                "tackles_won": int(p_row[10]),
+                "interceptions": int(p_row[11]),
+                "shots": int(p_row[12]),
+                "shots_on_target": int(p_row[13]),
+                "saves": int(p_row[14]),
+                "possession_losses": int(p_row[15]),
+                "provider_rating": float(p_row[16]),
+                "role": str(p_row[17]) if p_row[17] is not None else "UNKNOWN",
+                "build_reference": str(p_row[18]) if p_row[18] is not None else None,
             }
         )
 
@@ -1582,27 +1761,65 @@ def _load_persisted_match_projections_in_cursor(
         m_uuid = m_row[0]
         ext_id = str(m_row[1])
         exp_id = str(m_row[2]) if m_row[2] is not None else None
-        sup_ref = str(m_row[11]) if m_row[11] is not None else None
+        played_at_val = m_row[3]
+        result_str = str(m_row[4])
+        gf_val = int(m_row[5])
+        ga_val = int(m_row[6])
+        opp_name = str(m_row[7])
+        form_str = str(m_row[8] or "UNKNOWN")
+        status_str = str(m_row[9] or "COMPLETED")
+        persisted_source_classification = str(m_row[10] or "USER_SUPPLIED_EXPORT")
+        stored_mhash = str(m_row[11] or "")
+        persisted_dqs = str(m_row[12]) if m_row[12] is not None else None
+        sup_ref = str(m_row[13]) if m_row[13] is not None else None
+        ordered_players = players_by_match_uuid.get(m_uuid, [])
+
+        explicit_mt, mt_authoritative = _extract_persisted_match_type_from_supplier_ref(
+            sup_ref
+        )
+        if mt_authoritative:
+            recovered_mt = explicit_mt
+            mt_unverified = False
+        else:
+            recovered_mt, mt_unverified = _recover_persisted_match_type_from_match_hash(
+                stored_match_hash=stored_mhash,
+                club_id=club_id,
+                platform=platform,
+                game_version=norm_version,
+                external_match_id=ext_id,
+                played_at=played_at_val,
+                result=result_str,
+                goals_for=gf_val,
+                goals_against=ga_val,
+                opponent_name=opp_name,
+                formation=form_str,
+                match_status=status_str,
+                persisted_source_classification=persisted_source_classification,
+                persisted_data_quality_status=persisted_dqs,
+                ordered_players=ordered_players,
+            )
+
         projections[ext_id] = project_match_equivalence_v1(
             {
                 "external_match_id": ext_id,
-                "played_at": m_row[3],
-                "result": str(m_row[4]),
-                "goals_for": int(m_row[5]),
-                "goals_against": int(m_row[6]),
-                "opponent_name": str(m_row[7]),
-                "formation": str(m_row[8] or "UNKNOWN"),
-                "match_status": str(m_row[9] or "COMPLETED"),
-                "source_classification": str(m_row[10] or "USER_SUPPLIED_EXPORT"),
-                "match_type": _extract_persisted_match_type_from_supplier_ref(sup_ref),
-                "player_performances": players_by_match_uuid.get(m_uuid, []),
+                "played_at": played_at_val,
+                "result": result_str,
+                "goals_for": gf_val,
+                "goals_against": ga_val,
+                "opponent_name": opp_name,
+                "formation": form_str,
+                "match_status": status_str,
+                "source_classification": persisted_source_classification,
+                "match_type": recovered_mt,
+                "player_performances": ordered_players,
             },
             club_id=club_id,
             platform=platform,
             game_version=norm_version,
-            source_classification=str(m_row[10] or "USER_SUPPLIED_EXPORT"),
+            source_classification=persisted_source_classification,
             supplier_reference=sup_ref,
             export_id=exp_id,
+            match_type_unverified=mt_unverified,
         )
     return projections
 
@@ -2815,7 +3032,9 @@ def apply_export_plan(
                 existing_match_projections=existing_match_projections,
             )
             revalidated_plan = plan_fc27_user_export_import(
-                envelope, existing_state=locked_state
+                envelope,
+                existing_state=locked_state,
+                match_type_override=match_type_override,
             )
 
             # Check per-match hashes & versioned immutable-fact equivalence (`fc27-match-equivalence-v1`)

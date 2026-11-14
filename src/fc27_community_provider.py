@@ -850,6 +850,7 @@ def _convert_community_match_record_to_ea_envelope_dict(
     match_id = str(stripped.get("match_id", stripped.get("matchId", "")) or "").strip()
     if not match_id:
         raise FC27SchemaValidationError("Match record missing match_id")
+    safe_match_ref = pseudonymize_match_ref(match_id, club_id=TARGET_CLUB_ID)
     raw_ts = stripped.get("timestamp")
     played_at_utc = _parse_utc_timestamp_from_any(raw_ts)
     dt = datetime.fromisoformat(played_at_utc[:-1] + "+00:00")
@@ -862,7 +863,7 @@ def _convert_community_match_record_to_ea_envelope_dict(
         cid = str(stripped.get("clubId", stripped.get("club_id", "")) or "").strip()
         if cid != TARGET_CLUB_ID:
             raise FC27SchemaValidationError(
-                f"Target club '{TARGET_CLUB_ID}' missing from flat match record {match_id} (got '{cid}')"
+                f"Target club '{TARGET_CLUB_ID}' missing from flat match record {safe_match_ref} (got '{cid}')"
             )
         cname = str(stripped.get("clubName", stripped.get("club_name", TARGET_CLUB_NAME)) or TARGET_CLUB_NAME)
         opp_id = str(stripped.get("opponentId", stripped.get("opponent_id", "999001")) or "999001").strip()
@@ -906,7 +907,7 @@ def _convert_community_match_record_to_ea_envelope_dict(
     else:
         clubs_list = stripped.get("clubs")
         if not isinstance(clubs_list, list) or len(clubs_list) == 0:
-            raise FC27SchemaValidationError(f"Match {match_id} missing clubs list")
+            raise FC27SchemaValidationError(f"Match {safe_match_ref} missing clubs list")
 
         clubs_dict = {}
         for c_item in clubs_list:
@@ -935,7 +936,7 @@ def _convert_community_match_record_to_ea_envelope_dict(
 
         if TARGET_CLUB_ID not in clubs_dict:
             raise FC27SchemaValidationError(
-                f"Target club '{TARGET_CLUB_ID}' missing from clubs in match {match_id}"
+                f"Target club '{TARGET_CLUB_ID}' missing from clubs in match {safe_match_ref}"
             )
 
     players_by_club: Dict[str, Dict[str, Any]] = {cid: {} for cid in clubs_dict}
@@ -2039,11 +2040,15 @@ def build_community_persistence_preview(
 
     if postgres_conn_or_uri is not None and match_envelopes:
         gen_dt = generated_at or datetime.now(timezone.utc)
+        preview_match_type = str(
+            match_envelope.provenance.get("match_type") or "leagueMatch"
+        )
         supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
         export_env = _build_export_envelope_for_persistence(
             supplied_matches,
             export_id=f"comm_eval_{match_envelope.payload_hash[:16]}",
             generated_at=gen_dt,
+            source_reference=f"fc27-community-eval-v1:{preview_match_type}",
         )
         existing_state = load_import_state(
             postgres_conn_or_uri,
@@ -2055,6 +2060,7 @@ def build_community_persistence_preview(
             export_env,
             existing_state=existing_state,
             evaluation_time=gen_dt,
+            match_type_override=preview_match_type,
         )
         dup_plan += len(plan.duplicate_match_ids)
         conf_plan = len(plan.conflicting_match_ids)
@@ -2122,12 +2128,15 @@ def persist_community_provider_batch(
 
     gen_dt = generated_at or datetime.now(timezone.utc)
     eff_export_id = export_id or f"comm_eval_{match_envelope.payload_hash[:16]}"
+    eff_match_type = match_type_override or str(
+        match_envelope.provenance.get("match_type") or "leagueMatch"
+    )
     supplied_matches = _supplied_matches_from_envelopes(match_envelopes)
     export_env = _build_export_envelope_for_persistence(
         supplied_matches,
         export_id=eff_export_id,
         generated_at=gen_dt,
-        source_reference=source_reference or "fc27-community-eval-v1",
+        source_reference=source_reference or f"fc27-community-eval-v1:{eff_match_type}",
     )
     existing_state = load_import_state(
         postgres_conn_or_uri,
@@ -2139,14 +2148,12 @@ def persist_community_provider_batch(
         export_env,
         existing_state=existing_state,
         evaluation_time=gen_dt,
+        match_type_override=eff_match_type,
     )
     eff_fingerprints = (
         alias_fingerprints
         if alias_fingerprints is not None
         else match_envelope.alias_fingerprints
-    )
-    eff_match_type = match_type_override or str(
-        match_envelope.provenance.get("match_type") or "leagueMatch"
     )
     apply_res = apply_export_plan(
         postgres_conn_or_uri,

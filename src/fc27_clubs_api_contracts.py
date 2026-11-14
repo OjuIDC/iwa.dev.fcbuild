@@ -1458,6 +1458,20 @@ def normalize_matches_payload(
                     )
                 )
 
+            if len(player_schemas) > 1:
+                paired_players = sorted(
+                    zip(player_schemas, supplied_perfs, strict=True),
+                    key=lambda pair: (
+                        pair[0].local_player_reference,
+                        pair[0].position,
+                        pair[0].minutes_played,
+                        pair[0].goals,
+                        pair[0].assists,
+                    ),
+                )
+                player_schemas = [pair[0] for pair in paired_players]
+                supplied_perfs = [pair[1] for pair in paired_players]
+
         allowed_match_top_keys = {
             "matchId",
             "playedAt",

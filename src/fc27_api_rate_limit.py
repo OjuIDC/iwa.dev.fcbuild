@@ -436,8 +436,8 @@ class FC27AdapterCircuitBreaker:
         self._half_open_probe_authorized: bool = False
         self._half_open_probe_in_flight: bool = False
         self._reset_count: int = 0
-        self._last_reset_authorization_reference: Optional[str] = None
-        self._last_reset_at_monotonic: Optional[float] = None
+        self._last_reset_authorization_reference: str | None = None
+        self._last_reset_at_monotonic: float | None = None
         self._lock = threading.Lock()
 
     @property

@@ -83,10 +83,12 @@ from src.fc27_provider import (
     FC27TransportError,
 )
 from src.fc27_privacy import (
+    PSEUDONYM_MATCH_REF_RE,
     FC27FingerprintCollisionError,
     FC27PrivacyError,
     FC27SensitiveFieldDetectedError,
     MIN_ALIAS_HMAC_KEY_BYTES as ALIAS_HMAC_KEY_MIN_BYTES,
+    pseudonymize_match_ref,
 )
 from src.fc27_repository import (
     FC27JobIdempotencyConflictError,
@@ -1515,6 +1517,7 @@ def persist_polled_match_envelope(
                         persistence_enabled=True,
                         enforce_posture=enforce_posture,
                         quarantine_conflicts=False,
+                        export_id=eff_export_id,
                         generated_at=deterministic_gen_dt,
                         alias_fingerprints=eff_alias_fingerprints,
                         enqueue_discord_jobs=eff_enqueue_jobs,
@@ -1553,6 +1556,7 @@ def persist_polled_match_envelope(
                 export_env,
                 existing_state=existing_state,
                 evaluation_time=deterministic_gen_dt,
+                match_type_override=eff_match_type,
             )
             tx_ctx = (
                 postgres_conn_or_uri.transaction()
@@ -1609,10 +1613,8 @@ def persist_polled_match_envelope(
             )
         except FC27ReplayConflictError as conflict_exc:
             if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
-                try:
+                with contextlib.suppress(Exception):
                     postgres_conn_or_uri.rollback()
-                except Exception:
-                    pass
             if quarantine_table_ready:
                 caught_q_exc: FC27ReplayConflictError | None = None
                 q_tx = (
@@ -1634,6 +1636,7 @@ def persist_polled_match_envelope(
                                 quarantine_conflicts=True,
                                 include_equivalence_diff_paths=True,
                                 pseudonymize_quarantine_match_id=True,
+                                export_id=eff_export_id,
                                 generated_at=deterministic_gen_dt,
                                 alias_fingerprints=(),
                                 enqueue_discord_jobs=False,
@@ -1652,6 +1655,7 @@ def persist_polled_match_envelope(
                                 export_env,
                                 existing_state=q_state,
                                 evaluation_time=deterministic_gen_dt,
+                                match_type_override=eff_match_type,
                             )
                             q_apply_res = apply_export_plan(
                                 postgres_conn_or_uri,
@@ -1682,10 +1686,8 @@ def persist_polled_match_envelope(
             raise
         except FC27JobIdempotencyConflictError as job_exc:
             if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
-                try:
+                with contextlib.suppress(Exception):
                     postgres_conn_or_uri.rollback()
-                except Exception:
-                    pass
             if quarantine_table_ready:
                 q_tx = (
                     postgres_conn_or_uri.transaction()
@@ -1693,13 +1695,23 @@ def persist_polled_match_envelope(
                     and callable(postgres_conn_or_uri.transaction)
                     else contextlib.nullcontext()
                 )
+                raw_job_ref = str(job_exc.match_ref or "").strip()
+                safe_job_ref = (
+                    None
+                    if not raw_job_ref
+                    else (
+                        raw_job_ref
+                        if PSEUDONYM_MATCH_REF_RE.fullmatch(raw_job_ref)
+                        else pseudonymize_match_ref(raw_job_ref, club_id=FIXED_CLUB_ID)
+                    )
+                )
                 with q_tx:
                     q_row = _insert_quarantine_row_in_tx(
                         postgres_conn_or_uri,
                         club_id=FIXED_CLUB_ID,
                         platform=FIXED_PLATFORM,
                         game_version=FIXED_GAME_VERSION,
-                        external_match_id=job_exc.match_ref,
+                        external_match_id=safe_job_ref,
                         export_id=eff_export_id,
                         source_classification="COMMUNITY_RESEARCH_DERIVED",
                         anomaly_category="REPLAY_CONFLICT",

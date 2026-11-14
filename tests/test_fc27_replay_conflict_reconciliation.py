@@ -27,6 +27,10 @@ import pytest
 
 from src.db_roles import GRANTS_POLICY_VERSION
 from src.fc27_api_rate_limit import FC27CircuitState
+from src.fc27_clubs_api_contracts import (
+    FC27SchemaValidationError,
+    normalize_matches_payload,
+)
 from src.fc27_community_provider import normalize_community_match_records
 from src.fc27_discord_bot import FC27DiscordBotConfig, FC27DiscordBotService
 from src.fc27_polling_worker import (
@@ -55,6 +59,7 @@ from src.fc27_repository import (
     FC27UserExportEnvelope,
     _default_build_for_position,
     _default_role_for_position,
+    _extract_persisted_match_type_from_supplier_ref,
     apply_export_plan,
     compute_payload_sha256,
     fetch_quarantine_records,
@@ -217,7 +222,7 @@ def _build_user_export_envelope_matching_community_record(
     goals_for: int = 2,
     goals_against: int = 1,
     opponent_name: str = "Synthetic Harbor Club",
-    match_type: str = "LEAGUE",
+    match_type: str | None = "LEAGUE",
     formation: str = "4-3-3",
     source_classification: str = "USER_SUPPLIED_EXPORT",
     supplier_reference: str = "manual-steward-export-v1",
@@ -355,10 +360,12 @@ def _seed_historical_comm_eval_batch(
     *,
     export_id: str,
     generated_at: datetime,
+    match_type: str = "leagueMatch",
 ) -> tuple[str, dict[str, str]]:
     """Seed a batch reproducing the exact pre-remediation ``comm_eval_*`` persistence contract."""
     _, match_envs = normalize_community_match_records(
         raw_records,
+        match_type=match_type,
         observed_at="2026-11-01T13:55:00Z",
         alias_hmac_key=SYNTHETIC_HMAC_KEY,
     )
@@ -495,74 +502,272 @@ def _db_table_counts(admin_uri: str) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def test_00_persisted_match_type_recovery_and_missing_evidence_fail_closed() -> None:
+    # Explicit community suffix establishes authoritative canonical match_type.
+    assert _extract_persisted_match_type_from_supplier_ref(
+        "fc27-community-v1:playoffMatch"
+    ) == ("PLAYOFF", True)
+    assert _extract_persisted_match_type_from_supplier_ref(
+        "fc27-community-eval-v1:leagueMatch"
+    ) == ("LEAGUE", True)
+    # Bare community or user-export supplier references defer to cryptographic match_hash verification.
+    assert _extract_persisted_match_type_from_supplier_ref("fc27-community-v1") == (
+        None,
+        False,
+    )
+    assert _extract_persisted_match_type_from_supplier_ref(
+        "manual-steward-export-v1"
+    ) == (None, False)
+    assert _extract_persisted_match_type_from_supplier_ref(None) == (None, False)
+
+    # Missing or unverified persisted match_type must fail closed rather than acting as a wildcard.
+    base = _build_user_export_envelope_matching_community_record("950000").matches[0]
+    p_unknown = project_match_equivalence_v1(
+        base.model_copy(update={"match_type": None}),
+        club_id=CLUB_ID,
+    )
+    p_unverified = project_match_equivalence_v1(
+        base.model_copy(update={"match_type": None}),
+        club_id=CLUB_ID,
+        match_type_unverified=True,
+    )
+    p_league = project_match_equivalence_v1(
+        base.model_copy(update={"match_type": "LEAGUE"}),
+        club_id=CLUB_ID,
+    )
+    p_playoff = project_match_equivalence_v1(
+        base.model_copy(update={"match_type": "PLAYOFF"}),
+        club_id=CLUB_ID,
+    )
+    assert compare_match_equivalence_v1(p_unknown, p_league) == [
+        "matches[0].match_type"
+    ]
+    assert compare_match_equivalence_v1(p_unknown, p_playoff) == [
+        "matches[0].match_type"
+    ]
+    assert compare_match_equivalence_v1(p_unknown, p_unknown) == []
+    assert compare_match_equivalence_v1(p_unverified, p_unknown) == [
+        "matches[0].match_type"
+    ]
+    assert compute_match_equivalence_hash(p_league) != compute_match_equivalence_hash(
+        p_playoff
+    )
+    p_alt_club = project_match_equivalence_v1(base, club_id="999999")
+    assert compute_match_equivalence_hash(p_alt_club) != compute_match_equivalence_hash(
+        p_league
+    )
+
+
 def test_01_exact_duplicate_across_user_export_and_live_paths_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
     pg_db_migrated,
 ) -> None:
     _enable_polling_gates(monkeypatch)
-    user_env = _build_user_export_envelope_matching_community_record("950001")
-    plan = plan_fc27_user_export_import(
-        user_env,
+
+    # Direction A: Persist USER_SUPPLIED_EXPORT(LEAGUE) first, then poll equivalent live leagueMatch.
+    user_first_env = _build_user_export_envelope_matching_community_record("950001")
+    user_first_plan = plan_fc27_user_export_import(
+        user_first_env,
         evaluation_time=datetime(2026, 11, 2, 12, 5, tzinfo=UTC),
     )
-    res_user = apply_export_plan(pg_db_migrated.app, envelope=user_env, plan=plan)
-    assert res_user.status == "APPLIED"
-    assert res_user.accepted_records == 1
+    user_first_apply = apply_export_plan(
+        pg_db_migrated.app, envelope=user_first_env, plan=user_first_plan
+    )
+    assert user_first_apply.status == "APPLIED"
+    assert user_first_apply.accepted_records == 1
 
-    live_env, _live_match_envs = normalize_community_match_records(
-        [_raw_community_match("950001")],
-        observed_at="2026-11-03T12:00:00Z",
-        alias_hmac_key=SYNTHETIC_HMAC_KEY,
-    )
-    rt = FC27PollingRuntime()
-    poll_res = run_fc27_poll_cycle(
-        runtime=rt,
-        confirm_live_polling=True,
-        db_conn_or_uri=pg_db_migrated.poll_writer,
-        fetch_matches_fn=lambda: live_env,
-        use_cache=False,
-        use_rate_limiter=False,
-    )
-    assert poll_res.poll_status == "NO_NEW_MATCHES"
-    assert poll_res.inserted_match_count == 0
-    assert poll_res.duplicate_ignored_count == 1
-    assert poll_res.replay_conflict_count == 0
-
-    # Reverse direction: persist live match first, then import matching user export
-    live_env_2, live_match_envs_2 = normalize_community_match_records(
-        [_raw_community_match("950002", timestamp=1762004400)],
-        observed_at="2026-11-03T12:00:00Z",
-        alias_hmac_key=SYNTHETIC_HMAC_KEY,
-    )
-    persist_polled_match_envelope(
-        pg_db_migrated.poll_writer,
-        match_envelope=live_env_2,
-        match_envelopes=live_match_envs_2,
-        generated_at=datetime(2026, 11, 3, 12, 5, tzinfo=UTC),
-    )
-    user_env_2 = _build_user_export_envelope_matching_community_record(
-        "950002",
-        export_id="exp_user_synth_002",
-        played_at=datetime.fromtimestamp(1762004400, tz=UTC),
-    )
-    state_2 = load_import_state(
+    initial_state_a = load_import_state(
         pg_db_migrated.app,
         club_id=CLUB_ID,
         platform=PLATFORM,
         game_version=GAME_VERSION,
     )
-    plan_2 = plan_fc27_user_export_import(
-        user_env_2,
-        existing_state=state_2,
+    stored_user_hash = initial_state_a.existing_match_hashes["950001"]
+
+    live_env_a, live_match_envs_a = normalize_community_match_records(
+        [_raw_community_match("950001", reverse_player_keys=True)],
+        observed_at="2026-11-03T12:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+
+    class _AdapterA:
+        last_match_envelopes = live_match_envs_a
+
+        def get_east_coasters_recent_matches_once(self, **kwargs: Any) -> Any:
+            return live_env_a
+
+    poll_res_a = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        adapter=_AdapterA(),  # type: ignore[arg-type]
+        match_type_override="leagueMatch",
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert poll_res_a.poll_status == "NO_NEW_MATCHES"
+    assert poll_res_a.inserted_match_count == 0
+    assert poll_res_a.duplicate_ignored_count == 1
+    assert poll_res_a.replay_conflict_count == 0
+    assert poll_res_a.circuit_state == "CLOSED"
+
+    # Stored user-export hash and provenance remain completely untouched!
+    after_state_a = load_import_state(
+        pg_db_migrated.app,
+        club_id=CLUB_ID,
+        platform=PLATFORM,
+        game_version=GAME_VERSION,
+    )
+    assert after_state_a.existing_match_hashes["950001"] == stored_user_hash
+
+    # Direction B: Persist live leagueMatch first, then import equivalent USER_SUPPLIED_EXPORT(LEAGUE).
+    live_env_b, live_match_envs_b = normalize_community_match_records(
+        [_raw_community_match("950002", timestamp=1762004400)],
+        observed_at="2026-11-03T12:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    summary_b = persist_polled_match_envelope(
+        pg_db_migrated.poll_writer,
+        match_envelope=live_env_b,
+        match_envelopes=live_match_envs_b,
+        generated_at=datetime(2026, 11, 3, 12, 5, tzinfo=UTC),
+    )
+    assert summary_b.export_id.startswith("comm_poll_")
+
+    user_env_b = _build_user_export_envelope_matching_community_record(
+        "950002",
+        export_id="exp_user_synth_002",
+        played_at=datetime.fromtimestamp(1762004400, tz=UTC),
+    )
+    state_b = load_import_state(
+        pg_db_migrated.app,
+        club_id=CLUB_ID,
+        platform=PLATFORM,
+        game_version=GAME_VERSION,
+    )
+    plan_b = plan_fc27_user_export_import(
+        user_env_b,
+        existing_state=state_b,
         evaluation_time=datetime(2026, 11, 3, 12, 10, tzinfo=UTC),
     )
-    assert plan_2.can_apply is True
-    assert plan_2.conflicting_match_ids == []
-    assert plan_2.duplicate_match_ids == ["950002"]
-    apply_2 = apply_export_plan(pg_db_migrated.app, envelope=user_env_2, plan=plan_2)
-    assert apply_2.status == "APPLIED"
-    assert apply_2.idempotent_duplicate is True
-    assert apply_2.replay_conflict is False
+    assert plan_b.can_apply is True
+    assert plan_b.conflicting_match_ids == []
+    assert plan_b.duplicate_match_ids == ["950002"]
+    apply_res_b = apply_export_plan(
+        pg_db_migrated.app, envelope=user_env_b, plan=plan_b
+    )
+    assert apply_res_b.status == "APPLIED"
+    assert apply_res_b.idempotent_duplicate is True
+    assert apply_res_b.replay_conflict is False
+
+
+def test_01b_persisted_match_type_mismatch_and_missing_or_unverified_evidence_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    _enable_polling_gates(monkeypatch)
+
+    # Case 1: Persisted USER_SUPPLIED_EXPORT(LEAGUE) replayed as live playoffMatch -> REPLAY_CONFLICT.
+    user_league = _build_user_export_envelope_matching_community_record(
+        "950003",
+        export_id="exp_user_league_003",
+        match_type="LEAGUE",
+    )
+    plan_league = plan_fc27_user_export_import(
+        user_league,
+        evaluation_time=datetime(2026, 11, 2, 12, 5, tzinfo=UTC),
+    )
+    assert (
+        apply_export_plan(
+            pg_db_migrated.app, envelope=user_league, plan=plan_league
+        ).status
+        == "APPLIED"
+    )
+
+    live_playoff_env, live_playoff_envs = normalize_community_match_records(
+        [_raw_community_match("950003", match_type="playoffMatch")],
+        match_type="playoffMatch",
+        observed_at="2026-11-03T12:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    with pytest.raises(FC27ReplayConflictError):
+        persist_polled_match_envelope(
+            pg_db_migrated.poll_writer,
+            match_envelope=live_playoff_env,
+            match_envelopes=live_playoff_envs,
+            match_type_override="playoffMatch",
+            generated_at=datetime(2026, 11, 3, 12, 5, tzinfo=UTC),
+        )
+
+    # Case 2: Historical comm_eval_* PLAYOFF batch (demo-fixture-loopback-v1) replayed as live leagueMatch -> REPLAY_CONFLICT.
+    _seed_historical_comm_eval_batch(
+        pg_db_migrated.app,
+        [_raw_community_match("950004", match_type="playoffMatch")],
+        export_id="comm_eval_playoff_hist01",
+        generated_at=datetime(2026, 11, 1, 14, 0, tzinfo=UTC),
+        match_type="playoffMatch",
+    )
+    live_league_for_playoff, live_league_envs = normalize_community_match_records(
+        [_raw_community_match("950004", match_type="leagueMatch")],
+        observed_at="2026-11-03T13:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    with pytest.raises(FC27ReplayConflictError):
+        persist_polled_match_envelope(
+            pg_db_migrated.poll_writer,
+            match_envelope=live_league_for_playoff,
+            match_envelopes=live_league_envs,
+            match_type_override="leagueMatch",
+            generated_at=datetime(2026, 11, 3, 13, 5, tzinfo=UTC),
+        )
+
+    # Case 3: Typeless USER_SUPPLIED_EXPORT(match_type=None) replayed as live leagueMatch -> REPLAY_CONFLICT.
+    user_typeless = _build_user_export_envelope_matching_community_record(
+        "950005",
+        export_id="exp_user_typeless_005",
+        match_type=None,
+    )
+    state_c3 = load_import_state(
+        pg_db_migrated.app,
+        club_id=CLUB_ID,
+        platform=PLATFORM,
+        game_version=GAME_VERSION,
+    )
+    plan_typeless = plan_fc27_user_export_import(
+        user_typeless,
+        existing_state=state_c3,
+        evaluation_time=datetime(2026, 11, 2, 12, 10, tzinfo=UTC),
+    )
+    assert (
+        apply_export_plan(
+            pg_db_migrated.app, envelope=user_typeless, plan=plan_typeless
+        ).status
+        == "APPLIED"
+    )
+
+    live_for_typeless, live_typeless_envs = normalize_community_match_records(
+        [_raw_community_match("950005", match_type="leagueMatch")],
+        observed_at="2026-11-03T14:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    with pytest.raises(FC27ReplayConflictError):
+        persist_polled_match_envelope(
+            pg_db_migrated.poll_writer,
+            match_envelope=live_for_typeless,
+            match_envelopes=live_typeless_envs,
+            match_type_override="leagueMatch",
+            generated_at=datetime(2026, 11, 3, 14, 5, tzinfo=UTC),
+        )
+
+    q_rows = fetch_quarantine_records(
+        pg_db_migrated.app,
+        club_id=CLUB_ID,
+        review_status="PENDING_REVIEW",
+    )
+    assert len(q_rows) == 3
+    for q_row in q_rows:
+        assert q_row.anomaly_category == "REPLAY_CONFLICT"
+        assert any(path.endswith(".match_type") for path in q_row.diagnostic_paths)
 
 
 def test_02_key_order_differences_in_player_map_and_appearances_are_equivalent() -> (
@@ -603,6 +808,39 @@ def test_02_key_order_differences_in_player_map_and_appearances_are_equivalent()
         proj_r
     )
     assert compare_match_equivalence_v1(proj_f, proj_r) == []
+
+    # List-shaped players container in normalize_matches_payload is also sorted canonically
+    list_players_fwd = [
+        {
+            "playerId": "700001",
+            "position": "ST",
+            "goals": 1,
+            "assists": 0,
+            "minutesPlayed": 90,
+        },
+        {
+            "playerId": "700002",
+            "position": "CM",
+            "goals": 0,
+            "assists": 1,
+            "minutesPlayed": 90,
+        },
+    ]
+    list_match_f = {
+        "matchId": "950011",
+        "timestamp": 1762000800,
+        "result": "WIN",
+        "goalsFor": 1,
+        "goalsAgainst": 0,
+        "opponentName": "List Order Opponent",
+        "opponentClubId": "880102",
+        "players": list_players_fwd,
+    }
+    list_match_r = {**list_match_f, "players": list(reversed(list_players_fwd))}
+    norm_f, sup_f, _ = normalize_matches_payload([list_match_f])
+    norm_r, sup_r, _ = normalize_matches_payload([list_match_r])
+    assert norm_f[0].player_statistics == norm_r[0].player_statistics
+    assert sup_f[0].player_performances == sup_r[0].player_performances
 
 
 def test_03_timestamp_precision_normalization_behaves_as_specified() -> None:
@@ -1381,3 +1619,160 @@ def test_22_23_24_worker_bot_provider_boundaries_request_budget_and_role_grants(
     assert post_counts["fingerprints"] == 0
     assert post_counts["jobs"] == 1
     assert post_counts["quarantine"] == 1
+
+
+def test_25_external_user_export_parser_rejects_spoofed_community_provenance() -> None:
+    gen_dt = datetime(2026, 11, 2, 12, 0, 0, tzinfo=UTC)
+    for spoof_update in (
+        {"source_classification": "COMMUNITY_RESEARCH_DERIVED"},
+        {"export_id": "comm_poll_deadbeef01234567"},
+        {"export_id": "comm_eval_deadbeef01234567"},
+        {"supplier_reference": "fc27-community-v1:leagueMatch"},
+    ):
+        raw_dict = make_synthetic_export_dict(
+            export_id=spoof_update.get("export_id", "exp_spoof_attempt_01"),
+            club_id=CLUB_ID,
+            club_name=CLUB_NAME,
+            platform=PLATFORM,
+            display_alias=None,
+        )
+        raw_dict.pop("payload_sha256", None)
+        raw_dict["generated_at"] = gen_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        raw_dict["supplied_at"] = gen_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        raw_dict["supplier_attestation"]["attested_at"] = gen_dt.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        raw_dict["consent_attestation"]["consented_at"] = gen_dt.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        if "source_classification" in spoof_update:
+            raw_dict["source_classification"] = spoof_update["source_classification"]
+        if "supplier_reference" in spoof_update:
+            raw_dict["supplier_attestation"]["supplier_reference"] = spoof_update[
+                "supplier_reference"
+            ]
+        raw_dict["payload_sha256"] = compute_payload_sha256(raw_dict)
+        with pytest.raises(ValueError, match="reserved community-provider provenance"):
+            parse_fc27_user_export_json(
+                json.dumps(raw_dict),
+                evaluation_time=gen_dt + timedelta(minutes=1),
+            )
+
+
+def test_26_diagnostic_paths_byte_cap_recovery_fail_closed_and_malformed_match_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_db_migrated,
+) -> None:
+    _enable_polling_gates(monkeypatch)
+
+    # 1. Malformed community match record redacts raw match_id in FC27SchemaValidationError
+    raw_bad_id = "991122334455"
+    with pytest.raises(FC27SchemaValidationError) as bad_exc:
+        normalize_community_match_records(
+            [{"match_id": raw_bad_id, "timestamp": 1762000800, "clubs": []}],
+            observed_at="2026-11-05T00:00:00Z",
+            alias_hmac_key=SYNTHETIC_HMAC_KEY,
+        )
+    assert raw_bad_id not in str(bad_exc.value)
+    assert pseudonymize_match_ref(raw_bad_id, club_id=CLUB_ID) in str(bad_exc.value)
+
+    # 2. 11-player all-stat conflict stays within 4096-byte JSON diagnostic_paths constraint
+    eleven_players_a = [
+        {
+            "club_id": CLUB_ID,
+            "player_id": f"7100{i:02d}",
+            "player_name": f"SynthElevenA{i:02d}",
+            "position": "GK" if i == 11 else "CM",
+            "goals": 0,
+            "assists": 0,
+            "passes_made": 10 + i,
+            "pass_attempts": 20 + i,
+            "tackles_made": 1,
+            "tackle_attempts": 2,
+            "shots": 1,
+            "saves": 0,
+            "interceptions": 1,
+            "rating": 7.0,
+            "seconds_played": 5400,
+        }
+        for i in range(1, 12)
+    ]
+    eleven_players_b = [
+        {
+            **p,
+            "position": "CB" if p["position"] == "CM" else "GK",
+            "goals": 0,
+            "assists": 1,
+            "passes_made": 1,
+            "pass_attempts": 45,
+            "tackles_made": 0,
+            "tackle_attempts": 9,
+            "shots": 5,
+            "saves": 3,
+            "interceptions": 7,
+            "rating": 8.9,
+            "seconds_played": 4500,
+        }
+        for p in eleven_players_a
+    ]
+    base_11_a = {
+        **_raw_community_match("987700", goals_for=0, goals_against=0),
+        "players": eleven_players_a,
+    }
+    base_11_b = {
+        **_raw_community_match("987700", goals_for=0, goals_against=0),
+        "players": eleven_players_b,
+    }
+
+    env_11_a, m_envs_11_a = normalize_community_match_records(
+        [base_11_a],
+        observed_at="2026-11-06T00:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    persist_polled_match_envelope(
+        pg_db_migrated.poll_writer,
+        match_envelope=env_11_a,
+        match_envelopes=m_envs_11_a,
+        generated_at=datetime(2026, 11, 6, 0, 5, tzinfo=UTC),
+    )
+
+    env_11_b, m_envs_11_b = normalize_community_match_records(
+        [base_11_b],
+        observed_at="2026-11-06T01:00:00Z",
+        alias_hmac_key=SYNTHETIC_HMAC_KEY,
+    )
+    with pytest.raises(FC27ReplayConflictError):
+        persist_polled_match_envelope(
+            pg_db_migrated.poll_writer,
+            match_envelope=env_11_b,
+            match_envelopes=m_envs_11_b,
+            generated_at=datetime(2026, 11, 6, 1, 5, tzinfo=UTC),
+        )
+    q_rows = fetch_quarantine_records(pg_db_migrated.app, club_id=CLUB_ID)
+    assert len(q_rows) == 1
+    assert len(q_rows[0].diagnostic_paths) <= 100
+    assert len(json.dumps(q_rows[0].diagnostic_paths).encode("utf-8")) <= 4096
+
+    # 3. Database state recovery error blocks before issuing any provider call
+    def _broken_recover(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated database recovery outage")
+
+    monkeypatch.setattr(
+        "src.fc27_polling_worker.recover_polling_state_from_postgres",
+        _broken_recover,
+    )
+
+    def _never_fetch() -> Any:
+        raise AssertionError("Provider must not be called when DB recovery fails")
+
+    blocked_res = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db_migrated.poll_writer,
+        fetch_matches_fn=_never_fetch,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert blocked_res.poll_status == "PROVIDER_BLOCKED"
+    assert blocked_res.error_category == "DATABASE_STATE_RECOVERY_ERROR"
+    assert blocked_res.provider_requests == 0
