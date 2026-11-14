@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Callable, Iterator, Literal, Sequence, TYPE_CHECKING
+from typing import Any, Callable, Generator, Literal, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import discord
@@ -250,7 +250,7 @@ def validate_safe_text(
         if allow_none:
             return None
         raise MatchResultsValidationError(f"{field_name} is required.")
-    raw = str(value)
+    raw = value
     if "\n" in raw or "\r" in raw or _CONTROL_CHAR_RE.search(raw):
         raise MatchResultsValidationError(
             f"{field_name} cannot contain control characters or line breaks."
@@ -606,7 +606,7 @@ def parse_player_stats_input(
             parsed_fields[canonical_key] = coerced_val
 
     results = tuple(ParsedPlayerStatEntry(**by_player[norm]) for norm in player_order)
-    total_goals = sum(int(r.goals or 0) for r in results)
+    total_goals = sum((r.goals or 0) for r in results)
     if home_score is not None and total_goals > home_score:
         raise MatchResultsValidationError(
             f"Total player stat goals ({total_goals}) cannot exceed {EAST_COASTERS_SHORT_NAME} score ({home_score})."
@@ -677,14 +677,14 @@ def reconcile_scorers_and_player_stats(
         goals_val = (
             s_entry.goals
             if s_entry is not None
-            else (int(p_entry.goals) if (p_entry is not None and p_entry.goals is not None) else 0)
+            else (p_entry.goals if (p_entry is not None and p_entry.goals is not None) else 0)
         )
         reconciled_players.append(
             ManualMatchPlayerRecordInput(
                 normalized_display_label=norm_label,
                 safe_display_label=safe_label,
                 goals=goals_val,
-                assists=int(p_entry.assists) if (p_entry and p_entry.assists is not None) else 0,
+                assists=p_entry.assists if (p_entry and p_entry.assists is not None) else 0,
                 tackles=p_entry.tackles if p_entry else None,
                 passes=p_entry.passes if p_entry else None,
                 pass_accuracy=p_entry.pass_accuracy if p_entry else None,
@@ -925,7 +925,7 @@ def open_guarded_match_results_writer_connection(
     conn_or_uri: psycopg.Connection | GuardedMatchResultsWriterConnection | str,
     *,
     require_dedicated_writer_role: bool = True,
-) -> Iterator[GuardedMatchResultsWriterConnection]:
+) -> Generator[GuardedMatchResultsWriterConnection, None, None]:
     """Open a guarded connection for manual Match Results write operations."""
     if isinstance(conn_or_uri, GuardedMatchResultsWriterConnection):
         yield conn_or_uri
@@ -1430,7 +1430,7 @@ def record_match_result(
                         WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                         FOR UPDATE
                         """,
-                        (int(match_id), club_id),
+                        (match_id, club_id),
                     )
                     target_row = cur.fetchone()
                     if target_row is None:
@@ -1708,7 +1708,7 @@ def edit_match_result(
                         WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                         FOR UPDATE
                         """,
-                        (int(match_id), club_id),
+                        (match_id, club_id),
                     )
                 else:
                     cur.execute(
@@ -1732,7 +1732,7 @@ def edit_match_result(
                     raise MatchResultsNotFoundError("No editable manual match was found.")
 
                 existing = _hydrate_manual_match(cur, row)
-                if expected_revision is not None and existing.revision != int(expected_revision):
+                if expected_revision is not None and existing.revision != expected_revision:
                     raise MatchResultsConcurrencyError(
                         f"Optimistic concurrency conflict on Match #{existing.match_id}: "
                         f"expected revision {expected_revision}, current revision is {existing.revision}."
@@ -2087,7 +2087,7 @@ def update_match_discord_message_link(
                     WHERE match_id = %s AND deleted_at IS NULL
                     FOR UPDATE
                     """,
-                    (int(match_id),),
+                    (match_id,),
                 )
                 existing_row = cur.fetchone()
                 if existing_row is None:
@@ -2106,14 +2106,14 @@ def update_match_discord_message_link(
                     WHERE match_id = %s AND deleted_at IS NULL
                     RETURNING {_SELECT_MANUAL_MATCH_COLUMNS}
                     """,
-                    (guild_id, channel_id, message_id, actor_id, int(match_id)),
+                    (guild_id, channel_id, message_id, actor_id, match_id),
                 )
                 updated_row = cur.fetchone()
                 assert updated_row is not None
                 if is_replacement:
                     _insert_audit_entry(
                         cur,
-                        match_id=int(match_id),
+                        match_id=match_id,
                         action="RELINK_DISCORD_MESSAGE",
                         actor_discord_user_id=actor_id,
                         discord_guild_id=guild_id,
@@ -2155,7 +2155,7 @@ def soft_delete_match(
                     WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                     FOR UPDATE
                     """,
-                    (int(match_id), club_id),
+                    (match_id, club_id),
                 )
                 row = cur.fetchone()
                 if row is None:
@@ -2163,7 +2163,7 @@ def soft_delete_match(
                         f"Match #{match_id} was not found or is already deleted."
                     )
                 prev_rev = int(row[31])
-                if expected_revision is not None and prev_rev != int(expected_revision):
+                if expected_revision is not None and prev_rev != expected_revision:
                     raise MatchResultsConcurrencyError(
                         f"Optimistic concurrency conflict on Match #{match_id}."
                     )
@@ -2180,7 +2180,7 @@ def soft_delete_match(
                     WHERE match_id = %s AND revision = %s AND deleted_at IS NULL
                     RETURNING {_SELECT_MANUAL_MATCH_COLUMNS}
                     """,
-                    (actor_id, safe_reason, actor_id, new_rev, int(match_id), prev_rev),
+                    (actor_id, safe_reason, actor_id, new_rev, match_id, prev_rev),
                 )
                 deleted_row = cur.fetchone()
                 if deleted_row is None:
@@ -2189,7 +2189,7 @@ def soft_delete_match(
                     )
                 _insert_audit_entry(
                     cur,
-                    match_id=int(match_id),
+                    match_id=match_id,
                     action="SOFT_DELETE_MATCH",
                     actor_discord_user_id=actor_id,
                     discord_guild_id=str(deleted_row[23]) if deleted_row[23] else None,
@@ -2242,7 +2242,7 @@ def record_unauthorized_write_attempt(
                         previous_revision=None,
                         new_revision=None,
                         changed_fields=[],
-                        audit_metadata={"command": str(command_name)[:64]},
+                        audit_metadata={"command": command_name[:64]},
                     )
     except Exception:
         pass
@@ -2293,7 +2293,7 @@ def fetch_manual_match(
                 FROM public.fc27_manual_matches
                 WHERE match_id = %s AND club_id = %s AND deleted_at IS NULL
                 """,
-                (int(match_id), club_id),
+                (match_id, club_id),
             )
             row = cur.fetchone()
             return _hydrate_manual_match(cur, row) if row is not None else None
@@ -2328,7 +2328,7 @@ def fetch_manual_results_page(
     club_id: str = EAST_COASTERS_CLUB_ID,
 ) -> ManualMatchResultsPage:
     """Fetch a paginated list of non-deleted manual matches (newest first, 5/page default, max 10)."""
-    eff_size = max(1, min(int(page_size), RESULTS_PAGE_MAX_SIZE))
+    eff_size = max(1, min(page_size, RESULTS_PAGE_MAX_SIZE))
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -2340,7 +2340,7 @@ def fetch_manual_results_page(
         )
         total_matches = int(cur.fetchone()[0])
         total_pages = max(1, (total_matches + eff_size - 1) // eff_size)
-        eff_page = max(1, min(int(page), total_pages))
+        eff_page = max(1, min(page, total_pages))
         offset = (eff_page - 1) * eff_size
 
         cur.execute(
@@ -2372,7 +2372,7 @@ def fetch_manual_top_scorers(
     club_id: str = EAST_COASTERS_CLUB_ID,
 ) -> tuple[ManualTopScorerEntry, ...]:
     """Aggregate manual player goals and assists across non-deleted `FULL_TIME` matches."""
-    eff_limit = max(1, min(int(limit), 25))
+    eff_limit = max(1, min(limit, 25))
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -2834,7 +2834,7 @@ class MatchResultsPaginationView(discord.ui.View):
         self.current_page = initial_page.page
         self.total_pages = initial_page.total_pages
         self._page_fetcher = page_fetcher
-        self._author_id = str(author_discord_user_id)
+        self._author_id = author_discord_user_id
         self.message: Any = None
         self._sync_button_states()
 
@@ -2900,7 +2900,7 @@ class MatchDeleteConfirmationView(discord.ui.View):
     ) -> None:
         super().__init__(timeout=timeout)
         self.match_id = match_id
-        self._author_id = str(author_discord_user_id)
+        self._author_id = author_discord_user_id
         self._on_confirm_callback = on_confirm_callback
         self.completed: bool = False
         self.message: Any = None
@@ -2965,7 +2965,7 @@ class InMemoryDiscordChannelAdapter:
     """Deterministic in-memory Discord channel adapter for offline edit-in-place and relink tests."""
 
     def __init__(self, *, start_snowflake: int = 700000000000000001) -> None:
-        self._next_snowflake = int(start_snowflake)
+        self._next_snowflake = start_snowflake
         self.messages: dict[tuple[str, str], discord.Embed] = {}
         self.deleted_message_ids: set[str] = set()
         self.post_count: int = 0
@@ -2995,7 +2995,7 @@ class InMemoryDiscordChannelAdapter:
         self.messages.pop((chan, msg_id), None)
 
     def get_embed(self, channel_id: str, message_id: str) -> discord.Embed | None:
-        return self.messages.get((str(channel_id).strip(), str(message_id).strip()))
+        return self.messages.get((channel_id.strip(), message_id.strip()))
 
 
 __all__ = [
