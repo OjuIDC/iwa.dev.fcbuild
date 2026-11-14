@@ -1530,4 +1530,3 @@ def test_25_unrenderable_unknown_job_audit_key_cannot_block_cycle(
             WHERE job_type = 'evaluate_suggestions'
             """)
     assert eval_row == ("pending", 0, None)
-
