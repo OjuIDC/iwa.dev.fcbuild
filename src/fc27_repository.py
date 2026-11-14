@@ -2886,6 +2886,13 @@ def apply_export_plan(
                         if include_equivalence_diff_paths:
                             for dp in diff_paths:
                                 if dp not in base_paths:
+                                    candidate_paths = [*base_paths, dp]
+                                    encoded_paths = json.dumps(candidate_paths).encode("utf-8")
+                                    if (
+                                        len(candidate_paths) > 100
+                                        or len(encoded_paths) > 4096
+                                    ):
+                                        break
                                     base_paths.append(dp)
                         q_ext_id = (
                             pseudonymize_match_ref(
