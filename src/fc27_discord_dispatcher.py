@@ -1938,14 +1938,14 @@ def _to_canonical_manual_match_detail(
             pass_acc = round(100 * player.passes_completed / player.passes_attempted)
 
         p_shots = getattr(player, "shots", 0) or 0
-        total_shots += max(0, int(p_shots))
-        total_passes_completed += max(0, int(player.passes_completed))
-        total_passes_attempted += max(0, int(player.passes_attempted))
-        total_tackles += max(0, int(player.tackles_won))
+        total_shots += max(0, p_shots)
+        total_passes_completed += max(0, player.passes_completed)
+        total_passes_attempted += max(0, player.passes_attempted)
+        total_tackles += max(0, player.tackles_won)
 
         if player.goals > 0:
             prev_name, prev_goals = scorer_totals.get(norm_name, (safe_name, 0))
-            scorer_totals[norm_name] = (prev_name, prev_goals + int(player.goals))
+            scorer_totals[norm_name] = (prev_name, prev_goals + player.goals)
 
         player_details.append(
             ManualMatchPlayerDetail(
@@ -1953,15 +1953,15 @@ def _to_canonical_manual_match_detail(
                 safe_display_label=safe_name,
                 player_id=None,
                 position=pos_clean,
-                goals=max(0, int(player.goals)),
-                assists=max(0, int(player.assists)),
+                goals=max(0, player.goals),
+                assists=max(0, player.assists),
                 tackles=player.tackles_won if player.tackles_won > 0 else None,
                 passes=player.passes_completed if player.passes_completed > 0 else None,
-                passes_completed=max(0, int(player.passes_completed)),
-                passes_attempted=max(0, int(player.passes_attempted)),
+                passes_completed=max(0, player.passes_completed),
+                passes_attempted=max(0, player.passes_attempted),
                 pass_accuracy=pass_acc,
                 shots=p_shots if p_shots > 0 else None,
-                saves=max(0, int(player.saves)),
+                saves=max(0, player.saves),
                 rating=rating_dec,
             )
         )
@@ -1996,8 +1996,8 @@ def _to_canonical_manual_match_detail(
         kickoff_at=played_utc,
         match_date=match_date,
         match_time=match_time,
-        home_score=int(match_data.goals_for),
-        away_score=int(match_data.goals_against),
+        home_score=match_data.goals_for,
+        away_score=match_data.goals_against,
         status="FULL_TIME",
         competition=comp_label,
         formation=form_label,

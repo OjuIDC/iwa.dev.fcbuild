@@ -50,7 +50,9 @@ def test_role_attributes(pg_db):
         with conn.cursor() as cur:
             # owner: rolcanlogin false
             cur.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ROLE_OWNER,))
-            assert not cur.fetchone()[0]
+            _owner_row = cur.fetchone()
+            assert _owner_row is not None
+            assert not _owner_row[0]
 
             # runtime login roles: can login, not superuser/createdb/createrole/replication/bypassrls, not member of fc27_owner
             for role in runtime_roles:
@@ -64,11 +66,15 @@ def test_role_attributes(pg_db):
                 assert row[0] is True
                 assert not any(row[1:])
                 cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (role, ROLE_OWNER))
-                assert not cur.fetchone()[0]
+                _member_row = cur.fetchone()
+                assert _member_row is not None
+                assert not _member_row[0]
 
             # migrator: pg_has_role('fc27_migrator','fc27_owner','MEMBER') is true
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_MIGRATOR, ROLE_OWNER))
-            assert cur.fetchone()[0]
+            _migrator_row = cur.fetchone()
+            assert _migrator_row is not None
+            assert _migrator_row[0]
 
 
 def test_public_cannot_create_in_public_schema(pg_db):
@@ -83,9 +89,13 @@ def test_public_cannot_create_in_public_schema(pg_db):
                 ROLE_DISCORD_READER,
             ):
                 cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE')", (role,))
-                assert not cur.fetchone()[0]
+                _create_row = cur.fetchone()
+                assert _create_row is not None
+                assert not _create_row[0]
                 cur.execute("SELECT has_schema_privilege(%s, 'public', 'USAGE')", (role,))
-                assert cur.fetchone()[0]
+                _usage_row = cur.fetchone()
+                assert _usage_row is not None
+                assert _usage_row[0]
 
 def test_bootstrap_transfers_legacy_objects_owned_by_admin(pg_db):
     with psycopg.connect(pg_db.admin, autocommit=True) as conn:
@@ -103,8 +113,10 @@ def test_bootstrap_transfers_legacy_objects_owned_by_admin(pg_db):
         assert not report.pending_transfers
 
         # verify owners
-        assert conn.execute("SELECT relowner::regrole::text FROM pg_class WHERE relname = 'legacy_t'").fetchone()[0] == ROLE_OWNER
-        assert conn.execute("SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'legacy_f'").fetchone()[0] == ROLE_OWNER
+        _tbl_owner_row = conn.execute("SELECT relowner::regrole::text FROM pg_class WHERE relname = 'legacy_t'").fetchone()
+        assert _tbl_owner_row is not None and _tbl_owner_row[0] == ROLE_OWNER
+        _fn_owner_row = conn.execute("SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'legacy_f'").fetchone()
+        assert _fn_owner_row is not None and _fn_owner_row[0] == ROLE_OWNER
 
 def test_check_runtime_posture(pg_db):
     with psycopg.connect(pg_db.admin) as conn:

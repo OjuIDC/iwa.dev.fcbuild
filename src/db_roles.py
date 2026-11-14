@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import LiteralString, Mapping, cast
 
 import psycopg
+import psycopg.conninfo
 from psycopg import sql
 
 from src import settings
@@ -81,7 +82,8 @@ def plan_cluster(admin_conninfo: str, passwords: Mapping[str, str | None]) -> li
         member = False
         if ROLE_OWNER in existing and ROLE_MIGRATOR in existing:
             cur.execute("SELECT pg_has_role(%s, %s, 'MEMBER')", (ROLE_MIGRATOR, ROLE_OWNER))
-            member = bool(cur.fetchone()[0])
+            _row = cur.fetchone()
+            member = bool(_row and _row[0])
         if not member:
             planned.append(f"GRANT {ROLE_OWNER} TO {ROLE_MIGRATOR}")
         for role, pw in passwords.items():
@@ -116,15 +118,19 @@ def bootstrap_cluster(admin_conninfo: str, passwords: Mapping[str, str | None]) 
                 if not cur.fetchone():
                     if role == ROLE_OWNER:
                         cur.execute(
-                            f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                            sql.SQL(
+                                "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                            ).format(sql.Identifier(role))
                         )
                     else:
                         cur.execute(
-                            f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                            sql.SQL(
+                                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                            ).format(sql.Identifier(role))
                         )
 
             # GRANT fc27_owner TO fc27_migrator
-            cur.execute(f"GRANT {ROLE_OWNER} TO {ROLE_MIGRATOR}")
+            cur.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(ROLE_OWNER), sql.Identifier(ROLE_MIGRATOR)))
 
             # Set passwords
             for r, pw in passwords.items():
@@ -136,17 +142,20 @@ def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
     with conn.cursor() as cur:
         # Check superuser
         cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-        if cur.fetchone()[0]:
+        _row = cur.fetchone()
+        if _row and _row[0]:
             return ['superuser']
 
         # Check owner_member
         cur.execute("SELECT pg_has_role(current_user, %s, 'MEMBER')", (ROLE_OWNER,))
-        if cur.fetchone()[0]:
+        _row = cur.fetchone()
+        if _row and _row[0]:
             violations.append("owner_member")
 
         # Check create_on_public
         cur.execute("SELECT has_schema_privilege(current_user, 'public', 'CREATE')")
-        if cur.fetchone()[0]:
+        _row = cur.fetchone()
+        if _row and _row[0]:
             violations.append("create_on_public")
 
     return violations
@@ -205,7 +214,10 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT current_database()")
-            dbname = cur.fetchone()[0]
+            _db_row = cur.fetchone()
+            if _db_row is None:
+                raise RuntimeError("current_database() returned no row")
+            dbname = _db_row[0]
             if not confirm:
                 planned.extend(_plan_database_grants(cur, dbname))
             else:
@@ -307,7 +319,6 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
             for kind, name in objects:
                 obj_desc = f"{kind} public.{name}"
                 if kind == 'function':
-                    # Need to construct the exact statement
                     stmt = f"ALTER FUNCTION public.{name} OWNER TO {ROLE_OWNER}"
                 elif kind == 'sequence':
                     stmt = f"ALTER SEQUENCE public.{name} OWNER TO {ROLE_OWNER}"
@@ -317,7 +328,7 @@ def bootstrap_database(admin_db_conninfo: str, *, legacy_owner: str | None, conf
                     stmt = f"ALTER TABLE public.{name} OWNER TO {ROLE_OWNER}"
 
                 if confirm:
-                    cur.execute(stmt)
+                    cur.execute(cast(LiteralString, stmt))
                     transferred.append(obj_desc)
                 else:
                     pending_transfers.append(obj_desc)
@@ -370,7 +381,9 @@ def main():
         passwords[ROLE_DISCORD_READER] = discord_reader_pw
     info = psycopg.conninfo.conninfo_to_dict(admin_uri)
     info["dbname"] = args.database
-    db_conninfo = psycopg.conninfo.make_conninfo(**info)
+    db_conninfo = psycopg.conninfo.make_conninfo(
+        **cast("dict[str, str]", {k: v for k, v in info.items() if v is not None})
+    )
 
     try:
         if not args.confirm:

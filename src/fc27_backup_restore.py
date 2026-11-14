@@ -19,12 +19,15 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString, cast
 
 import psycopg
+import psycopg.conninfo
+import psycopg.sql
+from psycopg import sql
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.db_migrate import migrate
@@ -308,7 +311,8 @@ def inspect_database_state_for_manifest(
     with psycopg.connect(db_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.schema_migrations')")
-            has_migrations = cur.fetchone()[0] is not None
+            _reg_row = cur.fetchone()
+            has_migrations = _reg_row is not None and _reg_row[0] is not None
             migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
@@ -316,8 +320,8 @@ def inspect_database_state_for_manifest(
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 15)
-                latest_mig = str(mig_row[1] or "0015_fc27_player_development_fixups.sql")
+                mig_count = int((mig_row[0] if mig_row else None) or 15)
+                latest_mig = str((mig_row[1] if mig_row else None) or "0015_fc27_player_development_fixups.sql")
                 cur.execute(
                     "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
                 )
@@ -327,13 +331,15 @@ def inspect_database_state_for_manifest(
                 latest_mig = "0015_fc27_player_development_fixups.sql"
 
             cur.execute("SELECT to_regclass('public.schema_policy_versions')")
-            has_policy_versions = cur.fetchone()[0] is not None
+            _pol_reg_row = cur.fetchone()
+            has_policy_versions = _pol_reg_row is not None and _pol_reg_row[0] is not None
             policy_rows: list[tuple[Any, ...]] = []
             if has_policy_versions:
                 cur.execute(
                     "SELECT has_table_privilege(current_user, 'public.schema_policy_versions', 'SELECT')"
                 )
-                can_read_policy = bool(cur.fetchone()[0])
+                _can_read_row = cur.fetchone()
+                can_read_policy = bool(_can_read_row and _can_read_row[0])
                 if can_read_policy:
                     cur.execute(
                         "SELECT policy, version, sha256 FROM public.schema_policy_versions ORDER BY policy ASC, version ASC"
@@ -345,13 +351,15 @@ def inspect_database_state_for_manifest(
                 "SELECT COUNT(*) FROM public.fc27_clubs WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            clubs_cnt = int(cur.fetchone()[0])
+            _clubs_row = cur.fetchone()
+            clubs_cnt = int(_clubs_row[0]) if _clubs_row else 0
 
             cur.execute(
                 "SELECT COUNT(*) FROM public.fc27_export_batches WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            batches_cnt = int(cur.fetchone()[0])
+            _batches_row = cur.fetchone()
+            batches_cnt = int(_batches_row[0]) if _batches_row else 0
 
             cur.execute(
                 """
@@ -404,7 +412,8 @@ def inspect_database_state_for_manifest(
                 "SELECT COUNT(*) FROM public.fc27_quarantine_records WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            quarantine_cnt = int(cur.fetchone()[0])
+            _quarantine_row = cur.fetchone()
+            quarantine_cnt = int(_quarantine_row[0]) if _quarantine_row else 0
 
             cur.execute(
                 """
@@ -514,14 +523,21 @@ def inspect_database_state_for_manifest(
                 "fc27_discord_jobs",
             ):
                 cur.execute("SELECT to_regclass(%s)", (f"public.{pd_tbl}",))
-                if cur.fetchone()[0] is not None:
+                _pd_reg_row = cur.fetchone()
+                if _pd_reg_row is not None and _pd_reg_row[0] is not None:
                     cur.execute(
                         "SELECT has_table_privilege(current_user, %s, 'SELECT')",
                         (f"public.{pd_tbl}",),
                     )
-                    if cur.fetchone()[0]:
-                        cur.execute(f"SELECT COUNT(*) FROM public.{pd_tbl}")
-                        player_dev_counts[pd_tbl] = int(cur.fetchone()[0])
+                    _pd_priv_row = cur.fetchone()
+                    if _pd_priv_row and _pd_priv_row[0]:
+                        cur.execute(
+                            psycopg.sql.SQL("SELECT COUNT(*) FROM public.{}").format(
+                                sql.Identifier(pd_tbl)
+                            )
+                        )
+                        _pd_count_row = cur.fetchone()
+                        player_dev_counts[pd_tbl] = int(_pd_count_row[0]) if _pd_count_row else 0
                     else:
                         player_dev_counts[pd_tbl] = 0
                 else:
@@ -930,13 +946,19 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 if not seq_name:
                     continue
                 cur.execute(
-                    f"""
-                    SELECT setval(
-                        %s::regclass,
-                        COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
-                        false
-                    )
-                    """,
+                    sql.SQL(
+                        """
+                        SELECT setval(
+                            %s::regclass,
+                            COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
+                            false
+                        )
+                        """
+                    ).format(
+                        column_name=sql.Identifier(column_name),
+                        schema_name=sql.Identifier(schema_name),
+                        table_name=sql.Identifier(table_name),
+                    ),
                     (seq_name,),
                 )
 
@@ -972,7 +994,7 @@ def _find_free_loopback_port() -> int:
 
 
 @contextlib.contextmanager
-def _ensure_reachable_db_uri(db_uri: str | None) -> Iterator[str | None]:
+def _ensure_reachable_db_uri(db_uri: str | None) -> Generator[str | None]:
     """Yield a host-reachable PostgreSQL URI, starting a transient loopback proxy if needed."""
     if not db_uri:
         yield None
@@ -1045,7 +1067,9 @@ def _ensure_reachable_db_uri(db_uri: str | None) -> Iterator[str | None]:
         bridged_info = dict(info)
         bridged_info["host"] = "127.0.0.1"
         bridged_info["port"] = str(local_port)
-        bridged_uri = psycopg.conninfo.make_conninfo(**bridged_info)
+        bridged_uri = psycopg.conninfo.make_conninfo(
+            **cast("dict[str, str]", {k: v for k, v in bridged_info.items() if v is not None})
+        )
         for _ in range(30):
             try:
                 with psycopg.connect(bridged_uri, connect_timeout=2) as probe_conn:
@@ -1111,7 +1135,9 @@ def create_fc27_backup(
 def _with_dbname(uri: str, dbname: str) -> str:
     info = psycopg.conninfo.conninfo_to_dict(uri)
     info["dbname"] = dbname
-    return psycopg.conninfo.make_conninfo(**info)
+    return psycopg.conninfo.make_conninfo(
+        **cast("dict[str, str]", {k: v for k, v in info.items() if v is not None})
+    )
 
 
 def verify_fc27_backup_restore(
@@ -1169,7 +1195,9 @@ def verify_fc27_backup_restore(
                 },
             )
             with psycopg.connect(reachable_admin_uri, autocommit=True) as admin_conn:
-                admin_conn.execute(f'CREATE DATABASE "{created_temp_db_name}"')
+                admin_conn.execute(
+                    sql.SQL("CREATE DATABASE {}").format(sql.Identifier(created_temp_db_name))
+                )
             target_uri = _with_dbname(reachable_admin_uri, created_temp_db_name)
 
         try:
@@ -1248,7 +1276,8 @@ def verify_fc27_backup_restore(
                                 """,
                                 (manifest.club_id, manifest.platform, manifest.game_version),
                             )
-                            inserted_id = int(cur.fetchone()[0])
+                            _inserted_row = cur.fetchone()
+                            inserted_id = int(_inserted_row[0]) if _inserted_row else 0
                             cur.execute(
                                 "DELETE FROM public.fc27_manual_matches WHERE match_id = %s",
                                 (inserted_id,),
@@ -1266,7 +1295,8 @@ def verify_fc27_backup_restore(
                                 """,
                                 (f"restore-verify-{manifest.backup_id}",),
                             )
-                            inserted_id = int(cur.fetchone()[0])
+                            _job_row = cur.fetchone()
+                            inserted_id = int(_job_row[0]) if _job_row else 0
                             cur.execute(
                                 "DELETE FROM public.fc27_discord_jobs WHERE job_id = %s",
                                 (inserted_id,),
@@ -1294,7 +1324,11 @@ def verify_fc27_backup_restore(
                             "WHERE datname = %s AND pid <> pg_backend_pid()",
                             (created_temp_db_name,),
                         )
-                        admin_conn.execute(f'DROP DATABASE IF EXISTS "{created_temp_db_name}"')
+                        admin_conn.execute(
+                            sql.SQL("DROP DATABASE IF EXISTS {}").format(
+                                sql.Identifier(created_temp_db_name)
+                            )
+                        )
                 except Exception:
                     pass
 

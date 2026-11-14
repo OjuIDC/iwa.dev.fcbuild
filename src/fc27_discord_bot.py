@@ -1462,7 +1462,7 @@ class FC27DiscordBotService:
         def _coerce_numeric_match_id(raw_mid: int | str | None) -> int | None:
             if raw_mid is None or isinstance(raw_mid, int):
                 return raw_mid
-            cleaned_mid = str(raw_mid).strip().lstrip("#")
+            cleaned_mid = raw_mid.strip().lstrip("#")
             if cleaned_mid.isdigit() and int(cleaned_mid) > 0:
                 return int(cleaned_mid)
             raise MatchResultsValidationError("match_id must be a positive numeric match ID.")

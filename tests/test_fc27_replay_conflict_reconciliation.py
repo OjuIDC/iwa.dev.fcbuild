@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 import psycopg.errors
@@ -475,25 +475,17 @@ def _seed_historical_comm_eval_batch(
 
 def _db_table_counts(admin_uri: str) -> dict[str, int]:
     with psycopg.connect(admin_uri) as conn:
+        def _scalar(query: LiteralString) -> int:
+            row = conn.execute(query).fetchone()
+            return int(row[0]) if row else 0
+
         return {
-            "matches": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_matches"
-            ).fetchone()[0],
-            "stats": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_player_match_stats"
-            ).fetchone()[0],
-            "batches": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_export_batches"
-            ).fetchone()[0],
-            "quarantine": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_quarantine_records"
-            ).fetchone()[0],
-            "fingerprints": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints"
-            ).fetchone()[0],
-            "jobs": conn.execute(
-                "SELECT COUNT(*) FROM public.fc27_discord_jobs"
-            ).fetchone()[0],
+            "matches": _scalar("SELECT COUNT(*) FROM public.fc27_matches"),
+            "stats": _scalar("SELECT COUNT(*) FROM public.fc27_player_match_stats"),
+            "batches": _scalar("SELECT COUNT(*) FROM public.fc27_export_batches"),
+            "quarantine": _scalar("SELECT COUNT(*) FROM public.fc27_quarantine_records"),
+            "fingerprints": _scalar("SELECT COUNT(*) FROM public.fc27_player_alias_fingerprints"),
+            "jobs": _scalar("SELECT COUNT(*) FROM public.fc27_discord_jobs"),
         }
 
 
@@ -1197,10 +1189,11 @@ def test_14_15_16_17_18_unresolved_conflict_rollback_quarantine_checkpoint_and_d
             """
         ).fetchall()
         assert after_match_snapshot == before_match_snapshot
-        club_updated = conn.execute(
+        _club_row = conn.execute(
             "SELECT updated_at FROM public.fc27_clubs WHERE club_id = %s",
             (CLUB_ID,),
-        ).fetchone()[0]
+        ).fetchone()
+        club_updated = _club_row[0] if _club_row else None
         assert club_updated == initial_club_ts
 
     q_rows = fetch_quarantine_records(
@@ -1241,7 +1234,7 @@ def test_14_15_16_17_18_unresolved_conflict_rollback_quarantine_checkpoint_and_d
     assert res_restarted.poll_status == "PROVIDER_BLOCKED"
     assert res_restarted.error_category == "CIRCUIT_BREAKER_OPEN"
     assert res_restarted.provider_requests == 0
-    assert restarted_rt.circuit_breaker.state is FC27CircuitState.OPEN
+    assert restarted_rt.circuit_breaker.state == FC27CircuitState.OPEN
 
     # Operator reviews quarantine record via fc27_app and performs audited manual circuit reset
     review_event_id = review_quarantine_record(
@@ -1491,9 +1484,10 @@ def test_22_23_24_worker_bot_provider_boundaries_request_budget_and_role_grants(
     # 24. Migration max == 0016 and Grants Policy == 17
     assert GRANTS_POLICY_VERSION == 17
     with psycopg.connect(pg_db_migrated.admin) as conn:
-        max_mig = conn.execute(
+        _max_mig_row = conn.execute(
             "SELECT MAX(version) FROM public.schema_migrations"
-        ).fetchone()[0]
+        ).fetchone()
+        max_mig = _max_mig_row[0] if _max_mig_row else None
         assert str(max_mig).startswith("0016")
 
     # fc27_poll_writer cannot UPDATE/DELETE quarantine rows or write domain_events

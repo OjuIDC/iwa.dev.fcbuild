@@ -1475,7 +1475,7 @@ def upsert_roster_player(
                         updated_at = now()
                     RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
                     """,
-                    (safe_pid, safe_name, norm_name, safe_pos, safe_discord_id, bool(active)),
+                    (safe_pid, safe_name, norm_name, safe_pos, safe_discord_id, active),
                 )
                 row = cur.fetchone()
                 assert row is not None
@@ -2848,7 +2848,7 @@ def fetch_manual_match(
                     (match_id, club_id),
                 )
             else:
-                raw_mid = str(match_id).strip().lstrip("#")
+                raw_mid = match_id.strip().lstrip("#")
                 if raw_mid.isdigit():
                     cur.execute(
                         f"""

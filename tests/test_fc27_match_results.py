@@ -533,9 +533,11 @@ def test_end_to_end_match_results_acceptance_sequence(pg_db_migrated) -> None:
 
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM public.fc27_matches")
-            assert cur.fetchone()[0] == 0
+            _matches_row = cur.fetchone()
+            assert _matches_row is not None and _matches_row[0] == 0
             cur.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats")
-            assert cur.fetchone()[0] == 0
+            _stats_row = cur.fetchone()
+            assert _stats_row is not None and _stats_row[0] == 0
 
 
 def test_missing_discord_message_relinks_cleanly_on_edit(pg_db_migrated) -> None:
@@ -632,7 +634,8 @@ def test_write_commands_enforce_role_id_authorization_and_audit_denials(
             cur.execute(
                 "SELECT COUNT(*) FROM public.fc27_manual_match_audit WHERE action = 'UNAUTHORIZED_WRITE_DENIED'"
             )
-            assert cur.fetchone()[0] == 4
+            _audit_row = cur.fetchone()
+            assert _audit_row is not None and _audit_row[0] == 4
 
 
 def test_optimistic_concurrency_prevents_lost_updates(pg_db_migrated) -> None:
@@ -874,8 +877,8 @@ def test_discord_ui_pagination_and_delete_confirmation_views_offline(
             author_inter = _DummyInteraction(AUTHORIZED_USER_ID)
             await view._change_page(author_inter, 2)  # type: ignore[arg-type]
             assert view.current_page == 2
-            assert view.prev_button.disabled is False
-            assert view.next_button.disabled is True
+            assert not view.prev_button.disabled
+            assert view.next_button.disabled
             assert len(author_inter.response.edited_embeds) == 1
 
             await view.on_timeout()
@@ -1015,6 +1018,7 @@ def test_p0_build_result_content_colors_omission_splitting_and_zero_jargon() -> 
     assert "👥 Players" in split_names
     assert "👥 Players (cont.)" in split_names
     for fld in split_emb.fields:
+        assert fld.value is not None
         assert len(fld.value) <= 1024
 
     rendered_all = "\n".join(
@@ -1151,7 +1155,9 @@ def test_p0_roster_commands_rename_unresolved_and_single_query_batch_resolution(
                 RETURNING match_id
                 """
             )
-            mid = int(cur.fetchone()[0])
+            _mid_row = cur.fetchone()
+            assert _mid_row is not None
+            mid = int(_mid_row[0])
             cur.execute(
                 """
                 INSERT INTO public.fc27_manual_match_players (
