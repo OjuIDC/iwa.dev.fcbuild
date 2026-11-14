@@ -364,9 +364,9 @@ def _seed_historical_comm_eval_batch(
     )
     historical_matches: list[FC27SuppliedMatch] = []
     for m_env in match_envs:
-        # Preserve raw stat insertion order (deliberately unsorted) + historical defaults
+        # Simulate the historical non-canonical insertion order explicitly.
         perfs: list[FC27SuppliedPlayerPerformance] = []
-        for p in m_env.player_statistics:
+        for p in reversed(m_env.player_statistics):
             perfs.append(
                 FC27SuppliedPlayerPerformance(
                     local_player_reference=p.local_player_reference,
