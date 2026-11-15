@@ -5197,7 +5197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         writer_uri = (
             args.writer_uri.strip()
             if args.writer_uri and args.writer_uri.strip()
-            else resolve_match_results_writer_uri(required=False)
+            else resolve_match_results_writer_uri(strict=False)
         )
         reader_uri = _resolve_cli_reader_uri(args.reader_uri)
         if not writer_uri and not args.dry_run:
