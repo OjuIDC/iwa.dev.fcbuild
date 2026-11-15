@@ -1917,14 +1917,10 @@ def test_34_manual_result_recovers_unlinked_team_chat_post_and_persists_id(
     )
     pre_tc_id, _ = adapter.post_text(TEAM_CHAT_CHANNEL_ID, stale_team_chat)
     assert adapter.text_post_count == 1
-    assert get_match_discord_message_links(
+    pre_links = get_match_discord_message_links(
         pg_db_migrated.discord_reader, match_id=created.match_id
-    ) is None or (
-        get_match_discord_message_links(
-            pg_db_migrated.discord_reader, match_id=created.match_id
-        ).team_chat_message_id
-        is None
     )
+    assert pre_links is None or pre_links.team_chat_message_id is None
 
     service = FC27DiscordBotService(
         _bot_config(),
@@ -2063,24 +2059,28 @@ def test_36_compose_forwards_team_chat_channel_id_and_writer_cannot_access_disco
                 wcur.execute("SELECT job_id FROM public.fc27_discord_jobs LIMIT 1")
 
     with psycopg.connect(pg_db_migrated.admin) as aconn:
-        assert aconn.execute(
+        jobs_row = aconn.execute(
             "SELECT has_table_privilege(%s, 'public.fc27_discord_jobs', 'INSERT')",
             (ROLE_MATCH_RESULTS_WRITER,),
-        ).fetchone()[0] is False
-        assert aconn.execute(
+        ).fetchone()
+        assert jobs_row is not None and jobs_row[0] is False
+        reader_sel_row = aconn.execute(
             "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', 'SELECT')",
             (ROLE_DISCORD_READER,),
-        ).fetchone()[0] is True
+        ).fetchone()
+        assert reader_sel_row is not None and reader_sel_row[0] is True
         for mut_priv in ("INSERT", "UPDATE", "DELETE"):
-            assert aconn.execute(
+            priv_row = aconn.execute(
                 "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', %s)",
                 (ROLE_DISCORD_READER, mut_priv),
-            ).fetchone()[0] is False
+            ).fetchone()
+            assert priv_row is not None and priv_row[0] is False
         for w_priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
-            assert aconn.execute(
+            w_row = aconn.execute(
                 "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', %s)",
                 (ROLE_MATCH_RESULTS_WRITER, w_priv),
-            ).fetchone()[0] is True
+            ).fetchone()
+            assert w_row is not None and w_row[0] is True
         assert verify_postconditions(aconn) == []
 
 
