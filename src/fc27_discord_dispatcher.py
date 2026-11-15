@@ -3700,11 +3700,23 @@ def refresh_dispatched_match_message(
                 extra_forbidden_tokens=merged_forbidden,
             )
             if not res_msg_id:
-                res_msg_id = transport.find_existing_notification(
-                    channel_id=res_chan,
-                    match_ref=match_ref,
-                    idempotency_key=idem_key,
-                )
+                find_kwargs: dict[str, Any] = {
+                    "channel_id": res_chan,
+                    "match_ref": match_ref,
+                    "idempotency_key": idem_key,
+                }
+                try:
+                    sig_params = inspect.signature(
+                        transport.find_existing_notification
+                    ).parameters
+                    if "message" in sig_params or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig_params.values()
+                    ):
+                        find_kwargs["message"] = formal_msg
+                except (TypeError, ValueError):
+                    pass
+                res_msg_id = transport.find_existing_notification(**find_kwargs)
             edit_fn = getattr(transport, "edit_notification", None)
             if res_msg_id and callable(edit_fn):
                 formal_edited = bool(
