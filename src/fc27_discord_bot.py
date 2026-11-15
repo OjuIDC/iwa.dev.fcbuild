@@ -2083,7 +2083,7 @@ class FC27DiscordBotService:
 
         if cmd == "setplayer":
             writer_target = self._resolve_writer_conn_or_uri(required=True)
-            raw_ref = str(player_id or token or "").strip()
+            raw_ref = (player_id or token or "").strip()
             is_reconcile_token = bool(token and token.strip()) or bool(
                 re.fullmatch(r"^T[1-9][0-9]*$", raw_ref, re.IGNORECASE)
             )
@@ -3563,7 +3563,7 @@ async def dispatch_interaction_response(
                 except Exception:
                     pass
 
-        is_ephemeral_followup = bool(resp.ephemeral or should_defer_ephemeral)
+        is_ephemeral_followup = resp.ephemeral or should_defer_ephemeral
         if is_ephemeral_followup:
             await _cleanup_public_defer()
         kwargs: dict[str, Any] = {

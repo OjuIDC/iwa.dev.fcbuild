@@ -330,7 +330,9 @@ def _seed_provider_match_and_job(
                     now,
                 ),
             )
-            match_uuid = cur.fetchone()[0]
+            match_row = cur.fetchone()
+            assert match_row is not None
+            match_uuid = match_row[0]
             for p in default_players:
                 cur.execute(
                     """
@@ -401,7 +403,9 @@ def _seed_provider_match_and_job(
                     """,
                     (idem_key, json.dumps(payload), now, now),
                 )
-                job_id = int(cur.fetchone()[0])
+                job_row = cur.fetchone()
+                assert job_row is not None
+                job_id = int(job_row[0])
         pw.commit()
     return {
         "match_uuid": str(match_uuid),
@@ -1486,13 +1490,14 @@ def test_28_existing_commands_and_cli_remain_functional(
     assert adapter.edit_count >= 1
     assert adapter.text_edit_count >= 1
 
-    for read_cmd, extra in (
+    read_commands: tuple[tuple[str, dict[str, Any]], ...] = (
         ("lastresult", {}),
         ("match", {"match_id": 1}),
         ("results", {}),
         ("topscorers", {}),
         ("playerstats", {"player_name": "Lucas M"}),
-    ):
+    )
+    for read_cmd, extra in read_commands:
         assert (
             service.handle_slash_command(
                 read_cmd,
