@@ -109,6 +109,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "tests/test_db_migrate_roles.py",
             "tests/test_fc27_persistence_and_queries.py",
             "tests/test_fc27_match_results.py",
+            "tests/test_fc27_roster_reconciliation_and_team_chat.py",
             "tests/test_fc27_backup_restore.py",
             "tests/test_migration_0003.py",
             "tests/test_events_outbox.py",
@@ -119,7 +120,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
         cats.add("database")
 
     # 5. Discord
-    if "discord" in norm or "match_results" in norm:
+    if "discord" in norm or "match_results" in norm or "roster_reconciliation_and_team_chat" in norm:
         cats.add("discord")
 
     # 6. Polling

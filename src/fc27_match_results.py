@@ -2313,24 +2313,29 @@ def upsert_roster_player(
                     norm_new=norm_name,
                     position=safe_pos,
                 )
-                _insert_audit_entry(
-                    cur,
-                    match_id=None,
-                    action="EDIT_RESULT",
-                    actor_discord_user_id=audit_actor_id,
-                    discord_guild_id=None,
-                    discord_channel_id=None,
-                    discord_message_id=None,
-                    previous_revision=None,
-                    new_revision=None,
-                    changed_fields=["roster_player"],
-                    audit_metadata={
-                        "kind": "roster_upsert",
-                        "player_id": safe_pid,
-                        "display_name_normalized": norm_name,
-                        "active": active,
-                    },
-                )
+                if (
+                    (actor_discord_user_id is not None and str(actor_discord_user_id).strip())
+                    or has_token
+                    or has_gamertag
+                ):
+                    _insert_audit_entry(
+                        cur,
+                        match_id=None,
+                        action="EDIT_RESULT",
+                        actor_discord_user_id=audit_actor_id,
+                        discord_guild_id=None,
+                        discord_channel_id=None,
+                        discord_message_id=None,
+                        previous_revision=None,
+                        new_revision=None,
+                        changed_fields=["roster_player"],
+                        audit_metadata={
+                            "kind": "roster_upsert",
+                            "player_id": safe_pid,
+                            "display_name_normalized": norm_name,
+                            "active": active,
+                        },
+                    )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),
