@@ -241,6 +241,18 @@ _STAT_VALUE_FIRST_RE = re.compile(
 _STAT_KEY_FIRST_RE = re.compile(
     r"^(?P<key>[a-zA-Z_ ]+?)\s*(?:=|:|\s)\s*(?P<val>[+-]?\d+(?:\.\d+)?)%?$"
 )
+_STAT_PASS_RATIO_VALUE_FIRST_RE = re.compile(
+    r"^(?P<comp>\d+)\s*/\s*(?P<att>\d+)\s+(?P<key>passes?)$",
+    re.IGNORECASE,
+)
+_STAT_PASS_RATIO_KEY_FIRST_RE = re.compile(
+    r"^(?P<key>passes?)\s*(?:=|:|\s)\s*(?P<comp>\d+)\s*/\s*(?P<att>\d+)$",
+    re.IGNORECASE,
+)
+_STAT_POSITION_RE = re.compile(
+    r"^(?P<key>pos|position)\s*(?:=|:|\s)\s*(?P<val>[A-Za-z0-9_/-]+)$",
+    re.IGNORECASE,
+)
 
 _FORBIDDEN_WRITER_TABLES_RE = re.compile(
     r"\b("
@@ -664,13 +676,45 @@ _CANONICAL_STAT_KEYS: dict[str, str] = {
     "tackles": "tackles",
     "pass": "passes",
     "passes": "passes",
+    "pass_completed": "passes_completed",
+    "passes_completed": "passes_completed",
+    "completed_passes": "passes_completed",
+    "completed pass": "passes_completed",
+    "completed passes": "passes_completed",
+    "pass completed": "passes_completed",
+    "passes completed": "passes_completed",
+    "pass_attempted": "passes_attempted",
+    "passes_attempted": "passes_attempted",
+    "attempted_passes": "passes_attempted",
+    "attempted pass": "passes_attempted",
+    "attempted passes": "passes_attempted",
+    "pass attempted": "passes_attempted",
+    "passes attempted": "passes_attempted",
     "pass_accuracy": "pass_accuracy",
     "pass accuracy": "pass_accuracy",
     "pass_acc": "pass_accuracy",
     "shot": "shots",
     "shots": "shots",
+    "save": "saves",
+    "saves": "saves",
+    "pos": "position",
+    "position": "position",
     "rating": "rating",
 }
+
+
+def _assign_stat_field(
+    parsed_fields: dict[str, Any],
+    *,
+    key: str,
+    value: Any,
+    safe_label: str,
+) -> None:
+    if key in parsed_fields and parsed_fields[key] != value:
+        raise MatchResultsValidationError(
+            f"Conflicting duplicate '{key}' values for '{safe_label}'."
+        )
+    parsed_fields[key] = value
 
 
 def parse_player_stats_input(
@@ -681,6 +725,7 @@ def parse_player_stats_input(
     """Deterministically parse player stats strings without `eval`.
 
     Accepts: `Lao: 2 goals, 1 assist, 4 tackles, 32 passes, 84 pass_accuracy; Jay: 1 goal, 2 assists`
+    Also accepts `12/15 passes`, `passes_completed`, `passes_attempted`, `saves`, and `position`.
     """
     if raw_player_stats is None:
         return ()
@@ -726,6 +771,43 @@ def parse_player_stats_input(
             player_order.append(norm_label)
 
         for token in metric_tokens:
+            m_ratio = _STAT_PASS_RATIO_VALUE_FIRST_RE.match(
+                token
+            ) or _STAT_PASS_RATIO_KEY_FIRST_RE.match(token)
+            if m_ratio is not None:
+                comp_val = int(m_ratio.group("comp"))
+                att_val = int(m_ratio.group("att"))
+                if comp_val < 0 or comp_val > 500 or att_val < 0 or att_val > 500:
+                    raise MatchResultsValidationError(
+                        f"Pass counts for '{safe_label}' must be between 0 and 500."
+                    )
+                if comp_val > att_val:
+                    raise MatchResultsValidationError(
+                        f"Passes completed ({comp_val}) cannot exceed passes attempted ({att_val}) for '{safe_label}'."
+                    )
+                _assign_stat_field(
+                    parsed_fields, key="passes_completed", value=comp_val, safe_label=safe_label
+                )
+                _assign_stat_field(
+                    parsed_fields, key="passes_attempted", value=att_val, safe_label=safe_label
+                )
+                _assign_stat_field(
+                    parsed_fields, key="passes", value=comp_val, safe_label=safe_label
+                )
+                continue
+
+            m_pos = _STAT_POSITION_RE.match(token)
+            if m_pos is not None:
+                raw_pos = m_pos.group("val").strip()
+                safe_pos = validate_safe_text(
+                    raw_pos, field_name="Position", max_length=16, allow_none=False
+                )
+                assert safe_pos is not None
+                _assign_stat_field(
+                    parsed_fields, key="position", value=safe_pos.upper(), safe_label=safe_label
+                )
+                continue
+
             m1 = _STAT_VALUE_FIRST_RE.match(token)
             m2 = _STAT_KEY_FIRST_RE.match(token) if m1 is None else None
             if m1 is not None:
@@ -744,6 +826,16 @@ def parse_player_stats_input(
                 raise MatchResultsValidationError(
                     f"Unsupported player stat metric '{raw_key}' for '{safe_label}'."
                 )
+
+            if canonical_key == "position":
+                safe_pos = validate_safe_text(
+                    raw_val, field_name="Position", max_length=16, allow_none=False
+                )
+                assert safe_pos is not None
+                _assign_stat_field(
+                    parsed_fields, key="position", value=safe_pos.upper(), safe_label=safe_label
+                )
+                continue
 
             if canonical_key == "rating":
                 try:
@@ -775,8 +867,11 @@ def parse_player_stats_input(
                     "assists": (0, 30),
                     "tackles": (0, 200),
                     "passes": (0, 1000),
+                    "passes_completed": (0, 500),
+                    "passes_attempted": (0, 500),
                     "pass_accuracy": (0, 100),
                     "shots": (0, 100),
+                    "saves": (0, 200),
                 }[canonical_key]
                 if int_val < bounds[0] or int_val > bounds[1]:
                     raise MatchResultsValidationError(
@@ -784,11 +879,16 @@ def parse_player_stats_input(
                     )
                 coerced_val = int_val
 
-            if canonical_key in parsed_fields and parsed_fields[canonical_key] != coerced_val:
-                raise MatchResultsValidationError(
-                    f"Conflicting duplicate '{canonical_key}' values for '{safe_label}'."
-                )
-            parsed_fields[canonical_key] = coerced_val
+            _assign_stat_field(
+                parsed_fields, key=canonical_key, value=coerced_val, safe_label=safe_label
+            )
+
+        comp_check = parsed_fields.get("passes_completed")
+        att_check = parsed_fields.get("passes_attempted")
+        if comp_check is not None and att_check is not None and comp_check > att_check:
+            raise MatchResultsValidationError(
+                f"Passes completed ({comp_check}) cannot exceed passes attempted ({att_check}) for '{safe_label}'."
+            )
 
     results = tuple(ParsedPlayerStatEntry(**by_player[norm]) for norm in player_order)
     total_goals = sum((r.goals or 0) for r in results)
@@ -1485,6 +1585,255 @@ def get_player_name(
     return UNRESOLVED_PLAYER_DISPLAY_NAME
 
 
+def _clone_player_input(
+    player: ManualMatchPlayerDetail,
+    **overrides: Any,
+) -> ManualMatchPlayerRecordInput:
+    """Build a `ManualMatchPlayerRecordInput` preserving all canonical columns."""
+    data: dict[str, Any] = {
+        "normalized_display_label": player.normalized_display_label,
+        "safe_display_label": player.safe_display_label,
+        "player_id": player.player_id,
+        "position": player.position,
+        "goals": player.goals,
+        "assists": player.assists,
+        "tackles": player.tackles,
+        "passes": player.passes,
+        "passes_completed": player.passes_completed,
+        "passes_attempted": player.passes_attempted,
+        "pass_accuracy": player.pass_accuracy,
+        "shots": player.shots,
+        "saves": player.saves,
+        "rating": player.rating,
+    }
+    data.update(overrides)
+    return ManualMatchPlayerRecordInput(**data)
+
+
+def _carry_unambiguous_player_identity(
+    players: Sequence[ManualMatchPlayerRecordInput],
+    unambiguous_prev_by_norm: dict[str, ManualMatchPlayerDetail],
+) -> tuple[ManualMatchPlayerRecordInput, ...]:
+    """Carry forward prior `player_id` and `position` for uniquely named existing rows."""
+    carried: list[ManualMatchPlayerRecordInput] = []
+    for p in players:
+        prev_p = unambiguous_prev_by_norm.get(p.normalized_display_label)
+        if prev_p is None:
+            carried.append(p)
+            continue
+        carried.append(
+            p.model_copy(
+                update={
+                    "player_id": p.player_id if p.player_id is not None else prev_p.player_id,
+                    "position": p.position if p.position is not None else prev_p.position,
+                }
+            )
+        )
+    return tuple(carried)
+
+
+def _resolve_unambiguous_roster_bindings(
+    cur: Any,
+    players: Sequence[ManualMatchPlayerRecordInput],
+) -> tuple[ManualMatchPlayerRecordInput, ...]:
+    """Bind players missing `player_id`/`position` to active roster entries when unambiguous."""
+    if not players:
+        return ()
+    unbound_norms = list(
+        {
+            p.normalized_display_label
+            for p in players
+            if p.player_id is None and p.normalized_display_label != "unnamed player"
+        }
+    )
+    unambiguous_by_norm: dict[str, tuple[str, str | None]] = {}
+    if unbound_norms:
+        cur.execute(
+            """
+            SELECT player_id, display_name_normalized, position
+            FROM public.fc27_roster
+            WHERE active = TRUE
+              AND display_name_normalized = ANY(%s)
+            """,
+            (unbound_norms,),
+        )
+        grouped: dict[str, list[tuple[str, str | None]]] = {}
+        for r_pid, r_norm, r_pos in cur.fetchall():
+            grouped.setdefault(str(r_norm), []).append(
+                (str(r_pid), str(r_pos) if r_pos is not None else None)
+            )
+        for norm_key, matches in grouped.items():
+            if len(matches) == 1:
+                unambiguous_by_norm[norm_key] = matches[0]
+
+    bound_pids_needing_pos = list(
+        {p.player_id for p in players if p.player_id is not None and p.position is None}
+    )
+    pos_by_pid: dict[str, str] = {}
+    if bound_pids_needing_pos:
+        cur.execute(
+            """
+            SELECT player_id, position
+            FROM public.fc27_roster
+            WHERE active = TRUE
+              AND position IS NOT NULL
+              AND player_id = ANY(%s)
+            """,
+            (bound_pids_needing_pos,),
+        )
+        for r_pid, r_pos in cur.fetchall():
+            pos_by_pid[str(r_pid)] = str(r_pos)
+
+    used_pids: set[str] = {p.player_id for p in players if p.player_id is not None}
+    resolved: list[ManualMatchPlayerRecordInput] = []
+    for player in players:
+        if player.player_id is None and player.normalized_display_label in unambiguous_by_norm:
+            cand_pid, cand_pos = unambiguous_by_norm[player.normalized_display_label]
+            if cand_pid not in used_pids:
+                used_pids.add(cand_pid)
+                resolved.append(
+                    player.model_copy(
+                        update={
+                            "player_id": cand_pid,
+                            "position": player.position if player.position is not None else cand_pos,
+                        }
+                    )
+                )
+                continue
+        if (
+            player.player_id is not None
+            and player.position is None
+            and player.player_id in pos_by_pid
+        ):
+            resolved.append(player.model_copy(update={"position": pos_by_pid[player.player_id]}))
+            continue
+        resolved.append(player)
+    return tuple(resolved)
+
+
+def _propagate_roster_rename(
+    cur: Any,
+    *,
+    player_id: str,
+    old_norm_name: str,
+    safe_new: str,
+    norm_new: str,
+    position: str | None = None,
+) -> None:
+    """Propagate a canonical roster name change across player stats, goal events, and MOTM labels."""
+    cur.execute(
+        """
+        UPDATE public.fc27_manual_match_players
+        SET safe_display_label = %s,
+            normalized_display_label = %s,
+            position = COALESCE(%s, position),
+            updated_at = now()
+        WHERE player_id = %s
+        """,
+        (safe_new, norm_new, position, player_id),
+    )
+    if not old_norm_name or old_norm_name == norm_new:
+        return
+
+    cur.execute(
+        """
+        SELECT DISTINCT match_id
+        FROM public.fc27_manual_match_players
+        WHERE player_id = %s
+        """,
+        (player_id,),
+    )
+    linked_match_ids = [int(r[0]) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM public.fc27_roster
+        WHERE active = TRUE
+          AND display_name_normalized = %s
+          AND player_id <> %s
+        """,
+        (old_norm_name, player_id),
+    )
+    shared_row = cur.fetchone()
+    shared_old_name_count = int(shared_row[0]) if shared_row is not None else 0
+
+    if linked_match_ids:
+        # Merge any GOAL event rows where both old_norm_name and norm_new exist on the same match
+        # before renaming remaining rows, avoiding (match_id, event_type, normalized_display_label) collisions.
+        cur.execute(
+            """
+            UPDATE public.fc27_manual_match_events AS tgt
+            SET event_count = LEAST(30, tgt.event_count + src.event_count),
+                safe_display_label = %s
+            FROM public.fc27_manual_match_events AS src
+            WHERE tgt.match_id = src.match_id
+              AND tgt.event_type = src.event_type
+              AND tgt.normalized_display_label = %s
+              AND src.normalized_display_label = %s
+              AND src.match_id = ANY(%s)
+            """,
+            (safe_new, norm_new, old_norm_name, linked_match_ids),
+        )
+        cur.execute(
+            """
+            DELETE FROM public.fc27_manual_match_events AS src
+            WHERE src.normalized_display_label = %s
+              AND src.match_id = ANY(%s)
+              AND EXISTS (
+                  SELECT 1
+                  FROM public.fc27_manual_match_events AS tgt
+                  WHERE tgt.match_id = src.match_id
+                    AND tgt.event_type = src.event_type
+                    AND tgt.normalized_display_label = %s
+              )
+            """,
+            (old_norm_name, linked_match_ids, norm_new),
+        )
+        cur.execute(
+            """
+            UPDATE public.fc27_manual_match_events
+            SET safe_display_label = %s,
+                normalized_display_label = %s
+            WHERE normalized_display_label = %s
+              AND match_id = ANY(%s)
+            """,
+            (safe_new, norm_new, old_norm_name, linked_match_ids),
+        )
+
+    if shared_old_name_count == 0:
+        cur.execute(
+            """
+            UPDATE public.fc27_manual_matches AS m
+            SET motm_display_label = %s,
+                motm_normalized_label = %s
+            WHERE m.motm_normalized_label = %s
+              AND m.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.fc27_manual_match_players AS p
+                  WHERE p.match_id = m.match_id
+                    AND p.normalized_display_label = %s
+                    AND p.player_id IS NOT NULL
+                    AND p.player_id <> %s
+              )
+            """,
+            (safe_new, norm_new, old_norm_name, old_norm_name, player_id),
+        )
+    elif linked_match_ids:
+        cur.execute(
+            """
+            UPDATE public.fc27_manual_matches
+            SET motm_display_label = %s,
+                motm_normalized_label = %s
+            WHERE motm_normalized_label = %s
+              AND deleted_at IS NULL
+              AND match_id = ANY(%s)
+            """,
+            (safe_new, norm_new, old_norm_name, linked_match_ids),
+        )
+
+
 def upsert_roster_player(
     conn_or_uri: Any,
     *,
@@ -1519,6 +1868,18 @@ def upsert_roster_player(
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    SELECT display_name_normalized
+                    FROM public.fc27_roster
+                    WHERE player_id = %s
+                    FOR UPDATE
+                    """,
+                    (safe_pid,),
+                )
+                prev_row = cur.fetchone()
+                old_norm_name = str(prev_row[0]) if prev_row is not None else norm_name
+
+                cur.execute(
+                    """
                     INSERT INTO public.fc27_roster (
                         player_id,
                         display_name,
@@ -1540,16 +1901,13 @@ def upsert_roster_player(
                 )
                 row = cur.fetchone()
                 assert row is not None
-                cur.execute(
-                    """
-                    UPDATE public.fc27_manual_match_players
-                    SET safe_display_label = %s,
-                        normalized_display_label = %s,
-                        position = COALESCE(%s, position),
-                        updated_at = now()
-                    WHERE player_id = %s
-                    """,
-                    (safe_name, norm_name, safe_pos, safe_pid),
+                _propagate_roster_rename(
+                    cur,
+                    player_id=safe_pid,
+                    old_norm_name=old_norm_name,
+                    safe_new=safe_name,
+                    norm_new=norm_name,
+                    position=safe_pos,
                 )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
@@ -1584,9 +1942,10 @@ def rename_roster_player(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT player_id
+                    SELECT player_id, display_name_normalized
                     FROM public.fc27_roster
                     WHERE active = TRUE AND player_id = %s
+                    FOR UPDATE
                     """,
                     (target,),
                 )
@@ -1594,9 +1953,10 @@ def rename_roster_player(
                 if not rows:
                     cur.execute(
                         """
-                        SELECT player_id
+                        SELECT player_id, display_name_normalized
                         FROM public.fc27_roster
                         WHERE active = TRUE AND display_name_normalized = %s
+                        FOR UPDATE
                         """,
                         (target.lower(),),
                     )
@@ -1610,6 +1970,7 @@ def rename_roster_player(
                         f"Multiple roster players match '{target}'; specify player_id instead."
                     )
                 resolved_pid = str(rows[0][0])
+                old_norm_name = str(rows[0][1])
                 cur.execute(
                     """
                     UPDATE public.fc27_roster
@@ -1623,41 +1984,12 @@ def rename_roster_player(
                 )
                 row = cur.fetchone()
                 assert row is not None
-                # Update player stat labels
-                cur.execute(
-                    """
-                    UPDATE public.fc27_manual_match_players
-                    SET safe_display_label = %s,
-                        normalized_display_label = %s,
-                        updated_at = now()
-                    WHERE player_id = %s
-                    """,
-                    (safe_new, norm_new, resolved_pid),
-                )
-                # Update scorer event labels for this player
-                cur.execute(
-                    """
-                    UPDATE public.fc27_manual_match_events
-                    SET safe_display_label = %s,
-                        normalized_display_label = %s
-                    WHERE normalized_display_label = %s
-                      AND match_id IN (
-                          SELECT DISTINCT match_id
-                          FROM public.fc27_manual_match_players
-                          WHERE player_id = %s
-                      )
-                    """,
-                    (safe_new, norm_new, norm_new, resolved_pid),
-                )
-                # Update MOTM labels where this player was MOTM
-                cur.execute(
-                    """
-                    UPDATE public.fc27_manual_matches
-                    SET motm_display_label = %s,
-                        motm_normalized_label = %s
-                    WHERE motm_normalized_label = %s
-                    """,
-                    (safe_new, norm_new, norm_new),
+                _propagate_roster_rename(
+                    cur,
+                    player_id=resolved_pid,
+                    old_norm_name=old_norm_name,
+                    safe_new=safe_new,
+                    norm_new=norm_new,
                 )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
@@ -1767,10 +2099,20 @@ def create_scheduled_match(
                     cur.execute(
                         f"""
                         SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
-                        FROM public.fc27_manual_matches
-                        WHERE interaction_id = %s AND deleted_at IS NULL
+                        FROM public.fc27_manual_matches AS m
+                        WHERE m.deleted_at IS NULL
+                          AND m.club_id = %s
+                          AND (
+                              m.interaction_id = %s
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM public.fc27_manual_match_audit AS a
+                                  WHERE a.match_id = m.match_id
+                                    AND a.audit_metadata ->> 'interaction_id' = %s
+                              )
+                          )
                         """,
-                        (safe_interaction_id,),
+                        (club_id, safe_interaction_id, safe_interaction_id),
                     )
                     existing_row = cur.fetchone()
                     if existing_row is not None:
@@ -1839,6 +2181,11 @@ def create_scheduled_match(
                     previous_revision=None,
                     new_revision=1,
                     changed_fields=["opponent", "match_date", "match_time", "competition", "status", "notes"],
+                    audit_metadata=(
+                        {"interaction_id": safe_interaction_id}
+                        if safe_interaction_id is not None
+                        else None
+                    ),
                 )
                 return _hydrate_manual_match(cur, row)
 
@@ -2028,10 +2375,20 @@ def record_match_result(
                     cur.execute(
                         f"""
                         SELECT {_SELECT_MANUAL_MATCH_COLUMNS}
-                        FROM public.fc27_manual_matches
-                        WHERE interaction_id = %s AND deleted_at IS NULL
+                        FROM public.fc27_manual_matches AS m
+                        WHERE m.deleted_at IS NULL
+                          AND m.club_id = %s
+                          AND (
+                              m.interaction_id = %s
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM public.fc27_manual_match_audit AS a
+                                  WHERE a.match_id = m.match_id
+                                    AND a.audit_metadata ->> 'interaction_id' = %s
+                              )
+                          )
                         """,
-                        (safe_interaction_id,),
+                        (club_id, safe_interaction_id, safe_interaction_id),
                     )
                     existing_inter_row = cur.fetchone()
                     if existing_inter_row is not None:
@@ -2147,11 +2504,14 @@ def record_match_result(
                         raise MatchResultsConcurrencyError(
                             f"Concurrent update detected on Match #{target_id}."
                         )
+                    resolved_players = _resolve_unambiguous_roster_bindings(
+                        cur, final_players
+                    )
                     _replace_match_players_and_events(
                         cur,
                         match_id=target_id,
                         scorers=final_scorers,
-                        players=final_players,
+                        players=resolved_players,
                     )
                     _insert_audit_entry(
                         cur,
@@ -2171,6 +2531,11 @@ def record_match_result(
                             "motm",
                             "stats",
                         ],
+                        audit_metadata=(
+                            {"interaction_id": safe_interaction_id}
+                            if safe_interaction_id is not None
+                            else None
+                        ),
                     )
                     return _hydrate_manual_match(cur, updated_row)
 
@@ -2244,11 +2609,14 @@ def record_match_result(
                 inserted_row = cur.fetchone()
                 assert inserted_row is not None
                 new_match_id = int(inserted_row[0])
+                resolved_players = _resolve_unambiguous_roster_bindings(
+                    cur, final_players
+                )
                 _replace_match_players_and_events(
                     cur,
                     match_id=new_match_id,
                     scorers=final_scorers,
-                    players=final_players,
+                    players=resolved_players,
                 )
                 _insert_audit_entry(
                     cur,
@@ -2269,6 +2637,11 @@ def record_match_result(
                         "motm",
                         "stats",
                     ],
+                    audit_metadata=(
+                        {"interaction_id": safe_interaction_id}
+                        if safe_interaction_id is not None
+                        else None
+                    ),
                 )
                 return _hydrate_manual_match(cur, inserted_row)
 
@@ -2514,101 +2887,106 @@ def edit_match_result(
                     changed_fields.append("fouls")
 
                 # Scorers and player stats partial preservation logic
+                norm_counts: dict[str, int] = {}
+                for prev_p in existing.players:
+                    norm_counts[prev_p.normalized_display_label] = (
+                        norm_counts.get(prev_p.normalized_display_label, 0) + 1
+                    )
+                unambiguous_prev_by_norm: dict[str, ManualMatchPlayerDetail] = {
+                    prev_p.normalized_display_label: prev_p
+                    for prev_p in existing.players
+                    if prev_p.normalized_display_label != "unnamed player"
+                    and norm_counts.get(prev_p.normalized_display_label, 0) == 1
+                }
+
                 if scorers is not None and player_stats is not None:
                     parsed_scorers = parse_scorers_input(scorers, home_score=new_home)
                     parsed_pstats = parse_player_stats_input(player_stats, home_score=new_home)
-                    final_scorers, final_players = reconcile_scorers_and_player_stats(
+                    final_scorers, reconciled_players = reconcile_scorers_and_player_stats(
                         parsed_scorers,
                         parsed_pstats,
                         home_score=new_home,
                         scorers_explicitly_supplied=bool(scorers.strip()),
                     )
+                    final_players = _carry_unambiguous_player_identity(
+                        reconciled_players, unambiguous_prev_by_norm
+                    )
                     changed_fields.extend(["scorers", "player_stats"])
                     replace_children = True
                 elif scorers is not None:
                     parsed_scorers = parse_scorers_input(scorers, home_score=new_home)
-                    scorer_by_norm = {s.normalized_display_label: s for s in parsed_scorers}
-                    existing_players_by_norm = {
-                        p.normalized_display_label: p for p in existing.players
-                    }
                     merged_players: list[ManualMatchPlayerRecordInput] = []
+                    matched_prev_obj_ids: set[int] = set()
                     seen_norms: set[str] = set()
                     for s in parsed_scorers:
                         seen_norms.add(s.normalized_display_label)
-                        prev_p = existing_players_by_norm.get(s.normalized_display_label)
-                        merged_players.append(
-                            ManualMatchPlayerRecordInput(
-                                normalized_display_label=s.normalized_display_label,
-                                safe_display_label=s.safe_display_label,
-                                goals=s.goals,
-                                assists=prev_p.assists if prev_p else 0,
-                                tackles=prev_p.tackles if prev_p else None,
-                                passes=prev_p.passes if prev_p else None,
-                                pass_accuracy=prev_p.pass_accuracy if prev_p else None,
-                                shots=prev_p.shots if prev_p else None,
-                                rating=prev_p.rating if prev_p else None,
+                        prev_p = unambiguous_prev_by_norm.get(s.normalized_display_label)
+                        if prev_p is not None:
+                            matched_prev_obj_ids.add(id(prev_p))
+                            merged_players.append(
+                                _clone_player_input(
+                                    prev_p,
+                                    normalized_display_label=s.normalized_display_label,
+                                    safe_display_label=s.safe_display_label,
+                                    goals=s.goals,
+                                )
                             )
-                        )
+                        else:
+                            merged_players.append(
+                                ManualMatchPlayerRecordInput(
+                                    normalized_display_label=s.normalized_display_label,
+                                    safe_display_label=s.safe_display_label,
+                                    goals=s.goals,
+                                )
+                            )
                     for prev_p in existing.players:
-                        if prev_p.normalized_display_label in seen_norms:
+                        if id(prev_p) in matched_prev_obj_ids:
+                            continue
+                        if (
+                            prev_p.player_id is None
+                            and prev_p.normalized_display_label in seen_norms
+                        ):
                             continue
                         # Player was previously in players; since scorers was replaced and they are not in new scorers,
-                        # set their goals to 0 and keep them only if they have non-goal stats.
+                        # set their goals to 0 and keep them if they have non-goal stats or a distinct roster player_id.
                         has_non_goal_stats = any(
                             v is not None and v != 0
                             for v in (
                                 prev_p.assists,
                                 prev_p.tackles,
                                 prev_p.passes,
+                                prev_p.passes_completed,
+                                prev_p.passes_attempted,
                                 prev_p.pass_accuracy,
                                 prev_p.shots,
+                                prev_p.saves,
                                 prev_p.rating,
                             )
                         )
-                        if has_non_goal_stats:
-                            merged_players.append(
-                                ManualMatchPlayerRecordInput(
-                                    normalized_display_label=prev_p.normalized_display_label,
-                                    safe_display_label=prev_p.safe_display_label,
-                                    goals=0,
-                                    assists=prev_p.assists,
-                                    tackles=prev_p.tackles,
-                                    passes=prev_p.passes,
-                                    pass_accuracy=prev_p.pass_accuracy,
-                                    shots=prev_p.shots,
-                                    rating=prev_p.rating,
-                                )
-                            )
+                        if has_non_goal_stats or (
+                            prev_p.player_id is not None and prev_p.goals == 0
+                        ):
+                            merged_players.append(_clone_player_input(prev_p, goals=0))
                     final_scorers = parsed_scorers
                     final_players = tuple(merged_players)
                     changed_fields.append("scorers")
                     replace_children = True
                 elif player_stats is not None:
                     parsed_pstats = parse_player_stats_input(player_stats, home_score=new_home)
-                    final_scorers, final_players = reconcile_scorers_and_player_stats(
+                    final_scorers, reconciled_players = reconcile_scorers_and_player_stats(
                         existing.scorers,
                         parsed_pstats,
                         home_score=new_home,
                         scorers_explicitly_supplied=len(existing.scorers) > 0,
                     )
+                    final_players = _carry_unambiguous_player_identity(
+                        reconciled_players, unambiguous_prev_by_norm
+                    )
                     changed_fields.append("player_stats")
                     replace_children = True
                 else:
                     final_scorers = existing.scorers
-                    final_players = tuple(
-                        ManualMatchPlayerRecordInput(
-                            normalized_display_label=p.normalized_display_label,
-                            safe_display_label=p.safe_display_label,
-                            goals=p.goals,
-                            assists=p.assists,
-                            tackles=p.tackles,
-                            passes=p.passes,
-                            pass_accuracy=p.pass_accuracy,
-                            shots=p.shots,
-                            rating=p.rating,
-                        )
-                        for p in existing.players
-                    )
+                    final_players = tuple(_clone_player_input(p) for p in existing.players)
                     if new_home is not None:
                         total_existing_goals = max(
                             sum(s.goals for s in final_scorers),
@@ -2680,11 +3058,14 @@ def edit_match_result(
                     )
 
                 if replace_children:
+                    resolved_edit_players = _resolve_unambiguous_roster_bindings(
+                        cur, final_players
+                    )
                     _replace_match_players_and_events(
                         cur,
                         match_id=existing.match_id,
                         scorers=final_scorers,
-                        players=final_players,
+                        players=resolved_edit_players,
                     )
 
                 _insert_audit_entry(
@@ -3093,7 +3474,7 @@ def fetch_manual_top_scorers(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(r.player_id, p.normalized_display_label) AS group_key,
+            SELECT COALESCE(r.player_id, p.player_id, p.normalized_display_label) AS group_key,
                    MAX(COALESCE(r.display_name, p.safe_display_label)) AS safe_label,
                    COUNT(DISTINCT p.match_id) AS matches_played,
                    COALESCE(SUM(p.goals), 0) AS total_goals,
@@ -3115,7 +3496,7 @@ def fetch_manual_top_scorers(
             WHERE m.club_id = %s
               AND m.status = 'FULL_TIME'
               AND m.deleted_at IS NULL
-            GROUP BY COALESCE(r.player_id, p.normalized_display_label)
+            GROUP BY COALESCE(r.player_id, p.player_id, p.normalized_display_label)
             HAVING COALESCE(SUM(p.goals), 0) > 0 OR COALESCE(SUM(p.assists), 0) > 0
             ORDER BY total_goals DESC,
                      total_assists DESC,
@@ -3541,7 +3922,12 @@ def build_result_embed(match: ManualMatchDetail) -> discord.Embed:
         match.players, motm_display=motm_name
     )
     for idx, chunk in enumerate(player_chunks):
-        field_name = "👥 Players" if idx == 0 else "👥 Players (cont.)"
+        if idx == 0:
+            field_name = "👥 Players"
+        elif idx == 1:
+            field_name = "👥 Players (cont.)"
+        else:
+            field_name = f"👥 Players (cont. {idx})"
         embed.add_field(name=field_name, value=chunk[:1024], inline=False)
 
     if match.notes and match.notes.strip():

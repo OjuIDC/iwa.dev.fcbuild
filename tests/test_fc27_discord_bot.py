@@ -1149,18 +1149,26 @@ def test_58_dispatch_interaction_response_ephemeral_defer_and_post_defer_safety(
         is_admin: bool = False,
         guild_id: str = APPROVED_GUILD_ID,
         channel_id: str = APPROVED_CHANNEL_ID,
+        user_id: str = APPROVED_USER_ID,
     ) -> Any:
+        deleted_originals: list[bool] = []
+
+        async def _delete_original_response() -> None:
+            deleted_originals.append(True)
+
         return types.SimpleNamespace(
             id="999888777666555444",
             guild_id=int(guild_id),
             channel_id=int(channel_id),
             user=types.SimpleNamespace(
-                id=int(APPROVED_USER_ID),
+                id=int(user_id),
                 roles=[types.SimpleNamespace(id=int(rid)) for rid in role_ids],
                 guild_permissions=types.SimpleNamespace(administrator=is_admin),
             ),
             response=_FakeResponse(),
             followup=_FakeFollowup(),
+            deleted_originals=deleted_originals,
+            delete_original_response=_delete_original_response,
         )
 
     async def _run_checks() -> None:
@@ -1253,9 +1261,59 @@ def test_58_dispatch_interaction_response_ephemeral_defer_and_post_defer_safety(
         assert r_boom is None
         assert len(ix_boom.response.defer_calls) == 1
         assert ix_boom.response.send_message_calls == []
+        assert ix_boom.deleted_originals == [True]
         assert len(ix_boom.followup.send_calls) == 1
         assert ix_boom.followup.send_calls[0]["ephemeral"] is True
         assert "topsecret" not in ix_boom.followup.send_calls[0]["content"]
+
+        # 6b. Rate-limited user detected pre-defer -> ephemeral defer without recording before limit
+        tight_cfg = _build_enabled_config(
+            manager_role_ids=frozenset({writer_role_id}),
+            admin_role_ids=frozenset({admin_role_id}),
+            max_user_commands_per_minute=1,
+            max_guild_commands_per_minute=10,
+        )
+        tight_svc = FC27DiscordBotService(
+            tight_cfg,
+            db_conn_or_uri=pg_db_migrated.discord_reader,
+            writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+            require_dedicated_writer_role=False,
+        )
+        ix_rl_1 = _make_interaction(user_id="345678901234567891")
+        r_rl_1 = await dispatch_interaction_response(
+            ix_rl_1, tight_svc, subcmd_name="status", discord_module=fake_discord
+        )
+        assert r_rl_1 is not None and r_rl_1.status == "OK"
+        assert ix_rl_1.response.defer_calls == [{"ephemeral": False, "thinking": True}]
+
+        ix_rl_2 = _make_interaction(user_id="345678901234567891")
+        r_rl_2 = await dispatch_interaction_response(
+            ix_rl_2, tight_svc, subcmd_name="status", discord_module=fake_discord
+        )
+        assert r_rl_2 is not None and r_rl_2.status == "RATE_LIMITED"
+        assert ix_rl_2.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_rl_2.followup.send_calls[0]["ephemeral"] is True
+
+        # 6c. Missing writer DB detected pre-defer on write command -> ephemeral defer
+        ro_only_svc = FC27DiscordBotService(
+            cfg,
+            db_conn_or_uri=pg_db_migrated.discord_reader,
+            writer_db_conn_or_uri=None,
+            require_dedicated_writer_role=False,
+        )
+        assert (
+            ro_only_svc.resolve_defer_ephemeral(
+                "matchday",
+                guild_id=APPROVED_GUILD_ID,
+                channel_id=APPROVED_CHANNEL_ID,
+                user_id=APPROVED_USER_ID,
+                user_role_ids=(writer_role_id,),
+                is_slash_interaction=True,
+                opponent="Harbor City",
+                date_str="2026-04-20",
+            )
+            is True
+        )
 
     asyncio.run(_run_checks())
 
@@ -1281,3 +1339,152 @@ def test_58_dispatch_interaction_response_ephemeral_defer_and_post_defer_safety(
         assert resp.ephemeral is True
         assert resp.content == "Match ID must be a positive number (e.g., 1). Use /results to list matches."
         assert "mref_ecf_" not in resp.content
+
+
+def test_59_gateway_channel_transport_and_ephemeral_slash_sync(
+    pg_db_migrated,
+) -> None:
+    """59. Verify DiscordGatewayChannelTransport post_embed/edit_embed and single in-place card sync."""
+    import discord
+    from src.fc27_discord_dispatcher import DiscordGatewayChannelTransport
+
+    writer_role_id = "777000111222333444"
+    results_channel_id = "555666777888999000"
+
+    class _FakeMessage:
+        def __init__(self, msg_id: int, channel: Any, embed: Any) -> None:
+            self.id = msg_id
+            self.channel = channel
+            self.embed = embed
+            self.edits: list[Any] = []
+
+        async def edit(self, *, embed: Any, allowed_mentions: Any = None) -> None:
+            self.embed = embed
+            self.edits.append(embed)
+
+    class _FakeTextChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+            self.messages: dict[int, _FakeMessage] = {}
+            self.next_id = 800000000000000001
+            self.send_count = 0
+
+        async def send(self, *, embed: Any, allowed_mentions: Any = None) -> _FakeMessage:
+            self.send_count += 1
+            mid = self.next_id
+            self.next_id += 1
+            msg = _FakeMessage(mid, self, embed)
+            self.messages[mid] = msg
+            return msg
+
+        async def fetch_message(self, msg_id: int) -> _FakeMessage:
+            if msg_id not in self.messages:
+                raise discord.NotFound(
+                    types.SimpleNamespace(status=404, reason="Unknown Message"),  # type: ignore[arg-type]
+                    {"message": "Unknown Message", "code": 10008},
+                )
+            return self.messages[msg_id]
+
+    fake_channel = _FakeTextChannel(int(results_channel_id))
+    fake_client = types.SimpleNamespace(
+        get_channel=lambda cid: fake_channel if int(cid) == fake_channel.id else None,
+        fetch_channel=None,
+    )
+
+    cfg = _build_enabled_config(
+        manager_role_ids=frozenset({writer_role_id}),
+        results_channel_id=results_channel_id,
+        max_user_commands_per_minute=60,
+        max_guild_commands_per_minute=120,
+    )
+
+    class _FakeFollowup:
+        def __init__(self) -> None:
+            self.send_calls: list[dict[str, Any]] = []
+
+        async def send(self, **kwargs: Any) -> None:
+            self.send_calls.append(kwargs)
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.defer_calls: list[dict[str, Any]] = []
+
+        async def defer(self, *, ephemeral: bool = False, thinking: bool = True) -> None:
+            self.defer_calls.append({"ephemeral": ephemeral, "thinking": thinking})
+
+    def _make_ix(ix_id: str) -> Any:
+        return types.SimpleNamespace(
+            id=ix_id,
+            guild_id=int(APPROVED_GUILD_ID),
+            channel_id=int(APPROVED_CHANNEL_ID),
+            user=types.SimpleNamespace(
+                id=int(APPROVED_USER_ID),
+                roles=[types.SimpleNamespace(id=int(writer_role_id))],
+                guild_permissions=types.SimpleNamespace(administrator=False),
+            ),
+            response=_FakeResponse(),
+            followup=_FakeFollowup(),
+        )
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        transport = DiscordGatewayChannelTransport(fake_client, loop)
+        svc = FC27DiscordBotService(
+            cfg,
+            db_conn_or_uri=pg_db_migrated.discord_reader,
+            writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+            discord_channel_adapter=transport,
+            require_dedicated_writer_role=False,
+        )
+
+        # 1. /matchday posts one canonical card in results_channel and defers command ephemerally
+        ix_1 = _make_ix("910000000000000001")
+        r_1 = await dispatch_interaction_response(
+            ix_1,
+            svc,
+            subcmd_name="matchday",
+            opponent="Harbor City",
+            date_str="2026-04-20",
+            time_str="20:30",
+        )
+        assert r_1 is not None and r_1.status == "OK"
+        assert ix_1.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_1.followup.send_calls[0]["ephemeral"] is True
+        assert fake_channel.send_count == 1
+        first_msg_id = 800000000000000001
+        assert len(fake_channel.messages[first_msg_id].edits) == 0
+
+        # 2. /result edits the same channel card in place (still send_count == 1)
+        ix_2 = _make_ix("910000000000000002")
+        r_2 = await dispatch_interaction_response(
+            ix_2,
+            svc,
+            subcmd_name="result",
+            opponent="Harbor City",
+            our_score=3,
+            opponent_score=1,
+            match_id=1,
+            scorers="Lao x2, Jay x1",
+        )
+        assert r_2 is not None and r_2.status == "OK"
+        assert ix_2.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert ix_2.followup.send_calls[0]["ephemeral"] is True
+        assert fake_channel.send_count == 1
+        assert len(fake_channel.messages[first_msg_id].edits) == 1
+
+        # 3. Deleted channel message -> Discord.NotFound returns False so /editresult relinks
+        del fake_channel.messages[first_msg_id]
+        ix_3 = _make_ix("910000000000000003")
+        r_3 = await dispatch_interaction_response(
+            ix_3,
+            svc,
+            subcmd_name="editresult",
+            match_id=1,
+            possession=59,
+        )
+        assert r_3 is not None and r_3.status == "OK"
+        assert ix_3.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+        assert fake_channel.send_count == 2
+        assert 800000000000000002 in fake_channel.messages
+
+    asyncio.run(_run())

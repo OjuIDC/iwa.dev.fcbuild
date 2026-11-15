@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -815,6 +816,31 @@ class FC27DiscordRateLimiter:
             u_q.append(now)
             g_q.append(now)
 
+    def would_exceed(
+        self,
+        *,
+        user_id: str,
+        guild_id: str,
+        is_export: bool = False,
+    ) -> bool:
+        """Non-mutating rate-limit check so pre-defer logic can keep limit errors ephemeral."""
+        now = float(self.clock_fn())
+        cutoff = now - 60.0
+        with self._lock:
+            u_q = self._user_timestamps.get(user_id)
+            if u_q is not None and sum(1 for ts in u_q if ts > cutoff) >= self.max_user_commands_per_minute:
+                return True
+            g_q = self._guild_timestamps.get(guild_id)
+            if g_q is not None and sum(1 for ts in g_q if ts > cutoff) >= self.max_guild_commands_per_minute:
+                return True
+            if is_export:
+                if self._active_exports >= self.max_concurrent_exports:
+                    return True
+                last_exp = self._user_last_export.get(user_id)
+                if last_exp is not None and (now - last_exp) < self.export_cooldown_seconds:
+                    return True
+        return False
+
     def release_export_slot(self) -> None:
         with self._lock:
             if self._active_exports > 0:
@@ -1121,9 +1147,20 @@ class FC27DiscordBotService:
 
             if cmd_clean == "setplayer":
                 normalize_roster_player_id(str(cmd_kwargs.get("player_id") or ""))
-                normalize_display_label(
+                _, safe_pname = normalize_display_label(
                     str(cmd_kwargs.get("player_name") or ""), field_name="Player name"
                 )
+                if len(safe_pname) > 40:
+                    return True
+                pos_raw = cmd_kwargs.get("position")
+                if pos_raw is not None and str(pos_raw).strip():
+                    validate_safe_text(
+                        str(pos_raw), field_name="Position", max_length=16, allow_none=True
+                    )
+                duid_raw = cmd_kwargs.get("discord_user_id")
+                if duid_raw is not None and str(duid_raw).strip():
+                    if not re.fullmatch(r"^[0-9]{15,20}$", str(duid_raw).strip()):
+                        return True
                 return False
 
             if cmd_clean == "renameplayer":
@@ -1133,9 +1170,11 @@ class FC27DiscordBotService:
                     max_length=64,
                     allow_none=False,
                 )
-                normalize_display_label(
+                _, safe_new_pname = normalize_display_label(
                     str(cmd_kwargs.get("new_name") or ""), field_name="New name"
                 )
+                if len(safe_new_pname) > 40:
+                    return True
                 return False
 
             if cmd_clean == "matchday":
@@ -1144,10 +1183,17 @@ class FC27DiscordBotService:
                     str(cmd_kwargs.get("date_str") or ""),
                     cmd_kwargs.get("time_str") or DEFAULT_MATCHDAY_TIME,
                 )
+                if cmd_kwargs.get("formation") is not None:
+                    validate_safe_text(
+                        cmd_kwargs.get("formation"),
+                        field_name="Formation",
+                        max_length=24,
+                        allow_none=True,
+                    )
                 validate_safe_text(
                     cmd_kwargs.get("notes"),
                     field_name="Notes",
-                    max_length=250,
+                    max_length=280,
                     allow_none=True,
                 )
                 return False
@@ -1323,6 +1369,7 @@ class FC27DiscordBotService:
         *,
         guild_id: str | int | None,
         channel_id: str | int | None,
+        user_id: str | int | None = None,
         user_role_ids: Sequence[str | int] | None = None,
         is_slash_interaction: bool = True,
         raw_argument: str | None = None,
@@ -1366,7 +1413,33 @@ class FC27DiscordBotService:
                 cmd_clean, user_role_ids=user_role_ids, is_admin=is_admin
             ):
                 return True
-        return self._has_preflight_validation_error(cmd_clean, cmd_kwargs)
+            if self._resolve_writer_conn_or_uri(required=False) is None:
+                return True
+        if user_id is not None:
+            uid_str = str(user_id).strip() or "0"
+            if self._rate_limiter.would_exceed(
+                user_id=uid_str,
+                guild_id=gid_str,
+                is_export=cmd_clean in EXPORT_SUBCOMMANDS,
+            ):
+                return True
+        if cmd_kwargs:
+            sig = inspect.signature(self.handle_slash_command)
+            if not any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ) and not set(cmd_kwargs).issubset(sig.parameters.keys()):
+                return True
+        if self._has_preflight_validation_error(cmd_clean, cmd_kwargs):
+            return True
+        # When an external channel adapter is wired, canonical match cards are posted/edited
+        # directly in target_channel; keep the invoking officer's command response ephemeral
+        # so the channel never receives duplicate public cards.
+        if (
+            cmd_clean in ("matchday", "result", "editresult")
+            and self._discord_channel_adapter is not None
+        ):
+            return True
+        return False
 
     def handle_slash_command(
         self,
@@ -3136,6 +3209,7 @@ async def dispatch_interaction_response(
         subcmd_name,
         guild_id=gid,
         channel_id=cid,
+        user_id=uid,
         user_role_ids=role_ids,
         is_slash_interaction=True,
         is_admin=is_admin,
@@ -3182,10 +3256,25 @@ async def dispatch_interaction_response(
                 if emb.footer_text:
                     d_emb.set_footer(text=emb.footer_text[:2048])
                 discord_embeds.append(d_emb)
+        async def _cleanup_public_defer() -> None:
+            if should_defer_ephemeral:
+                return
+            delete_fn = getattr(interaction, "delete_original_response", None)
+            if callable(delete_fn):
+                try:
+                    maybe_coro = delete_fn()
+                    if inspect.isawaitable(maybe_coro):
+                        await maybe_coro
+                except Exception:
+                    pass
+
+        is_ephemeral_followup = bool(resp.ephemeral or should_defer_ephemeral)
+        if is_ephemeral_followup:
+            await _cleanup_public_defer()
         kwargs: dict[str, Any] = {
             "content": resp.content,
             "embeds": discord_embeds,
-            "ephemeral": bool(resp.ephemeral or should_defer_ephemeral),
+            "ephemeral": is_ephemeral_followup,
         }
         if resp.attachment is not None:
             if discord_mod is None:
@@ -3208,6 +3297,15 @@ async def dispatch_interaction_response(
             type(exc).__name__,
             safe_err,
         )
+        if not should_defer_ephemeral:
+            delete_fn = getattr(interaction, "delete_original_response", None)
+            if callable(delete_fn):
+                try:
+                    maybe_coro = delete_fn()
+                    if inspect.isawaitable(maybe_coro):
+                        await maybe_coro
+                except Exception:
+                    pass
         await interaction.followup.send(
             content="An internal error occurred while processing `/fc27`. Please try again later.",
             ephemeral=True,
@@ -3235,21 +3333,9 @@ def run_discord_gateway_bot(
             "Guild, channel, and role allowlists must all be non-empty for Gateway mode"
         )
 
-    # Create a channel adapter for syncing match cards if writer DB is available
-    channel_adapter = None
-    if config.dispatch_enabled:
-        try:
-            from src.fc27_discord_dispatcher import DiscordGatewayChannelTransport
-            # The transport will be created later in the gateway setup_hook
-            # For now, create a placeholder that will be replaced
-            channel_adapter = None  # Will be set in setup_hook
-        except ImportError:
-            pass
-
     bot_service = service or FC27DiscordBotService(
         config,
         secret_tokens_to_scrub=(resolved_token,),
-        discord_channel_adapter=channel_adapter,
     )
 
     if gateway_runner is not None:
@@ -3326,15 +3412,19 @@ def run_discord_gateway_bot(
                     f"DISCORD_GATEWAY_GUILD_SYNCED={guild_obj.id} COMMAND_COUNT={len(synced)}",
                     flush=True,
                 )
+            from src.fc27_discord_dispatcher import DiscordGatewayChannelTransport
+
+            loop = asyncio.get_running_loop()
+            transport = DiscordGatewayChannelTransport(self, loop)
+            # Wire up the channel adapter unconditionally so slash commands sync cards
+            # in place even when background dispatcher polling is disabled.
+            if bot_service._discord_channel_adapter is None or config.dispatch_enabled:
+                bot_service._discord_channel_adapter = transport
             if config.dispatch_enabled:
                 assert dispatch_cfg is not None
                 # Created here, after discord.py login() initialized readiness, and without
                 # awaiting readiness in this hook: the loop itself waits for the ready event.
-                loop = asyncio.get_running_loop()
                 stop_event = asyncio.Event()
-                transport = DiscordGatewayChannelTransport(self, loop)
-                # Wire up the channel adapter for match card syncing
-                bot_service._discord_channel_adapter = transport
                 task = asyncio.create_task(
                     run_discord_dispatcher_loop(
                         config=dispatch_cfg,

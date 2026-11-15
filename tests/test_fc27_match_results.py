@@ -32,12 +32,14 @@ from src.fc27_match_results import (
     MANUAL_MATCH_RESULT,
     ManualMatchDetail,
     ManualMatchPlayerDetail,
+    ManualMatchResultsPage,
     MatchDeleteConfirmationView,
     MatchResultsConcurrencyError,
     MatchResultsNotFoundError,
     MatchResultsPaginationView,
     MatchResultsPostureError,
     MatchResultsValidationError,
+    RosterPlayerRecord,
     UNRESOLVED_PLAYER_DISPLAY_NAME,
     build_result_content,
     build_result_embed,
@@ -1510,3 +1512,343 @@ def test_canonical_embed_contract_format_and_numeric_match_id_isolation(pg_db_mi
                 match_id="mref_ecf_0123456789ab",
                 actor_discord_user_id="345678901234567890",
             )
+
+
+def test_thread7_player_stats_detailed_metrics_and_edit_preservation(
+    pg_db_migrated,
+) -> None:
+    """Thread 7: Parse detailed player stats, auto-bind unambiguous roster players, and preserve fields across edits."""
+    parsed = parse_player_stats_input(
+        "Lao: 2 goals, 12/15 passes, pos ST; Keeper: 4 saves, passes_completed=8, passes_attempted=10, position=GK",
+        home_score=3,
+    )
+    assert len(parsed) == 2
+    assert parsed[0].passes_completed == 12
+    assert parsed[0].passes_attempted == 15
+    assert parsed[0].passes == 12
+    assert parsed[0].position == "ST"
+    assert parsed[1].saves == 4
+    assert parsed[1].passes_completed == 8
+    assert parsed[1].passes_attempted == 10
+    assert parsed[1].position == "GK"
+
+    with pytest.raises(MatchResultsValidationError, match="cannot exceed passes attempted"):
+        parse_player_stats_input("Lao: passes_completed=16, passes_attempted=15")
+
+    with pytest.raises(MatchResultsValidationError, match="between 0 and 500"):
+        parse_player_stats_input("Lao: passes_attempted=501")
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_lao_unique",
+        display_name="Lao",
+        position="LW",
+        require_dedicated_writer_role=False,
+    )
+    # Ambiguous name ("Alex") should NOT auto-bind when two active roster rows share it
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_alex_1",
+        display_name="Alex",
+        position="CM",
+        require_dedicated_writer_role=False,
+    )
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_alex_2",
+        display_name="Alex",
+        position="CB",
+        require_dedicated_writer_role=False,
+    )
+
+    recorded = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Metro United",
+        home_score=3,
+        away_score=1,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        scorers="Lao x2, Alex x1",
+        player_stats="Lao: 2 goals, 18/20 passes; Alex: 1 goal, 3 tackles; Keeper: 5 saves",
+        require_dedicated_writer_role=False,
+    )
+    players_by_norm = {p.normalized_display_label: p for p in recorded.players}
+    assert players_by_norm["lao"].player_id == "plr_lao_unique"
+    assert players_by_norm["lao"].position == "LW"
+    assert players_by_norm["lao"].passes_completed == 18
+    assert players_by_norm["lao"].passes_attempted == 20
+    assert players_by_norm["alex"].player_id is None
+    assert players_by_norm["keeper"].saves == 5
+
+    # Seed two distinct unresolved "Unnamed Player" rows in the same match
+    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO public.fc27_manual_match_players (
+                    match_id, normalized_display_label, safe_display_label,
+                    player_id, goals, assists, passes_completed, passes_attempted, saves,
+                    source_classification
+                ) VALUES
+                    (%s, 'unnamed player', 'Unnamed Player', 'plr_ecf_unres_a', 0, 1, 10, 12, 0, 'MANUAL_MATCH_RESULT'),
+                    (%s, 'unnamed player', 'Unnamed Player', 'plr_ecf_unres_b', 0, 0, 0, 0, 6, 'MANUAL_MATCH_RESULT')
+                """,
+                (recorded.match_id, recorded.match_id),
+            )
+
+    # Edit scorers only -> preserves player_id, position, passes_completed/attempted, saves, and both distinct Unnamed rows
+    edited_scorers = edit_match_result(
+        pg_db_migrated.match_results_writer,
+        match_id=recorded.match_id,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        home_score=3,
+        scorers="Lao x3",
+        require_dedicated_writer_role=False,
+    )
+    edited_map: dict[tuple[str, str | None], ManualMatchPlayerDetail] = {
+        (p.normalized_display_label, p.player_id): p for p in edited_scorers.players
+    }
+    lao_row = edited_map[("lao", "plr_lao_unique")]
+    assert lao_row.goals == 3
+    assert lao_row.position == "LW"
+    assert lao_row.passes_completed == 18
+    assert lao_row.passes_attempted == 20
+    assert edited_map[("keeper", None)].saves == 5
+    assert edited_map[("unnamed player", "plr_ecf_unres_a")].assists == 1
+    assert edited_map[("unnamed player", "plr_ecf_unres_b")].saves == 6
+
+
+def test_thread8_roster_rename_and_setplayer_propagation(pg_db_migrated) -> None:
+    """Thread 8: Renaming or updating via /renameplayer or /setplayer updates stats, GOAL events, and MOTM labels."""
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_lao",
+        display_name="Lao",
+        position="ST",
+        require_dedicated_writer_role=False,
+    )
+    created = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Harbor City FC",
+        home_score=2,
+        away_score=0,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        scorers="Lao x2",
+        motm="Lao",
+        player_stats="Lao: 2 goals, 10/12 passes",
+        require_dedicated_writer_role=False,
+    )
+
+    renamed = rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="Lao",
+        new_name="LaoPrime",
+        require_dedicated_writer_role=False,
+    )
+    assert renamed.display_name == "LaoPrime"
+
+    with psycopg.connect(pg_db_migrated.app) as conn:
+        after_rename = fetch_manual_match(conn, match_id=created.match_id)
+    assert after_rename is not None
+    assert after_rename.motm_display_label == "LaoPrime"
+    assert after_rename.motm_normalized_label == "laoprime"
+    assert [s.safe_display_label for s in after_rename.scorers] == ["LaoPrime"]
+    assert [p.safe_display_label for p in after_rename.players] == ["LaoPrime"]
+
+    # Subsequent /setplayer rename propagates across players, GOAL events, and MOTM
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_lao",
+        display_name="LaoCaptain",
+        position="CAM",
+        require_dedicated_writer_role=False,
+    )
+    with psycopg.connect(pg_db_migrated.app) as conn:
+        after_set = fetch_manual_match(conn, match_id=created.match_id)
+    assert after_set is not None
+    assert after_set.motm_display_label == "LaoCaptain"
+    assert [s.safe_display_label for s in after_set.scorers] == ["LaoCaptain"]
+    assert after_set.players[0].position == "CAM"
+
+
+def test_thread9_scheduled_to_full_time_interaction_idempotency(
+    pg_db_migrated,
+) -> None:
+    """Thread 9: Upgrading a scheduled match preserves prior matchday interaction_id in audit for replay idempotency."""
+    sched = create_scheduled_match(
+        pg_db_migrated.match_results_writer,
+        opponent="Coastal Athletic",
+        match_date="2026-05-02",
+        match_time="21:00",
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        interaction_id="ix_sched_replay_001",
+        require_dedicated_writer_role=False,
+    )
+    upgraded = record_match_result(
+        pg_db_migrated.match_results_writer,
+        match_id=sched.match_id,
+        opponent="Coastal Athletic",
+        home_score=3,
+        away_score=1,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        scorers="Lao x2, Jay x1",
+        interaction_id="ix_result_replay_002",
+        require_dedicated_writer_role=False,
+    )
+    assert upgraded.match_id == sched.match_id
+    assert upgraded.interaction_id == "ix_result_replay_002"
+
+    # Replaying original matchday interaction_id hits audit_metadata and returns existing match
+    replayed_sched = create_scheduled_match(
+        pg_db_migrated.match_results_writer,
+        opponent="Coastal Athletic",
+        match_date="2026-05-02",
+        match_time="21:00",
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        interaction_id="ix_sched_replay_001",
+        require_dedicated_writer_role=False,
+    )
+    assert replayed_sched.match_id == sched.match_id
+    assert replayed_sched.status == "FULL_TIME"
+
+    # Replaying result interaction_id is also idempotent
+    replayed_result = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Coastal Athletic",
+        home_score=3,
+        away_score=1,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        scorers="Lao x2, Jay x1",
+        interaction_id="ix_result_replay_002",
+        require_dedicated_writer_role=False,
+    )
+    assert replayed_result.match_id == sched.match_id
+
+    with psycopg.connect(pg_db_migrated.app) as conn:
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM public.fc27_manual_matches WHERE deleted_at IS NULL"
+        ).fetchone()
+    assert cnt is not None and int(cnt[0]) == 1
+
+
+def test_thread10_top_scorers_preserves_distinct_unresolved_players(
+    pg_db_migrated,
+) -> None:
+    """Thread 10: Distinct unresolved player_ids with 'Unnamed Player' labels are not merged in top scorers."""
+    match_rec = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Bayfront FC",
+        home_score=4,
+        away_score=1,
+        actor_discord_user_id=AUTHORIZED_USER_ID,
+        require_dedicated_writer_role=False,
+    )
+    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO public.fc27_manual_match_players (
+                    match_id, normalized_display_label, safe_display_label,
+                    player_id, goals, assists, source_classification
+                ) VALUES
+                    (%s, 'unnamed player', 'Unnamed Player', 'plr_ecf_unres_1', 3, 0, 'MANUAL_MATCH_RESULT'),
+                    (%s, 'unnamed player', 'Unnamed Player', 'plr_ecf_unres_2', 1, 1, 'MANUAL_MATCH_RESULT')
+                """,
+                (match_rec.match_id, match_rec.match_id),
+            )
+        top = fetch_manual_top_scorers(conn, limit=10)
+    assert len(top) == 2
+    assert [t.goals for t in top] == [3, 1]
+    assert {t.normalized_display_label for t in top} == {"plr_ecf_unres_1", "plr_ecf_unres_2"}
+
+
+def test_thread11_12_13_embed_field_names_and_overflow_splitting() -> None:
+    """Threads 11-13: Result, roster, and results-page embeds stay under 1024 chars/field with unique continuation names."""
+    now = datetime(2026, 5, 1, 20, 0, tzinfo=timezone.utc)
+    many_players = tuple(
+        ManualMatchPlayerDetail(
+            normalized_display_label=f"player_{i:02d}",
+            safe_display_label=f"PlayerLongDisplayName_{i:02d}",
+            goals=1 if i == 0 else 0,
+            assists=i % 3,
+            tackles=4,
+            passes=30,
+            pass_accuracy=88,
+            shots=3,
+            rating=Decimal("8.25"),
+        )
+        for i in range(45)
+    )
+    big_match = ManualMatchDetail(
+        match_id=42,
+        club_id="22839789",
+        platform="common-gen5",
+        game_version="fc27",
+        opponent="Long Rival Athletic FC",
+        opponent_normalized="long rival athletic fc",
+        match_date="2026-05-01",
+        match_time="20:00 ET",
+        home_score=3,
+        away_score=1,
+        status="FULL_TIME",
+        motm_display_label="PlayerLongDisplayName_00",
+        motm_normalized_label="player_00",
+        created_by=AUTHORIZED_USER_ID,
+        updated_by=AUTHORIZED_USER_ID,
+        created_at=now,
+        updated_at=now,
+        revision=1,
+        players=many_players,
+    )
+    res_embed = build_result_embed(big_match)
+    player_fields = [f for f in res_embed.fields if (f.name or "").startswith("👥 Players")]
+    assert len(player_fields) >= 3
+    assert [f.name for f in player_fields[:3]] == [
+        "👥 Players",
+        "👥 Players (cont.)",
+        "👥 Players (cont. 2)",
+    ]
+    assert len({f.name for f in player_fields}) == len(player_fields)
+    assert all(len(f.value or "") <= 1024 for f in res_embed.fields)
+
+    roster_players = [
+        RosterPlayerRecord(
+            player_id=f"plr_ecf_roster_{i:02d}",
+            display_name=f"EastCoastersLongRosterName_{i:02d}",
+            display_name_normalized=f"eastcoasterslongrostername_{i:02d}",
+            position="CDM",
+            discord_user_id=f"1000000000000000{i:02d}",
+            active=True,
+        )
+        for i in range(30)
+    ]
+    roster_embed = render_roster_embed(roster_players)
+    roster_fields = [f for f in roster_embed.fields if (f.name or "").startswith("Active Players")]
+    assert len(roster_fields) >= 2
+    assert len({f.name for f in roster_fields}) == len(roster_fields)
+    assert all(len(f.value or "") <= 1024 for f in roster_embed.fields)
+    assert "EastCoastersLongRosterName_29" in "\n".join(f.value or "" for f in roster_fields)
+
+    page_matches = tuple(
+        big_match.model_copy(
+            update={
+                "match_id": idx + 1,
+                "opponent": f"Very Long Club Opponent Name Number {idx + 1}",
+                "opponent_normalized": f"very long club opponent name number {idx + 1}",
+            }
+        )
+        for idx in range(25)
+    )
+    page_embed = render_results_page_embed(
+        ManualMatchResultsPage(
+            page=1,
+            page_size=25,
+            total_matches=25,
+            total_pages=1,
+            matches=page_matches,
+        )
+    )
+    match_fields = [f for f in page_embed.fields if (f.name or "").startswith("Matches")]
+    assert len(match_fields) >= 2
+    assert len({f.name for f in match_fields}) == len(match_fields)
+    assert all(len(f.value or "") <= 1024 for f in page_embed.fields)
+    assert "Very Long Club Opponent Name Number 25" in "\n".join(f.value or "" for f in match_fields)

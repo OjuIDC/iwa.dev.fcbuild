@@ -779,6 +779,43 @@ def _resolve_postgres_container_for_port(port: int) -> str | None:
     return "fc27-full-stack-postgres-1"
 
 
+def _list_custom_archive_tables(
+    archive_bytes: bytes,
+    *,
+    host_pg_restore: str | None,
+    container: str | None,
+) -> set[str] | None:
+    """Return table names present in a ``pg_dump --format=custom`` TOC, or None if unavailable."""
+    proc: subprocess.CompletedProcess[bytes] | None = None
+    if host_pg_restore:
+        proc = subprocess.run(
+            [host_pg_restore, "--list"],
+            input=archive_bytes,
+            capture_output=True,
+            check=False,
+        )
+    if (proc is None or proc.returncode != 0) and container:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", container, "pg_restore", "--list"],
+            input=archive_bytes,
+            capture_output=True,
+            check=False,
+        )
+    if proc is None or proc.returncode != 0:
+        return None
+    tables: set[str] = set()
+    for raw_line in proc.stdout.decode("utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if " TABLE DATA " in line:
+            # Format: "<id>; <oid> <oid> TABLE DATA <schema> <table_name> <owner>"
+            parts = line.split(" TABLE DATA ", 1)[1].split()
+            if len(parts) >= 2:
+                tables.add(parts[1])
+    return tables
+
+
 def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
     """Execute ``pg_dump --format=custom`` for the normalized FC27 tables."""
     info = psycopg.conninfo.conninfo_to_dict(db_uri)
@@ -788,8 +825,16 @@ def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
     password = str(info.get("password") or "")
     dbname = str(info.get("dbname") or "fc27")
 
+    with psycopg.connect(db_uri, autocommit=True) as probe_conn:
+        probe_row = probe_conn.execute(
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+        ).fetchone()
+        has_roster_table = bool(probe_row and probe_row[0])
+
     table_args: list[str] = []
     for tbl in FC27_DOMAIN_TABLES:
+        if tbl == "fc27_roster" and not has_roster_table:
+            continue
         table_args.extend(["-t", f"public.{tbl}"])
 
     host_pg_dump = shutil.which("pg_dump")
@@ -864,27 +909,60 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
     host_pg_restore = shutil.which("pg_restore")
     container = _resolve_postgres_container_for_port(port)
 
+    archive_tables = _list_custom_archive_tables(
+        archive_bytes,
+        host_pg_restore=host_pg_restore,
+        container=container,
+    )
+
     with psycopg.connect(db_uri, autocommit=True) as conn:
-        conn.execute(
-            "TRUNCATE public.schema_migrations, "
-            "public.schema_policy_versions, "
-            "public.fc27_player_match_stats, "
-            "public.fc27_matches, "
-            "public.fc27_quarantine_records, "
-            "public.fc27_export_batches, "
-            "public.fc27_clubs, "
-            "public.fc27_manual_match_audit, "
-            "public.fc27_manual_match_events, "
-            "public.fc27_manual_match_players, "
-            "public.fc27_manual_matches, "
-            "public.fc27_suggestion_assessments, "
-            "public.fc27_player_suggestions, "
-            "public.fc27_build_catalog_audit, "
-            "public.fc27_build_catalog, "
-            "public.fc27_player_links, "
-            "public.fc27_player_alias_fingerprints, "
-            "public.fc27_discord_jobs CASCADE"
-        )
+        roster_row = conn.execute(
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+        ).fetchone()
+        has_target_roster = bool(roster_row and roster_row[0])
+        if has_target_roster:
+            conn.execute(
+                "TRUNCATE public.schema_migrations, "
+                "public.schema_policy_versions, "
+                "public.fc27_player_match_stats, "
+                "public.fc27_matches, "
+                "public.fc27_quarantine_records, "
+                "public.fc27_export_batches, "
+                "public.fc27_clubs, "
+                "public.fc27_roster, "
+                "public.fc27_manual_match_audit, "
+                "public.fc27_manual_match_events, "
+                "public.fc27_manual_match_players, "
+                "public.fc27_manual_matches, "
+                "public.fc27_suggestion_assessments, "
+                "public.fc27_player_suggestions, "
+                "public.fc27_build_catalog_audit, "
+                "public.fc27_build_catalog, "
+                "public.fc27_player_links, "
+                "public.fc27_player_alias_fingerprints, "
+                "public.fc27_discord_jobs CASCADE"
+            )
+        else:
+            conn.execute(
+                "TRUNCATE public.schema_migrations, "
+                "public.schema_policy_versions, "
+                "public.fc27_player_match_stats, "
+                "public.fc27_matches, "
+                "public.fc27_quarantine_records, "
+                "public.fc27_export_batches, "
+                "public.fc27_clubs, "
+                "public.fc27_manual_match_audit, "
+                "public.fc27_manual_match_events, "
+                "public.fc27_manual_match_players, "
+                "public.fc27_manual_matches, "
+                "public.fc27_suggestion_assessments, "
+                "public.fc27_player_suggestions, "
+                "public.fc27_build_catalog_audit, "
+                "public.fc27_build_catalog, "
+                "public.fc27_player_links, "
+                "public.fc27_player_alias_fingerprints, "
+                "public.fc27_discord_jobs CASCADE"
+            )
 
         def _run_pg_restore_for_table(tbl: str) -> None:
             if host_pg_restore:
@@ -959,6 +1037,11 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 )
 
         for tbl in FC27_DOMAIN_TABLES:
+            if tbl == "fc27_roster" and (
+                not has_target_roster
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
             if tbl == "fc27_discord_jobs":
                 conn.execute("ALTER TABLE public.fc27_discord_jobs DISABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
                 try:

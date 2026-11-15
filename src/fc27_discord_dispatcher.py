@@ -1166,6 +1166,188 @@ class DiscordGatewayChannelTransport:
             operation="send",
         )
 
+    async def _async_post_embed(
+        self,
+        *,
+        channel_id: str,
+        embed: Any,
+    ) -> tuple[str, str]:
+        import discord
+
+        channel = await self._resolve_channel(channel_id)
+        try:
+            sent = await channel.send(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord bot lacks permission to post match card to results channel",
+                category="DISCORD_CHANNEL_FORBIDDEN",
+                retryable=False,
+            ) from exc
+        except discord.NotFound as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Configured Discord results channel was not found while posting match card",
+                category="DISCORD_CHANNEL_NOT_FOUND",
+                retryable=False,
+            ) from exc
+        except discord.HTTPException as exc:
+            status = getattr(exc, "status", 0) or 0
+            retry_after = getattr(exc, "retry_after", None)
+            if status == 429:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord API rate limited match card post",
+                    category="DISCORD_RATE_LIMITED",
+                    retryable=True,
+                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+                ) from exc
+            if status >= 500 or status == 0:
+                raise FC27DiscordDispatchTransportError(
+                    f"Discord API transient error status {status}",
+                    category="DISCORD_TRANSIENT_FAILURE",
+                    retryable=True,
+                ) from exc
+            raise FC27DiscordDispatchTransportError(
+                f"Discord API rejected match card payload with HTTP status {status}",
+                category="DISCORD_PAYLOAD_REJECTED",
+                retryable=False,
+            ) from exc
+        except (TimeoutError, OSError) as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Network or timeout failure while posting Discord match card",
+                category="DISCORD_TRANSIENT_FAILURE",
+                retryable=True,
+            ) from exc
+        resolved_channel_id = str(getattr(channel, "id", channel_id) or channel_id)
+        return (str(sent.id), resolved_channel_id)
+
+    async def _async_post_embed_bounded(
+        self,
+        *,
+        channel_id: str,
+        embed: Any,
+    ) -> tuple[str, str]:
+        try:
+            return await asyncio.wait_for(
+                self._async_post_embed(channel_id=channel_id, embed=embed),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord match card post timed out before completion",
+                category="DISCORD_TIMEOUT",
+                retryable=True,
+            ) from exc
+
+    async def _async_edit_embed(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        embed: Any,
+    ) -> bool:
+        import discord
+
+        try:
+            msg_int = int(str(message_id).strip())
+        except (TypeError, ValueError):
+            return False
+
+        try:
+            channel = await self._resolve_channel(channel_id)
+        except FC27DiscordDispatchTransportError as exc:
+            if exc.category == "DISCORD_CHANNEL_NOT_FOUND":
+                return False
+            raise
+
+        fetch_message = getattr(channel, "fetch_message", None)
+        if fetch_message is None:
+            return False
+        try:
+            msg = await fetch_message(msg_int)
+            await msg.edit(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return True
+        except discord.NotFound:
+            return False
+        except discord.Forbidden as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord bot lacks permission to edit match card in results channel",
+                category="DISCORD_CHANNEL_FORBIDDEN",
+                retryable=False,
+            ) from exc
+        except discord.HTTPException as exc:
+            status = getattr(exc, "status", 0) or 0
+            retry_after = getattr(exc, "retry_after", None)
+            if status == 429:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord API rate limited match card edit",
+                    category="DISCORD_RATE_LIMITED",
+                    retryable=True,
+                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+                ) from exc
+            if status >= 500 or status == 0:
+                raise FC27DiscordDispatchTransportError(
+                    f"Discord API transient error status {status}",
+                    category="DISCORD_TRANSIENT_FAILURE",
+                    retryable=True,
+                ) from exc
+            raise FC27DiscordDispatchTransportError(
+                f"Discord API rejected match card edit with HTTP status {status}",
+                category="DISCORD_PAYLOAD_REJECTED",
+                retryable=False,
+            ) from exc
+        except (TimeoutError, OSError) as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Network or timeout failure while editing Discord match card",
+                category="DISCORD_TRANSIENT_FAILURE",
+                retryable=True,
+            ) from exc
+
+    async def _async_edit_embed_bounded(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        embed: Any,
+    ) -> bool:
+        try:
+            return await asyncio.wait_for(
+                self._async_edit_embed(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    embed=embed,
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord match card edit timed out before completion",
+                category="DISCORD_TIMEOUT",
+                retryable=True,
+            ) from exc
+
+    def post_embed(self, channel_id: str, embed: Any) -> tuple[str, str]:
+        return self._run_loop_coroutine(
+            self._async_post_embed_bounded(channel_id=channel_id, embed=embed),
+            operation="post embed",
+        )
+
+    def edit_embed(self, channel_id: str, message_id: str, embed: Any) -> bool:
+        return bool(
+            self._run_loop_coroutine(
+                self._async_edit_embed_bounded(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    embed=embed,
+                ),
+                operation="edit embed",
+            )
+        )
+
 
 def try_acquire_dispatch_advisory_lock(
     queue_conn: GuardedDiscordJobQueueConnection,
