@@ -7,15 +7,17 @@ import json
 import logging
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 
 from src import settings
-from src.db_migrate import migrate
+from src.db_migrate import migrate, verify_postconditions
 from src.db_roles import GRANTS_POLICY_VERSION, ROLE_DISCORD_READER, ROLE_MATCH_RESULTS_WRITER
 from src.fc27_discord_bot import (
     DISCORD_PROVIDER_REQUESTS,
@@ -30,6 +32,7 @@ from src.fc27_discord_dispatcher import (
     FC27AuthoritativeMatchData,
     FC27AuthoritativePlayerSummary,
     FC27DiscordDispatchConfig,
+    FC27TeamChatMessage,
     SyntheticDiscordNotificationTransport,
     build_post_new_results_notification,
     build_post_new_results_team_chat_message,
@@ -49,13 +52,16 @@ from src.fc27_match_results import (
     ManualMatchPlayerDetail,
     MatchResultsNotFoundError,
     MatchResultsPermissionError,
+    MatchResultsPostureError,
     MatchResultsValidationError,
     ParsedScorerEntry,
     ReconciliationTokenStore,
+    build_match_post_tag,
     build_result_content,
     build_result_embed,
     build_team_chat_result_summary,
     compute_alias_hmac_fingerprint,
+    extract_match_post_tag,
     format_unresolved_players_ephemeral,
     get_match_discord_message_links,
     list_unresolved_players,
@@ -65,6 +71,7 @@ from src.fc27_match_results import (
     redact_internal_player_refs,
     render_unresolved_players_embed,
     resolve_player_names,
+    tag_match_post_content,
     upsert_roster_player,
 )
 from src.fc27_privacy import (
@@ -1256,7 +1263,7 @@ def test_25_dispatcher_lease_and_single_flight_intact(pg_db_migrated) -> None:
 
 def test_26_migration_0016_and_audit_linkage_compatibility(pg_db) -> None:
     """26. Fresh migration + idempotent re-run stay at Grants Policy v17 with nullable match_id RELINK linkage."""
-    assert GRANTS_POLICY_VERSION == 17
+    assert GRANTS_POLICY_VERSION == 18
     migrate(pg_db.migrator)
     migrate(pg_db.migrator)
 
@@ -1573,3 +1580,516 @@ def test_28_existing_commands_and_cli_remain_functional(
                 pg_db_migrated.match_results_writer,
             ]
         )
+
+
+# ==============================================================================
+# 29-30. REVIEW FOLLOW-UPS: STABLE TEAM-CHAT DISCRIMINATOR & DURABLE TOKENS
+# ==============================================================================
+
+def _review_match_data(match_ref: str) -> FC27AuthoritativeMatchData:
+    """Build authoritative match payloads that differ only by ``match_ref``."""
+    return FC27AuthoritativeMatchData(
+        match_ref=match_ref,
+        club_id=EAST_COASTERS_CLUB_ID,
+        platform=EAST_COASTERS_PLATFORM,
+        game_version=EAST_COASTERS_GAME_VERSION,
+        match_type="leagueMatch",
+        played_at=datetime(2026, 10, 22, 2, 19, tzinfo=timezone.utc),
+        result="L",
+        goals_for=1,
+        goals_against=2,
+        opponent_name="Harbor City FC",
+        formation="4-3-3",
+        match_status="COMPLETED",
+        source_classification="COMMUNITY_API",
+        data_quality_status="VERIFIED",
+        players=(
+            FC27AuthoritativePlayerSummary(
+                local_player_reference="plr_ecf_000000000001",
+                position="ST",
+                goals=1,
+                assists=0,
+                provider_rating=7.5,
+                passes_completed=10,
+                passes_attempted=12,
+                tackles_won=1,
+                saves=0,
+                display_name="Kai",
+                shots=2,
+            ),
+        ),
+    )
+
+
+def test_29_identical_team_chat_summaries_use_stable_distinct_discriminators() -> None:
+    """Two matches with identical coaching summaries must not cross-link during history recovery."""
+    match_a = _review_match_data("mref_ecf_aaaaaaaaaaaa")
+    match_b = _review_match_data("mref_ecf_bbbbbbbbbbbb")
+    msg_a = build_post_new_results_team_chat_message(
+        match_a,
+        channel_id=TEAM_CHAT_CHANNEL_ID,
+        idempotency_key="fc27:post_new_results:mref_ecf_aaaaaaaaaaaa",
+    )
+    msg_b = build_post_new_results_team_chat_message(
+        match_b,
+        channel_id=TEAM_CHAT_CHANNEL_ID,
+        idempotency_key="fc27:post_new_results:mref_ecf_bbbbbbbbbbbb",
+    )
+
+    # Same opponent, score and scorers produce an identical summary body.
+    assert msg_a.content.split("\n\nfc27-")[0] == msg_b.content.split("\n\nfc27-")[0]
+    assert msg_a.discriminator != msg_b.discriminator
+    assert msg_a.content.endswith(msg_a.discriminator)
+    assert msg_b.content.endswith(msg_b.discriminator)
+    # Internal references stay out of the public team-chat payload.
+    assert msg_a.match_ref not in msg_a.content
+    assert "plr_ecf_" not in msg_a.content
+
+    transport = SyntheticDiscordNotificationTransport()
+    transport.send_team_chat_notification(channel_id=TEAM_CHAT_CHANNEL_ID, message=msg_a)
+
+    assert (
+        transport.find_existing_team_chat_notification(
+            channel_id=TEAM_CHAT_CHANNEL_ID,
+            match_ref=match_b.match_ref,
+            idempotency_key="fc27:post_new_results:mref_ecf_bbbbbbbbbbbb",
+            message=msg_b,
+        )
+        is None
+    )
+    assert (
+        transport.find_existing_team_chat_notification(
+            channel_id=TEAM_CHAT_CHANNEL_ID,
+            match_ref=match_a.match_ref,
+            idempotency_key="fc27:post_new_results:mref_ecf_aaaaaaaaaaaa",
+            message=msg_a,
+        )
+        is not None
+    )
+
+    # Editing the coaching summary (e.g. after a roster rename) preserves the exact same tag.
+    renamed_match_a = replace(
+        match_a,
+        players=(replace(match_a.players[0], display_name="Marcus"),),
+    )
+    edited_msg_a = build_post_new_results_team_chat_message(
+        renamed_match_a,
+        channel_id=TEAM_CHAT_CHANNEL_ID,
+        idempotency_key="fc27:post_new_results:mref_ecf_aaaaaaaaaaaa",
+    )
+    assert edited_msg_a.discriminator == msg_a.discriminator
+    assert extract_match_post_tag(edited_msg_a.content) == msg_a.discriminator
+    assert edited_msg_a.content != msg_a.content
+    assert (
+        transport.find_existing_team_chat_notification(
+            channel_id=TEAM_CHAT_CHANNEL_ID,
+            match_ref=match_a.match_ref,
+            idempotency_key="fc27:post_new_results:mref_ecf_aaaaaaaaaaaa",
+            message=edited_msg_a,
+        )
+        is not None
+    )
+
+    # Legacy untagged messages still match safely by exact body equality without cross-linking.
+    legacy_transport = SyntheticDiscordNotificationTransport()
+    legacy_body = msg_a.content.split("\n\nfc27-")[0]
+    legacy_msg = FC27TeamChatMessage(
+        channel_id=TEAM_CHAT_CHANNEL_ID,
+        idempotency_key="other_key",
+        match_ref="mref_ecf_legacy000001",
+        discriminator=build_match_post_tag("mref_ecf_legacy000001"),
+        content=legacy_body,
+    )
+    legacy_transport._team_chat_history[TEAM_CHAT_CHANNEL_ID] = [  # noqa: SLF001
+        ("910000000000000099", legacy_msg),
+        ("910000000000000098", msg_b),
+    ]
+    assert (
+        legacy_transport.find_existing_text(
+            channel_id=TEAM_CHAT_CHANNEL_ID,
+            content=legacy_body,
+            discriminator=msg_a.discriminator,
+        )
+        == "910000000000000099"
+    )
+    assert (
+        legacy_transport.find_existing_text(
+            channel_id=TEAM_CHAT_CHANNEL_ID,
+            content="Different body",
+            discriminator=msg_a.discriminator,
+        )
+        is None
+    )
+
+
+def test_30_persisted_reconciliation_tokens_survive_a_new_process(pg_db_migrated) -> None:
+    """Tokens listed by one process resolve to the same player id elsewhere until they expire."""
+    _seed_provider_match_and_job(pg_db_migrated, external_suffix="tokens_30")
+    writer_uri = pg_db_migrated.match_results_writer
+
+    lister = ReconciliationTokenStore(writer_conn_or_uri=writer_uri)
+    entries = list_unresolved_players(
+        pg_db_migrated.discord_reader,
+        token_store=lister,
+        actor_discord_user_id=ADMIN_USER_ID,
+    )
+    assert entries
+    issued = {entry.token: entry.player_id for entry in entries}
+    assert issued
+
+    # A second match changes unresolved-player ordering (e.g. boosting SAMPLE_REFS[5] appearances),
+    # yet previously issued T1..Tn bindings keep pointing to the original player_ids.
+    _seed_provider_match_and_job(
+        pg_db_migrated,
+        external_suffix="tokens_30_order_shift",
+        played_at=datetime(2026, 10, 23, 3, 0, tzinfo=timezone.utc),
+        players=[
+            {
+                "ref": SAMPLE_REFS[5],
+                "position": "GK",
+                "goals": 0,
+                "assists": 0,
+                "passes_attempted": 10,
+                "passes_completed": 9,
+                "tackles_attempted": 0,
+                "tackles_won": 0,
+                "shots": 0,
+                "shots_on_target": 0,
+                "rating": Decimal("9.50"),
+            }
+        ],
+    )
+
+    # A brand-new store (a separate process) resolves the same tokens to the same players.
+    consumer = ReconciliationTokenStore(writer_conn_or_uri=writer_uri)
+    for token, player_id in issued.items():
+        assert consumer.resolve(token, actor_discord_user_id=ADMIN_USER_ID) == player_id
+
+    # Cross-actor token use is isolated per Discord actor and fails closed.
+    other_actor_id = "999999999999999999"
+    with pytest.raises(MatchResultsValidationError, match="Unknown or expired"):
+        consumer.resolve("T1", actor_discord_user_id=other_actor_id)
+
+    with pytest.raises(MatchResultsValidationError, match="Unknown or expired"):
+        consumer.resolve("T99", actor_discord_user_id=ADMIN_USER_ID)
+
+    # Re-issuing a smaller batch replaces prior actor tokens so stale slots cannot linger.
+    smaller = ReconciliationTokenStore(writer_conn_or_uri=writer_uri)
+    smaller.issue_tokens([SAMPLE_REFS[0]], actor_discord_user_id=ADMIN_USER_ID)
+    assert smaller.resolve("T1", actor_discord_user_id=ADMIN_USER_ID) == SAMPLE_REFS[0]
+    with pytest.raises(MatchResultsValidationError, match="Unknown or expired"):
+        smaller.resolve("T2", actor_discord_user_id=ADMIN_USER_ID)
+
+    # Expired bindings fail closed instead of being re-derived from the current ordering.
+    expired = ReconciliationTokenStore(writer_conn_or_uri=writer_uri)
+    expired.issue_tokens(
+        [SAMPLE_REFS[0]],
+        actor_discord_user_id=ADMIN_USER_ID,
+        ttl_seconds=60,
+        now=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    with pytest.raises(MatchResultsValidationError, match="expired"):
+        expired.resolve("T1", actor_discord_user_id=ADMIN_USER_ID)
+
+
+def test_31_refresh_recovers_team_chat_message_from_history_without_linkage(
+    pg_db_migrated,
+) -> None:
+    """A team-chat post with no durable linkage is recovered from history and edited, not reposted."""
+    seeded = _seed_provider_match_and_job(
+        pg_db_migrated, external_suffix="tc_recover_31", opponent_name="FC Goatsss"
+    )
+    cfg = _dispatch_config()
+
+    # Discord already holds the team-chat post, but no durable linkage row was written.
+    restarted = SyntheticDiscordNotificationTransport()
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        from src.fc27_discord_bot import GuardedDiscordReadOnlyConnection
+
+        guarded = GuardedDiscordReadOnlyConnection(rconn)
+        m_data, _ = load_authoritative_match_for_job(
+            guarded, raw_payload=seeded["payload"], idempotency_key=seeded["idempotency_key"]
+        )
+        rconn.commit()
+    tc_msg = build_post_new_results_team_chat_message(
+        m_data, channel_id=TEAM_CHAT_CHANNEL_ID, idempotency_key=seeded["idempotency_key"]
+    )
+    posted_tc_id = "910000000000000002"
+    restarted._team_chat_history[TEAM_CHAT_CHANNEL_ID] = [(posted_tc_id, tc_msg)]  # noqa: SLF001
+
+    _formal_edited, tc_edited = refresh_dispatched_match_message(
+        config=cfg,
+        transport=restarted,
+        match_ref=seeded["match_ref"],
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert tc_edited is True
+    assert len(restarted.edited_team_chat_messages) == 1
+    assert len(restarted.sent_team_chat_messages) == 0
+
+def test_32_readonly_token_store_and_cli_dry_run_resolve_without_writer(
+    pg_db_migrated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tokens can be resolved read-only (dry-run) without a writer connection."""
+    from src import fc27_match_results as match_results_module
+
+    _seed_provider_match_and_job(pg_db_migrated, external_suffix="tokens_32")
+    writer_store = ReconciliationTokenStore(
+        writer_conn_or_uri=pg_db_migrated.match_results_writer
+    )
+    entries = list_unresolved_players(
+        pg_db_migrated.discord_reader,
+        token_store=writer_store,
+        actor_discord_user_id=ADMIN_USER_ID,
+    )
+    assert entries
+    token = entries[0].token
+
+    reader_store = ReconciliationTokenStore(reader_conn_or_uri=pg_db_migrated.discord_reader)
+    assert reader_store.resolve(token, actor_discord_user_id=ADMIN_USER_ID) == entries[0].player_id
+
+    monkeypatch.setattr(
+        match_results_module, "resolve_match_results_writer_uri", lambda *, strict=False: None
+    )
+    rc = match_results_cli_main(
+        [
+            "set-player",
+            "--token",
+            token,
+            "--display-name",
+            "DryRunToken",
+            "--position",
+            "CM",
+            "--dry-run",
+            "--reader-uri",
+            pg_db_migrated.discord_reader,
+            "--actor-discord-user-id",
+            ADMIN_USER_ID,
+        ]
+    )
+    assert rc == 0
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        row = rconn.execute(
+            "SELECT display_name FROM public.fc27_roster WHERE player_id = %s",
+            (entries[0].player_id,),
+        ).fetchone()
+    assert row is None
+
+
+def test_33_persistent_token_store_requires_actor_and_writer(pg_db_migrated) -> None:
+    """Actor-less and writer-less persistent token usage fails closed."""
+    writer_store = ReconciliationTokenStore(
+        writer_conn_or_uri=pg_db_migrated.match_results_writer
+    )
+    with pytest.raises(MatchResultsValidationError, match="actor id is required"):
+        writer_store.issue_tokens([SAMPLE_REFS[0]], actor_discord_user_id=None)
+    with pytest.raises(MatchResultsValidationError, match="actor id is required"):
+        writer_store.resolve("T1", actor_discord_user_id=None)
+
+    reader_store = ReconciliationTokenStore(reader_conn_or_uri=pg_db_migrated.discord_reader)
+    with pytest.raises(MatchResultsValidationError, match="writer database URI"):
+        reader_store.issue_tokens([SAMPLE_REFS[0]], actor_discord_user_id=ADMIN_USER_ID)
+
+
+def test_34_manual_result_recovers_unlinked_team_chat_post_and_persists_id(
+    pg_db_migrated,
+) -> None:
+    """Manual result sync recovers an existing team-chat post by tag, edits it in place, and persists linkage."""
+    created = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Bayfront Athletic",
+        home_score=2,
+        away_score=0,
+        scorers="Lao x2",
+        actor_discord_user_id=ADMIN_USER_ID,
+        discord_guild_id=APPROVED_GUILD_ID,
+        discord_channel_id=RESULTS_CHANNEL_ID,
+        discord_message_id="920000000000000001",
+    )
+    adapter = InMemoryDiscordChannelAdapter(start_snowflake=920000000000000010)
+    # Formal embed already exists at the recorded message ID.
+    adapter.messages[(RESULTS_CHANNEL_ID, "920000000000000001")] = build_result_embed(created)
+    # Simulate prior run that posted to team chat with the stable manual tag,
+    # then crashed before persisting team_chat_message_id into PostgreSQL.
+    stale_team_chat = tag_match_post_content(
+        "Old team-chat summary before edit",
+        seed=f"manual:{created.match_id}",
+    )
+    pre_tc_id, _ = adapter.post_text(TEAM_CHAT_CHANNEL_ID, stale_team_chat)
+    assert adapter.text_post_count == 1
+    assert get_match_discord_message_links(
+        pg_db_migrated.discord_reader, match_id=created.match_id
+    ) is None or (
+        get_match_discord_message_links(
+            pg_db_migrated.discord_reader, match_id=created.match_id
+        ).team_chat_message_id
+        is None
+    )
+
+    service = FC27DiscordBotService(
+        _bot_config(),
+        db_conn_or_uri=pg_db_migrated.discord_reader,
+        writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+        discord_channel_adapter=adapter,
+    )
+    edited_resp = service.handle_slash_command(
+        "editresult",
+        guild_id=APPROVED_GUILD_ID,
+        channel_id=APPROVED_CHANNEL_ID,
+        user_id=ADMIN_USER_ID,
+        user_role_ids=[ADMIN_ROLE_ID],
+        match_id=created.match_id,
+        our_score=3,
+        opponent_score=1,
+        scorers="Lao x3",
+    )
+    assert edited_resp.status == "OK"
+    # No duplicate team-chat post was sent; existing post was edited in place.
+    assert adapter.text_post_count == 1
+    assert adapter.text_edit_count == 1
+    updated_text = adapter.get_text(TEAM_CHAT_CHANNEL_ID, pre_tc_id)
+    assert updated_text is not None
+    assert "3-1" in updated_text
+    assert extract_match_post_tag(updated_text) == build_match_post_tag(
+        f"manual:{created.match_id}"
+    )
+
+    links = get_match_discord_message_links(
+        pg_db_migrated.discord_reader, match_id=created.match_id
+    )
+    assert links is not None
+    assert links.team_chat_message_id == pre_tc_id
+    assert links.team_chat_channel_id == TEAM_CHAT_CHANNEL_ID
+
+
+def test_35_dispatcher_persists_recovered_message_ids_when_db_linkage_missing(
+    pg_db_migrated,
+) -> None:
+    """When formal/team-chat IDs are recovered from history without DB linkage, they are persisted to PostgreSQL."""
+    seeded = _seed_provider_match_and_job(
+        pg_db_migrated,
+        external_suffix="dispatch_recover_35",
+        opponent_name="Harbor City FC",
+    )
+    cfg = _dispatch_config()
+
+    # Force a second-attempt job where Discord already received both posts,
+    # while PostgreSQL linkage is completely absent.
+    with psycopg.connect(pg_db_migrated.admin, autocommit=True) as aconn:
+        aconn.execute(
+            """
+            UPDATE public.fc27_discord_jobs
+            SET attempt_count = 2
+            WHERE job_id = %s
+            """,
+            (seeded["job_id"],),
+        )
+
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        from src.fc27_discord_bot import GuardedDiscordReadOnlyConnection
+
+        guarded = GuardedDiscordReadOnlyConnection(rconn)
+        m_data, _ = load_authoritative_match_for_job(
+            guarded, raw_payload=seeded["payload"], idempotency_key=seeded["idempotency_key"]
+        )
+        rconn.commit()
+
+    formal_msg = build_post_new_results_notification(
+        m_data, channel_id=RESULTS_CHANNEL_ID, idempotency_key=seeded["idempotency_key"]
+    )
+    tc_msg = build_post_new_results_team_chat_message(
+        m_data, channel_id=TEAM_CHAT_CHANNEL_ID, idempotency_key=seeded["idempotency_key"]
+    )
+    recovered_res_id = "930000000000000001"
+    recovered_tc_id = "930000000000000002"
+
+    transport = SyntheticDiscordNotificationTransport()
+    transport._channel_history[RESULTS_CHANNEL_ID] = [(recovered_res_id, formal_msg)]  # noqa: SLF001
+    transport._team_chat_history[TEAM_CHAT_CHANNEL_ID] = [(recovered_tc_id, tc_msg)]  # noqa: SLF001
+
+    assert get_match_discord_message_links(
+        pg_db_migrated.discord_reader, match_ref=seeded["match_ref"]
+    ) is None
+
+    summary = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+        sent_idempotency_cache=set(),
+        verify_posture=False,
+    )
+    assert summary.jobs_completed == 1
+    assert len(transport.sent_messages) == 0
+    assert len(transport.sent_team_chat_messages) == 0
+
+    links = get_match_discord_message_links(
+        pg_db_migrated.discord_reader, match_ref=seeded["match_ref"]
+    )
+    assert links is not None
+    assert links.results_message_id == recovered_res_id
+    assert links.results_channel_id == RESULTS_CHANNEL_ID
+    assert links.team_chat_message_id == recovered_tc_id
+    assert links.team_chat_channel_id == TEAM_CHAT_CHANNEL_ID
+
+
+def test_36_compose_forwards_team_chat_channel_id_and_writer_cannot_access_discord_jobs(
+    pg_db_migrated,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finding 8/9: compose forwards team-chat ID and writer stays barred from fc27_discord_jobs."""
+    compose_path = Path(__file__).resolve().parents[1] / "docker-compose.discord.yml"
+    compose_text = compose_path.read_text(encoding="utf-8")
+    assert "FC27_DISCORD_TEAM_CHAT_CHANNEL_ID: ${FC27_DISCORD_TEAM_CHAT_CHANNEL_ID:-}" in compose_text
+
+    monkeypatch.setenv("FC27_DISCORD_ALLOWED_CHANNEL_IDS", f"{RESULTS_CHANNEL_ID},{TEAM_CHAT_CHANNEL_ID}")
+    monkeypatch.setenv("FC27_DISCORD_TEAM_CHAT_CHANNEL_ID", TEAM_CHAT_CHANNEL_ID)
+    assert settings.get_fc27_discord_team_chat_channel_id(strict=True) == TEAM_CHAT_CHANNEL_ID
+
+    monkeypatch.setenv("FC27_DISCORD_TEAM_CHAT_CHANNEL_ID", "999999999999999999")
+    with pytest.raises(settings.ConfigError, match="FC27_DISCORD_ALLOWED_CHANNEL_IDS"):
+        settings.get_fc27_discord_team_chat_channel_id(strict=True)
+
+    # Finding 8 boundary: writer connection wrapper & DB role must both block fc27_discord_jobs.
+    from src.fc27_match_results import open_guarded_match_results_writer_connection
+
+    with open_guarded_match_results_writer_connection(
+        pg_db_migrated.match_results_writer,
+        require_dedicated_writer_role=True,
+    ) as wconn:
+        with wconn.cursor() as wcur:
+            with pytest.raises(MatchResultsPostureError, match="forbidden"):
+                wcur.execute("SELECT job_id FROM public.fc27_discord_jobs LIMIT 1")
+
+    with psycopg.connect(pg_db_migrated.admin) as aconn:
+        assert aconn.execute(
+            "SELECT has_table_privilege(%s, 'public.fc27_discord_jobs', 'INSERT')",
+            (ROLE_MATCH_RESULTS_WRITER,),
+        ).fetchone()[0] is False
+        assert aconn.execute(
+            "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', 'SELECT')",
+            (ROLE_DISCORD_READER,),
+        ).fetchone()[0] is True
+        for mut_priv in ("INSERT", "UPDATE", "DELETE"):
+            assert aconn.execute(
+                "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', %s)",
+                (ROLE_DISCORD_READER, mut_priv),
+            ).fetchone()[0] is False
+        for w_priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+            assert aconn.execute(
+                "SELECT has_table_privilege(%s, 'public.fc27_roster_reconciliation_tokens', %s)",
+                (ROLE_MATCH_RESULTS_WRITER, w_priv),
+            ).fetchone()[0] is True
+        assert verify_postconditions(aconn) == []
+
+
+def test_37_migration_0016_to_0017_upgrade_path(pg_db) -> None:
+    """Upgrading from 0016 cleanly applies 0017 and satisfies all postconditions."""
+    applied_0016 = migrate(pg_db.migrator, target="0016")
+    assert "0016_fc27_canonical_roster_and_legacy_matches.sql" in applied_0016
+    assert "0017_fc27_roster_reconciliation_tokens.sql" not in applied_0016
+    applied_0017 = migrate(pg_db.migrator)
+    assert applied_0017 == ["0017_fc27_roster_reconciliation_tokens.sql"]
+    with psycopg.connect(pg_db.admin) as uconn:
+        assert verify_postconditions(uconn) == []

@@ -64,8 +64,10 @@ from src.fc27_match_results import (
     ParsedScorerEntry,
     build_result_content,
     build_result_embed,
+    build_match_post_tag,
     build_team_chat_result_summary,
     clean_opponent,
+    extract_match_post_tag,
     get_match_discord_message_links,
     get_player_name,
     normalize_competition_label,
@@ -73,6 +75,7 @@ from src.fc27_match_results import (
     normalize_formation_label,
     record_match_discord_message_links,
     resolve_player_names,
+    tag_match_post_content,
 )
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
@@ -767,6 +770,7 @@ class FC27TeamChatMessage(BaseModel):
     channel_id: str = Field(min_length=1, max_length=32)
     idempotency_key: str = Field(min_length=1, max_length=256)
     match_ref: str = Field(min_length=1, max_length=64)
+    discriminator: str = Field(min_length=1, max_length=32)
     content: str = Field(min_length=1, max_length=MAX_DISCORD_CONTENT_LENGTH)
 
 
@@ -851,6 +855,97 @@ class DiscordNotificationTransport(Protocol):
         message: FC27PostNewResultsMessage,
     ) -> str:
         """Publish ``message`` to ``channel_id`` and return the Discord message ID."""
+
+
+def _team_chat_history_matches(
+    content: str,
+    *,
+    expected_discriminator: str,
+    expected_content: str,
+) -> bool:
+    """Return whether a candidate message body is the expected team-chat post.
+
+    Shared by every history-recovery path so the match rule cannot drift: the stable
+    per-match discriminator wins, with exact content equality as the legacy fallback.
+    """
+    candidate = str(content or "").strip()
+    if expected_discriminator and extract_match_post_tag(candidate) == expected_discriminator:
+        return True
+    return bool(expected_content) and candidate == expected_content
+
+
+async def _scan_team_chat_history(
+    history_lookup: Any,
+    *,
+    bot_id: int | None,
+    expected_discriminator: str,
+    expected_content: str,
+    history_kwargs: dict[str, Any],
+) -> str | None:
+    """Scan Discord channel history for the expected team-chat message.
+
+    Both gateway history-recovery entry points delegate here so the scan bounds, the
+    author filter and the Discord error mapping (including 429 retryability) stay
+    identical.
+    """
+    import discord
+
+    scanned = 0
+    try:
+        async for msg in history_lookup(**history_kwargs):
+            scanned += 1
+            if scanned > CHANNEL_HISTORY_MAX_SCAN:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord team-chat history scan exceeded its bounded message limit",
+                    category="DISCORD_HISTORY_INCOMPLETE",
+                    retryable=True,
+                )
+            if bot_id is not None and getattr(
+                getattr(msg, "author", None), "id", None
+            ) != bot_id:
+                continue
+            if _team_chat_history_matches(
+                str(getattr(msg, "content", "") or ""),
+                expected_discriminator=expected_discriminator,
+                expected_content=expected_content,
+            ):
+                return str(msg.id)
+    except FC27DiscordDispatchTransportError:
+        raise
+    except discord.Forbidden as exc:
+        raise FC27DiscordDispatchTransportError(
+            "Discord bot lacks permission to read team-chat history",
+            category="DISCORD_HISTORY_FORBIDDEN",
+            retryable=True,
+        ) from exc
+    except discord.NotFound as exc:
+        raise FC27DiscordDispatchTransportError(
+            "Configured Discord team-chat channel was not found during history lookup",
+            category="DISCORD_CHANNEL_NOT_FOUND",
+            retryable=False,
+        ) from exc
+    except discord.HTTPException as exc:
+        status = getattr(exc, "status", 0) or 0
+        retry_after = getattr(exc, "retry_after", None)
+        if status == 429:
+            raise FC27DiscordDispatchTransportError(
+                "Discord API rate limited team-chat history lookup",
+                category="DISCORD_RATE_LIMITED",
+                retryable=True,
+                retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+            ) from exc
+        raise FC27DiscordDispatchTransportError(
+            f"Discord team-chat history lookup failed with HTTP status {status}",
+            category="DISCORD_HISTORY_LOOKUP_FAILED",
+            retryable=True,
+        ) from exc
+    except Exception as exc:
+        raise FC27DiscordDispatchTransportError(
+            "Discord team-chat history lookup failed before delivery state could be established",
+            category="DISCORD_HISTORY_LOOKUP_FAILED",
+            retryable=True,
+        ) from exc
+    return None
 
 
 class SyntheticDiscordNotificationTransport:
@@ -940,11 +1035,44 @@ class SyntheticDiscordNotificationTransport:
         not_before: datetime | None = None,
         message: FC27TeamChatMessage | None = None,
     ) -> str | None:
-        del not_before, message
+        del not_before
+        expected_discriminator = (
+            str(getattr(message, "discriminator", "") or "").strip()
+            if message is not None
+            else ""
+        )
+        expected_content = message.content.strip() if message is not None else None
         for msg_id, msg in reversed(self._team_chat_history.get(channel_id, [])):
             if msg_id in self.deleted_message_ids:
                 continue
+            if _team_chat_history_matches(
+                msg.content,
+                expected_discriminator=expected_discriminator,
+                expected_content=expected_content or "",
+            ):
+                return msg_id
             if msg.idempotency_key == idempotency_key or msg.match_ref == match_ref:
+                return msg_id
+        return None
+
+    def find_existing_text(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        discriminator: str | None = None,
+    ) -> str | None:
+        """Return the ID of an already-posted team-chat text message, if any."""
+        expected_discriminator = str(discriminator or "").strip()
+        expected_content = str(content or "").strip()
+        for msg_id, msg in reversed(self._team_chat_history.get(channel_id, [])):
+            if msg_id in self.deleted_message_ids:
+                continue
+            if _team_chat_history_matches(
+                msg.content,
+                expected_discriminator=expected_discriminator,
+                expected_content=expected_content,
+            ):
                 return msg_id
         return None
 
@@ -1566,7 +1694,12 @@ class DiscordGatewayChannelTransport:
         bot_user = getattr(self._client, "user", None)
         bot_id = getattr(bot_user, "id", None)
         expected_content = message.content.strip() if message is not None else None
-        if expected_content is None:
+        expected_discriminator = (
+            str(getattr(message, "discriminator", "") or "").strip()
+            if message is not None
+            else ""
+        )
+        if not expected_content and not expected_discriminator:
             return None
 
         history_kwargs: dict[str, Any] = {}
@@ -1577,57 +1710,13 @@ class DiscordGatewayChannelTransport:
             history_kwargs["limit"] = None
         else:
             history_kwargs["limit"] = CHANNEL_HISTORY_DEDUP_LIMIT
-        scanned = 0
-        try:
-            async for msg in history_lookup(**history_kwargs):
-                scanned += 1
-                if scanned > CHANNEL_HISTORY_MAX_SCAN:
-                    raise FC27DiscordDispatchTransportError(
-                        "Discord team-chat history scan exceeded its bounded message limit",
-                        category="DISCORD_HISTORY_INCOMPLETE",
-                        retryable=True,
-                    )
-                if bot_id is not None and getattr(getattr(msg, "author", None), "id", None) != bot_id:
-                    continue
-                content = str(getattr(msg, "content", "") or "").strip()
-                if content == expected_content:
-                    return str(msg.id)
-        except FC27DiscordDispatchTransportError:
-            raise
-        except discord.Forbidden as exc:
-            raise FC27DiscordDispatchTransportError(
-                "Discord bot lacks permission to read team-chat history",
-                category="DISCORD_HISTORY_FORBIDDEN",
-                retryable=True,
-            ) from exc
-        except discord.NotFound as exc:
-            raise FC27DiscordDispatchTransportError(
-                "Configured Discord team-chat channel was not found during history lookup",
-                category="DISCORD_CHANNEL_NOT_FOUND",
-                retryable=False,
-            ) from exc
-        except discord.HTTPException as exc:
-            status = getattr(exc, "status", 0) or 0
-            retry_after = getattr(exc, "retry_after", None)
-            if status == 429:
-                raise FC27DiscordDispatchTransportError(
-                    "Discord API rate limited team-chat history lookup",
-                    category="DISCORD_RATE_LIMITED",
-                    retryable=True,
-                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
-                ) from exc
-            raise FC27DiscordDispatchTransportError(
-                f"Discord team-chat history lookup failed with HTTP status {status}",
-                category="DISCORD_HISTORY_LOOKUP_FAILED",
-                retryable=True,
-            ) from exc
-        except Exception as exc:
-            raise FC27DiscordDispatchTransportError(
-                "Discord team-chat history lookup failed before delivery state could be established",
-                category="DISCORD_HISTORY_LOOKUP_FAILED",
-                retryable=True,
-            ) from exc
-        return None
+        return await _scan_team_chat_history(
+            history_lookup,
+            bot_id=bot_id,
+            expected_discriminator=expected_discriminator,
+            expected_content=expected_content or "",
+            history_kwargs=history_kwargs,
+        )
 
     async def _async_send_text(self, *, channel_id: str, content: str) -> str:
         import discord
@@ -1823,6 +1912,59 @@ class DiscordGatewayChannelTransport:
             team_chat_message_id=msg_id,
         )
         return msg_id
+
+    def find_existing_text(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        discriminator: str | None = None,
+    ) -> str | None:
+        """Return the ID of an already-posted text message in ``channel_id``, if any."""
+        return self._run_loop_coroutine(
+            asyncio.wait_for(
+                self._async_find_existing_text(
+                    channel_id=channel_id,
+                    content=content,
+                    discriminator=discriminator,
+                ),
+                timeout=self._timeout_seconds,
+            ),
+            operation="text history lookup",
+        )
+
+    async def _async_find_existing_text(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        discriminator: str | None = None,
+    ) -> str | None:
+        import discord
+
+        channel = await self._resolve_channel(channel_id)
+        history_lookup = getattr(channel, "history", None)
+        if history_lookup is None:
+            raise FC27DiscordDispatchTransportError(
+                "Configured Discord team-chat channel does not support history lookup; "
+                "absence of a prior notification cannot be proven",
+                category="DISCORD_HISTORY_UNAVAILABLE",
+                retryable=False,
+            )
+        bot_user = getattr(self._client, "user", None)
+        bot_id = getattr(bot_user, "id", None)
+        expected_discriminator = str(discriminator or "").strip()
+        expected_content = str(content or "").strip()
+        if not expected_discriminator and not expected_content:
+            return None
+
+        return await _scan_team_chat_history(
+            history_lookup,
+            bot_id=bot_id,
+            expected_discriminator=expected_discriminator,
+            expected_content=expected_content,
+            history_kwargs={"limit": CHANNEL_HISTORY_DEDUP_LIMIT},
+        )
 
     def edit_notification(
         self,
@@ -2888,11 +3030,17 @@ def build_post_new_results_team_chat_message(
         opponent_display=opponent_safe,
     )
     summary_text = build_team_chat_result_summary(detail)
+    discriminator = build_match_post_tag(match_data.match_ref)
+    tagged_text = tag_match_post_content(
+        summary_text,
+        seed=match_data.match_ref,
+    )
     tc_msg = FC27TeamChatMessage(
         channel_id=clean_channel,
         idempotency_key=idempotency_key,
         match_ref=match_data.match_ref,
-        content=summary_text[:MAX_DISCORD_CONTENT_LENGTH],
+        discriminator=discriminator,
+        content=tagged_text[:MAX_DISCORD_CONTENT_LENGTH],
     )
     combined_forbidden = _combined_forbidden_tokens(match_data, extra_forbidden_tokens)
     _validate_outgoing_texts([tc_msg.content], combined_forbidden)
@@ -3219,7 +3367,15 @@ def run_discord_dispatch_cycle(
                     require_dedicated_writer_role=verify_posture,
                 )
 
-        def _load_existing_linkage(m_ref: str) -> tuple[str | None, str | None]:
+        def _load_existing_linkage(
+            m_ref: str,
+        ) -> tuple[str | None, str | None, str | None, str | None]:
+            """Return ``(db_results_id, db_team_chat_id, cached_results_id, cached_team_chat_id)``.
+
+            Database linkage is authoritative; the transport cache is reported separately so
+            callers can persist an ID they recovered from the cache instead of losing it on
+            the next restart.
+            """
             db_res_id: str | None = None
             db_tc_id: str | None = None
             try:
@@ -3233,13 +3389,15 @@ def run_discord_dispatch_cycle(
                     readonly_conn._conn.rollback()  # noqa: SLF001
                 except Exception:
                     pass
+            cache_res_id: str | None = None
+            cache_tc_id: str | None = None
             get_fn = getattr(transport, "get_match_linkage", None)
             if callable(get_fn):
                 t_links = get_fn(m_ref)
                 if t_links is not None:
-                    db_res_id = db_res_id or getattr(t_links, "results_message_id", None)
-                    db_tc_id = db_tc_id or getattr(t_links, "team_chat_message_id", None)
-            return db_res_id, db_tc_id
+                    cache_res_id = getattr(t_links, "results_message_id", None)
+                    cache_tc_id = getattr(t_links, "team_chat_message_id", None)
+            return db_res_id, db_tc_id, cache_res_id, cache_tc_id
 
         for job in claimed_jobs:
             match_ref = (
@@ -3279,7 +3437,14 @@ def run_discord_dispatch_cycle(
                         extra_forbidden_tokens=merged_forbidden,
                     )
 
-                linked_res_id, linked_tc_id = _load_existing_linkage(match_data.match_ref)
+                (
+                    db_linked_res_id,
+                    db_linked_tc_id,
+                    cached_res_id,
+                    cached_tc_id,
+                ) = _load_existing_linkage(match_data.match_ref)
+                linked_res_id = db_linked_res_id or cached_res_id
+                linked_tc_id = db_linked_tc_id or cached_tc_id
 
                 # Idempotency / duplicate-send protection across retries and restarts (formal embed):
                 existing_msg_id: str | None = None
@@ -3350,7 +3515,7 @@ def run_discord_dispatch_cycle(
                 else:
                     discord_msg_id = existing_msg_id
                     eff_cache.add(job.idempotency_key)
-                    if _SNOWFLAKE_RE.fullmatch(discord_msg_id) and linked_res_id is None:
+                    if _SNOWFLAKE_RE.fullmatch(discord_msg_id) and db_linked_res_id is None:
                         _persist_linkage(
                             m_ref=match_data.match_ref,
                             results_channel_id=config.results_channel_id,
@@ -3437,7 +3602,7 @@ def run_discord_dispatch_cycle(
                     elif existing_tc_id is not None:
                         tc_msg_id = existing_tc_id
                         eff_cache.add(tc_cache_key)
-                        if _SNOWFLAKE_RE.fullmatch(tc_msg_id) and linked_tc_id is None:
+                        if _SNOWFLAKE_RE.fullmatch(tc_msg_id) and db_linked_tc_id is None:
                             _persist_linkage(
                                 m_ref=match_data.match_ref,
                                 team_chat_channel_id=config.team_chat_channel_id,
@@ -3733,29 +3898,63 @@ def refresh_dispatched_match_message(
                         res_chan,
                     )
 
+        def _find_existing_team_chat_message(
+            chan: str, msg: FC27TeamChatMessage
+        ) -> str | None:
+            """Recover an already-posted team-chat message using the expected payload."""
+            tc_find_fn = getattr(transport, "find_existing_team_chat_notification", None)
+            if callable(tc_find_fn):
+                find_kwargs: dict[str, Any] = {
+                    "channel_id": chan,
+                    "match_ref": match_ref,
+                    "idempotency_key": idem_key,
+                    "message": msg,
+                }
+                try:
+                    sig_params = inspect.signature(tc_find_fn).parameters
+                    if "message" not in sig_params and not any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig_params.values()
+                    ):
+                        find_kwargs.pop("message", None)
+                except (TypeError, ValueError):
+                    find_kwargs.pop("message", None)
+                return tc_find_fn(**find_kwargs)
+            text_find_fn = getattr(transport, "find_existing_text", None)
+            if callable(text_find_fn):
+                return text_find_fn(
+                    channel_id=chan,
+                    content=msg.content,
+                    discriminator=msg.discriminator,
+                )
+            return None
+
         tc_edited = False
-        if tc_chan and tc_msg_id:
+        if tc_chan:
             tc_msg = build_post_new_results_team_chat_message(
                 match_data,
                 channel_id=tc_chan,
                 idempotency_key=idem_key,
                 extra_forbidden_tokens=merged_forbidden,
             )
-            tc_edit_fn = getattr(transport, "edit_team_chat_notification", None)
-            if callable(tc_edit_fn):
-                tc_edited = bool(
-                    tc_edit_fn(
-                        channel_id=tc_chan,
-                        message_id=tc_msg_id,
-                        message=tc_msg,
+            if not tc_msg_id:
+                tc_msg_id = _find_existing_team_chat_message(tc_chan, tc_msg)
+            if tc_msg_id:
+                tc_edit_fn = getattr(transport, "edit_team_chat_notification", None)
+                if callable(tc_edit_fn):
+                    tc_edited = bool(
+                        tc_edit_fn(
+                            channel_id=tc_chan,
+                            message_id=tc_msg_id,
+                            message=tc_msg,
+                        )
                     )
-                )
-                if not tc_edited:
-                    LOGGER.warning(
-                        "fc27_team_chat_edit_missing match_ref=%s channel_id=%s",
-                        match_ref,
-                        tc_chan,
-                    )
+                    if not tc_edited:
+                        LOGGER.warning(
+                            "fc27_team_chat_edit_missing match_ref=%s channel_id=%s",
+                            match_ref,
+                            tc_chan,
+                        )
         return (formal_edited, tc_edited)
     finally:
         if owns_ro:

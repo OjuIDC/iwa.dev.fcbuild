@@ -19,6 +19,7 @@ Invariants:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -263,7 +264,7 @@ _STAT_POSITION_RE = re.compile(
 _FORBIDDEN_WRITER_TABLES_RE = re.compile(
     r"\b("
     r"fc27_matches|fc27_player_match_stats|fc27_clubs|fc27_export_batches|fc27_quarantine_records|"
-    r"approval_requests|approval_audit|approval_nonces|dispatches|outbox|domain_events|"
+    r"fc27_discord_jobs|approval_requests|approval_audit|approval_nonces|dispatches|outbox|domain_events|"
     r"schema_migrations|schema_policy_versions|fc27_users|fc27_credentials"
     r")\b",
     re.IGNORECASE,
@@ -1841,6 +1842,7 @@ def _propagate_roster_rename(
 
 
 RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS: int = 900
+DEFAULT_CLI_ACTOR_DISCORD_USER_ID: str = "100000000000000001"
 _RECONCILIATION_TOKEN_RE = re.compile(r"^T([1-9][0-9]*)$", re.IGNORECASE)
 _RAW_PLAYER_REF_SUBSTR_RE = re.compile(r"\bplr_ecf_[A-Za-z0-9_-]+\b", re.IGNORECASE)
 _RAW_MATCH_REF_SUBSTR_RE = re.compile(r"\bmref_ecf_[A-Za-z0-9_-]+\b", re.IGNORECASE)
@@ -1866,24 +1868,77 @@ class UnresolvedPlayerSummary(BaseModel):
     player_id: str | None = Field(default=None, exclude=True, repr=False)
 
 
+@contextmanager
+def _open_roster_reader_connection(
+    conn_or_uri: Any,
+) -> Generator[psycopg.Connection, None, None]:
+    """Open a read-only connection for reconciliation token lookups."""
+    if isinstance(conn_or_uri, psycopg.Connection):
+        yield conn_or_uri
+        return
+    raw_conn = psycopg.connect(conn_or_uri, connect_timeout=5)
+    try:
+        yield raw_conn
+    finally:
+        raw_conn.close()
+
+
+def _as_aware_datetime(value: datetime) -> datetime:
+    """Return ``value`` as a timezone-aware UTC datetime (naive values are treated as UTC)."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class ReconciliationTokenStore:
-    """Thread-safe in-memory store mapping short-lived numbered tokens (T1..Tn) to internal player IDs."""
+    """Thread-safe store mapping short-lived numbered tokens (T1..Tn) to internal player IDs.
+
+    Bindings are kept in memory by default. When ``writer_conn_or_uri`` is supplied they are
+    persisted in ``public.fc27_roster_reconciliation_tokens`` with an explicit expiry, so a
+    token listed by one process keeps resolving to the same internal player id in another
+    (for example the Discord bot listing unresolved players and a CLI run consuming a token).
+    Unknown or expired tokens always fail closed; they are never re-derived from the current
+    unresolved-player ordering, which would silently retarget an operator's token.
+    """
 
     def __init__(
         self,
         *,
+        writer_conn_or_uri: Any = None,
+        reader_conn_or_uri: Any = None,
+        require_dedicated_writer_role: bool = True,
         default_ttl_seconds: int = RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if default_ttl_seconds < 1 or default_ttl_seconds > 86400:
             raise MatchResultsValidationError("ttl_seconds must be between 1 and 86400.")
+        self._writer_conn_or_uri = writer_conn_or_uri
+        self._reader_conn_or_uri = reader_conn_or_uri
+        self._require_dedicated_writer_role = bool(require_dedicated_writer_role)
         self._default_ttl_seconds = int(default_ttl_seconds)
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
         self._lock = threading.Lock()
         self._entries: dict[tuple[str | None, str], tuple[str, datetime]] = {}
 
+    @property
+    def is_persistent(self) -> bool:
+        """Whether tokens can be issued into PostgreSQL instead of memory only."""
+        return self._writer_conn_or_uri is not None
+
+    @property
+    def can_resolve_persisted(self) -> bool:
+        """Whether stored token bindings can be read back (writer or read-only connection)."""
+        return self._writer_conn_or_uri is not None or self._reader_conn_or_uri is not None
+
+    def _require_actor_for_persistence(self, actor_key: str | None) -> None:
+        """Reject actor-less persistent tokens so operators cannot share one T1..Tn namespace."""
+        if self.can_resolve_persisted and actor_key is None:
+            raise MatchResultsValidationError(
+                "A Discord actor id is required for persistent reconciliation tokens."
+            )
+
     def clear(self) -> None:
-        """Clear all stored tokens (primarily for test isolation)."""
+        """Clear in-memory tokens (primarily for test isolation)."""
         with self._lock:
             self._entries.clear()
 
@@ -1895,6 +1950,125 @@ class ReconciliationTokenStore:
         ]
         for key in expired_keys:
             self._entries.pop(key, None)
+
+    def _open_writer(self) -> Any:
+        return open_guarded_match_results_writer_connection(
+            self._writer_conn_or_uri,
+            require_dedicated_writer_role=self._require_dedicated_writer_role,
+        )
+
+    def _open_reader(self) -> Any:
+        return _open_roster_reader_connection(self._reader_conn_or_uri)
+
+    def _issue_tokens_persisted(
+        self,
+        player_ids: Sequence[str],
+        *,
+        actor_key: str | None,
+        ttl_seconds: int,
+        current_now: datetime,
+    ) -> list[str]:
+        expires_at = current_now + timedelta(seconds=ttl_seconds)
+        tokens = [f"T{idx}" for idx in range(1, len(player_ids) + 1)]
+        with self._open_writer() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM public.fc27_roster_reconciliation_tokens
+                    WHERE expires_at <= %s
+                       OR actor_discord_user_id = %s
+                    """,
+                    (current_now, actor_key or ""),
+                )
+                for token, pid in zip(tokens, player_ids):
+                    cur.execute(
+                        """
+                        INSERT INTO public.fc27_roster_reconciliation_tokens
+                            (actor_discord_user_id, token, player_id, issued_at, expires_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (actor_discord_user_id, token) DO UPDATE
+                        SET player_id = EXCLUDED.player_id,
+                            issued_at = EXCLUDED.issued_at,
+                            expires_at = EXCLUDED.expires_at
+                        """,
+                        (actor_key or "", token, pid, current_now, expires_at),
+                    )
+        return tokens
+
+    def _resolve_persisted(
+        self,
+        raw: str,
+        *,
+        actor_key: str | None,
+        current_now: datetime,
+    ) -> str:
+        return self._resolve_persisted_with(
+            self._open_writer,
+            raw,
+            actor_key=actor_key,
+            current_now=current_now,
+            purge_expired=True,
+        )
+
+    def _resolve_persisted_readonly(
+        self,
+        raw: str,
+        *,
+        actor_key: str | None,
+        current_now: datetime,
+    ) -> str:
+        """Resolve a token through a read-only connection (no expiry purge possible)."""
+        return self._resolve_persisted_with(
+            self._open_reader,
+            raw,
+            actor_key=actor_key,
+            current_now=current_now,
+            purge_expired=False,
+        )
+
+    def _resolve_persisted_with(
+        self,
+        conn_opener: Callable[[], Any],
+        raw: str,
+        *,
+        actor_key: str | None,
+        current_now: datetime,
+        purge_expired: bool,
+    ) -> str:
+        actor_value = actor_key or ""
+        with conn_opener() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT player_id, expires_at
+                    FROM public.fc27_roster_reconciliation_tokens
+                    WHERE actor_discord_user_id = %s
+                      AND token = %s
+                    """,
+                    (actor_value, raw),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise MatchResultsValidationError(
+                        f"Unknown or expired reconciliation token '{raw}'. "
+                        "Run /unresolvedplayers again."
+                    )
+                pid = str(row[0])
+                expires_at = row[1]
+                if _as_aware_datetime(expires_at) <= _as_aware_datetime(current_now):
+                    if purge_expired:
+                        cur.execute(
+                            """
+                            DELETE FROM public.fc27_roster_reconciliation_tokens
+                            WHERE actor_discord_user_id = %s
+                              AND token = %s
+                            """,
+                            (actor_value, raw),
+                        )
+                    raise MatchResultsValidationError(
+                        f"Reconciliation token '{raw}' has expired. Run /unresolvedplayers again."
+                    )
+        return pid
 
     def issue_tokens(
         self,
@@ -1913,7 +2087,7 @@ class ReconciliationTokenStore:
             if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
             else None
         )
-        current_now = now or self._clock()
+        current_now = _as_aware_datetime(now or self._clock())
         expires_at = current_now + timedelta(seconds=ttl)
 
         normalized_pids: list[str] = []
@@ -1923,6 +2097,20 @@ class ReconciliationTokenStore:
             if clean_pid not in seen_pids:
                 seen_pids.add(clean_pid)
                 normalized_pids.append(clean_pid)
+
+        if self.is_persistent:
+            self._require_actor_for_persistence(actor_key)
+            return self._issue_tokens_persisted(
+                normalized_pids,
+                actor_key=actor_key,
+                ttl_seconds=ttl,
+                current_now=current_now,
+            )
+        if self._reader_conn_or_uri is not None:
+            raise MatchResultsValidationError(
+                "Issuing reconciliation tokens requires a writer database URI "
+                "(FC27_MATCH_RESULTS_WRITER_URI)."
+            )
 
         with self._lock:
             self._purge_expired_locked(current_now, actor_key=actor_key)
@@ -1951,7 +2139,22 @@ class ReconciliationTokenStore:
             if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
             else None
         )
-        current_now = now or self._clock()
+        current_now = _as_aware_datetime(now or self._clock())
+
+        if self.is_persistent:
+            self._require_actor_for_persistence(actor_key)
+            return self._resolve_persisted(
+                raw,
+                actor_key=actor_key,
+                current_now=current_now,
+            )
+        if self._reader_conn_or_uri is not None:
+            self._require_actor_for_persistence(actor_key)
+            return self._resolve_persisted_readonly(
+                raw,
+                actor_key=actor_key,
+                current_now=current_now,
+            )
 
         with self._lock:
             self._purge_expired_locked(current_now)
@@ -2249,7 +2452,7 @@ def upsert_roster_player(
     audit_actor_id = (
         validate_discord_snowflake(actor_discord_user_id, field_name="actor")
         if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
-        else "100000000000000001"
+        else DEFAULT_CLI_ACTOR_DISCORD_USER_ID
     )
 
     if dry_run:
@@ -3669,7 +3872,7 @@ def record_match_discord_message_links(
     *,
     match_id: int | None = None,
     match_ref: str | None = None,
-    actor_discord_user_id: str = "100000000000000001",
+    actor_discord_user_id: str = DEFAULT_CLI_ACTOR_DISCORD_USER_ID,
     discord_guild_id: str | None = None,
     results_channel_id: str | None = None,
     results_message_id: str | None = None,
@@ -4658,6 +4861,59 @@ def build_team_chat_result_summary(match: ManualMatchDetail) -> str:
     return summary
 
 
+MATCH_POST_TAG_PREFIX = "fc27-"
+MATCH_POST_TAG_DIGEST_LENGTH = 12
+MATCH_POST_TAG_MAX_CONTENT_LENGTH = 1000
+
+
+def build_match_post_tag(seed: str) -> str:
+    """Return a stable, irreversible per-match tag for Discord post deduplication.
+
+    The tag is a truncated SHA-256 digest of ``seed`` (a pseudonymized provider match
+    reference, or a manual match id). It therefore identifies exactly one match without
+    disclosing internal references, and it keeps working after the human-readable
+    summary changes (roster corrections, renamed players, edited coaching notes).
+    """
+    clean_seed = str(seed or "").strip()
+    if not clean_seed:
+        raise MatchResultsValidationError(
+            "A non-empty seed is required to build a match post tag."
+        )
+    digest = hashlib.sha256(clean_seed.encode("utf-8")).hexdigest()
+    return f"{MATCH_POST_TAG_PREFIX}{digest[:MATCH_POST_TAG_DIGEST_LENGTH]}"
+
+
+def tag_match_post_content(
+    content: str,
+    *,
+    seed: str,
+    max_length: int = MATCH_POST_TAG_MAX_CONTENT_LENGTH,
+) -> str:
+    """Append the stable match tag to ``content``, keeping the result within ``max_length``."""
+    tag = build_match_post_tag(seed)
+    base = str(content or "").rstrip()
+    if not base:
+        return tag
+    room = max(0, int(max_length) - len(tag) - 2)
+    if len(base) > room:
+        base = base[:room].rstrip()
+    return f"{base}\n\n{tag}"
+
+
+def extract_match_post_tag(content: str) -> str | None:
+    """Return the stable match tag embedded in ``content``, or ``None`` when absent."""
+    for line in reversed(str(content or "").splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith(MATCH_POST_TAG_PREFIX):
+            continue
+        suffix = candidate[len(MATCH_POST_TAG_PREFIX) :]
+        if len(suffix) == MATCH_POST_TAG_DIGEST_LENGTH and all(
+            ch in "0123456789abcdef" for ch in suffix
+        ):
+            return candidate
+    return None
+
+
 def build_result_embed(match: ManualMatchDetail) -> discord.Embed:
     """Canonical East Coasters FC match result embed builder (no internal IDs or jargon)."""
     if match.status == "SCHEDULED":
@@ -5107,6 +5363,28 @@ class InMemoryDiscordChannelAdapter:
     def get_text(self, channel_id: str, message_id: str) -> str | None:
         return self.text_messages.get((channel_id.strip(), message_id.strip()))
 
+    def find_existing_text(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        discriminator: str | None = None,
+    ) -> str | None:
+        """Return the ID of an already-posted text message in ``channel_id``, if any."""
+        chan = channel_id.strip()
+        expected_disc = str(discriminator or "").strip()
+        expected_content = str(content or "").strip()
+        for (stored_chan, msg_id), stored_content in reversed(
+            list(self.text_messages.items())
+        ):
+            if stored_chan != chan or msg_id in self.deleted_message_ids:
+                continue
+            if expected_disc and extract_match_post_tag(stored_content) == expected_disc:
+                return msg_id
+            if expected_content and stored_content.strip() == expected_content:
+                return msg_id
+        return None
+
 
 def _resolve_cli_reader_uri(explicit_uri: str | None = None) -> str | None:
     if explicit_uri and explicit_uri.strip():
@@ -5141,6 +5419,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_unres.add_argument("--limit", type=int, default=50)
     p_unres.add_argument("--show-internal-ids", action="store_true", default=False)
     p_unres.add_argument("--db-uri", default=None)
+    p_unres.add_argument("--writer-uri", default=None)
+    p_unres.add_argument("--actor-discord-user-id", default=DEFAULT_CLI_ACTOR_DISCORD_USER_ID)
+    p_unres.add_argument("--require-dedicated-writer-role", action="store_true", default=True)
 
     p_set = sub.add_parser(
         "set-player",
@@ -5152,7 +5433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_set.add_argument("--display-name", required=True)
     p_set.add_argument("--position", default=None)
     p_set.add_argument("--discord-user-id", default=None)
-    p_set.add_argument("--actor-discord-user-id", default="100000000000000001")
+    p_set.add_argument("--actor-discord-user-id", default=DEFAULT_CLI_ACTOR_DISCORD_USER_ID)
     p_set.add_argument("--inactive", action="store_true", default=False)
     p_set.add_argument("--dry-run", action="store_true", default=False)
     p_set.add_argument("--club-id", default=EAST_COASTERS_CLUB_ID)
@@ -5171,11 +5452,33 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        writer_uri = (
+            args.writer_uri.strip()
+            if args.writer_uri and args.writer_uri.strip()
+            else resolve_match_results_writer_uri(strict=False)
+        )
+        require_dedicated = bool(args.require_dedicated_writer_role)
+        token_store = (
+            ReconciliationTokenStore(
+                writer_conn_or_uri=writer_uri,
+                require_dedicated_writer_role=require_dedicated,
+            )
+            if writer_uri
+            else None
+        )
+        if token_store is None:
+            print(
+                "Warning: writer database URI (FC27_MATCH_RESULTS_WRITER_URI) is not configured; "
+                "issued tokens are only valid inside this process.",
+                file=sys.stderr,
+            )
         entries = list_unresolved_players(
             reader_uri,
             club_id=args.club_id,
             game_version=args.game_version,
             limit=args.limit,
+            token_store=token_store,
+            actor_discord_user_id=args.actor_discord_user_id,
         )
         if not entries:
             print("No unresolved players found.")
@@ -5212,19 +5515,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Error: no database URI available for validation.", file=sys.stderr)
             return 2
 
-        if args.token and reader_uri:
-            # Hydrate current deterministic T1..Tn ordering in standalone CLI execution.
-            try:
-                resolve_reconciliation_token(
-                    args.token, actor_discord_user_id=args.actor_discord_user_id
-                )
-            except MatchResultsValidationError:
-                list_unresolved_players(
-                    reader_uri,
-                    club_id=args.club_id,
-                    game_version=args.game_version,
-                    actor_discord_user_id=args.actor_discord_user_id,
-                )
+        token_store: ReconciliationTokenStore | None = None
+        if writer_uri:
+            token_store = ReconciliationTokenStore(
+                writer_conn_or_uri=writer_uri,
+                require_dedicated_writer_role=require_dedicated,
+            )
+        elif reader_uri:
+            # Dry-run only: token resolution is read-only, so the reader role suffices.
+            token_store = ReconciliationTokenStore(reader_conn_or_uri=reader_uri)
+
+        if args.token and token_store is None:
+            print(
+                "Error: a reconciliation token can only be resolved with a database URI "
+                "(FC27_MATCH_RESULTS_WRITER_URI, or a reader URI for --dry-run) so the issued "
+                "binding can be read back. Use --player-id for a direct mapping instead.",
+                file=sys.stderr,
+            )
+            return 2
 
         hmac_key: bytes | None = None
         if args.gamertag:
@@ -5239,12 +5547,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             position=args.position,
             discord_user_id=args.discord_user_id,
             active=not args.inactive,
+            token_store=token_store,
             actor_discord_user_id=args.actor_discord_user_id,
             reader_conn_or_uri=reader_uri,
             alias_hmac_key=hmac_key,
             dry_run=bool(args.dry_run),
             require_dedicated_writer_role=require_dedicated,
         )
+        # Finding 8 (PR #117 review comment 4580138216):
+        # DEFERRED_BY_DESIGN — SEPARATE AUTHORIZATION REQUIRED.
+        # CLI roster mutations persist to `public.fc27_roster` so all subsequent dispatches
+        # and read commands reflect the updated player identity immediately, while Discord
+        # slash-command mutations (`/setplayer`, `/renameplayer`) refresh live Discord
+        # messages in-process using the bot's gateway transport. Enqueueing a cross-process
+        # Discord refresh job from the CLI is intentionally deferred because the dedicated
+        # writer role (`fc27_match_results_writer`) has `REVOKE ALL` on
+        # `public.fc27_discord_jobs` and `chk_fc27_discord_jobs_type` restricts job types;
+        # introducing a queued roster-refresh job type requires separate DB/grants approval.
         mode_tag = "[DRY RUN] " if args.dry_run else ""
         pos_tag = f" ({rec.position})" if rec.position else ""
         print(f"{mode_tag}Mapped roster player -> {rec.display_name}{pos_tag} [active={rec.active}]")
@@ -5265,6 +5584,7 @@ __all__ = [
     "BRAND_COLOR_SILVER",
     "BRAND_COLOR_WHITE",
     "BRAND_COLOR_WIN",
+    "DEFAULT_CLI_ACTOR_DISCORD_USER_ID",
     "DEFAULT_COMPETITION_LABEL",
     "DEFAULT_MATCHDAY_TIME",
     "DEFAULT_RECONCILIATION_TOKEN_STORE",
@@ -5292,6 +5612,9 @@ __all__ = [
     "MatchResultsPermissionError",
     "MatchResultsPostureError",
     "MatchResultsValidationError",
+    "MATCH_POST_TAG_DIGEST_LENGTH",
+    "MATCH_POST_TAG_MAX_CONTENT_LENGTH",
+    "MATCH_POST_TAG_PREFIX",
     "PAGINATION_TIMEOUT_SECONDS",
     "PERMISSION_DENIED_MESSAGE",
     "ParsedPlayerStatEntry",
@@ -5305,11 +5628,13 @@ __all__ = [
     "UnresolvedPlayerSummary",
     "build_result_content",
     "build_result_embed",
+    "build_match_post_tag",
     "build_team_chat_result_summary",
     "clean_opponent",
     "coerce_public_match_id",
     "create_scheduled_match",
     "edit_match_result",
+    "extract_match_post_tag",
     "fetch_latest_manual_result",
     "fetch_manual_match",
     "fetch_manual_match_by_legacy_ref",
@@ -5349,6 +5674,7 @@ __all__ = [
     "resolve_player_names",
     "resolve_reconciliation_token",
     "soft_delete_match",
+    "tag_match_post_content",
     "update_match_discord_message_link",
     "upsert_roster_player",
     "validate_bounded_int",

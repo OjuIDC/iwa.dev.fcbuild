@@ -1,4 +1,4 @@
--- grants-policy-version: 17
+-- grants-policy-version: 18
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -779,6 +779,26 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
             EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_discord_jobs_job_id_seq TO fc27_player_dev_writer';
+        END IF;
+    END IF;
+
+    -- Durable reconciliation token inventory (0017)
+    IF to_regclass('public.fc27_roster_reconciliation_tokens') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_roster_reconciliation_tokens FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_roster_reconciliation_tokens FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_roster_reconciliation_tokens FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_roster_reconciliation_tokens FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON public.fc27_roster_reconciliation_tokens TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_roster_reconciliation_tokens TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;
