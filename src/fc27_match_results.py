@@ -18,13 +18,16 @@ Invariants:
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import re
+import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Generator, Literal, Sequence, TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -158,6 +161,9 @@ from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_GAME_VERSION,
     EAST_COASTERS_PLATFORM,
+    PSEUDONYM_MATCH_REF_RE,
+    PSEUDONYM_PLAYER_REF_RE,
+    compute_alias_hmac_fingerprint,
 )
 
 MANUAL_MATCH_RESULT: Literal["MANUAL_MATCH_RESULT"] = "MANUAL_MATCH_RESULT"
@@ -1834,18 +1840,397 @@ def _propagate_roster_rename(
         )
 
 
+RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS: int = 900
+_RECONCILIATION_TOKEN_RE = re.compile(r"^T([1-9][0-9]*)$", re.IGNORECASE)
+_RAW_PLAYER_REF_SUBSTR_RE = re.compile(r"\bplr_ecf_[A-Za-z0-9_-]+\b", re.IGNORECASE)
+_RAW_MATCH_REF_SUBSTR_RE = re.compile(r"\bmref_ecf_[A-Za-z0-9_-]+\b", re.IGNORECASE)
+
+
+def redact_internal_player_refs(text: str) -> str:
+    """Strip any accidental `plr_ecf_*` or `mref_ecf_*` identifiers from public text."""
+    cleaned = _RAW_PLAYER_REF_SUBSTR_RE.sub("[redacted-ref]", text)
+    cleaned = _RAW_MATCH_REF_SUBSTR_RE.sub("[redacted-match]", cleaned)
+    return cleaned
+
+
+class UnresolvedPlayerSummary(BaseModel):
+    """Privacy-safe summary of an unresolved provider player reference with a short-lived token."""
+
+    model_config = ConfigDict(frozen=True)
+
+    token: str
+    appearance_count: int
+    observed_positions: tuple[str, ...] = ()
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    player_id: str | None = Field(default=None, exclude=True, repr=False)
+
+
+class ReconciliationTokenStore:
+    """Thread-safe in-memory store mapping short-lived numbered tokens (T1..Tn) to internal player IDs."""
+
+    def __init__(
+        self,
+        *,
+        default_ttl_seconds: int = RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if default_ttl_seconds < 1 or default_ttl_seconds > 86400:
+            raise MatchResultsValidationError("ttl_seconds must be between 1 and 86400.")
+        self._default_ttl_seconds = int(default_ttl_seconds)
+        self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str | None, str], tuple[str, datetime]] = {}
+
+    def clear(self) -> None:
+        """Clear all stored tokens (primarily for test isolation)."""
+        with self._lock:
+            self._entries.clear()
+
+    def _purge_expired_locked(self, now: datetime, *, actor_key: str | None = None) -> None:
+        expired_keys = [
+            key
+            for key, (_, expires_at) in self._entries.items()
+            if expires_at <= now or (actor_key is not None and key[0] == actor_key)
+        ]
+        for key in expired_keys:
+            self._entries.pop(key, None)
+
+    def issue_tokens(
+        self,
+        player_ids: Sequence[str],
+        *,
+        actor_discord_user_id: str | None = None,
+        ttl_seconds: int | None = None,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Issue sequential `T1..Tn` tokens for ordered internal player IDs with bounded TTL."""
+        ttl = self._default_ttl_seconds if ttl_seconds is None else int(ttl_seconds)
+        if ttl < 1 or ttl > 86400:
+            raise MatchResultsValidationError("ttl_seconds must be between 1 and 86400.")
+        actor_key = (
+            validate_discord_snowflake(actor_discord_user_id, field_name="actor")
+            if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+            else None
+        )
+        current_now = now or self._clock()
+        expires_at = current_now + timedelta(seconds=ttl)
+
+        normalized_pids: list[str] = []
+        seen_pids: set[str] = set()
+        for pid in player_ids:
+            clean_pid = normalize_roster_player_id(pid)
+            if clean_pid not in seen_pids:
+                seen_pids.add(clean_pid)
+                normalized_pids.append(clean_pid)
+
+        with self._lock:
+            self._purge_expired_locked(current_now, actor_key=actor_key)
+            tokens: list[str] = []
+            for idx, pid in enumerate(normalized_pids, start=1):
+                token = f"T{idx}"
+                self._entries[(actor_key, token)] = (pid, expires_at)
+                tokens.append(token)
+            return tokens
+
+    def resolve(
+        self,
+        token: str,
+        *,
+        actor_discord_user_id: str | None = None,
+        now: datetime | None = None,
+    ) -> str:
+        """Resolve a numbered token (`T1..Tn`) back to its internal player ID or fail closed."""
+        raw = str(token or "").strip().upper()
+        if not _RECONCILIATION_TOKEN_RE.fullmatch(raw):
+            raise MatchResultsValidationError(
+                "Invalid reconciliation token format. Run /unresolvedplayers to obtain a token like T1."
+            )
+        actor_key = (
+            validate_discord_snowflake(actor_discord_user_id, field_name="actor")
+            if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+            else None
+        )
+        current_now = now or self._clock()
+
+        with self._lock:
+            self._purge_expired_locked(current_now)
+            entry = self._entries.get((actor_key, raw))
+            if entry is None:
+                raise MatchResultsValidationError(
+                    f"Unknown or expired reconciliation token '{raw}'. Run /unresolvedplayers again."
+                )
+            pid, expires_at = entry
+            if current_now >= expires_at:
+                self._entries.pop((actor_key, raw), None)
+                raise MatchResultsValidationError(
+                    f"Reconciliation token '{raw}' has expired. Run /unresolvedplayers again."
+                )
+            return pid
+
+
+DEFAULT_RECONCILIATION_TOKEN_STORE = ReconciliationTokenStore()
+
+
+def resolve_reconciliation_token(
+    token: str,
+    *,
+    token_store: ReconciliationTokenStore | None = None,
+    actor_discord_user_id: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Resolve a short-lived reconciliation token using the given or default token store."""
+    store = token_store or DEFAULT_RECONCILIATION_TOKEN_STORE
+    return store.resolve(token, actor_discord_user_id=actor_discord_user_id, now=now)
+
+
+@contextmanager
+def _open_read_connection(conn_or_uri: Any) -> Generator[Any, None, None]:
+    """Yield an active read connection without unwrapping query-counting test wrappers."""
+    if isinstance(conn_or_uri, str):
+        with psycopg.connect(conn_or_uri) as conn:
+            yield conn
+        return
+    yield conn_or_uri
+
+
+def list_unresolved_players(
+    conn_or_uri: Any,
+    *,
+    club_id: str = EAST_COASTERS_CLUB_ID,
+    game_version: str = EAST_COASTERS_GAME_VERSION,
+    token_store: ReconciliationTokenStore | None = None,
+    actor_discord_user_id: str | None = None,
+    ttl_seconds: int = RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS,
+    now: datetime | None = None,
+    limit: int = 50,
+) -> tuple[UnresolvedPlayerSummary, ...]:
+    """Query unresolved provider identities in a single aggregate SQL query and bind short-lived tokens."""
+    bounded_limit = max(1, min(int(limit), 100))
+    store = token_store or DEFAULT_RECONCILIATION_TOKEN_STORE
+    clean_club_id = validate_safe_text(club_id, field_name="club_id", max_length=32, allow_none=False)
+    clean_game_version = validate_safe_text(
+        game_version, field_name="game_version", max_length=32, allow_none=False
+    )
+    assert clean_club_id is not None and clean_game_version is not None
+
+    query = """
+        SELECT
+            pms.local_player_reference,
+            COUNT(DISTINCT pms.match_id)::integer AS appearance_count,
+            ARRAY_REMOVE(
+                ARRAY_AGG(DISTINCT NULLIF(UPPER(BTRIM(pms.position)), '')),
+                NULL
+            ) AS observed_positions,
+            MIN(m.played_at) AS first_seen_at,
+            MAX(m.played_at) AS last_seen_at
+        FROM public.fc27_player_match_stats pms
+        INNER JOIN public.fc27_matches m
+            ON m.match_id = pms.match_id
+        LEFT JOIN public.fc27_roster r
+            ON r.player_id = pms.local_player_reference
+           AND r.active = TRUE
+        WHERE m.club_id = %s
+          AND LOWER(m.game_version) = LOWER(%s)
+          AND pms.local_player_reference IS NOT NULL
+          AND BTRIM(pms.local_player_reference) <> ''
+          AND r.player_id IS NULL
+        GROUP BY pms.local_player_reference
+        ORDER BY COUNT(DISTINCT pms.match_id) DESC, MAX(m.played_at) DESC NULLS LAST, pms.local_player_reference ASC
+        LIMIT %s
+    """
+
+    with _open_read_connection(conn_or_uri) as conn:
+        rows = conn.execute(
+            query,
+            (clean_club_id, clean_game_version, bounded_limit),
+        ).fetchall()
+
+    if not rows:
+        return ()
+
+    player_ids = [str(r[0]) for r in rows]
+    tokens = store.issue_tokens(
+        player_ids,
+        actor_discord_user_id=actor_discord_user_id,
+        ttl_seconds=ttl_seconds,
+        now=now,
+    )
+
+    summaries: list[UnresolvedPlayerSummary] = []
+    for token, r in zip(tokens, rows):
+        raw_positions = r[2] if len(r) > 2 and r[2] is not None else ()
+        cleaned_positions = tuple(
+            str(pos).strip().upper()
+            for pos in raw_positions
+            if pos is not None
+            and str(pos).strip()
+            and str(pos).strip().upper() not in {"UNKNOWN", "N/A", "NONE", "NULL"}
+        )
+        summaries.append(
+            UnresolvedPlayerSummary(
+                token=token,
+                appearance_count=int(r[1]),
+                observed_positions=cleaned_positions,
+                first_seen_at=r[3],
+                last_seen_at=r[4],
+                player_id=str(r[0]),
+            )
+        )
+    return tuple(summaries)
+
+
+def _format_seen_timestamp(dt: datetime | None) -> str:
+    if dt is None:
+        return "Not recorded"
+    local_dt = dt.astimezone(EASTERN_TZ)
+    return local_dt.strftime("%Y-%m-%d %I:%M %p %Z")
+
+
+def format_unresolved_players_ephemeral(entries: Sequence[UnresolvedPlayerSummary]) -> str:
+    """Format an administrator-only, privacy-safe summary of unresolved player tokens."""
+    if not entries:
+        return "✅ All recorded East Coasters FC players currently have verified roster names."
+
+    lines: list[str] = [
+        "**Unresolved Players (Temporary Reconciliation Tokens — Expires in 15 min)**",
+        "Map a token with `/setplayer player_id:<Token> display_name:<Name> [position:<POS>]`:",
+        "",
+    ]
+    for entry in entries[:25]:
+        pos_part = ", ".join(entry.observed_positions) if entry.observed_positions else "No position recorded"
+        first_str = _format_seen_timestamp(entry.first_seen_at)
+        last_str = _format_seen_timestamp(entry.last_seen_at)
+        lines.append(
+            f"• `{entry.token}` — **{entry.appearance_count}** appearance(s) | "
+            f"Pos: {pos_part} | First: {first_str} | Last: {last_str}"
+        )
+    if len(entries) > 25:
+        lines.append(f"...and {len(entries) - 25} more unresolved identities.")
+    return redact_internal_player_refs("\n".join(lines))[:2000]
+
+
+def render_unresolved_players_embed(entries: Sequence[UnresolvedPlayerSummary]) -> discord.Embed:
+    """Render an administrator-only embed listing temporary reconciliation tokens without raw IDs."""
+    embed = discord.Embed(
+        title="🔎 Unresolved Players",
+        description=(
+            "Every identity has a short-lived reconciliation token (`T1`, `T2`, ...) "
+            "valid for 15 minutes. Never shares raw internal references."
+            if entries
+            else "All recorded players have verified roster mappings."
+        ),
+        color=BRAND_COLOR_ELECTRIC_BLUE,
+    )
+    for entry in entries[:25]:
+        pos_part = ", ".join(entry.observed_positions) if entry.observed_positions else "No position recorded"
+        first_str = _format_seen_timestamp(entry.first_seen_at)
+        last_str = _format_seen_timestamp(entry.last_seen_at)
+        val = redact_internal_player_refs(
+            f"Appearances: **{entry.appearance_count}** • Positions: {pos_part}\n"
+            f"First seen: {first_str} • Last seen: {last_str}"
+        )
+        embed.add_field(name=f"Token `{entry.token}`", value=val[:1024], inline=False)
+    embed.set_footer(text=EAST_COASTERS_FOOTER_TEXT)
+    return embed
+
+
+def _resolve_gamertag_to_player_id(
+    gamertag: str,
+    *,
+    reader_conn_or_uri: Any,
+    alias_hmac_key: bytes | str | None,
+) -> str:
+    """Resolve an operator-supplied gamertag via keyed HMAC fingerprint lookup (never stores raw value)."""
+    if alias_hmac_key is None or reader_conn_or_uri is None:
+        raise MatchResultsValidationError(
+            "Alias lookup requires an operator HMAC key and read-only fingerprint store. "
+            "Use a reconciliation token from /unresolvedplayers or run the protected operator CLI."
+        )
+    fingerprint = compute_alias_hmac_fingerprint(gamertag, alias_hmac_key)
+    with _open_read_connection(reader_conn_or_uri) as conn:
+        rows = conn.execute(
+            """
+            SELECT pseudonym
+            FROM public.fc27_player_alias_fingerprints
+            WHERE gamertag_hmac = %s
+            """,
+            (fingerprint,),
+        ).fetchall()
+    if not rows:
+        raise MatchResultsNotFoundError(
+            "No verified alias fingerprint matched the supplied player identifier."
+        )
+    if len(rows) > 1:
+        raise MatchResultsValidationError(
+            "Ambiguous alias fingerprint match; cannot bind roster identity automatically."
+        )
+    return normalize_roster_player_id(str(rows[0][0]))
+
+
 def upsert_roster_player(
     conn_or_uri: Any,
     *,
-    player_id: str,
+    player_id: str | None = None,
     display_name: str,
     position: str | None = None,
     discord_user_id: str | None = None,
     active: bool = True,
+    token: str | None = None,
+    token_store: ReconciliationTokenStore | None = None,
+    actor_discord_user_id: str | None = None,
+    gamertag: str | None = None,
+    reader_conn_or_uri: Any = None,
+    alias_hmac_key: bytes | str | None = None,
+    dry_run: bool = False,
     require_dedicated_writer_role: bool = True,
 ) -> RosterPlayerRecord:
     """Register or update a player's canonical display name in `public.fc27_roster`."""
-    safe_pid = normalize_roster_player_id(player_id)
+    has_token = bool(token and token.strip())
+    has_pid = bool(player_id and player_id.strip())
+    has_gamertag = bool(gamertag and gamertag.strip())
+
+    if has_gamertag and (has_token or has_pid):
+        raise MatchResultsValidationError(
+            "Provide only one player target: token, player_id, or gamertag."
+        )
+    if has_token and has_pid and token.strip().upper() != player_id.strip().upper():  # type: ignore[union-attr]
+        raise MatchResultsValidationError(
+            "Ambiguous player target: token and player_id cannot specify different targets."
+        )
+
+    resolved_pid_raw: str | None = None
+    if has_token:
+        assert token is not None
+        resolved_pid_raw = resolve_reconciliation_token(
+            token,
+            token_store=token_store,
+            actor_discord_user_id=actor_discord_user_id,
+        )
+    elif has_pid:
+        assert player_id is not None
+        pid_clean = player_id.strip()
+        if _RECONCILIATION_TOKEN_RE.fullmatch(pid_clean):
+            resolved_pid_raw = resolve_reconciliation_token(
+                pid_clean,
+                token_store=token_store,
+                actor_discord_user_id=actor_discord_user_id,
+            )
+        else:
+            resolved_pid_raw = pid_clean
+    elif has_gamertag:
+        assert gamertag is not None
+        resolved_pid_raw = _resolve_gamertag_to_player_id(
+            gamertag,
+            reader_conn_or_uri=reader_conn_or_uri,
+            alias_hmac_key=alias_hmac_key,
+        )
+    else:
+        raise MatchResultsValidationError(
+            "A player_id, reconciliation token (e.g. T1), or gamertag is required."
+        )
+
+    safe_pid = normalize_roster_player_id(resolved_pid_raw)
     norm_name, safe_name = normalize_display_label(display_name, field_name="Name")
     if len(safe_name) > 40:
         raise MatchResultsValidationError("Name must be at most 40 characters.")
@@ -1860,6 +2245,25 @@ def upsert_roster_player(
         if not re.fullmatch(r"^[0-9]{15,20}$", cand_id):
             raise MatchResultsValidationError("discord_user must be a valid Discord user ID (15-20 digits).")
         safe_discord_id = cand_id
+
+    audit_actor_id = (
+        validate_discord_snowflake(actor_discord_user_id, field_name="actor")
+        if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+        else "100000000000000001"
+    )
+
+    if dry_run:
+        now_utc = datetime.now(timezone.utc)
+        return RosterPlayerRecord(
+            player_id=safe_pid,
+            display_name=safe_name,
+            display_name_normalized=norm_name,
+            position=safe_pos,
+            discord_user_id=safe_discord_id,
+            active=active,
+            created_at=now_utc,
+            updated_at=now_utc,
+        )
 
     with open_guarded_match_results_writer_connection(
         conn_or_uri, require_dedicated_writer_role=require_dedicated_writer_role
@@ -1909,6 +2313,29 @@ def upsert_roster_player(
                     norm_new=norm_name,
                     position=safe_pos,
                 )
+                if (
+                    (actor_discord_user_id is not None and str(actor_discord_user_id).strip())
+                    or has_token
+                    or has_gamertag
+                ):
+                    _insert_audit_entry(
+                        cur,
+                        match_id=None,
+                        action="EDIT_RESULT",
+                        actor_discord_user_id=audit_actor_id,
+                        discord_guild_id=None,
+                        discord_channel_id=None,
+                        discord_message_id=None,
+                        previous_revision=None,
+                        new_revision=None,
+                        changed_fields=["roster_player"],
+                        audit_metadata={
+                            "kind": "roster_upsert",
+                            "player_id": safe_pid,
+                            "display_name_normalized": norm_name,
+                            "active": active,
+                        },
+                    )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),
@@ -3156,6 +3583,223 @@ def update_match_discord_message_link(
                 return _hydrate_manual_match(cur, updated_row)
 
 
+class MatchDiscordMessageLinks(BaseModel):
+    """Durable Discord message linkage separating formal results-channel posts and team-chat summaries."""
+
+    model_config = ConfigDict(frozen=True)
+
+    match_id: int | None = None
+    match_ref: str | None = None
+    discord_guild_id: str | None = None
+    results_channel_id: str | None = None
+    results_message_id: str | None = None
+    team_chat_channel_id: str | None = None
+    team_chat_message_id: str | None = None
+
+
+def _validate_optional_snowflake(val: str | None, *, field_name: str) -> str | None:
+    if val is None or not str(val).strip():
+        return None
+    return validate_discord_snowflake(str(val).strip(), field_name=field_name)
+
+
+def _fetch_latest_linkage_row(
+    cur: Any,
+    *,
+    match_id: int | None,
+    match_ref: str | None,
+) -> tuple[str | None, str | None, str | None, str | None, str | None] | None:
+    if match_ref is not None:
+        cur.execute(
+            """
+            SELECT discord_guild_id,
+                   audit_metadata->>'results_channel_id',
+                   audit_metadata->>'results_message_id',
+                   audit_metadata->>'team_chat_channel_id',
+                   audit_metadata->>'team_chat_message_id'
+            FROM public.fc27_manual_match_audit
+            WHERE action = 'RELINK_DISCORD_MESSAGE'
+              AND audit_metadata->>'kind' = 'discord_message_linkage'
+              AND audit_metadata->>'match_ref' = %s
+            ORDER BY audit_id DESC
+            LIMIT 1
+            """,
+            (match_ref,),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return (
+                str(row[0]) if row[0] is not None else None,
+                str(row[1]) if row[1] is not None else None,
+                str(row[2]) if row[2] is not None else None,
+                str(row[3]) if row[3] is not None else None,
+                str(row[4]) if row[4] is not None else None,
+            )
+    if match_id is not None:
+        cur.execute(
+            """
+            SELECT discord_guild_id,
+                   audit_metadata->>'results_channel_id',
+                   audit_metadata->>'results_message_id',
+                   audit_metadata->>'team_chat_channel_id',
+                   audit_metadata->>'team_chat_message_id'
+            FROM public.fc27_manual_match_audit
+            WHERE action = 'RELINK_DISCORD_MESSAGE'
+              AND audit_metadata->>'kind' = 'discord_message_linkage'
+              AND match_id = %s
+            ORDER BY audit_id DESC
+            LIMIT 1
+            """,
+            (match_id,),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return (
+                str(row[0]) if row[0] is not None else None,
+                str(row[1]) if row[1] is not None else None,
+                str(row[2]) if row[2] is not None else None,
+                str(row[3]) if row[3] is not None else None,
+                str(row[4]) if row[4] is not None else None,
+            )
+    return None
+
+
+def record_match_discord_message_links(
+    conn_or_uri: Any,
+    *,
+    match_id: int | None = None,
+    match_ref: str | None = None,
+    actor_discord_user_id: str = "100000000000000001",
+    discord_guild_id: str | None = None,
+    results_channel_id: str | None = None,
+    results_message_id: str | None = None,
+    team_chat_channel_id: str | None = None,
+    team_chat_message_id: str | None = None,
+    require_dedicated_writer_role: bool = True,
+) -> MatchDiscordMessageLinks:
+    """Persist durable formal + team-chat Discord message linkage without sharing message IDs."""
+    if match_id is None and (match_ref is None or not match_ref.strip()):
+        raise MatchResultsValidationError("Either match_id or match_ref is required to record message links.")
+
+    actor_id = validate_discord_snowflake(actor_discord_user_id, field_name="actor")
+    clean_ref = (
+        validate_safe_text(match_ref, field_name="match_ref", max_length=64, allow_none=True)
+        if match_ref is not None
+        else None
+    )
+    guild_id = _validate_optional_snowflake(discord_guild_id, field_name="guild")
+    res_chan = _validate_optional_snowflake(results_channel_id, field_name="results_channel")
+    res_msg = _validate_optional_snowflake(results_message_id, field_name="results_message")
+    tc_chan = _validate_optional_snowflake(team_chat_channel_id, field_name="team_chat_channel")
+    tc_msg = _validate_optional_snowflake(team_chat_message_id, field_name="team_chat_message")
+
+    with open_guarded_match_results_writer_connection(
+        conn_or_uri, require_dedicated_writer_role=require_dedicated_writer_role
+    ) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                prev = _fetch_latest_linkage_row(cur, match_id=match_id, match_ref=clean_ref)
+                prev_guild, prev_rc, prev_rm, prev_tc_c, prev_tc_m = prev or (None, None, None, None, None)
+
+                final_guild = guild_id or prev_guild
+                final_rc = res_chan or prev_rc
+                final_rm = res_msg or prev_rm
+                final_tc_c = tc_chan or prev_tc_c
+                final_tc_m = tc_msg or prev_tc_m
+
+                if final_rm and final_tc_m and final_rm == final_tc_m:
+                    raise MatchResultsValidationError(
+                        "Results channel message ID cannot be reused as team-chat message ID."
+                    )
+
+                changed_fields: list[str] = []
+                if final_rm != prev_rm or final_rc != prev_rc:
+                    changed_fields.append("results_message_id")
+                if final_tc_m != prev_tc_m or final_tc_c != prev_tc_c:
+                    changed_fields.append("team_chat_message_id")
+                if not changed_fields:
+                    changed_fields.append("discord_message_links")
+
+                _insert_audit_entry(
+                    cur,
+                    match_id=match_id,
+                    action="RELINK_DISCORD_MESSAGE",
+                    actor_discord_user_id=actor_id,
+                    discord_guild_id=final_guild,
+                    discord_channel_id=final_rc or final_tc_c,
+                    discord_message_id=final_rm or final_tc_m,
+                    previous_revision=None,
+                    new_revision=None,
+                    changed_fields=changed_fields,
+                    audit_metadata={
+                        "kind": "discord_message_linkage",
+                        "match_ref": clean_ref,
+                        "match_id": match_id,
+                        "results_channel_id": final_rc,
+                        "results_message_id": final_rm,
+                        "team_chat_channel_id": final_tc_c,
+                        "team_chat_message_id": final_tc_m,
+                    },
+                )
+
+                return MatchDiscordMessageLinks(
+                    match_id=match_id,
+                    match_ref=clean_ref,
+                    discord_guild_id=final_guild,
+                    results_channel_id=final_rc,
+                    results_message_id=final_rm,
+                    team_chat_channel_id=final_tc_c,
+                    team_chat_message_id=final_tc_m,
+                )
+
+
+def get_match_discord_message_links(
+    conn_or_uri: Any,
+    *,
+    match_id: int | None = None,
+    match_ref: str | None = None,
+) -> MatchDiscordMessageLinks | None:
+    """Load the latest durable Discord formal + team-chat message links for a match."""
+    if match_id is None and (match_ref is None or not match_ref.strip()):
+        return None
+    clean_ref = match_ref.strip() if match_ref is not None and match_ref.strip() else None
+
+    with _open_read_connection(conn_or_uri) as conn:
+        with conn.cursor() as cur:
+            row = _fetch_latest_linkage_row(cur, match_id=match_id, match_ref=clean_ref)
+            if row is not None:
+                return MatchDiscordMessageLinks(
+                    match_id=match_id,
+                    match_ref=clean_ref,
+                    discord_guild_id=row[0],
+                    results_channel_id=row[1],
+                    results_message_id=row[2],
+                    team_chat_channel_id=row[3],
+                    team_chat_message_id=row[4],
+                )
+            if match_id is not None:
+                cur.execute(
+                    """
+                    SELECT discord_guild_id, discord_channel_id, discord_message_id
+                    FROM public.fc27_manual_matches
+                    WHERE match_id = %s AND deleted_at IS NULL
+                    """,
+                    (match_id,),
+                )
+                mm_row = cur.fetchone()
+                if mm_row is not None and (mm_row[1] is not None or mm_row[2] is not None):
+                    return MatchDiscordMessageLinks(
+                        match_id=match_id,
+                        match_ref=clean_ref,
+                        discord_guild_id=str(mm_row[0]) if mm_row[0] is not None else None,
+                        results_channel_id=str(mm_row[1]) if mm_row[1] is not None else None,
+                        results_message_id=str(mm_row[2]) if mm_row[2] is not None else None,
+                        team_chat_channel_id=None,
+                        team_chat_message_id=None,
+                    )
+    return None
+
+
 def soft_delete_match(
     conn_or_uri: Any,
     *,
@@ -3875,6 +4519,145 @@ def build_result_content(match: ManualMatchDetail) -> str:
     return f"✅ FULL TIME — {EAST_COASTERS_SHORT_NAME} {home_s}-{away_s} {opponent_clean}"
 
 
+def build_team_chat_result_summary(match: ManualMatchDetail) -> str:
+    """Build a concise, deterministic, no-blame team-chat coaching summary (< 1,000 chars)."""
+    opponent_clean = clean_opponent(match.opponent)
+    if match.status == "SCHEDULED":
+        return redact_internal_player_refs(
+            f"Heads up — upcoming match against {opponent_clean}."
+        )[:990]
+
+    home_s = match.home_score if match.home_score is not None else 0
+    away_s = match.away_score if match.away_score is not None else 0
+    outcome = match.outcome_label
+
+    shots = match.shots
+    pass_acc = match.pass_accuracy
+    tackles = match.tackles
+
+    lead_line: str | None = None
+    if outcome == "LOSS":
+        header = f"Heads up. Tough {home_s}-{away_s} loss to {opponent_clean}."
+        if shots is not None and shots <= 4 and pass_acc is not None and pass_acc >= 75:
+            lead_line = (
+                f"The passing base was solid at {pass_acc}%, but it produced only {shots} shots. "
+                "The next step is progressing the ball into dangerous areas more consistently."
+            )
+        elif pass_acc is not None and pass_acc < 75:
+            lead_line = (
+                f"Pass accuracy finished at {pass_acc}%, so cleaner decisions and simpler "
+                "combinations should be the next-game priority."
+            )
+        elif shots is not None and shots <= 4:
+            lead_line = (
+                f"We finished with only {shots} shots, so the next step is turning more "
+                "possessions into attempts."
+            )
+        elif away_s >= 3:
+            lead_line = (
+                "Protect central areas and reduce open chances conceded in transitions next game."
+            )
+        closing = (
+            "Bounce back next match. Keep it simple, move the ball quickly, and create chances together."
+        )
+    elif outcome == "DRAW":
+        header = f"Full time. {home_s}-{away_s} draw against {opponent_clean}."
+        lead_line = "We were close, but the next step is turning control and chances into a winner."
+        closing = "Keep competing together and carry the sharpest phases into the next match."
+    else:
+        header = f"Full time. {home_s}-{away_s} win over {opponent_clean}."
+        lead_line = "Good result. Keep the standard high and carry the strongest parts into the next match."
+        closing = "Stay disciplined and keep building together in the next outing."
+
+    resolved_scorers = [
+        s
+        for s in match.scorers
+        if s.safe_display_label != UNRESOLVED_PLAYER_DISPLAY_NAME
+        and s.safe_display_label.strip().upper() != "UNKNOWN"
+        and not _RAW_PLAYER_REF_SUBSTR_RE.search(s.safe_display_label)
+    ]
+    scorers_line: str | None = None
+    if resolved_scorers:
+        scorers_line = "Goals: " + ", ".join(
+            f"{_sanitize_player_display(s.safe_display_label)} x{s.goals}"
+            for s in resolved_scorers
+        )
+
+    fix_bullets: list[str] = []
+    if shots is not None and shots <= 4:
+        if pass_acc is not None and pass_acc >= 75:
+            fix_bullets.append(
+                "Create more shooting opportunities before the final phase breaks down."
+            )
+            fix_bullets.append(
+                "Support forwards earlier to progress possession into dangerous areas."
+            )
+        else:
+            fix_bullets.append(
+                f"We finished with only {shots} shots, so turn more possessions into attempts."
+            )
+    if pass_acc is not None and pass_acc < 75 and outcome != "LOSS":
+        fix_bullets.append(
+            f"Pass accuracy finished at {pass_acc}%; prioritize cleaner decisions and simpler combinations."
+        )
+    elif pass_acc is not None and pass_acc < 75 and shots is not None and shots <= 4:
+        fix_bullets.append(
+            f"Raise passing efficiency from {pass_acc}% with cleaner decisions and shorter options."
+        )
+    if tackles is not None and tackles <= 5:
+        fix_bullets.append(
+            f"Improve pressure and defensive engagement ({tackles} tackles recorded, though tackle count alone does not indicate poor defending)."
+        )
+    if away_s >= 3:
+        fix_bullets.append("Protect central areas and reduce open chances conceded.")
+
+    positives: list[str] = []
+    if pass_acc is not None and pass_acc >= 75:
+        positives.append(f"{pass_acc}% pass accuracy gives us a workable base.")
+    if outcome == "LOSS" and (away_s - home_s) == 1:
+        positives.append("The match remained within one goal.")
+    if outcome == "WIN" and away_s == 0:
+        positives.append("Clean sheet defensively.")
+
+    sections: list[str] = [header]
+    if lead_line:
+        sections.append(lead_line)
+    if scorers_line:
+        sections.append(scorers_line)
+    if fix_bullets:
+        sections.append("What to fix next game:\n" + "\n".join(f"• {b}" for b in fix_bullets))
+    if positives:
+        sections.append("Positive to carry forward:\n" + "\n".join(f"• {p}" for p in positives))
+    sections.append(closing)
+    final_line = f"Final: {EAST_COASTERS_SHORT_NAME} {home_s}-{away_s} {opponent_clean}"
+    sections.append(final_line)
+
+    summary = redact_internal_player_refs("\n\n".join(sections))
+    summary = re.sub(r"\bUNKNOWN\b", "", summary, flags=re.IGNORECASE).strip()
+
+    # Keep safely within ~1,000 characters while preserving header, coaching cue, and Final line.
+    while len(summary) > 990 and len(sections) > 3:
+        # Trim lowest-priority optional sections before header/lead/closing/final
+        if positives and "Positive to carry forward:" in sections[-3]:
+            sections.pop(-3)
+        elif len(fix_bullets) > 1:
+            fix_bullets.pop()
+            for idx, sec in enumerate(sections):
+                if sec.startswith("What to fix next game:"):
+                    sections[idx] = "What to fix next game:\n" + "\n".join(f"• {b}" for b in fix_bullets)
+                    break
+        else:
+            break
+        summary = redact_internal_player_refs("\n\n".join(sections))
+        summary = re.sub(r"\bUNKNOWN\b", "", summary, flags=re.IGNORECASE).strip()
+
+    if len(summary) > 990:
+        keep_tail = f"\n\n{final_line}"
+        max_head = max(100, 987 - len(keep_tail))
+        summary = summary[:max_head].rstrip() + "..." + keep_tail
+    return summary
+
+
 def build_result_embed(match: ManualMatchDetail) -> discord.Embed:
     """Canonical East Coasters FC match result embed builder (no internal IDs or jargon)."""
     if match.status == "SCHEDULED":
@@ -4270,9 +5053,12 @@ class InMemoryDiscordChannelAdapter:
     def __init__(self, *, start_snowflake: int = 700000000000000001) -> None:
         self._next_snowflake = start_snowflake
         self.messages: dict[tuple[str, str], discord.Embed] = {}
+        self.text_messages: dict[tuple[str, str], str] = {}
         self.deleted_message_ids: set[str] = set()
         self.post_count: int = 0
         self.edit_count: int = 0
+        self.text_post_count: int = 0
+        self.text_edit_count: int = 0
 
     def post_embed(self, channel_id: str, embed: discord.Embed) -> tuple[str, str]:
         chan = validate_discord_snowflake(channel_id, field_name="channel")
@@ -4291,14 +5077,184 @@ class InMemoryDiscordChannelAdapter:
         self.messages[(chan, msg_id)] = embed
         return True
 
+    def post_text(self, channel_id: str, content: str) -> tuple[str, str]:
+        chan = validate_discord_snowflake(channel_id, field_name="channel")
+        msg_id = str(self._next_snowflake)
+        self._next_snowflake += 1
+        self.text_post_count += 1
+        self.text_messages[(chan, msg_id)] = str(content)
+        return (msg_id, chan)
+
+    def edit_text(self, channel_id: str, message_id: str, content: str) -> bool:
+        chan = validate_discord_snowflake(channel_id, field_name="channel")
+        msg_id = validate_discord_snowflake(message_id, field_name="message")
+        if msg_id in self.deleted_message_ids or (chan, msg_id) not in self.text_messages:
+            return False
+        self.text_edit_count += 1
+        self.text_messages[(chan, msg_id)] = str(content)
+        return True
+
     def delete_message(self, channel_id: str, message_id: str) -> None:
         chan = validate_discord_snowflake(channel_id, field_name="channel")
         msg_id = validate_discord_snowflake(message_id, field_name="message")
         self.deleted_message_ids.add(msg_id)
         self.messages.pop((chan, msg_id), None)
+        self.text_messages.pop((chan, msg_id), None)
 
     def get_embed(self, channel_id: str, message_id: str) -> discord.Embed | None:
         return self.messages.get((channel_id.strip(), message_id.strip()))
+
+    def get_text(self, channel_id: str, message_id: str) -> str | None:
+        return self.text_messages.get((channel_id.strip(), message_id.strip()))
+
+
+def _resolve_cli_reader_uri(explicit_uri: str | None = None) -> str | None:
+    if explicit_uri and explicit_uri.strip():
+        return explicit_uri.strip()
+    try:
+        uri = settings.read_fc27_discord_reader_uri(required=False)
+        if uri:
+            return uri
+    except settings.ConfigError:
+        pass
+    for var_name in ("FC27_DISCORD_READER_URI", "DATABASE_URL"):
+        uri = settings.read_secret(var_name, required=False)
+        if uri:
+            return uri
+    return None
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Protected operator CLI for unresolved-player inventory and safe roster mapping."""
+    parser = argparse.ArgumentParser(
+        prog="python -m src.fc27_match_results",
+        description="East Coasters FC Match Results & Roster Reconciliation CLI.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_unres = sub.add_parser(
+        "unresolved-players",
+        help="List unresolved provider player references with numbered tokens.",
+    )
+    p_unres.add_argument("--club-id", default=EAST_COASTERS_CLUB_ID)
+    p_unres.add_argument("--game-version", default=EAST_COASTERS_GAME_VERSION)
+    p_unres.add_argument("--limit", type=int, default=50)
+    p_unres.add_argument("--show-internal-ids", action="store_true", default=False)
+    p_unres.add_argument("--db-uri", default=None)
+
+    p_set = sub.add_parser(
+        "set-player",
+        help="Map a reconciliation token, player ID, or gamertag into public.fc27_roster.",
+    )
+    p_set.add_argument("--token", default=None)
+    p_set.add_argument("--player-id", default=None)
+    p_set.add_argument("--gamertag", default=None)
+    p_set.add_argument("--display-name", required=True)
+    p_set.add_argument("--position", default=None)
+    p_set.add_argument("--discord-user-id", default=None)
+    p_set.add_argument("--actor-discord-user-id", default="100000000000000001")
+    p_set.add_argument("--inactive", action="store_true", default=False)
+    p_set.add_argument("--dry-run", action="store_true", default=False)
+    p_set.add_argument("--club-id", default=EAST_COASTERS_CLUB_ID)
+    p_set.add_argument("--game-version", default=EAST_COASTERS_GAME_VERSION)
+    p_set.add_argument("--writer-uri", default=None)
+    p_set.add_argument("--reader-uri", default=None)
+    p_set.add_argument("--require-dedicated-writer-role", action="store_true", default=True)
+
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.command == "unresolved-players":
+        reader_uri = _resolve_cli_reader_uri(args.db_uri)
+        if not reader_uri:
+            print(
+                "Error: read-only database URI (FC27_DISCORD_READER_URI) is not configured.",
+                file=sys.stderr,
+            )
+            return 2
+        entries = list_unresolved_players(
+            reader_uri,
+            club_id=args.club_id,
+            game_version=args.game_version,
+            limit=args.limit,
+        )
+        if not entries:
+            print("No unresolved players found.")
+            return 0
+        for entry in entries:
+            pos_str = ",".join(entry.observed_positions) if entry.observed_positions else "-"
+            first_str = _format_seen_timestamp(entry.first_seen_at)
+            last_str = _format_seen_timestamp(entry.last_seen_at)
+            line = (
+                f"{entry.token} | appearances={entry.appearance_count} | "
+                f"positions={pos_str} | first_seen={first_str} | last_seen={last_str}"
+            )
+            if args.show_internal_ids and entry.player_id:
+                line = f"{line} | player_id={entry.player_id}"
+            print(line)
+        return 0
+
+    if args.command == "set-player":
+        writer_uri = (
+            args.writer_uri.strip()
+            if args.writer_uri and args.writer_uri.strip()
+            else resolve_match_results_writer_uri(strict=False)
+        )
+        reader_uri = _resolve_cli_reader_uri(args.reader_uri)
+        if not writer_uri and not args.dry_run:
+            print(
+                "Error: writer database URI (FC27_MATCH_RESULTS_WRITER_URI) is not configured.",
+                file=sys.stderr,
+            )
+            return 2
+        effective_writer: Any = writer_uri or reader_uri
+        require_dedicated = bool(args.require_dedicated_writer_role) and not args.dry_run
+        if effective_writer is None:
+            print("Error: no database URI available for validation.", file=sys.stderr)
+            return 2
+
+        if args.token and reader_uri:
+            # Hydrate current deterministic T1..Tn ordering in standalone CLI execution.
+            try:
+                resolve_reconciliation_token(
+                    args.token, actor_discord_user_id=args.actor_discord_user_id
+                )
+            except MatchResultsValidationError:
+                list_unresolved_players(
+                    reader_uri,
+                    club_id=args.club_id,
+                    game_version=args.game_version,
+                    actor_discord_user_id=args.actor_discord_user_id,
+                )
+
+        hmac_key: bytes | None = None
+        if args.gamertag:
+            hmac_key = settings.read_fc27_alias_hmac_key(required=True)
+
+        rec = upsert_roster_player(
+            effective_writer,
+            player_id=args.player_id,
+            token=args.token,
+            gamertag=args.gamertag,
+            display_name=args.display_name,
+            position=args.position,
+            discord_user_id=args.discord_user_id,
+            active=not args.inactive,
+            actor_discord_user_id=args.actor_discord_user_id,
+            reader_conn_or_uri=reader_uri,
+            alias_hmac_key=hmac_key,
+            dry_run=bool(args.dry_run),
+            require_dedicated_writer_role=require_dedicated,
+        )
+        mode_tag = "[DRY RUN] " if args.dry_run else ""
+        pos_tag = f" ({rec.position})" if rec.position else ""
+        print(f"{mode_tag}Mapped roster player -> {rec.display_name}{pos_tag} [active={rec.active}]")
+        return 0
+
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 __all__ = [
@@ -4311,6 +5267,7 @@ __all__ = [
     "BRAND_COLOR_WIN",
     "DEFAULT_COMPETITION_LABEL",
     "DEFAULT_MATCHDAY_TIME",
+    "DEFAULT_RECONCILIATION_TOKEN_STORE",
     "DELETE_CONFIRMATION_TIMEOUT_SECONDS",
     "EAST_COASTERS_FOOTER_TEXT",
     "EAST_COASTERS_FOUNDED_TEXT",
@@ -4327,6 +5284,7 @@ __all__ = [
     "ManualPlayerRecentMatchSummary",
     "ManualTopScorerEntry",
     "MatchDeleteConfirmationView",
+    "MatchDiscordMessageLinks",
     "MatchResultsConcurrencyError",
     "MatchResultsError",
     "MatchResultsNotFoundError",
@@ -4338,12 +5296,16 @@ __all__ = [
     "PERMISSION_DENIED_MESSAGE",
     "ParsedPlayerStatEntry",
     "ParsedScorerEntry",
+    "RECONCILIATION_TOKEN_DEFAULT_TTL_SECONDS",
     "RESULTS_PAGE_DEFAULT_SIZE",
     "RESULTS_PAGE_MAX_SIZE",
+    "ReconciliationTokenStore",
     "RosterPlayerRecord",
     "UNRESOLVED_PLAYER_DISPLAY_NAME",
+    "UnresolvedPlayerSummary",
     "build_result_content",
     "build_result_embed",
+    "build_team_chat_result_summary",
     "clean_opponent",
     "coerce_public_match_id",
     "create_scheduled_match",
@@ -4355,8 +5317,12 @@ __all__ = [
     "fetch_manual_results_page",
     "fetch_manual_top_scorers",
     "format_scorers_summary",
+    "format_unresolved_players_ephemeral",
+    "get_match_discord_message_links",
     "get_player_name",
     "list_roster_players",
+    "list_unresolved_players",
+    "main",
     "normalize_competition_label",
     "normalize_display_label",
     "normalize_formation_label",
@@ -4366,8 +5332,10 @@ __all__ = [
     "parse_player_stats_input",
     "parse_scorers_input",
     "reconcile_scorers_and_player_stats",
+    "record_match_discord_message_links",
     "record_match_result",
     "record_unauthorized_write_attempt",
+    "redact_internal_player_refs",
     "rename_roster_player",
     "render_empty_match_results_embed",
     "render_match_result_embed",
@@ -4376,8 +5344,10 @@ __all__ = [
     "render_results_page_embed",
     "render_roster_embed",
     "render_top_scorers_embed",
+    "render_unresolved_players_embed",
     "resolve_match_results_writer_uri",
     "resolve_player_names",
+    "resolve_reconciliation_token",
     "soft_delete_match",
     "update_match_discord_message_link",
     "upsert_roster_player",

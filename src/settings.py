@@ -562,6 +562,32 @@ def get_fc27_discord_results_channel_id(*, strict: bool = False) -> str | None:
     return token
 
 
+def get_fc27_discord_team_chat_channel_id(*, strict: bool = False) -> str | None:
+    """Return optional dedicated Discord Team Chat channel ID if configured."""
+    raw = os.getenv("FC27_DISCORD_TEAM_CHAT_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        raw = os.getenv("DISCORD_TEAM_CHAT_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        return None
+    token = raw.strip()
+    if token.startswith("replace_with_"):
+        return None
+    if not token.isdecimal() or int(token) <= 0:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_TEAM_CHAT_CHANNEL_ID must be a positive numeric Discord snowflake ID, got '{token}'"
+            )
+        return None
+    allowed_channels = get_fc27_discord_allowed_channel_ids(strict=strict)
+    if allowed_channels and token not in allowed_channels:
+        if strict:
+            raise ConfigError(
+                "FC27_DISCORD_TEAM_CHAT_CHANNEL_ID must be included in FC27_DISCORD_ALLOWED_CHANNEL_IDS"
+            )
+        return None
+    return token
+
+
 def is_fc27_discord_dispatch_enabled(*, strict: bool = False) -> bool:
     """Check if the FC27 Discord notification dispatcher is enabled (default: False, fail-closed)."""
     raw = os.getenv("FC27_DISCORD_DISPATCH_ENABLED")

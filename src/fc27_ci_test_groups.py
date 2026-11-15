@@ -428,6 +428,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Manual Match Results schema, dedicated writer role, parser, embed renderer, edit-in-place, and Discord command tests using per-test DBs.",
         ),
         _entry(
+            "tests/test_fc27_roster_reconciliation_and_team_chat.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Roster reconciliation tokens, team-chat coaching summary, dual-channel message linkage, and CLI/bot integration tests using per-test DBs.",
+        ),
+        _entry(
             "tests/test_fc27_polling_worker.py",
             "POSTGRES_PARALLEL_SAFE",
             (

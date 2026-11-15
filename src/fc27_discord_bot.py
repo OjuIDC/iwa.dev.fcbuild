@@ -66,6 +66,7 @@ from src.fc27_community_provider import (
 from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_match_results import (
     DEFAULT_MATCHDAY_TIME,
+    DEFAULT_RECONCILIATION_TOKEN_STORE,
     EAST_COASTERS_FOOTER_TEXT,
     EAST_COASTERS_FULL_NAME,
     EAST_COASTERS_SHORT_NAME,
@@ -80,9 +81,11 @@ from src.fc27_match_results import (
     MatchResultsPermissionError,
     MatchResultsPostureError,
     MatchResultsValidationError,
+    ReconciliationTokenStore,
     RosterPlayerRecord,
     build_result_content,
     build_result_embed,
+    build_team_chat_result_summary,
     clean_opponent,
     coerce_public_match_id,
     create_scheduled_match,
@@ -92,14 +95,19 @@ from src.fc27_match_results import (
     fetch_manual_player_stats,
     fetch_manual_results_page,
     fetch_manual_top_scorers,
+    format_unresolved_players_ephemeral,
+    get_match_discord_message_links,
     list_roster_players,
+    list_unresolved_players,
     normalize_display_label,
     normalize_roster_player_id,
     parse_kickoff_datetime,
     parse_player_stats_input,
     parse_scorers_input,
+    record_match_discord_message_links,
     record_match_result,
     record_unauthorized_write_attempt,
+    redact_internal_player_refs,
     rename_roster_player,
     render_empty_match_results_embed,
     render_match_result_embed,
@@ -108,6 +116,7 @@ from src.fc27_match_results import (
     render_results_page_embed,
     render_roster_embed,
     render_top_scorers_embed,
+    render_unresolved_players_embed,
     resolve_match_results_writer_uri,
     soft_delete_match,
     update_match_discord_message_link,
@@ -228,6 +237,7 @@ SUPPORTED_DISCORD_SUBCOMMANDS: Final[tuple[str, ...]] = (
     "setplayer",
     "roster",
     "renameplayer",
+    "unresolvedplayers",
     "matchday",
     "result",
     "editresult",
@@ -246,7 +256,15 @@ DISCORD_SUBCOMMAND_ALIASES: Final[dict[str, str]] = {
 }
 
 MATCH_RESULTS_WRITE_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
-    {"setplayer", "renameplayer", "matchday", "result", "editresult", "deletematch"}
+    {
+        "setplayer",
+        "renameplayer",
+        "unresolvedplayers",
+        "matchday",
+        "result",
+        "editresult",
+        "deletematch",
+    }
 )
 
 MATCH_RESULTS_READ_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
@@ -388,6 +406,7 @@ class FC27DiscordBotConfig(BaseModel):
     captain_role_ids: frozenset[str] = Field(default_factory=frozenset)
     admin_role_ids: frozenset[str] = Field(default_factory=frozenset)
     results_channel_id: str | None = None
+    team_chat_channel_id: str | None = None
     dispatch_enabled: bool = False
     dispatch_max_jobs_per_cycle: int = Field(default=5, ge=1, le=25)
     dispatch_lease_minutes: int = Field(default=5, ge=1, le=60)
@@ -449,6 +468,16 @@ class FC27DiscordBotConfig(BaseModel):
                 raise FC27DiscordAuthzError(
                     f"Invalid Discord results_channel_id: '{self.results_channel_id}'"
                 )
+        if self.team_chat_channel_id is not None:
+            tc_clean = self.team_chat_channel_id.strip()
+            if not tc_clean.isdecimal() or int(tc_clean) <= 0:
+                raise FC27DiscordAuthzError(
+                    f"Invalid Discord team_chat_channel_id: '{self.team_chat_channel_id}'"
+                )
+            if self.allowed_channel_ids and tc_clean not in self.allowed_channel_ids:
+                raise FC27DiscordAuthzError(
+                    "FC27_DISCORD_TEAM_CHAT_CHANNEL_ID must be included in FC27_DISCORD_ALLOWED_CHANNEL_IDS"
+                )
         if self.dispatch_enabled and not self.results_channel_id:
             raise FC27DiscordDisabledError(
                 "FC27_DISCORD_RESULTS_CHANNEL_ID must be non-empty when FC27_DISCORD_DISPATCH_ENABLED=true"
@@ -486,6 +515,7 @@ class FC27DiscordBotConfig(BaseModel):
             captain_roles = settings.get_fc27_discord_captain_role_ids(strict=strict)
             admin_roles = settings.get_fc27_discord_admin_role_ids(strict=strict)
             results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
+            team_chat_chan = settings.get_fc27_discord_team_chat_channel_id(strict=strict)
             dispatch_enabled = settings.is_fc27_discord_dispatch_enabled(strict=strict)
             dispatch_max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
             dispatch_lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
@@ -509,6 +539,7 @@ class FC27DiscordBotConfig(BaseModel):
             captain_role_ids=captain_roles,
             admin_role_ids=admin_roles,
             results_channel_id=results_chan,
+            team_chat_channel_id=team_chat_chan,
             dispatch_enabled=dispatch_enabled,
             dispatch_max_jobs_per_cycle=dispatch_max_jobs,
             dispatch_lease_minutes=dispatch_lease_mins,
@@ -886,6 +917,8 @@ class FC27DiscordBotService:
         db_conn_or_uri: str | psycopg.Connection[Any] | None = None,
         writer_db_conn_or_uri: str | psycopg.Connection[Any] | None = None,
         discord_channel_adapter: Any | None = None,
+        dispatch_transport: Any | None = None,
+        reconciliation_token_store: ReconciliationTokenStore | None = None,
         require_dedicated_writer_role: bool = True,
         polling_runtime: FC27PollingRuntime | None = None,
         coach_report_provider: Callable[[FC27SearchContext, FC27ScoutReport, FC27AnalystReport], Any]
@@ -904,6 +937,10 @@ class FC27DiscordBotService:
         self._db_conn_or_uri = db_conn_or_uri
         self._writer_db_conn_or_uri = writer_db_conn_or_uri
         self._discord_channel_adapter = discord_channel_adapter
+        self._dispatch_transport = dispatch_transport
+        self._reconciliation_token_store = (
+            reconciliation_token_store or DEFAULT_RECONCILIATION_TOKEN_STORE
+        )
         self._require_dedicated_writer_role = require_dedicated_writer_role
         self._polling_runtime = polling_runtime or get_default_polling_runtime()
         self._coach_provider = coach_report_provider
@@ -1068,6 +1105,7 @@ class FC27DiscordBotService:
         )
         writer_target = self._resolve_writer_conn_or_uri(required=True)
 
+        updated_detail: ManualMatchDetail
         if match_detail.discord_message_id and match_detail.discord_channel_id:
             edited = bool(
                 self._discord_channel_adapter.edit_embed(
@@ -1077,34 +1115,180 @@ class FC27DiscordBotService:
                 )
             )
             if edited:
-                return match_detail
+                updated_detail = match_detail
+            else:
+                new_msg_id, new_chan_id = self._discord_channel_adapter.post_embed(
+                    target_channel, d_embed
+                )
+                updated_detail = update_match_discord_message_link(
+                    writer_target,
+                    match_id=match_detail.match_id,
+                    actor_discord_user_id=actor_uid,
+                    discord_guild_id=guild_id,
+                    discord_channel_id=new_chan_id,
+                    discord_message_id=new_msg_id,
+                    is_replacement=True,
+                    require_dedicated_writer_role=self._require_dedicated_writer_role,
+                )
+        else:
             new_msg_id, new_chan_id = self._discord_channel_adapter.post_embed(
                 target_channel, d_embed
             )
-            return update_match_discord_message_link(
+            updated_detail = update_match_discord_message_link(
                 writer_target,
                 match_id=match_detail.match_id,
                 actor_discord_user_id=actor_uid,
                 discord_guild_id=guild_id,
                 discord_channel_id=new_chan_id,
                 discord_message_id=new_msg_id,
-                is_replacement=True,
+                is_replacement=False,
                 require_dedicated_writer_role=self._require_dedicated_writer_role,
             )
 
-        new_msg_id, new_chan_id = self._discord_channel_adapter.post_embed(
-            target_channel, d_embed
-        )
-        return update_match_discord_message_link(
-            writer_target,
-            match_id=match_detail.match_id,
-            actor_discord_user_id=actor_uid,
-            discord_guild_id=guild_id,
-            discord_channel_id=new_chan_id,
-            discord_message_id=new_msg_id,
-            is_replacement=False,
-            require_dedicated_writer_role=self._require_dedicated_writer_role,
-        )
+        tc_channel_id = self._config.team_chat_channel_id
+        if tc_channel_id and updated_detail.status != "SCHEDULED":
+            team_chat_text = build_team_chat_result_summary(updated_detail)
+            assert_discord_output_sanitized(
+                team_chat_text, forbidden_tokens=self._secret_tokens
+            )
+            existing_links = get_match_discord_message_links(
+                writer_target, match_id=updated_detail.match_id
+            )
+            if (
+                existing_links is not None
+                and existing_links.team_chat_message_id
+                and existing_links.team_chat_message_id != updated_detail.discord_message_id
+            ):
+                edit_tc_chan = existing_links.team_chat_channel_id or tc_channel_id
+                edit_tc_msg = existing_links.team_chat_message_id
+                edit_text_fn = getattr(self._discord_channel_adapter, "edit_text", None)
+                if callable(edit_text_fn):
+                    tc_edited = bool(
+                        edit_text_fn(edit_tc_chan, edit_tc_msg, team_chat_text)
+                    )
+                    if tc_edited:
+                        if existing_links.results_message_id != updated_detail.discord_message_id:
+                            record_match_discord_message_links(
+                                writer_target,
+                                match_id=updated_detail.match_id,
+                                actor_discord_user_id=actor_uid,
+                                discord_guild_id=guild_id,
+                                results_channel_id=updated_detail.discord_channel_id or target_channel,
+                                results_message_id=updated_detail.discord_message_id,
+                                team_chat_channel_id=edit_tc_chan,
+                                team_chat_message_id=edit_tc_msg,
+                                require_dedicated_writer_role=self._require_dedicated_writer_role,
+                            )
+                    else:
+                        LOGGER.warning(
+                            "fc27_team_chat_message_missing_on_edit match_id=%s channel_id=%s",
+                            updated_detail.match_id,
+                            edit_tc_chan,
+                        )
+            elif existing_links is None or not existing_links.team_chat_message_id:
+                post_text_fn = getattr(self._discord_channel_adapter, "post_text", None)
+                if callable(post_text_fn):
+                    tc_msg_id, tc_chan_out = post_text_fn(tc_channel_id, team_chat_text)
+                    record_match_discord_message_links(
+                        writer_target,
+                        match_id=updated_detail.match_id,
+                        actor_discord_user_id=actor_uid,
+                        discord_guild_id=guild_id,
+                        results_channel_id=updated_detail.discord_channel_id or target_channel,
+                        results_message_id=updated_detail.discord_message_id,
+                        team_chat_channel_id=str(tc_chan_out),
+                        team_chat_message_id=str(tc_msg_id),
+                        require_dedicated_writer_role=self._require_dedicated_writer_role,
+                    )
+
+        return updated_detail
+
+    def _refresh_linked_messages_for_player(
+        self,
+        *,
+        player_id: str,
+        actor_uid: str,
+        guild_id: str,
+        channel_id: str,
+    ) -> None:
+        """Edit in place any linked manual or dispatched messages after roster reconciliation."""
+        if self._discord_channel_adapter is not None:
+            own_conn = isinstance(self._db_conn_or_uri, str) or self._db_conn_or_uri is None
+            has_ro = self._db_conn_or_uri is not None or bool(
+                settings.read_fc27_discord_reader_uri(required=False)
+                or settings.read_secret("POSTGRES_URI", required=False)
+            )
+            if has_ro:
+                manual_matches: list[ManualMatchDetail] = []
+                guarded = self._open_readonly_connection()
+                try:
+                    rows = guarded.execute(
+                        """
+                        SELECT DISTINCT m.match_id
+                        FROM public.fc27_manual_matches m
+                        WHERE m.deleted_at IS NULL
+                          AND m.discord_message_id IS NOT NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.fc27_manual_match_players p
+                              WHERE p.match_id = m.match_id
+                                AND p.player_id = %s
+                          )
+                        ORDER BY m.match_id ASC
+                        """,
+                        (player_id,),
+                    ).fetchall()
+                    for row in rows:
+                        detail = fetch_manual_match(guarded, match_id=int(row[0]))
+                        if detail is not None:
+                            manual_matches.append(detail)
+                    if not own_conn:
+                        guarded._conn.commit()  # noqa: SLF001
+                finally:
+                    if own_conn:
+                        guarded._conn.close()
+                for detail in manual_matches:
+                    self._sync_match_card_with_channel_adapter(
+                        detail,
+                        actor_uid=actor_uid,
+                        guild_id=detail.discord_guild_id or guild_id,
+                        fallback_channel_id=detail.discord_channel_id or channel_id,
+                    )
+
+        eff_transport = self._dispatch_transport
+        if (
+            eff_transport is None
+            and self._discord_channel_adapter is not None
+            and callable(getattr(self._discord_channel_adapter, "edit_notification", None))
+            and callable(getattr(self._discord_channel_adapter, "find_existing_notification", None))
+        ):
+            eff_transport = self._discord_channel_adapter
+
+        if eff_transport is not None:
+            has_ro = self._db_conn_or_uri is not None or bool(
+                settings.read_fc27_discord_reader_uri(required=False)
+            )
+            if has_ro:
+                from src.fc27_discord_dispatcher import (
+                    FC27DiscordDispatchConfig,
+                    refresh_dispatched_match_messages_for_player,
+                )
+
+                dispatch_cfg = FC27DiscordDispatchConfig(
+                    enabled=False,
+                    results_channel_id=self._config.results_channel_id,
+                    team_chat_channel_id=self._config.team_chat_channel_id,
+                    allowed_channel_ids=self._config.allowed_channel_ids,
+                    query_timeout_ms=self._config.query_timeout_ms,
+                )
+                refresh_dispatched_match_messages_for_player(
+                    config=dispatch_cfg,
+                    transport=eff_transport,
+                    player_id=player_id,
+                    readonly_db_conn_or_uri=self._db_conn_or_uri,
+                    verify_posture=True,
+                    secret_tokens_to_scrub=self._secret_tokens,
+                )
 
     def _match_results_write_authorized(
         self,
@@ -1117,7 +1301,7 @@ class FC27DiscordBotService:
         caller_role_set = {
             str(r).strip() for r in (user_role_ids or ()) if str(r).strip().isdecimal()
         }
-        if cmd_clean == "deletematch":
+        if cmd_clean in {"deletematch", "unresolvedplayers"}:
             admin_roles = self._config.admin_role_ids
             return bool(is_admin or (admin_roles and (caller_role_set & admin_roles)))
         writer_roles = self._config.match_results_writer_role_ids
@@ -1133,6 +1317,8 @@ class FC27DiscordBotService:
             return False
         if cmd_clean == "deletematch":
             return True
+        if cmd_clean == "unresolvedplayers":
+            return False
         try:
             if cmd_clean == "match":
                 mid = cmd_kwargs.get("match_id")
@@ -1146,7 +1332,9 @@ class FC27DiscordBotService:
                 return False
 
             if cmd_clean == "setplayer":
-                normalize_roster_player_id(str(cmd_kwargs.get("player_id") or ""))
+                normalize_roster_player_id(
+                    str(cmd_kwargs.get("player_id") or cmd_kwargs.get("token") or "")
+                )
                 _, safe_pname = normalize_display_label(
                     str(cmd_kwargs.get("player_name") or ""), field_name="Player name"
                 )
@@ -1406,7 +1594,7 @@ class FC27DiscordBotService:
                 return True
         if cmd_clean not in SUPPORTED_DISCORD_SUBCOMMANDS:
             return True
-        if cmd_clean == "deletematch":
+        if cmd_clean in {"deletematch", "unresolvedplayers"}:
             return True
         if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
             if not self._match_results_write_authorized(
@@ -1477,6 +1665,7 @@ class FC27DiscordBotService:
         expected_revision: int | None = None,
         player_name: str | None = None,
         player_id: str | None = None,
+        token: str | None = None,
         position: str | None = None,
         discord_user_id: str | None = None,
         new_name: str | None = None,
@@ -1710,6 +1899,7 @@ class FC27DiscordBotService:
                         expected_revision=expected_revision,
                         player_name=player_name,
                         player_id=player_id,
+                        token=token,
                         position=position,
                         discord_user_id=discord_user_id,
                         new_name=new_name,
@@ -1821,6 +2011,7 @@ class FC27DiscordBotService:
         expected_revision: int | None = None,
         player_name: str | None = None,
         player_id: str | None = None,
+        token: str | None = None,
         position: str | None = None,
         discord_user_id: str | None = None,
         new_name: str | None = None,
@@ -1831,20 +2022,36 @@ class FC27DiscordBotService:
 
         if cmd == "setplayer":
             writer_target = self._resolve_writer_conn_or_uri(required=True)
+            raw_ref = str(player_id or token or "").strip()
+            is_reconcile_token = bool(token and token.strip()) or bool(
+                re.fullmatch(r"^T[1-9][0-9]*$", raw_ref, re.IGNORECASE)
+            )
             rec = upsert_roster_player(
                 writer_target,
-                player_id=player_id or "",
+                player_id=None if is_reconcile_token else raw_ref,
+                token=raw_ref if is_reconcile_token else None,
+                token_store=self._reconciliation_token_store,
+                actor_discord_user_id=user_id,
                 display_name=player_name or "",
                 position=position,
                 discord_user_id=discord_user_id,
                 require_dedicated_writer_role=self._require_dedicated_writer_role,
             )
+            self._refresh_linked_messages_for_player(
+                player_id=rec.player_id,
+                actor_uid=user_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+            )
             fc27_emb = _discord_embed_to_fc27_embed(render_roster_embed([rec]))
             pos_label = f" ({rec.position})" if rec.position else ""
+            safe_content = redact_internal_player_refs(
+                f"Saved roster player **{rec.display_name}**{pos_label}."
+            )
             return FC27DiscordResponse(
                 command="setplayer",
                 status="OK",
-                content=f"Saved roster player **{rec.display_name}**{pos_label}.",
+                content=safe_content,
                 embeds=(fc27_emb,),
                 row_count=1,
             )
@@ -1857,11 +2064,20 @@ class FC27DiscordBotService:
                 new_name=new_name or "",
                 require_dedicated_writer_role=self._require_dedicated_writer_role,
             )
+            self._refresh_linked_messages_for_player(
+                player_id=renamed.player_id,
+                actor_uid=user_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+            )
             fc27_emb = _discord_embed_to_fc27_embed(render_roster_embed([renamed]))
+            safe_content = redact_internal_player_refs(
+                f"Renamed roster player to **{renamed.display_name}**."
+            )
             return FC27DiscordResponse(
                 command="renameplayer",
                 status="OK",
-                content=f"Renamed roster player to **{renamed.display_name}**.",
+                content=safe_content,
                 embeds=(fc27_emb,),
                 row_count=1,
             )
@@ -2053,6 +2269,24 @@ class FC27DiscordBotService:
                     content=f"{EAST_COASTERS_SHORT_NAME} Active Roster (`{len(players)}` players).",
                     embeds=(fc27_emb,),
                     row_count=len(players),
+                )
+
+            if cmd == "unresolvedplayers":
+                entries = list_unresolved_players(
+                    guarded,
+                    token_store=self._reconciliation_token_store,
+                    actor_discord_user_id=user_id,
+                )
+                fc27_emb = _discord_embed_to_fc27_embed(
+                    render_unresolved_players_embed(entries)
+                )
+                return FC27DiscordResponse(
+                    command="unresolvedplayers",
+                    status="OK",
+                    ephemeral=True,
+                    content=format_unresolved_players_ephemeral(entries),
+                    embeds=(fc27_emb,),
+                    row_count=len(entries),
                 )
 
             if cmd == "lastresult":
@@ -3354,6 +3588,8 @@ def run_discord_gateway_bot(
         dispatch_cfg = FC27DiscordDispatchConfig(
             enabled=True,
             results_channel_id=config.results_channel_id,
+            team_chat_channel_id=config.team_chat_channel_id,
+            allowed_channel_ids=config.allowed_channel_ids,
             max_jobs_per_cycle=config.dispatch_max_jobs_per_cycle,
             lease_minutes=config.dispatch_lease_minutes,
             single_flight=config.dispatch_single_flight,
@@ -3420,6 +3656,8 @@ def run_discord_gateway_bot(
             # in place even when background dispatcher polling is disabled.
             if bot_service._discord_channel_adapter is None or config.dispatch_enabled:
                 bot_service._discord_channel_adapter = transport
+            if bot_service._dispatch_transport is None:
+                bot_service._dispatch_transport = transport
             if config.dispatch_enabled:
                 assert dispatch_cfg is not None
                 # Created here, after discord.py login() initialized readiness, and without
@@ -3431,6 +3669,9 @@ def run_discord_gateway_bot(
                         transport=transport,
                         wait_until_ready_fn=self.wait_until_ready,
                         stop_event=stop_event,
+                        match_results_writer_db_conn_or_uri=resolve_match_results_writer_uri(
+                            strict=False
+                        ),
                         secret_tokens_to_scrub=(resolved_token,),
                     ),
                     name="fc27-discord-dispatcher",
@@ -3496,6 +3737,15 @@ def run_discord_gateway_bot(
             async def _cb_roster(interaction: discord.Interaction) -> None:
                 await _send_fc27_response(interaction, subcmd_name="roster")
             return ("Show the active East Coasters FC club roster", _cb_roster)
+
+        if subcmd_name == "unresolvedplayers":
+            async def _cb_unresolvedplayers(interaction: discord.Interaction) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="unresolvedplayers",
+                    ephemeral_defer=True,
+                )
+            return ("List unresolved club player tokens (Admin only)", _cb_unresolvedplayers)
 
         if subcmd_name == "renameplayer":
             async def _cb_renameplayer(
@@ -3721,6 +3971,7 @@ def run_discord_gateway_bot(
         "setplayer",
         "roster",
         "renameplayer",
+        "unresolvedplayers",
         "matchday",
         "result",
         "editresult",
