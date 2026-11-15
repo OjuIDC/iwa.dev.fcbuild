@@ -30,7 +30,7 @@ dev = [
 pandas = ["pandas>=2.0,<4", "openpyxl>=3.1,<4"]
 
 [tool.setuptools]
-packages = ["src"]
+packages = ["src", "src.fc27_matches"]
 
 [tool.setuptools.package-data]
 src = []
