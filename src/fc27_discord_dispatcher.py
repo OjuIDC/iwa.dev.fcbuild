@@ -3803,14 +3803,21 @@ def refresh_dispatched_match_messages_for_player(
 
     refreshed = 0
     for m_ref in match_refs:
-        f_ok, tc_ok = refresh_dispatched_match_message(
-            config=config,
-            transport=transport,
-            match_ref=m_ref,
-            readonly_db_conn_or_uri=readonly_db_conn_or_uri,
-            verify_posture=verify_posture,
-            secret_tokens_to_scrub=secret_tokens_to_scrub,
-        )
+        try:
+            f_ok, tc_ok = refresh_dispatched_match_message(
+                config=config,
+                transport=transport,
+                match_ref=m_ref,
+                readonly_db_conn_or_uri=readonly_db_conn_or_uri,
+                verify_posture=verify_posture,
+                secret_tokens_to_scrub=secret_tokens_to_scrub,
+            )
+        except _JobVerificationError as exc:
+            LOGGER.warning(
+                "fc27_roster_refresh_match_skipped category=%s",
+                exc.category,
+            )
+            continue
         if f_ok or tc_ok:
             refreshed += 1
     return refreshed
