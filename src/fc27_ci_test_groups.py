@@ -314,6 +314,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Offline FC27 platform domain models, analytics, and feature-gate boundary tests.",
         ),
         _entry(
+            "tests/test_fc27_match_presentation.py",
+            "PURE_UNIT_PARALLEL_SAFE",
+            ("unit", "domain", "offline", "network_forbidden"),
+            "unit_domain_parallel",
+            "full-unit-domain",
+            ("unit-domain",),
+            "Pure in-memory deterministic canonical match presentation, embed construction, and string normalization tests.",
+        ),
+        _entry(
             "tests/test_visual_studio_project.py",
             "FILESYSTEM_SERIAL",
             ("unit", "domain", "serial", "offline"),
