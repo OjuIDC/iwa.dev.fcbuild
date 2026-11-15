@@ -19,12 +19,15 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString, cast
 
 import psycopg
+import psycopg.conninfo
+import psycopg.sql
+from psycopg import sql
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.db_migrate import migrate
@@ -45,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0015"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0016"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -57,6 +60,7 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_matches",
     "fc27_player_match_stats",
     "fc27_quarantine_records",
+    "fc27_roster",
     "fc27_manual_matches",
     "fc27_manual_match_players",
     "fc27_manual_match_events",
@@ -203,6 +207,7 @@ class FC27BackupTableCounts(BaseModel):
     fc27_match_team_stats: int = Field(..., ge=0)
     fc27_player_match_stats: int = Field(..., ge=0)
     fc27_quarantine_records: int = Field(..., ge=0)
+    fc27_roster: int = Field(default=0, ge=0)
     fc27_manual_matches: int = Field(default=0, ge=0)
     fc27_manual_match_players: int = Field(default=0, ge=0)
     fc27_manual_match_events: int = Field(default=0, ge=0)
@@ -226,6 +231,7 @@ class FC27BackupRecordHashes(BaseModel):
     player_stats_sha256: str = Field(..., min_length=64, max_length=64)
     combined_records_sha256: str = Field(..., min_length=64, max_length=64)
     match_record_hashes: tuple[str, ...] = ()
+    fc27_roster_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_matches_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_players_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
     manual_events_sha256: str = Field(default=_EMPTY_SHA256, min_length=64, max_length=64)
@@ -308,7 +314,8 @@ def inspect_database_state_for_manifest(
     with psycopg.connect(db_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.schema_migrations')")
-            has_migrations = cur.fetchone()[0] is not None
+            _reg_row = cur.fetchone()
+            has_migrations = _reg_row is not None and _reg_row[0] is not None
             migration_rows: list[tuple[Any, ...]] = []
             if has_migrations:
                 cur.execute(
@@ -316,8 +323,8 @@ def inspect_database_state_for_manifest(
                     "FROM public.schema_migrations"
                 )
                 mig_row = cur.fetchone()
-                mig_count = int(mig_row[0] or 15)
-                latest_mig = str(mig_row[1] or "0015_fc27_player_development_fixups.sql")
+                mig_count = int((mig_row[0] if mig_row else None) or 15)
+                latest_mig = str((mig_row[1] if mig_row else None) or "0015_fc27_player_development_fixups.sql")
                 cur.execute(
                     "SELECT version, sha256 FROM public.schema_migrations ORDER BY version ASC"
                 )
@@ -327,13 +334,15 @@ def inspect_database_state_for_manifest(
                 latest_mig = "0015_fc27_player_development_fixups.sql"
 
             cur.execute("SELECT to_regclass('public.schema_policy_versions')")
-            has_policy_versions = cur.fetchone()[0] is not None
+            _pol_reg_row = cur.fetchone()
+            has_policy_versions = _pol_reg_row is not None and _pol_reg_row[0] is not None
             policy_rows: list[tuple[Any, ...]] = []
             if has_policy_versions:
                 cur.execute(
                     "SELECT has_table_privilege(current_user, 'public.schema_policy_versions', 'SELECT')"
                 )
-                can_read_policy = bool(cur.fetchone()[0])
+                _can_read_row = cur.fetchone()
+                can_read_policy = bool(_can_read_row and _can_read_row[0])
                 if can_read_policy:
                     cur.execute(
                         "SELECT policy, version, sha256 FROM public.schema_policy_versions ORDER BY policy ASC, version ASC"
@@ -345,13 +354,15 @@ def inspect_database_state_for_manifest(
                 "SELECT COUNT(*) FROM public.fc27_clubs WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            clubs_cnt = int(cur.fetchone()[0])
+            _clubs_row = cur.fetchone()
+            clubs_cnt = int(_clubs_row[0]) if _clubs_row else 0
 
             cur.execute(
                 "SELECT COUNT(*) FROM public.fc27_export_batches WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            batches_cnt = int(cur.fetchone()[0])
+            _batches_row = cur.fetchone()
+            batches_cnt = int(_batches_row[0]) if _batches_row else 0
 
             cur.execute(
                 """
@@ -404,7 +415,29 @@ def inspect_database_state_for_manifest(
                 "SELECT COUNT(*) FROM public.fc27_quarantine_records WHERE club_id = %s AND platform = %s AND game_version = %s",
                 (club_id, platform, game_version),
             )
-            quarantine_cnt = int(cur.fetchone()[0])
+            _quarantine_row = cur.fetchone()
+            quarantine_cnt = int(_quarantine_row[0]) if _quarantine_row else 0
+
+            cur.execute("SELECT to_regclass('public.fc27_roster') IS NOT NULL")
+            if cur.fetchone()[0]:
+                cur.execute(
+                    """
+                    SELECT player_id,
+                           display_name,
+                           display_name_normalized,
+                           position,
+                           discord_user_id,
+                           active,
+                           created_at,
+                           updated_at
+                      FROM public.fc27_roster
+                     ORDER BY player_id ASC
+                    """
+                )
+                roster_rows = cur.fetchall()
+            else:
+                roster_rows = []
+            roster_cnt = len(roster_rows)
 
             cur.execute(
                 """
@@ -514,14 +547,21 @@ def inspect_database_state_for_manifest(
                 "fc27_discord_jobs",
             ):
                 cur.execute("SELECT to_regclass(%s)", (f"public.{pd_tbl}",))
-                if cur.fetchone()[0] is not None:
+                _pd_reg_row = cur.fetchone()
+                if _pd_reg_row is not None and _pd_reg_row[0] is not None:
                     cur.execute(
                         "SELECT has_table_privilege(current_user, %s, 'SELECT')",
                         (f"public.{pd_tbl}",),
                     )
-                    if cur.fetchone()[0]:
-                        cur.execute(f"SELECT COUNT(*) FROM public.{pd_tbl}")
-                        player_dev_counts[pd_tbl] = int(cur.fetchone()[0])
+                    _pd_priv_row = cur.fetchone()
+                    if _pd_priv_row and _pd_priv_row[0]:
+                        cur.execute(
+                            psycopg.sql.SQL("SELECT COUNT(*) FROM public.{}").format(
+                                sql.Identifier(pd_tbl)
+                            )
+                        )
+                        _pd_count_row = cur.fetchone()
+                        player_dev_counts[pd_tbl] = int(_pd_count_row[0]) if _pd_count_row else 0
                     else:
                         player_dev_counts[pd_tbl] = 0
                 else:
@@ -633,6 +673,19 @@ def inspect_database_state_for_manifest(
         }
         for r in manual_audit_rows
     ]
+    canonical_roster = [
+        {
+            "player_id": str(r[0]),
+            "display_name": str(r[1]),
+            "display_name_normalized": str(r[2]),
+            "position": str(r[3]) if r[3] is not None else None,
+            "discord_user_id": str(r[4]) if r[4] is not None else None,
+            "active": bool(r[5]),
+            "created_at": r[6].astimezone(timezone.utc).isoformat() if isinstance(r[6], datetime) else str(r[6]),
+            "updated_at": r[7].astimezone(timezone.utc).isoformat() if isinstance(r[7], datetime) else str(r[7]),
+        }
+        for r in roster_rows
+    ]
     canonical_migration_ledger = {
         "schema_migrations": [
             {"version": str(r[0]), "checksum": str(r[1])} for r in migration_rows
@@ -653,6 +706,9 @@ def inspect_database_state_for_manifest(
     players_digest = _sha256_bytes(
         json.dumps(canonical_players, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
+    roster_digest = _sha256_bytes(
+        json.dumps(canonical_roster, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
     manual_matches_digest = _sha256_bytes(
         json.dumps(canonical_manual_matches, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
@@ -670,7 +726,7 @@ def inspect_database_state_for_manifest(
     )
     combined_digest = _sha256_bytes(
         (
-            f"{matches_digest}:{players_digest}:{manual_matches_digest}:"
+            f"{matches_digest}:{players_digest}:{roster_digest}:{manual_matches_digest}:"
             f"{manual_players_digest}:{manual_events_digest}:{manual_audit_digest}"
         ).encode("utf-8")
     )
@@ -684,6 +740,7 @@ def inspect_database_state_for_manifest(
         fc27_match_team_stats=matches_cnt,
         fc27_player_match_stats=player_cnt,
         fc27_quarantine_records=quarantine_cnt,
+        fc27_roster=roster_cnt,
         fc27_manual_matches=manual_matches_cnt,
         fc27_manual_match_players=manual_players_cnt,
         fc27_manual_match_events=manual_events_cnt,
@@ -702,6 +759,7 @@ def inspect_database_state_for_manifest(
         player_stats_sha256=players_digest,
         combined_records_sha256=combined_digest,
         match_record_hashes=tuple(str(r[7]) for r in match_rows),
+        fc27_roster_sha256=roster_digest,
         manual_matches_sha256=manual_matches_digest,
         manual_players_sha256=manual_players_digest,
         manual_events_sha256=manual_events_digest,
@@ -721,6 +779,43 @@ def _resolve_postgres_container_for_port(port: int) -> str | None:
     return "fc27-full-stack-postgres-1"
 
 
+def _list_custom_archive_tables(
+    archive_bytes: bytes,
+    *,
+    host_pg_restore: str | None,
+    container: str | None,
+) -> set[str] | None:
+    """Return table names present in a ``pg_dump --format=custom`` TOC, or None if unavailable."""
+    proc: subprocess.CompletedProcess[bytes] | None = None
+    if host_pg_restore:
+        proc = subprocess.run(
+            [host_pg_restore, "--list"],
+            input=archive_bytes,
+            capture_output=True,
+            check=False,
+        )
+    if (proc is None or proc.returncode != 0) and container:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", container, "pg_restore", "--list"],
+            input=archive_bytes,
+            capture_output=True,
+            check=False,
+        )
+    if proc is None or proc.returncode != 0:
+        return None
+    tables: set[str] = set()
+    for raw_line in proc.stdout.decode("utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if " TABLE DATA " in line:
+            # Format: "<id>; <oid> <oid> TABLE DATA <schema> <table_name> <owner>"
+            parts = line.split(" TABLE DATA ", 1)[1].split()
+            if len(parts) >= 2:
+                tables.add(parts[1])
+    return tables
+
+
 def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
     """Execute ``pg_dump --format=custom`` for the normalized FC27 tables."""
     info = psycopg.conninfo.conninfo_to_dict(db_uri)
@@ -730,8 +825,16 @@ def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
     password = str(info.get("password") or "")
     dbname = str(info.get("dbname") or "fc27")
 
+    with psycopg.connect(db_uri, autocommit=True) as probe_conn:
+        probe_row = probe_conn.execute(
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+        ).fetchone()
+        has_roster_table = bool(probe_row and probe_row[0])
+
     table_args: list[str] = []
     for tbl in FC27_DOMAIN_TABLES:
+        if tbl == "fc27_roster" and not has_roster_table:
+            continue
         table_args.extend(["-t", f"public.{tbl}"])
 
     host_pg_dump = shutil.which("pg_dump")
@@ -806,27 +909,60 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
     host_pg_restore = shutil.which("pg_restore")
     container = _resolve_postgres_container_for_port(port)
 
+    archive_tables = _list_custom_archive_tables(
+        archive_bytes,
+        host_pg_restore=host_pg_restore,
+        container=container,
+    )
+
     with psycopg.connect(db_uri, autocommit=True) as conn:
-        conn.execute(
-            "TRUNCATE public.schema_migrations, "
-            "public.schema_policy_versions, "
-            "public.fc27_player_match_stats, "
-            "public.fc27_matches, "
-            "public.fc27_quarantine_records, "
-            "public.fc27_export_batches, "
-            "public.fc27_clubs, "
-            "public.fc27_manual_match_audit, "
-            "public.fc27_manual_match_events, "
-            "public.fc27_manual_match_players, "
-            "public.fc27_manual_matches, "
-            "public.fc27_suggestion_assessments, "
-            "public.fc27_player_suggestions, "
-            "public.fc27_build_catalog_audit, "
-            "public.fc27_build_catalog, "
-            "public.fc27_player_links, "
-            "public.fc27_player_alias_fingerprints, "
-            "public.fc27_discord_jobs CASCADE"
-        )
+        roster_row = conn.execute(
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+        ).fetchone()
+        has_target_roster = bool(roster_row and roster_row[0])
+        if has_target_roster:
+            conn.execute(
+                "TRUNCATE public.schema_migrations, "
+                "public.schema_policy_versions, "
+                "public.fc27_player_match_stats, "
+                "public.fc27_matches, "
+                "public.fc27_quarantine_records, "
+                "public.fc27_export_batches, "
+                "public.fc27_clubs, "
+                "public.fc27_roster, "
+                "public.fc27_manual_match_audit, "
+                "public.fc27_manual_match_events, "
+                "public.fc27_manual_match_players, "
+                "public.fc27_manual_matches, "
+                "public.fc27_suggestion_assessments, "
+                "public.fc27_player_suggestions, "
+                "public.fc27_build_catalog_audit, "
+                "public.fc27_build_catalog, "
+                "public.fc27_player_links, "
+                "public.fc27_player_alias_fingerprints, "
+                "public.fc27_discord_jobs CASCADE"
+            )
+        else:
+            conn.execute(
+                "TRUNCATE public.schema_migrations, "
+                "public.schema_policy_versions, "
+                "public.fc27_player_match_stats, "
+                "public.fc27_matches, "
+                "public.fc27_quarantine_records, "
+                "public.fc27_export_batches, "
+                "public.fc27_clubs, "
+                "public.fc27_manual_match_audit, "
+                "public.fc27_manual_match_events, "
+                "public.fc27_manual_match_players, "
+                "public.fc27_manual_matches, "
+                "public.fc27_suggestion_assessments, "
+                "public.fc27_player_suggestions, "
+                "public.fc27_build_catalog_audit, "
+                "public.fc27_build_catalog, "
+                "public.fc27_player_links, "
+                "public.fc27_player_alias_fingerprints, "
+                "public.fc27_discord_jobs CASCADE"
+            )
 
         def _run_pg_restore_for_table(tbl: str) -> None:
             if host_pg_restore:
@@ -901,6 +1037,11 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 )
 
         for tbl in FC27_DOMAIN_TABLES:
+            if tbl == "fc27_roster" and (
+                not has_target_roster
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
             if tbl == "fc27_discord_jobs":
                 conn.execute("ALTER TABLE public.fc27_discord_jobs DISABLE TRIGGER trg_fc27_discord_jobs_claim_lease")
                 try:
@@ -930,13 +1071,19 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 if not seq_name:
                     continue
                 cur.execute(
-                    f"""
-                    SELECT setval(
-                        %s::regclass,
-                        COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
-                        false
-                    )
-                    """,
+                    sql.SQL(
+                        """
+                        SELECT setval(
+                            %s::regclass,
+                            COALESCE((SELECT MAX({column_name}) FROM {schema_name}.{table_name}), 0) + 1,
+                            false
+                        )
+                        """
+                    ).format(
+                        column_name=sql.Identifier(column_name),
+                        schema_name=sql.Identifier(schema_name),
+                        table_name=sql.Identifier(table_name),
+                    ),
                     (seq_name,),
                 )
 
@@ -972,7 +1119,7 @@ def _find_free_loopback_port() -> int:
 
 
 @contextlib.contextmanager
-def _ensure_reachable_db_uri(db_uri: str | None) -> Iterator[str | None]:
+def _ensure_reachable_db_uri(db_uri: str | None) -> Generator[str | None]:
     """Yield a host-reachable PostgreSQL URI, starting a transient loopback proxy if needed."""
     if not db_uri:
         yield None
@@ -1045,7 +1192,9 @@ def _ensure_reachable_db_uri(db_uri: str | None) -> Iterator[str | None]:
         bridged_info = dict(info)
         bridged_info["host"] = "127.0.0.1"
         bridged_info["port"] = str(local_port)
-        bridged_uri = psycopg.conninfo.make_conninfo(**bridged_info)
+        bridged_uri = psycopg.conninfo.make_conninfo(
+            **cast("dict[str, str]", {k: v for k, v in bridged_info.items() if v is not None})
+        )
         for _ in range(30):
             try:
                 with psycopg.connect(bridged_uri, connect_timeout=2) as probe_conn:
@@ -1111,7 +1260,9 @@ def create_fc27_backup(
 def _with_dbname(uri: str, dbname: str) -> str:
     info = psycopg.conninfo.conninfo_to_dict(uri)
     info["dbname"] = dbname
-    return psycopg.conninfo.make_conninfo(**info)
+    return psycopg.conninfo.make_conninfo(
+        **cast("dict[str, str]", {k: v for k, v in info.items() if v is not None})
+    )
 
 
 def verify_fc27_backup_restore(
@@ -1169,7 +1320,9 @@ def verify_fc27_backup_restore(
                 },
             )
             with psycopg.connect(reachable_admin_uri, autocommit=True) as admin_conn:
-                admin_conn.execute(f'CREATE DATABASE "{created_temp_db_name}"')
+                admin_conn.execute(
+                    sql.SQL("CREATE DATABASE {}").format(sql.Identifier(created_temp_db_name))
+                )
             target_uri = _with_dbname(reachable_admin_uri, created_temp_db_name)
 
         try:
@@ -1189,8 +1342,8 @@ def verify_fc27_backup_restore(
             )
             migration_ok = (
                 restored_mig_cnt >= 13
-                and any(v in restored_mig for v in ("0013", "0014", "0015"))
-                and manifest.migration_version in ("0001_THROUGH_0013", "0001_THROUGH_0014", EXPECTED_MIGRATION_VERSION)
+                and any(v in restored_mig for v in ("0013", "0014", "0015", "0016"))
+                and manifest.migration_version in ("0001_THROUGH_0013", "0001_THROUGH_0014", "0001_THROUGH_0015", EXPECTED_MIGRATION_VERSION)
             )
             if not migration_ok:
                 raise FC27RestoreVerificationError(
@@ -1248,7 +1401,8 @@ def verify_fc27_backup_restore(
                                 """,
                                 (manifest.club_id, manifest.platform, manifest.game_version),
                             )
-                            inserted_id = int(cur.fetchone()[0])
+                            _inserted_row = cur.fetchone()
+                            inserted_id = int(_inserted_row[0]) if _inserted_row else 0
                             cur.execute(
                                 "DELETE FROM public.fc27_manual_matches WHERE match_id = %s",
                                 (inserted_id,),
@@ -1266,7 +1420,8 @@ def verify_fc27_backup_restore(
                                 """,
                                 (f"restore-verify-{manifest.backup_id}",),
                             )
-                            inserted_id = int(cur.fetchone()[0])
+                            _job_row = cur.fetchone()
+                            inserted_id = int(_job_row[0]) if _job_row else 0
                             cur.execute(
                                 "DELETE FROM public.fc27_discord_jobs WHERE job_id = %s",
                                 (inserted_id,),
@@ -1294,7 +1449,11 @@ def verify_fc27_backup_restore(
                             "WHERE datname = %s AND pid <> pg_backend_pid()",
                             (created_temp_db_name,),
                         )
-                        admin_conn.execute(f'DROP DATABASE IF EXISTS "{created_temp_db_name}"')
+                        admin_conn.execute(
+                            sql.SQL("DROP DATABASE IF EXISTS {}").format(
+                                sql.Identifier(created_temp_db_name)
+                            )
+                        )
                 except Exception:
                     pass
 

@@ -105,7 +105,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
-        "schema_migrations": 15,
+        "schema_migrations": 16,
         "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,
@@ -113,6 +113,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
         "fc27_match_team_stats": 10,
         "fc27_player_match_stats": 60,
         "fc27_quarantine_records": 0,
+        "fc27_roster": 0,
         "fc27_manual_matches": 0,
         "fc27_manual_match_players": 0,
         "fc27_manual_match_events": 0,
@@ -293,6 +294,7 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
         "fc27_matches",
         "fc27_player_match_stats",
         "fc27_quarantine_records",
+        "fc27_roster",
         "fc27_manual_matches",
         "fc27_manual_match_players",
         "fc27_manual_match_events",
@@ -333,14 +335,23 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
     pg_db_migrated,
     pg_admin_uri: str,
 ) -> None:
-    """Backup and restore verification covers manual matches, players, events, audit, Discord linkage, and migration ledger."""
+    """Backup and restore verification covers roster, manual matches, players, events, audit, Discord linkage, and migration ledger."""
     from src.fc27_match_results import (
         create_scheduled_match,
+        list_roster_players,
         record_match_result,
         update_match_discord_message_link,
+        upsert_roster_player,
     )
 
     _seed_persisted_east_coasters_batch(monkeypatch, pg_db_migrated.app, count=10)
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_ecf_lao00001",
+        display_name="Lao",
+        position="CM",
+        discord_user_id="123456789012345678",
+    )
     sched = create_scheduled_match(
         pg_db_migrated.match_results_writer,
         opponent="Harbor City",
@@ -386,8 +397,9 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         pg_db_migrated.admin,
         backup_dir=backup_dir,
     )
-    assert manifest.table_counts.schema_migrations == 15
+    assert manifest.table_counts.schema_migrations == 16
     assert manifest.table_counts.schema_policy_versions == 1
+    assert manifest.table_counts.fc27_roster == 1
     assert manifest.table_counts.fc27_manual_matches == 1
     assert manifest.table_counts.fc27_manual_match_players == 3
     assert manifest.table_counts.fc27_manual_match_events == 3
@@ -400,11 +412,35 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         admin_db_uri=pg_admin_uri,
     )
     assert report.restore_verification == "PASS"
+    assert report.restored_counts.fc27_roster == 1
     assert report.restored_counts.fc27_manual_matches == 1
     assert report.restored_counts.fc27_manual_match_players == 3
     assert report.restored_counts.fc27_manual_match_events == 3
     assert report.restored_counts.fc27_manual_match_audit == 2
     assert report.restored_counts.fc27_manual_discord_linked_matches == 1
+
+    # Restore into the source database after inserting an extra stale roster row
+    # to confirm TRUNCATE clears public.fc27_roster before restoring.
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_ecf_stale999",
+        display_name="Stale Player",
+        position="GK",
+    )
+    stale_report = verify_fc27_backup_restore(
+        manifest_path=manifest_path,
+        archive_path=archive_path,
+        disposable_target_db_uri=pg_db_migrated.admin,
+    )
+    assert stale_report.restore_verification == "PASS"
+    assert stale_report.restored_counts.fc27_roster == 1
+    with psycopg.connect(pg_db_migrated.app) as conn:
+        restored_roster = list_roster_players(conn, include_inactive=True)
+        assert len(restored_roster) == 1
+        assert restored_roster[0].player_id == "plr_ecf_lao00001"
+        assert restored_roster[0].display_name == "Lao"
+        assert restored_roster[0].position == "CM"
+        assert restored_roster[0].discord_user_id == "123456789012345678"
 
 
 def _clear_backup_uri_env(monkeypatch: pytest.MonkeyPatch) -> None:

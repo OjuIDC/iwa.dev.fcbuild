@@ -24,6 +24,7 @@ from typing import Any
 
 import psycopg
 import psycopg.errors
+import psycopg.sql
 import pytest
 
 from src import settings
@@ -301,7 +302,9 @@ def test_05_required_tables_exist(pg_db_migrated) -> None:
         with conn.cursor() as cur:
             for tbl in expected_tables:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{tbl}",))
-                assert cur.fetchone()[0] == tbl or cur.fetchone is not None
+                _reg_row = cur.fetchone()
+                assert _reg_row is not None
+                assert _reg_row[0] == tbl or cur.fetchone is not None
                 cur.execute(
                     """
                     SELECT count(*) FROM information_schema.tables
@@ -309,7 +312,8 @@ def test_05_required_tables_exist(pg_db_migrated) -> None:
                     """,
                     (tbl,),
                 )
-                assert cur.fetchone()[0] == 1
+                _cnt_row = cur.fetchone()
+                assert _cnt_row is not None and _cnt_row[0] == 1
 
 
 def test_06_required_indexes_exist(pg_db_migrated) -> None:
@@ -327,7 +331,8 @@ def test_06_required_indexes_exist(pg_db_migrated) -> None:
         with conn.cursor() as cur:
             for idx in expected_indexes:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{idx}",))
-                assert cur.fetchone()[0] is not None, f"missing index {idx}"
+                _idx_row = cur.fetchone()
+                assert _idx_row is not None and _idx_row[0] is not None, f"missing index {idx}"
 
 
 def test_07_required_foreign_keys_exist(pg_db_migrated) -> None:
@@ -416,25 +421,26 @@ def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
         with conn.cursor() as cur:
             for tbl in saver_tables:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{tbl}",))
-                assert cur.fetchone()[0] is None
+                _reg_row = cur.fetchone()
+                assert _reg_row is not None and _reg_row[0] is None
 
 
 def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
     """10. Current grants policy version is recorded in public.schema_policy_versions."""
-    assert GRANTS_POLICY_VERSION == 16
-    assert GRANTS_POLICY.version == 16
+    assert GRANTS_POLICY_VERSION == 17
+    assert GRANTS_POLICY.version == 17
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT version, sha256, applied_by
                 FROM public.schema_policy_versions
-                WHERE policy = 'grants' AND version = 16
+                WHERE policy = 'grants' AND version = 17
                 """
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 16
+            assert row[0] == 17
             assert row[1] == GRANTS_POLICY.sha256
             assert row[2] == "fc27_migrator"
 
@@ -454,8 +460,13 @@ def test_11_fc27_app_can_select_normalized_tables(pg_uri) -> None:
                 "fc27_player_match_stats",
                 "fc27_quarantine_records",
             ):
-                cur.execute(f"SELECT count(*) FROM public.{tbl}")
-                assert cur.fetchone()[0] == 0
+                cur.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(tbl)
+                    )
+                )
+                _row = cur.fetchone()
+                assert _row is not None and _row[0] == 0
 
 
 def test_12_fc27_app_can_execute_required_apply_writes(pg_uri) -> None:
@@ -496,7 +507,11 @@ def test_15_fc27_dispatch_lacks_fc27_persistence_writes(pg_db_migrated) -> None:
             "fc27_quarantine_records",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                conn.execute(f"SELECT count(*) FROM public.{tbl}")
+                conn.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(tbl)
+                    )
+                )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT * FROM public.fc27_purge_expired_quarantine(now())")
 
@@ -512,7 +527,11 @@ def test_16_fc27_relay_lacks_fc27_persistence_writes(pg_db_migrated) -> None:
             "fc27_quarantine_records",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                conn.execute(f"SELECT count(*) FROM public.{tbl}")
+                conn.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(tbl)
+                    )
+                )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT * FROM public.fc27_purge_expired_quarantine(now())")
 
@@ -700,9 +719,11 @@ def test_29_identical_export_reapply_is_idempotent(pg_uri) -> None:
     with psycopg.connect(pg_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM public.fc27_matches")
-            assert cur.fetchone()[0] == 1
+            _m_row = cur.fetchone()
+            assert _m_row is not None and _m_row[0] == 1
             cur.execute("SELECT count(*) FROM public.fc27_player_match_stats")
-            assert cur.fetchone()[0] == 2
+            _s_row = cur.fetchone()
+            assert _s_row is not None and _s_row[0] == 2
 
 
 def test_30_duplicate_match_id_and_hash_ignored(pg_uri) -> None:
@@ -725,7 +746,8 @@ def test_30_duplicate_match_id_and_hash_ignored(pg_uri) -> None:
     with psycopg.connect(pg_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM public.fc27_matches")
-            assert cur.fetchone()[0] == 2
+            _m_row = cur.fetchone()
+            assert _m_row is not None and _m_row[0] == 2
 
 
 def test_31_same_external_match_id_with_changed_hash_blocks_apply(pg_uri) -> None:
@@ -911,11 +933,14 @@ def test_36_transaction_rollback_on_player_row_failure(pg_uri) -> None:
     with psycopg.connect(pg_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM public.fc27_export_batches WHERE export_id = 'exp-rollback-player'")
-            assert cur.fetchone()[0] == 0
+            _b_row = cur.fetchone()
+            assert _b_row is not None and _b_row[0] == 0
             cur.execute("SELECT count(*) FROM public.fc27_matches")
-            assert cur.fetchone()[0] == 0
+            _m_row = cur.fetchone()
+            assert _m_row is not None and _m_row[0] == 0
             cur.execute("SELECT count(*) FROM public.fc27_player_match_stats")
-            assert cur.fetchone()[0] == 0
+            _s_row = cur.fetchone()
+            assert _s_row is not None and _s_row[0] == 0
 
 
 def test_37_concurrent_duplicate_apply_remains_idempotent(pg_uri) -> None:
@@ -952,9 +977,11 @@ def test_37_concurrent_duplicate_apply_remains_idempotent(pg_uri) -> None:
     with psycopg.connect(pg_uri) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM public.fc27_export_batches WHERE export_id = 'exp-concurrent-01'")
-            assert cur.fetchone()[0] == 1
+            _b_row = cur.fetchone()
+            assert _b_row is not None and _b_row[0] == 1
             cur.execute("SELECT count(*) FROM public.fc27_matches WHERE external_match_id = 'm-conc-01'")
-            assert cur.fetchone()[0] == 1
+            _m_row = cur.fetchone()
+            assert _m_row is not None and _m_row[0] == 1
 
 
 def test_38_domain_event_written_atomically(pg_uri) -> None:
@@ -1031,8 +1058,13 @@ def test_40_failure_before_commit_leaves_no_partial_rows(
                 "domain_events",
                 "outbox",
             ):
-                cur.execute(f"SELECT count(*) FROM public.{tbl}")
-                assert cur.fetchone()[0] == 0, f"partial row left in {tbl}"
+                cur.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(tbl)
+                    )
+                )
+                _row = cur.fetchone()
+                assert _row is not None and _row[0] == 0, f"partial row left in {tbl}"
 
 
 def test_41_expired_quarantine_purge(pg_uri) -> None:
@@ -1073,7 +1105,8 @@ def test_41_expired_quarantine_purge(pg_uri) -> None:
                 "SELECT count(*) FROM public.fc27_quarantine_records WHERE quarantine_id = %s",
                 (q_res.quarantine_id,),
             )
-            assert cur.fetchone()[0] == 0
+            _q_row = cur.fetchone()
+            assert _q_row is not None and _q_row[0] == 0
             cur.execute(
                 "SELECT event_type, to_status FROM public.domain_events WHERE event_id = %s",
                 (purge_res.domain_event_ids[0],),

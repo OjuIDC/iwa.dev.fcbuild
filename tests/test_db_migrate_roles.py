@@ -4,8 +4,11 @@ import hashlib
 import subprocess
 import threading
 from pathlib import Path
+from typing import Any
+
 import pytest
 import psycopg
+import psycopg.sql
 
 from src.db_migrate import (
     GRANTS_POLICY,
@@ -15,6 +18,13 @@ from src.db_migrate import (
     migration_files,
     verify_postconditions,
 )
+
+
+def _scalar(cur: "psycopg.Cursor[Any]") -> Any:
+    """Return the first column of the next row, asserting a row exists."""
+    row = cur.fetchone()
+    assert row is not None
+    return row[0]
 
 PINNED_APPLIED_MIGRATION_SHA256 = {
     "0001_initial.sql": "692e05d98453eb8a4c87016ad6b13cdb805bb68476b00fd8cb9df60811e88094",
@@ -250,8 +260,8 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
-    """Verifies Grants Policy Version 16 least-privilege separation for Migration 0012, 0013, and 0014 tables."""
-    assert GRANTS_POLICY.version == 16
+    """Verifies Grants Policy Version 17 least-privilege separation for Migration 0012, 0013, 0014, and 0016 tables."""
+    assert GRANTS_POLICY.version == 17
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",
@@ -261,9 +271,13 @@ def test_fc27_performance_storage_least_privilege(pg_db_migrated):
             "fc27_quarantine_records",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                app_conn.execute(f"DELETE FROM public.{tbl}")
+                app_conn.execute(
+                    psycopg.sql.SQL("DELETE FROM public.{}").format(psycopg.sql.Identifier(tbl))
+                )
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                app_conn.execute(f"TRUNCATE TABLE public.{tbl}")
+                app_conn.execute(
+                    psycopg.sql.SQL("TRUNCATE TABLE public.{}").format(psycopg.sql.Identifier(tbl))
+                )
 
         for manual_tbl in (
             "fc27_manual_matches",
@@ -272,7 +286,9 @@ def test_fc27_performance_storage_least_privilege(pg_db_migrated):
             "fc27_manual_match_audit",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                app_conn.execute(f"DELETE FROM public.{manual_tbl}")
+                app_conn.execute(
+                    psycopg.sql.SQL("DELETE FROM public.{}").format(psycopg.sql.Identifier(manual_tbl))
+                )
 
     with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as writer_conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -301,11 +317,12 @@ STAGE_C_TABLES = (
 
 
 def test_migration_0014_fresh_and_idempotent(pg_db):
-    """Validates fresh migration 0001..0015, grants policy 16, postconditions, and second-run no-op."""
+    """Validates fresh migration 0001..0016, grants policy 17, postconditions, and second-run no-op."""
     applied_first = migrate(pg_db.migrator)
     assert "0014_fc27_player_development.sql" in applied_first
     assert "0015_fc27_player_development_fixups.sql" in applied_first
-    assert len(applied_first) == 15
+    assert "0016_fc27_canonical_roster_and_legacy_matches.sql" in applied_first
+    assert len(applied_first) == 16
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -318,9 +335,8 @@ def test_migration_0014_fresh_and_idempotent(pg_db):
 
 
 def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_db, monkeypatch):
-    """Validates upgrade from 0013 to 0014 with seeded provider and manual Match Results data."""
+    """Validates upgrade from 0013 to 0015 with seeded provider and manual Match Results data."""
     from src.fc27_backup_restore import inspect_database_state_for_manifest
-    from src.fc27_match_results import create_scheduled_match, record_match_result
     from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
     from tests.test_fc27_polling_worker import (
         _build_validated_envelope,
@@ -345,23 +361,41 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
     assert res.poll_status == "NEW_MATCHES_PERSISTED"
     assert res.inserted_match_count == 2
 
-    sched = create_scheduled_match(
-        pg_db.match_results_writer,
-        opponent="Harbor City",
-        match_date="2026-04-19",
-        match_time="21:30 UTC",
-        actor_discord_user_id="345678901234567890",
-    )
-    record_match_result(
-        pg_db.match_results_writer,
-        opponent="Harbor City",
-        home_score=3,
-        away_score=1,
-        actor_discord_user_id="345678901234567890",
-        scorers="Lao x2, Jay",
-        motm="Lao",
-        match_id=sched.match_id,
-    )
+    # Seed a legacy pre-0016 manual Match Results row directly using 0013 columns.
+    with psycopg.connect(pg_db.match_results_writer, autocommit=True) as wconn:
+        seed_id = _scalar(wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_matches (
+                opponent, opponent_normalized, match_date, match_time,
+                home_score, away_score, status, motm_display_label, motm_normalized_label,
+                created_by, updated_by
+            )
+            VALUES (
+                'Harbor City', 'harbor city', '2026-04-19', '21:30 UTC',
+                3, 1, 'FULL_TIME', 'Lao', 'lao',
+                '345678901234567890', '345678901234567890'
+            )
+            RETURNING match_id
+            """
+        ))
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_players (
+                match_id, normalized_display_label, safe_display_label, goals, assists
+            )
+            VALUES (%s, 'lao', 'Lao', 2, 0), (%s, 'jay', 'Jay', 1, 0)
+            """,
+            (seed_id, seed_id),
+        )
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_events (
+                match_id, event_type, normalized_display_label, safe_display_label, event_count, display_order
+            )
+            VALUES (%s, 'GOAL', 'lao', 'Lao', 2, 0), (%s, 'GOAL', 'jay', 'Jay', 1, 1)
+            """,
+            (seed_id, seed_id),
+        )
 
     _, mig_cnt_before, counts_before, hashes_before = inspect_database_state_for_manifest(pg_db.admin)
     assert mig_cnt_before == 13
@@ -369,8 +403,8 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
     assert counts_before.fc27_player_match_stats == 12
     assert counts_before.fc27_manual_matches == 1
 
-    # Upgrade from 0013 through latest (0014 + 0015 fixups)
-    applied_upgrade = migrate(pg_db.migrator)
+    # Upgrade from 0013 through 0015 fixups
+    applied_upgrade = migrate(pg_db.migrator, target="0015")
     assert applied_upgrade == [
         "0014_fc27_player_development.sql",
         "0015_fc27_player_development_fixups.sql",
@@ -388,12 +422,108 @@ def test_migration_0014_upgrade_from_0013_preserves_provider_and_manual_data(pg_
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
-        with conn.cursor() as cur:
-            for tbl in STAGE_C_TABLES:
-                cur.execute(f"SELECT count(*) FROM public.{tbl}")
-                assert cur.fetchone()[0] == 0, f"expected {tbl} to be empty after 0014 upgrade"
 
-    # Second run after upgrade is a no-op
+
+def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, monkeypatch):
+    """Validates upgrade 0015->0016 preserves manual IDs and provider provenance without cross-domain copies, and is idempotent."""
+    from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
+    from tests.test_fc27_polling_worker import (
+        _build_validated_envelope,
+        _enable_all_polling_gates,
+    )
+
+    migrate(pg_db.migrator, target="0015")
+    _enable_all_polling_gates(monkeypatch)
+    env, _ = _build_validated_envelope(count=2, start_id=993001, players_per_match=4)
+    res = run_fc27_poll_cycle(
+        runtime=FC27PollingRuntime(),
+        confirm_live_polling=True,
+        db_conn_or_uri=pg_db.app,
+        fetch_matches_fn=lambda: env,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert res.inserted_match_count == 2
+
+    # Seed pre-0016 numeric manual match #1 using 0013 schema columns.
+    with psycopg.connect(pg_db.match_results_writer, autocommit=True) as wconn:
+        existing_match_id = _scalar(wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_matches (
+                opponent, opponent_normalized, home_score, away_score,
+                status, created_by, updated_by
+            )
+            VALUES (
+                'Harbor City FC', 'harbor city fc', 2, 0,
+                'FULL_TIME', '345678901234567890', '345678901234567890'
+            )
+            RETURNING match_id
+            """
+        ))
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_players (
+                match_id, normalized_display_label, safe_display_label, goals, assists
+            )
+            VALUES (%s, 'lao', 'Lao', 2, 0)
+            """,
+            (existing_match_id,),
+        )
+        wconn.execute(
+            """
+            INSERT INTO public.fc27_manual_match_events (
+                match_id, event_type, normalized_display_label, safe_display_label, event_count, display_order
+            )
+            VALUES (%s, 'GOAL', 'lao', 'Lao', 2, 0)
+            """,
+            (existing_match_id,),
+        )
+    assert existing_match_id == 1
+
+    applied_upgrade = migrate(pg_db.migrator)
+    assert applied_upgrade == ["0016_fc27_canonical_roster_and_legacy_matches.sql"]
+
+    with psycopg.connect(pg_db.admin) as conn:
+        assert verify_postconditions(conn) == []
+        row_existing = conn.execute(
+            "SELECT match_id, opponent, legacy_ref FROM public.fc27_manual_matches WHERE match_id = 1"
+        ).fetchone()
+        assert row_existing == (1, "Harbor City FC", None)
+
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_manual_matches")) == 1
+        assert (
+            _scalar(
+                conn.execute(
+                    "SELECT COUNT(*) FROM public.fc27_manual_matches WHERE legacy_ref IS NOT NULL"
+                )
+            )
+            == 0
+        )
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_manual_match_players")) == 1
+        assert (
+            _scalar(
+                conn.execute(
+                    "SELECT COUNT(*) FROM public.fc27_manual_match_players WHERE player_id LIKE 'plr_ecf_%'"
+                )
+            )
+            == 0
+        )
+
+        # Provider matches & stats remain strictly separated with intact provenance
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_matches")) == 2
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_player_match_stats")) == 8
+        prov_vals = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT source_classification FROM public.fc27_matches"
+            ).fetchall()
+        }
+        assert prov_vals == {"COMMUNITY_RESEARCH_DERIVED"}
+
+        # Canonical roster table starts empty and ready for explicit /fc27 setplayer registrations
+        assert _scalar(conn.execute("SELECT COUNT(*) FROM public.fc27_roster")) == 0
+
+    # Idempotent no-op re-run
     assert migrate(pg_db.migrator) == []
 
 
@@ -443,7 +573,7 @@ def test_migration_0014_ownership_indexes_and_privacy_columns(pg_db_migrated):
                 )
 
             cur.execute("SELECT count(*) FROM public.fc27_build_catalog")
-            assert cur.fetchone()[0] == 0
+            assert _scalar(cur) == 0
 
 
 def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
@@ -499,7 +629,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
 
     # 2. fc27_player_links lifecycle & partial unique indexes via fc27_player_dev_writer
     with psycopg.connect(pg_db_migrated.player_dev_writer, autocommit=True) as pd_conn:
-        link_1 = pd_conn.execute(
+        link_1 = _scalar(pd_conn.execute(
             """
             INSERT INTO public.fc27_player_links (
                 pseudonym, discord_user_id, status, requested_by
@@ -507,7 +637,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             RETURNING link_id
             """,
             (pseudo_a,),
-        ).fetchone()[0]
+        ))
 
         # Confirming without confirmed_by / confirmed_at fails CHECK
         with pytest.raises(psycopg.errors.CheckViolation):
@@ -566,7 +696,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
         )
 
         # 3. fc27_build_catalog & fc27_build_catalog_audit
-        cat_1 = pd_conn.execute(
+        cat_1 = _scalar(pd_conn.execute(
             """
             INSERT INTO public.fc27_build_catalog (
                 build_key, name, positions, archetype,
@@ -578,7 +708,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             )
             RETURNING catalog_row_id
             """
-        ).fetchone()[0]
+        ))
         # Duplicate (build_key, version) fails UNIQUE
         with pytest.raises(psycopg.errors.UniqueViolation):
             pd_conn.execute(
@@ -618,7 +748,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
                 """
             )
 
-        audit_1 = pd_conn.execute(
+        audit_1 = _scalar(pd_conn.execute(
             """
             INSERT INTO public.fc27_build_catalog_audit (
                 catalog_row_id, build_key, version, action, actor_discord_user_id, snapshot
@@ -626,7 +756,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             RETURNING audit_id
             """,
             (cat_1,),
-        ).fetchone()[0]
+        ))
         # Append-only: UPDATE and DELETE rejected for fc27_player_dev_writer
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             pd_conn.execute("UPDATE public.fc27_build_catalog_audit SET action = 'retire' WHERE audit_id = %s", (audit_1,))
@@ -634,7 +764,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             pd_conn.execute("DELETE FROM public.fc27_build_catalog_audit WHERE audit_id = %s", (audit_1,))
 
         # 4. fc27_player_suggestions & fc27_suggestion_assessments
-        sug_1 = pd_conn.execute(
+        sug_1 = _scalar(pd_conn.execute(
             """
             INSERT INTO public.fc27_player_suggestions (
                 pseudonym, kind, objective, content,
@@ -651,7 +781,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             RETURNING suggestion_id
             """,
             (pseudo_a,),
-        ).fetchone()[0]
+        ))
         # Objective min_matches > max_matches fails CHECK
         with pytest.raises(psycopg.errors.CheckViolation):
             pd_conn.execute(
@@ -673,7 +803,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
                 (sug_1,),
             )
 
-        ass_1 = pd_conn.execute(
+        ass_1 = _scalar(pd_conn.execute(
             """
             INSERT INTO public.fc27_suggestion_assessments (
                 suggestion_id, calculated_values, match_ids
@@ -683,7 +813,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             RETURNING assessment_id
             """,
             (sug_1,),
-        ).fetchone()[0]
+        ))
         # Append-only: UPDATE and DELETE rejected for fc27_player_dev_writer
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             pd_conn.execute(
@@ -702,7 +832,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
 
     # 5. fc27_discord_jobs idempotency and claim-lease enforcement
     with psycopg.connect(pg_db_migrated.poll_writer, autocommit=True) as pw_conn:
-        job_1 = pw_conn.execute(
+        job_1 = _scalar(pw_conn.execute(
             """
             INSERT INTO public.fc27_discord_jobs (
                 job_type, payload, state, idempotency_key
@@ -711,7 +841,7 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
             )
             RETURNING job_id
             """
-        ).fetchone()[0]
+        ))
         # Duplicate idempotency_key fails UNIQUE
         with pytest.raises(psycopg.errors.UniqueViolation):
             pw_conn.execute(
@@ -794,15 +924,28 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             "fc27_manual_match_players",
             "fc27_manual_match_events",
             "fc27_manual_match_audit",
+            "fc27_roster",
             *STAGE_C_TABLES,
         ):
-            reader_conn.execute(f"SELECT count(*) FROM public.{readable_tbl}")
+            reader_conn.execute(
+                psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                    psycopg.sql.Identifier(readable_tbl)
+                )
+            )
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                reader_conn.execute(f"DELETE FROM public.{readable_tbl}")
+                reader_conn.execute(
+                    psycopg.sql.SQL("DELETE FROM public.{}").format(
+                        psycopg.sql.Identifier(readable_tbl)
+                    )
+                )
 
         for leg_tbl in legacy_tables:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                reader_conn.execute(f"SELECT count(*) FROM public.{leg_tbl}")
+                reader_conn.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(leg_tbl)
+                    )
+                )
 
     # 2. fc27_poll_writer cannot access links, catalog, suggestions, assessments, manual matches, or legacy tables
     with psycopg.connect(pg_db_migrated.poll_writer, autocommit=True) as pw_conn:
@@ -816,10 +959,15 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             "fc27_manual_match_players",
             "fc27_manual_match_events",
             "fc27_manual_match_audit",
+            "fc27_roster",
             *legacy_tables,
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                pw_conn.execute(f"SELECT count(*) FROM public.{forbidden_tbl}")
+                pw_conn.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(forbidden_tbl)
+                    )
+                )
 
     # 3. fc27_player_dev_writer cannot write to provider tables or alias fingerprints, and cannot access quarantine, manual, or legacy tables
     with psycopg.connect(pg_db_migrated.player_dev_writer, autocommit=True) as pd_conn:
@@ -830,15 +978,35 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             "fc27_matches",
             "fc27_player_match_stats",
         ):
-            pd_conn.execute(f"SELECT count(*) FROM public.{ro_tbl}")
+            pd_conn.execute(
+                psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                    psycopg.sql.Identifier(ro_tbl)
+                )
+            )
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                pd_conn.execute(f"DELETE FROM public.{ro_tbl}")
+                pd_conn.execute(
+                    psycopg.sql.SQL("DELETE FROM public.{}").format(
+                        psycopg.sql.Identifier(ro_tbl)
+                    )
+                )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             pd_conn.execute(
                 "INSERT INTO public.fc27_player_alias_fingerprints (pseudonym, gamertag_hmac) "
                 "VALUES ('plr_ecf_0123456789ab', %s)",
                 ("c" * 64,),
             )
+        pd_conn.execute("SELECT count(*) FROM public.fc27_roster")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute(
+                "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized) "
+                "VALUES ('p_ro_deny', 'ReadOnly', 'readonly')"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute(
+                "UPDATE public.fc27_roster SET display_name = 'Nope' WHERE player_id = 'p_ro_deny'"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            pd_conn.execute("DELETE FROM public.fc27_roster")
         for no_access_tbl in (
             "fc27_quarantine_records",
             "fc27_manual_matches",
@@ -848,4 +1016,47 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
             *legacy_tables,
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                pd_conn.execute(f"SELECT count(*) FROM public.{no_access_tbl}")
+                pd_conn.execute(
+                    psycopg.sql.SQL("SELECT count(*) FROM public.{}").format(
+                        psycopg.sql.Identifier(no_access_tbl)
+                    )
+                )
+
+    # 4. Least-privilege fc27_roster enforcement across match_results_writer, app, dispatch, and relay
+    with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as mrw_conn:
+        mrw_conn.execute(
+            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position) "
+            "VALUES ('p_lao_matrix', 'Lao', 'lao', 'ST')"
+        )
+        mrw_conn.execute(
+            "UPDATE public.fc27_roster SET position = 'CAM' WHERE player_id = 'p_lao_matrix'"
+        )
+        assert (
+            _scalar(
+                mrw_conn.execute(
+                    "SELECT position FROM public.fc27_roster WHERE player_id = 'p_lao_matrix'"
+                )
+            )
+            == "CAM"
+        )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            mrw_conn.execute("DELETE FROM public.fc27_roster WHERE player_id = 'p_lao_matrix'")
+
+    with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
+        assert _scalar(app_conn.execute("SELECT COUNT(*) FROM public.fc27_roster")) == 1
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute(
+                "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized) "
+                "VALUES ('p_app_deny', 'AppDeny', 'appdeny')"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute(
+                "UPDATE public.fc27_roster SET position = 'GK' WHERE player_id = 'p_lao_matrix'"
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            app_conn.execute("DELETE FROM public.fc27_roster")
+
+    for no_roster_uri in (pg_db_migrated.dispatch, pg_db_migrated.relay):
+        with psycopg.connect(no_roster_uri, autocommit=True) as isolated_conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                isolated_conn.execute("SELECT count(*) FROM public.fc27_roster")

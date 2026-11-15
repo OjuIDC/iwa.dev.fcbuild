@@ -21,6 +21,7 @@ from src.fc27_discord_bot import (
     DISCORD_PROVIDER_REQUESTS,
     FC27DiscordBotConfig,
     FC27DiscordDisabledError,
+    FC27DiscordEmbed,
     FC27DiscordError,
     PSEUDONYM_PLAYER_REF_RE,
     run_discord_gateway_bot,
@@ -950,11 +951,16 @@ def test_18_privacy_and_output_sanitization_zero_pii_or_secrets(
     assert "@everyone" not in rendered
     assert "[mention-suppressed]" in rendered
     assert PSEUDONYM_MATCH_REF_RE.fullmatch(msg.match_ref)
-    assert msg.match_ref in rendered
-    assert "plr_ecf_" in rendered
-    for token in rendered.split("`"):
-        if token.startswith("plr_ecf_"):
-            assert PSEUDONYM_PLAYER_REF_RE.fullmatch(token)
+    assert msg.match_ref not in rendered
+    assert "mref_ecf_" not in rendered
+    assert "plr_ecf_" not in rendered
+    assert "ref:" not in rendered
+    assert "leagueMatch" not in rendered
+    assert "COMMUNITY_RESEARCH_DERIVED" not in rendered
+    assert "Match Reference" not in rendered
+    assert "Source & Quality" not in rendered
+    assert "League Match" in rendered
+    assert "Unnamed Player" in rendered
 
 
 def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
@@ -976,7 +982,7 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
             self.title = title
             self.description = description
             self.fields: list[Any] = []
-            self.footer = None
+            self.footer: Any = None
 
         def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
             self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
@@ -1073,15 +1079,35 @@ def test_19_gateway_channel_transport_and_background_loop_with_mocked_discord(
         assert cycles[0].jobs_completed == 2
         assert len(fake_channel.sent) == 2
 
-        # Verify pre-send channel history duplicate lookup finds an already posted match_ref
-        posted_mref = fake_channel.sent[0].embeds[0].footer.text.removeprefix("ref:")
+        from src.fc27_match_results import EAST_COASTERS_FOOTER_TEXT
+
+        assert fake_channel.sent[0].embeds[0].footer.text == EAST_COASTERS_FOOTER_TEXT
+        assert "ref:" not in fake_channel.sent[0].embeds[0].footer.text
+
+        # Verify pre-send channel history duplicate lookup finds an already posted canonical message
+        first_msg = cycles[0].audit_entries[0]
+        assert first_msg.match_ref is not None
+        first_sent = fake_channel.sent[0]
+        first_emb = first_sent.embeds[0]
+        probe_message = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key=first_msg.idempotency_key,
+            match_ref=first_msg.match_ref,
+            content=first_sent.content,
+            embed=__import__("src.fc27_discord_bot", fromlist=["FC27DiscordEmbed"]).FC27DiscordEmbed(
+                title=first_emb.title,
+                description=first_emb.description,
+                fields={f.name: f.value for f in first_emb.fields},
+            ),
+        )
         found_id = await asyncio.to_thread(
             transport.find_existing_notification,
             channel_id=RESULTS_CHANNEL_ID,
-            match_ref=posted_mref,
-            idempotency_key=f"fc27:post_new_results:{posted_mref}",
+            match_ref=first_msg.match_ref,
+            idempotency_key=first_msg.idempotency_key,
+            message=probe_message,
         )
-        assert found_id is not None
+        assert found_id == first_sent.id
 
         # Verify HTTP error classification (429 retryable, 403 permanent)
         fake_msg = FC27PostNewResultsMessage(
@@ -1210,7 +1236,7 @@ def test_21_gateway_history_is_time_bounded_and_timed_out_sends_are_cancelled(
             self.title = title
             self.description = description
             self.fields: list[Any] = []
-            self.footer = None
+            self.footer: Any = None
 
         def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
             self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
@@ -1530,3 +1556,202 @@ def test_25_unrenderable_unknown_job_audit_key_cannot_block_cycle(
             WHERE job_type = 'evaluate_suggestions'
             """)
     assert eval_row == ("pending", 0, None)
+
+
+def test_26_dispatcher_batch_resolves_fc27_roster_and_renders_canonical_notification(
+    monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+) -> None:
+    """Dispatcher batch-resolves registered roster names, falls back to Unnamed Player, and omits internal jargon."""
+    _seed_worker_matches_and_jobs(monkeypatch, pg_db_migrated, count=1, start_id=997001)
+
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        prefs = [
+            row[0]
+            for row in conn.execute(
+                "SELECT local_player_reference FROM public.fc27_player_match_stats ORDER BY local_player_reference ASC"
+            ).fetchall()
+        ]
+        assert len(prefs) >= 2
+        registered_pref = prefs[0]
+        conn.execute("UPDATE public.fc27_matches SET formation = 'UNKNOWN'")
+        conn.execute(
+            """
+            INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position, active)
+            VALUES (%s, 'Lao', 'lao', 'CM', TRUE)
+            ON CONFLICT (player_id) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                display_name_normalized = EXCLUDED.display_name_normalized
+            """,
+            (registered_pref,),
+        )
+        conn.commit()
+
+    transport = SyntheticDiscordNotificationTransport()
+    res = run_discord_dispatch_cycle(
+        config=_enabled_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+    )
+    assert res.jobs_completed == 1
+    assert len(transport.sent_messages) == 1
+    sent = transport.sent_messages[0]
+    assert sent.content.startswith("✅ FULL TIME — East Coasters FC ")
+    assert sent.embed.title.startswith("⚽ FULL TIME — ")
+    assert sent.embed.color is not None
+    assert sent.embed.footer_text is not None and "ref:" not in sent.embed.footer_text
+
+    full_text = "\n".join(
+        [
+            sent.content,
+            sent.embed.title,
+            sent.embed.description,
+            sent.embed.footer_text or "",
+            *(f"{k}: {v}" for k, v in sent.embed.fields.items()),
+        ]
+    )
+    assert "Lao" in full_text
+    assert "Unnamed Player" in full_text
+    for bad in (
+        "mref_ecf_",
+        "plr_ecf_",
+        "ref:",
+        "UNKNOWN",
+        "None",
+        "null",
+        "N/A",
+        "leagueMatch",
+        "COMMUNITY_RESEARCH_DERIVED",
+        "VERIFIED",
+        "COMPLETED",
+        "Match Reference",
+        "Source & Quality",
+        "Provenance",
+    ):
+        assert bad not in full_text
+
+
+def test_27_async_find_existing_requires_played_timestamp_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical dedup lookup must check 📅 Played so repeat opponent+score matches are not skipped."""
+
+    class _FakeHTTPException(Exception):
+        def __init__(self, status: int = 0) -> None:
+            super().__init__(f"HTTP {status}")
+            self.status = status
+
+    class _FakeForbidden(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(403)
+
+    class _FakeNotFound(_FakeHTTPException):
+        def __init__(self) -> None:
+            super().__init__(404)
+
+    class _FakeEmbed:
+        def __init__(self, *, title: str, description: str) -> None:
+            self.title = title
+            self.description = description
+            self.fields: list[Any] = []
+            self.footer: Any = None
+
+        def add_field(self, *, name: str, value: str, inline: bool = False) -> None:
+            self.fields.append(types.SimpleNamespace(name=name, value=value, inline=inline))
+
+        def set_footer(self, *, text: str) -> None:
+            self.footer = types.SimpleNamespace(text=text)
+
+    class _FakeAllowedMentions:
+        @classmethod
+        def none(cls) -> _FakeAllowedMentions:
+            return cls()
+
+    fake_discord = types.ModuleType("discord")
+    setattr(fake_discord, "Embed", _FakeEmbed)
+    setattr(fake_discord, "AllowedMentions", _FakeAllowedMentions)
+    setattr(fake_discord, "HTTPException", _FakeHTTPException)
+    setattr(fake_discord, "Forbidden", _FakeForbidden)
+    setattr(fake_discord, "NotFound", _FakeNotFound)
+    monkeypatch.setitem(sys.modules, "discord", fake_discord)
+
+    bot_id = 111222333
+    shared_content = "✅ FULL TIME — East Coasters FC 3-1 Metro United"
+    shared_title = "⚽ FULL TIME — WIN 3-1 vs Metro United"
+    prior_msg = types.SimpleNamespace(
+        id="8801",
+        author=types.SimpleNamespace(id=bot_id),
+        content=shared_content,
+        embeds=[
+            types.SimpleNamespace(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                footer=types.SimpleNamespace(text="East Coasters FC • Est. 2016"),
+                fields=[types.SimpleNamespace(name="📅 Played", value="2026-05-01 • 8:00 PM EDT")],
+            )
+        ],
+    )
+
+    class _Channel:
+        async def history(self, *, limit: int | None = 50, after: Any = None):
+            yield prior_msg
+
+        async def send(self, **kwargs: Any) -> Any:
+            return types.SimpleNamespace(id="8802")
+
+    class _Client:
+        def __init__(self) -> None:
+            self.user = types.SimpleNamespace(id=bot_id)
+            self._channel = _Channel()
+
+        def get_channel(self, cid: int) -> Any:
+            return self._channel if cid == int(RESULTS_CHANNEL_ID) else None
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        transport = DiscordGatewayChannelTransport(_Client(), loop, timeout_seconds=2.0)
+        not_before = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+
+        later_match_msg = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key="fc27:post_new_results:mref_ecf_222222222222",
+            match_ref="mref_ecf_222222222222",
+            content=shared_content,
+            embed=FC27DiscordEmbed(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                fields={"📅 Played": "2026-05-08 • 8:00 PM EDT"},
+            ),
+        )
+        found_later = await asyncio.to_thread(
+            transport.find_existing_notification,
+            channel_id=RESULTS_CHANNEL_ID,
+            match_ref=later_match_msg.match_ref,
+            idempotency_key=later_match_msg.idempotency_key,
+            not_before=not_before,
+            message=later_match_msg,
+        )
+        assert found_later is None
+
+        retry_same_msg = FC27PostNewResultsMessage(
+            channel_id=RESULTS_CHANNEL_ID,
+            idempotency_key="fc27:post_new_results:mref_ecf_111111111111",
+            match_ref="mref_ecf_111111111111",
+            content=shared_content,
+            embed=FC27DiscordEmbed(
+                title=shared_title,
+                description="**East Coasters FC** 3-1 **Metro United**",
+                fields={"📅 Played": "2026-05-01 • 8:00 PM EDT"},
+            ),
+        )
+        found_retry = await asyncio.to_thread(
+            transport.find_existing_notification,
+            channel_id=RESULTS_CHANNEL_ID,
+            match_ref=retry_same_msg.match_ref,
+            idempotency_key=retry_same_msg.idempotency_key,
+            not_before=not_before,
+            message=retry_same_msg,
+        )
+        assert found_retry == "8801"
+
+    asyncio.run(_run())
