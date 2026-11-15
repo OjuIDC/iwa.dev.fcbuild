@@ -1807,8 +1807,8 @@ class ReconciliationTokenStore:
             raise MatchResultsValidationError("ttl_seconds must be between 1 and 86400.")
         self._writer_conn_or_uri = writer_conn_or_uri
         self._reader_conn_or_uri = reader_conn_or_uri
-        self._require_dedicated_writer_role = bool(require_dedicated_writer_role)
-        self._default_ttl_seconds = int(default_ttl_seconds)
+        self._require_dedicated_writer_role = require_dedicated_writer_role
+        self._default_ttl_seconds = default_ttl_seconds
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
         self._lock = threading.Lock()
         self._entries: dict[tuple[str | None, str], tuple[str, datetime]] = {}
@@ -1972,12 +1972,12 @@ class ReconciliationTokenStore:
         now: datetime | None = None,
     ) -> list[str]:
         """Issue sequential `T1..Tn` tokens for ordered internal player IDs with bounded TTL."""
-        ttl = self._default_ttl_seconds if ttl_seconds is None else int(ttl_seconds)
+        ttl = self._default_ttl_seconds if ttl_seconds is None else ttl_seconds
         if ttl < 1 or ttl > 86400:
             raise MatchResultsValidationError("ttl_seconds must be between 1 and 86400.")
         actor_key = (
             validate_discord_snowflake(actor_discord_user_id, field_name="actor")
-            if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+            if actor_discord_user_id is not None and actor_discord_user_id.strip()
             else None
         )
         current_now = _as_aware_datetime(now or self._clock())
@@ -2022,14 +2022,14 @@ class ReconciliationTokenStore:
         now: datetime | None = None,
     ) -> str:
         """Resolve a numbered token (`T1..Tn`) back to its internal player ID or fail closed."""
-        raw = str(token or "").strip().upper()
+        raw = (token or "").strip().upper()
         if not _RECONCILIATION_TOKEN_RE.fullmatch(raw):
             raise MatchResultsValidationError(
                 "Invalid reconciliation token format. Run /unresolvedplayers to obtain a token like T1."
             )
         actor_key = (
             validate_discord_snowflake(actor_discord_user_id, field_name="actor")
-            if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+            if actor_discord_user_id is not None and actor_discord_user_id.strip()
             else None
         )
         current_now = _as_aware_datetime(now or self._clock())
@@ -2102,7 +2102,7 @@ def list_unresolved_players(
     limit: int = 50,
 ) -> tuple[UnresolvedPlayerSummary, ...]:
     """Query unresolved provider identities in a single aggregate SQL query and bind short-lived tokens."""
-    bounded_limit = max(1, min(int(limit), 100))
+    bounded_limit = max(1, min(limit, 100))
     store = token_store or DEFAULT_RECONCILIATION_TOKEN_STORE
     clean_club_id = validate_safe_text(club_id, field_name="club_id", max_length=32, allow_none=False)
     clean_game_version = validate_safe_text(
@@ -2344,7 +2344,7 @@ def upsert_roster_player(
 
     audit_actor_id = (
         validate_discord_snowflake(actor_discord_user_id, field_name="actor")
-        if actor_discord_user_id is not None and str(actor_discord_user_id).strip()
+        if actor_discord_user_id is not None and actor_discord_user_id.strip()
         else DEFAULT_CLI_ACTOR_DISCORD_USER_ID
     )
 
@@ -2410,7 +2410,7 @@ def upsert_roster_player(
                     position=safe_pos,
                 )
                 if (
-                    (actor_discord_user_id is not None and str(actor_discord_user_id).strip())
+                    (actor_discord_user_id is not None and actor_discord_user_id.strip())
                     or has_token
                     or has_gamertag
                 ):
@@ -3694,9 +3694,9 @@ class MatchDiscordMessageLinks(BaseModel):
 
 
 def _validate_optional_snowflake(val: str | None, *, field_name: str) -> str | None:
-    if val is None or not str(val).strip():
+    if val is None or not val.strip():
         return None
-    return validate_discord_snowflake(str(val).strip(), field_name=field_name)
+    return validate_discord_snowflake(val.strip(), field_name=field_name)
 
 
 def _fetch_latest_linkage_row(
@@ -4590,7 +4590,7 @@ def build_match_post_tag(seed: str) -> str:
     disclosing internal references, and it keeps working after the human-readable
     summary changes (roster corrections, renamed players, edited coaching notes).
     """
-    clean_seed = str(seed or "").strip()
+    clean_seed = (seed or "").strip()
     if not clean_seed:
         raise MatchResultsValidationError(
             "A non-empty seed is required to build a match post tag."
@@ -4607,10 +4607,10 @@ def tag_match_post_content(
 ) -> str:
     """Append the stable match tag to ``content``, keeping the result within ``max_length``."""
     tag = build_match_post_tag(seed)
-    base = str(content or "").rstrip()
+    base = content.rstrip()
     if not base:
         return tag
-    room = max(0, int(max_length) - len(tag) - 2)
+    room = max(0, max_length - len(tag) - 2)
     if len(base) > room:
         base = base[:room].rstrip()
     return f"{base}\n\n{tag}"
@@ -4618,7 +4618,7 @@ def tag_match_post_content(
 
 def extract_match_post_tag(content: str) -> str | None:
     """Return the stable match tag embedded in ``content``, or ``None`` when absent."""
-    for line in reversed(str(content or "").splitlines()):
+    for line in reversed(content.splitlines()):
         candidate = line.strip()
         if not candidate.startswith(MATCH_POST_TAG_PREFIX):
             continue
@@ -4890,7 +4890,7 @@ class InMemoryDiscordChannelAdapter:
         msg_id = str(self._next_snowflake)
         self._next_snowflake += 1
         self.text_post_count += 1
-        self.text_messages[(chan, msg_id)] = str(content)
+        self.text_messages[(chan, msg_id)] = content
         return (msg_id, chan)
 
     def edit_text(self, channel_id: str, message_id: str, content: str) -> bool:
@@ -4899,7 +4899,7 @@ class InMemoryDiscordChannelAdapter:
         if msg_id in self.deleted_message_ids or (chan, msg_id) not in self.text_messages:
             return False
         self.text_edit_count += 1
-        self.text_messages[(chan, msg_id)] = str(content)
+        self.text_messages[(chan, msg_id)] = content
         return True
 
     def delete_message(self, channel_id: str, message_id: str) -> None:
@@ -4924,8 +4924,8 @@ class InMemoryDiscordChannelAdapter:
     ) -> str | None:
         """Return the ID of an already-posted text message in ``channel_id``, if any."""
         chan = channel_id.strip()
-        expected_disc = str(discriminator or "").strip()
-        expected_content = str(content or "").strip()
+        expected_disc = (discriminator or "").strip()
+        expected_content = content.strip()
         for (stored_chan, msg_id), stored_content in reversed(
             list(self.text_messages.items())
         ):
