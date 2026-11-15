@@ -126,7 +126,7 @@ _ACRONYM_TOKENS: Final[frozenset[str]] = frozenset(
         "IV",
         "USA",
         "UK",
-        "EU",
+        "US",
         "NYC",
         "LA",
         "DC",
