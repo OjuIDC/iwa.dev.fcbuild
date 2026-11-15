@@ -85,6 +85,7 @@ from src.fc27_match_results import (
     RosterPlayerRecord,
     build_result_content,
     build_result_embed,
+    build_match_post_tag,
     build_team_chat_result_summary,
     clean_opponent,
     coerce_public_match_id,
@@ -119,6 +120,7 @@ from src.fc27_match_results import (
     render_unresolved_players_embed,
     resolve_match_results_writer_uri,
     soft_delete_match,
+    tag_match_post_content,
     update_match_discord_message_link,
     upsert_roster_player,
     validate_bounded_int,
@@ -938,8 +940,13 @@ class FC27DiscordBotService:
         self._writer_db_conn_or_uri = writer_db_conn_or_uri
         self._discord_channel_adapter = discord_channel_adapter
         self._dispatch_transport = dispatch_transport
-        self._reconciliation_token_store = (
-            reconciliation_token_store or DEFAULT_RECONCILIATION_TOKEN_STORE
+        self._reconciliation_token_store = reconciliation_token_store or (
+            ReconciliationTokenStore(
+                writer_conn_or_uri=writer_db_conn_or_uri,
+                require_dedicated_writer_role=require_dedicated_writer_role,
+            )
+            if writer_db_conn_or_uri is not None
+            else DEFAULT_RECONCILIATION_TOKEN_STORE
         )
         self._require_dedicated_writer_role = require_dedicated_writer_role
         self._polling_runtime = polling_runtime or get_default_polling_runtime()
@@ -1147,7 +1154,10 @@ class FC27DiscordBotService:
 
         tc_channel_id = self._config.team_chat_channel_id
         if tc_channel_id and updated_detail.status != "SCHEDULED":
-            team_chat_text = build_team_chat_result_summary(updated_detail)
+            team_chat_text = tag_match_post_content(
+                build_team_chat_result_summary(updated_detail),
+                seed=f"manual:{updated_detail.match_id}",
+            )
             assert_discord_output_sanitized(
                 team_chat_text, forbidden_tokens=self._secret_tokens
             )
@@ -1186,9 +1196,15 @@ class FC27DiscordBotService:
                             edit_tc_chan,
                         )
             elif existing_links is None or not existing_links.team_chat_message_id:
-                post_text_fn = getattr(self._discord_channel_adapter, "post_text", None)
-                if callable(post_text_fn):
-                    tc_msg_id, tc_chan_out = post_text_fn(tc_channel_id, team_chat_text)
+                recovered_tc_id = self._find_existing_team_chat_message(
+                    tc_channel_id,
+                    team_chat_text,
+                    match_id=updated_detail.match_id,
+                )
+                if recovered_tc_id:
+                    edit_text_fn = getattr(self._discord_channel_adapter, "edit_text", None)
+                    if callable(edit_text_fn):
+                        edit_text_fn(tc_channel_id, recovered_tc_id, team_chat_text)
                     record_match_discord_message_links(
                         writer_target,
                         match_id=updated_detail.match_id,
@@ -1196,12 +1212,57 @@ class FC27DiscordBotService:
                         discord_guild_id=guild_id,
                         results_channel_id=updated_detail.discord_channel_id or target_channel,
                         results_message_id=updated_detail.discord_message_id,
-                        team_chat_channel_id=str(tc_chan_out),
-                        team_chat_message_id=str(tc_msg_id),
+                        team_chat_channel_id=tc_channel_id,
+                        team_chat_message_id=recovered_tc_id,
                         require_dedicated_writer_role=self._require_dedicated_writer_role,
                     )
+                else:
+                    post_text_fn = getattr(self._discord_channel_adapter, "post_text", None)
+                    if callable(post_text_fn):
+                        tc_msg_id, tc_chan_out = post_text_fn(tc_channel_id, team_chat_text)
+                        record_match_discord_message_links(
+                            writer_target,
+                            match_id=updated_detail.match_id,
+                            actor_discord_user_id=actor_uid,
+                            discord_guild_id=guild_id,
+                            results_channel_id=updated_detail.discord_channel_id or target_channel,
+                            results_message_id=updated_detail.discord_message_id,
+                            team_chat_channel_id=str(tc_chan_out),
+                            team_chat_message_id=str(tc_msg_id),
+                            require_dedicated_writer_role=self._require_dedicated_writer_role,
+                        )
 
         return updated_detail
+
+    def _find_existing_team_chat_message(
+        self,
+        channel_id: str,
+        content: str,
+        *,
+        match_id: int,
+    ) -> str | None:
+        """Recover an already-published team-chat summary before posting a duplicate.
+
+        A successful post followed by a failed linkage write would otherwise produce a
+        second copy of the same summary on the next attempt, so the channel history is
+        searched for the stable per-match tag first.
+        """
+        if self._discord_channel_adapter is None:
+            return None
+        discriminator = build_match_post_tag(f"manual:{match_id}")
+        text_find_fn = getattr(self._discord_channel_adapter, "find_existing_text", None)
+        if callable(text_find_fn):
+            try:
+                found = text_find_fn(
+                    channel_id=channel_id,
+                    content=content,
+                    discriminator=discriminator,
+                )
+            except TypeError:
+                found = None
+            if found:
+                return str(found)
+        return None
 
     def _refresh_linked_messages_for_player(
         self,

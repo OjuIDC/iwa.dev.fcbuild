@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 17
+GRANTS_POLICY_VERSION = 18
 
 
 def _compute_grants_sha256() -> str:
@@ -28,7 +28,7 @@ def _compute_grants_sha256() -> str:
     return hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest() if p.exists() else ""
 
 
-GRANTS_POLICY = GrantsPolicy(version=17, sha256=_compute_grants_sha256())
+GRANTS_POLICY = GrantsPolicy(version=GRANTS_POLICY_VERSION, sha256=_compute_grants_sha256())
 
 class MigrationError(RuntimeError):
     pass
@@ -581,6 +581,63 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         row = cur.fetchone()
                         if row and row[0]:
                             violations.append(f"forbidden_{role_name}_{priv.lower()}_on_{leg_tbl}")
+
+        # check Migration 0017 durable reconciliation token table, index, ownership, and grants
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0017%'")
+            has_0017 = cur.fetchone() is not None
+        else:
+            has_0017 = False
+
+        if has_0017:
+            tok_tbl = "fc27_roster_reconciliation_tokens"
+            cur.execute(
+                """
+                SELECT c.relowner::regrole::text
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relname = %s
+                """,
+                (tok_tbl,),
+            )
+            t_row = cur.fetchone()
+            if not t_row:
+                violations.append(f"missing_table_{tok_tbl}")
+            else:
+                if t_row[0] != "fc27_owner":
+                    violations.append(f"table_owner_{tok_tbl}")
+                cur.execute("SELECT to_regclass(%s)", ("public.idx_fc27_roster_reconciliation_tokens_expiry",))
+                idx_row = cur.fetchone()
+                if idx_row is None or idx_row[0] is None:
+                    violations.append("missing_index_idx_fc27_roster_reconciliation_tokens_expiry")
+                token_grant_matrix: dict[str, set[str]] = {
+                    "public": set(),
+                    "fc27_app": set(),
+                    "fc27_dispatch": set(),
+                    "fc27_relay": set(),
+                    "fc27_poll_writer": set(),
+                    "fc27_player_dev_writer": set(),
+                    "fc27_discord_reader": {"SELECT"},
+                    "fc27_match_results_writer": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+                }
+                for role_name, allowed_privs in token_grant_matrix.items():
+                    if role_name != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                        if not cur.fetchone():
+                            continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, %s, %s)",
+                            (role_name, f"public.{tok_tbl}", priv),
+                        )
+                        p_row = cur.fetchone()
+                        has_priv = bool(p_row and p_row[0])
+                        if priv in allowed_privs and not has_priv:
+                            violations.append(f"missing_{role_name}_{priv.lower()}_on_{tok_tbl}")
+                        elif priv not in allowed_privs and has_priv:
+                            violations.append(f"forbidden_{role_name}_{priv.lower()}_on_{tok_tbl}")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
