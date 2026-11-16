@@ -166,6 +166,12 @@ from src.fc27_privacy import (
     PSEUDONYM_PLAYER_REF_RE,
     compute_alias_hmac_fingerprint,
 )
+from src.fc27_repository import (
+    FC27RosterRefreshPayload,
+    REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
+    ROSTER_REFRESH_PRODUCER_REASON_CODES,
+    compute_roster_revision_from_updated_at,
+)
 
 MANUAL_MATCH_RESULT: Literal["MANUAL_MATCH_RESULT"] = "MANUAL_MATCH_RESULT"
 
@@ -2264,6 +2270,60 @@ def _resolve_gamertag_to_player_id(
     return normalize_roster_player_id(str(rows[0][0]))
 
 
+def enqueue_roster_refresh_job_in_tx(
+    cur: Any,
+    *,
+    player_id: str,
+    roster_revision: str,
+    reason_code: str,
+    requested_at: datetime,
+) -> int | None:
+    """Enqueue a ``refresh_roster_messages`` job via owner-owned ``SECURITY DEFINER`` boundary.
+
+    Executes inside the caller's existing transaction using only ``EXECUTE`` on
+    ``public.fc27_enqueue_roster_refresh_job`` without granting ``fc27_match_results_writer``
+    any privileges on ``public.fc27_discord_jobs``.
+    """
+    clean_reason = (reason_code or "").strip().upper()
+    if clean_reason not in ROSTER_REFRESH_PRODUCER_REASON_CODES:
+        raise MatchResultsValidationError(
+            f"Unsupported roster-refresh producer reason_code: '{reason_code}'"
+        )
+    if not isinstance(requested_at, datetime) or requested_at.tzinfo is None:
+        raise MatchResultsValidationError("requested_at must be timezone-aware UTC datetime.")
+    iso_ts = requested_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        validated = FC27RosterRefreshPayload(
+            player_id=player_id,
+            roster_revision=roster_revision,
+            reason_code=clean_reason,  # type: ignore[arg-type]
+            requested_at=iso_ts,
+        )
+    except Exception as exc:
+        raise MatchResultsValidationError(
+            "Invalid roster-refresh job parameters."
+        ) from exc
+
+    cur.execute(
+        "SELECT pg_catalog.to_regprocedure('public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz)')"
+    )
+    fn_row = cur.fetchone()
+    if not fn_row or fn_row[0] is None:
+        return None
+
+    cur.execute(
+        "SELECT public.fc27_enqueue_roster_refresh_job(%s, %s, %s, %s)",
+        (
+            validated.player_id,
+            validated.roster_revision,
+            validated.reason_code,
+            requested_at,
+        ),
+    )
+    job_row = cur.fetchone()
+    return int(job_row[0]) if job_row and job_row[0] is not None else None
+
+
 def upsert_roster_player(
     conn_or_uri: Any,
     *,
@@ -2296,6 +2356,7 @@ def upsert_roster_player(
         )
 
     resolved_pid_raw: str | None = None
+    resolved_via_token = False
     if has_token:
         assert token is not None
         resolved_pid_raw = resolve_reconciliation_token(
@@ -2303,6 +2364,7 @@ def upsert_roster_player(
             token_store=token_store,
             actor_discord_user_id=actor_discord_user_id,
         )
+        resolved_via_token = True
     elif has_pid:
         assert player_id is not None
         pid_clean = player_id.strip()
@@ -2312,6 +2374,7 @@ def upsert_roster_player(
                 token_store=token_store,
                 actor_discord_user_id=actor_discord_user_id,
             )
+            resolved_via_token = True
         else:
             resolved_pid_raw = pid_clean
     elif has_gamertag:
@@ -2368,7 +2431,7 @@ def upsert_roster_player(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT display_name_normalized
+                    SELECT display_name, display_name_normalized, position, active
                     FROM public.fc27_roster
                     WHERE player_id = %s
                     FOR UPDATE
@@ -2376,7 +2439,14 @@ def upsert_roster_player(
                     (safe_pid,),
                 )
                 prev_row = cur.fetchone()
-                old_norm_name = str(prev_row[0]) if prev_row is not None else norm_name
+                old_display_name = str(prev_row[0]) if prev_row is not None else None
+                old_norm_name = str(prev_row[1]) if prev_row is not None else norm_name
+                old_position = (
+                    str(prev_row[2])
+                    if (prev_row is not None and prev_row[2] is not None)
+                    else None
+                )
+                old_active = bool(prev_row[3]) if prev_row is not None else None
 
                 cur.execute(
                     """
@@ -2386,21 +2456,42 @@ def upsert_roster_player(
                         display_name_normalized,
                         position,
                         discord_user_id,
-                        active
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                        active,
+                        updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, pg_catalog.clock_timestamp())
                     ON CONFLICT (player_id) DO UPDATE SET
                         display_name = EXCLUDED.display_name,
                         display_name_normalized = EXCLUDED.display_name_normalized,
                         position = COALESCE(EXCLUDED.position, public.fc27_roster.position),
                         discord_user_id = COALESCE(EXCLUDED.discord_user_id, public.fc27_roster.discord_user_id),
                         active = EXCLUDED.active,
-                        updated_at = now()
+                        updated_at = CASE
+                            WHEN public.fc27_roster.display_name IS DISTINCT FROM EXCLUDED.display_name
+                              OR public.fc27_roster.position IS DISTINCT FROM COALESCE(EXCLUDED.position, public.fc27_roster.position)
+                              OR public.fc27_roster.active IS DISTINCT FROM EXCLUDED.active
+                            THEN GREATEST(
+                                pg_catalog.clock_timestamp(),
+                                public.fc27_roster.updated_at + interval '1 microsecond'
+                            )
+                            ELSE public.fc27_roster.updated_at
+                        END
                     RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
                     """,
                     (safe_pid, safe_name, norm_name, safe_pos, safe_discord_id, active),
                 )
                 row = cur.fetchone()
                 assert row is not None
+                effective_pos = str(row[3]) if row[3] is not None else None
+                effective_active = bool(row[5])
+                if prev_row is None:
+                    public_changed = effective_active
+                else:
+                    public_changed = (
+                        old_display_name != str(row[1])
+                        or old_position != effective_pos
+                        or old_active != effective_active
+                    )
+
                 _propagate_roster_rename(
                     cur,
                     player_id=safe_pid,
@@ -2431,6 +2522,16 @@ def upsert_roster_player(
                             "display_name_normalized": norm_name,
                             "active": active,
                         },
+                    )
+                if public_changed:
+                    roster_revision = compute_roster_revision_from_updated_at(row[7])
+                    reason_code = "TOKEN_REDEEM" if resolved_via_token else "ROSTER_UPSERT"
+                    enqueue_roster_refresh_job_in_tx(
+                        cur,
+                        player_id=safe_pid,
+                        roster_revision=roster_revision,
+                        reason_code=reason_code,
+                        requested_at=row[7],
                     )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
@@ -2465,7 +2566,7 @@ def rename_roster_player(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT player_id, display_name_normalized
+                    SELECT player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
                     FROM public.fc27_roster
                     WHERE active = TRUE AND player_id = %s
                     FOR UPDATE
@@ -2476,7 +2577,7 @@ def rename_roster_player(
                 if not rows:
                     cur.execute(
                         """
-                        SELECT player_id, display_name_normalized
+                        SELECT player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
                         FROM public.fc27_roster
                         WHERE active = TRUE AND display_name_normalized = %s
                         FOR UPDATE
@@ -2492,14 +2593,30 @@ def rename_roster_player(
                     raise MatchResultsValidationError(
                         f"Multiple roster players match '{target}'; specify player_id instead."
                     )
-                resolved_pid = str(rows[0][0])
-                old_norm_name = str(rows[0][1])
+                existing_row = rows[0]
+                resolved_pid = str(existing_row[0])
+                old_display_name = str(existing_row[1])
+                old_norm_name = str(existing_row[2])
+                if old_display_name == safe_new:
+                    return RosterPlayerRecord(
+                        player_id=resolved_pid,
+                        display_name=old_display_name,
+                        display_name_normalized=old_norm_name,
+                        position=str(existing_row[3]) if existing_row[3] is not None else None,
+                        discord_user_id=str(existing_row[4]) if existing_row[4] is not None else None,
+                        active=bool(existing_row[5]),
+                        created_at=existing_row[6],
+                        updated_at=existing_row[7],
+                    )
                 cur.execute(
                     """
                     UPDATE public.fc27_roster
                     SET display_name = %s,
                         display_name_normalized = %s,
-                        updated_at = now()
+                        updated_at = GREATEST(
+                            pg_catalog.clock_timestamp(),
+                            updated_at + interval '1 microsecond'
+                        )
                     WHERE player_id = %s
                     RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
                     """,
@@ -2513,6 +2630,14 @@ def rename_roster_player(
                     old_norm_name=old_norm_name,
                     safe_new=safe_new,
                     norm_new=norm_new,
+                )
+                roster_revision = compute_roster_revision_from_updated_at(row[7])
+                enqueue_roster_refresh_job_in_tx(
+                    cur,
+                    player_id=resolved_pid,
+                    roster_revision=roster_revision,
+                    reason_code="ROSTER_RENAME",
+                    requested_at=row[7],
                 )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
@@ -5106,16 +5231,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=bool(args.dry_run),
             require_dedicated_writer_role=require_dedicated,
         )
-        # Finding 8 (PR #117 review comment 4580138216):
-        # DEFERRED_BY_DESIGN — SEPARATE AUTHORIZATION REQUIRED.
-        # CLI roster mutations persist to `public.fc27_roster` so all subsequent dispatches
-        # and read commands reflect the updated player identity immediately, while Discord
-        # slash-command mutations (`/setplayer`, `/renameplayer`) refresh live Discord
-        # messages in-process using the bot's gateway transport. Enqueueing a cross-process
-        # Discord refresh job from the CLI is intentionally deferred because the dedicated
-        # writer role (`fc27_match_results_writer`) has `REVOKE ALL` on
-        # `public.fc27_discord_jobs` and `chk_fc27_discord_jobs_type` restricts job types;
-        # introducing a queued roster-refresh job type requires separate DB/grants approval.
+        # Finding 8 (Migration 0018, Grants Policy 19):
+        # Meaningful roster mutations (`upsert_roster_player` / `rename_roster_player`)
+        # now enqueue a `refresh_roster_messages` job atomically inside the same DB
+        # transaction via owner-owned SECURITY DEFINER `public.fc27_enqueue_roster_refresh_job`
+        # without granting `fc27_match_results_writer` any privilege on `public.fc27_discord_jobs`.
         mode_tag = "[DRY RUN] " if args.dry_run else ""
         pos_tag = f" ({rec.position})" if rec.position else ""
         print(f"{mode_tag}Mapped roster player -> {rec.display_name}{pos_tag} [active={rec.active}]")
@@ -5186,6 +5306,7 @@ __all__ = [
     "coerce_public_match_id",
     "create_scheduled_match",
     "edit_match_result",
+    "enqueue_roster_refresh_job_in_tx",
     "extract_match_post_tag",
     "fetch_latest_manual_result",
     "fetch_manual_match",

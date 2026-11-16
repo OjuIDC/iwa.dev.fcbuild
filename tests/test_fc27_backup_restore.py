@@ -105,7 +105,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
-        "schema_migrations": 17,
+        "schema_migrations": 18,
         "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,
@@ -397,7 +397,7 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         pg_db_migrated.admin,
         backup_dir=backup_dir,
     )
-    assert manifest.table_counts.schema_migrations == 17
+    assert manifest.table_counts.schema_migrations == 18
     assert manifest.table_counts.schema_policy_versions == 1
     assert manifest.table_counts.fc27_roster == 1
     assert manifest.table_counts.fc27_manual_matches == 1
@@ -441,6 +441,115 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         assert restored_roster[0].display_name == "Lao"
         assert restored_roster[0].position == "CM"
         assert restored_roster[0].discord_user_id == "123456789012345678"
+
+
+def test_restore_preserves_roster_refresh_jobs_and_enqueue_function(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pg_db_migrated,
+    pg_admin_uri: str,
+) -> None:
+    """Migration 0018 enqueue function and queued/completed/failed refresh_roster_messages jobs survive backup & restore."""
+    from src.fc27_match_results import rename_roster_player, upsert_roster_player
+
+    _seed_persisted_east_coasters_batch(monkeypatch, pg_db_migrated.app, count=2)
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_ecf_res00001",
+        display_name="Elena",
+        position="CM",
+    )
+    rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="plr_ecf_res00001",
+        new_name="Elena R",
+    )
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_ecf_res00002",
+        display_name="Devon",
+        position="GK",
+    )
+
+    with psycopg.connect(pg_db_migrated.player_dev_writer) as qconn:
+        rows = qconn.execute(
+            "SELECT job_id FROM public.fc27_discord_jobs ORDER BY job_id ASC"
+        ).fetchall()
+        assert len(rows) == 3
+        j_pending, j_completed, j_failed = int(rows[0][0]), int(rows[1][0]), int(rows[2][0])
+        qconn.execute(
+            """
+            UPDATE public.fc27_discord_jobs
+            SET state = 'completed',
+                claim_owner = 'test-worker',
+                claimed_at = now() - interval '2 minutes',
+                lease_expires_at = NULL,
+                attempt_count = 1,
+                completed_at = now()
+            WHERE job_id = %s
+            """,
+            (j_completed,),
+        )
+        qconn.execute(
+            """
+            UPDATE public.fc27_discord_jobs
+            SET state = 'failed',
+                claim_owner = NULL,
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                attempt_count = 1,
+                last_error_category = 'UNKNOWN_ROSTER_PLAYER'
+            WHERE job_id = %s
+            """,
+            (j_failed,),
+        )
+        qconn.commit()
+
+    backup_dir = tmp_path / ".local-data" / "backups"
+    archive_path, manifest_path, manifest = create_fc27_backup(
+        pg_db_migrated.admin,
+        backup_dir=backup_dir,
+    )
+    assert manifest.migration_version == EXPECTED_MIGRATION_VERSION
+    assert manifest.table_counts.fc27_discord_jobs == 3
+
+    report = verify_fc27_backup_restore(
+        manifest_path=manifest_path,
+        archive_path=archive_path,
+        admin_db_uri=pg_admin_uri,
+    )
+    assert report.restore_verification == "PASS"
+    assert report.restored_counts.fc27_discord_jobs == 3
+
+    # Clear source, insert noise, restore directly back, verify states & restored SECURITY DEFINER function
+    with psycopg.connect(pg_db_migrated.admin, autocommit=True) as aconn:
+        aconn.execute("DELETE FROM public.fc27_discord_jobs WHERE job_id = %s", (j_pending,))
+    restore_back = verify_fc27_backup_restore(
+        manifest_path=manifest_path,
+        archive_path=archive_path,
+        disposable_target_db_uri=pg_db_migrated.admin,
+    )
+    assert restore_back.restore_verification == "PASS"
+    assert restore_back.restored_counts.fc27_discord_jobs == 3
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        restored_jobs = rconn.execute(
+            "SELECT job_type, state, last_error_category FROM public.fc27_discord_jobs ORDER BY job_id ASC"
+        ).fetchall()
+    assert restored_jobs == [
+        ("refresh_roster_messages", "pending", None),
+        ("refresh_roster_messages", "completed", None),
+        ("refresh_roster_messages", "failed", "UNKNOWN_ROSTER_PLAYER"),
+    ]
+    # Verify SECURITY DEFINER enqueue function still works post-restore under least-privilege role
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id="plr_ecf_res00003",
+        display_name="Nolan",
+        position="CB",
+    )
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        cnt_row = rconn.execute("SELECT COUNT(*) FROM public.fc27_discord_jobs").fetchone()
+        assert cnt_row is not None and int(cnt_row[0]) == 4
 
 
 def _clear_backup_uri_env(monkeypatch: pytest.MonkeyPatch) -> None:

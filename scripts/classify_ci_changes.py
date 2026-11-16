@@ -110,6 +110,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "tests/test_fc27_persistence_and_queries.py",
             "tests/test_fc27_match_results.py",
             "tests/test_fc27_roster_reconciliation_and_team_chat.py",
+            "tests/test_fc27_discord_roster_refresh_queue.py",
             "tests/test_fc27_backup_restore.py",
             "tests/test_migration_0003.py",
             "tests/test_events_outbox.py",

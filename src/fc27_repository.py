@@ -62,6 +62,19 @@ SUPPORTED_CONTRACT_VERSION: str = "1.0.0"
 SUPPORTED_SCHEMA_VERSION: str = "1.0.0"
 POST_NEW_RESULTS_SCHEMA_VERSION: Final[str] = "fc27-post-new-results-v1"
 POST_NEW_RESULTS_EVENT_TYPE: Final[str] = "post_new_results"
+REFRESH_ROSTER_MESSAGES_SCHEMA_VERSION: Final[str] = "fc27-roster-refresh-v1"
+REFRESH_ROSTER_MESSAGES_EVENT_TYPE: Final[str] = "refresh_roster_messages"
+ROSTER_REFRESH_PRODUCER_REASON_CODES: Final[frozenset[str]] = frozenset(
+    {"ROSTER_UPSERT", "ROSTER_RENAME", "TOKEN_REDEEM"}
+)
+ROSTER_REFRESH_REASON_CODES: Final[frozenset[str]] = frozenset(
+    {"ROSTER_UPSERT", "ROSTER_RENAME", "TOKEN_REDEEM", "CONTINUATION"}
+)
+_ROSTER_PLAYER_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[^\x00-\x20\x7F:]{1,64}$")
+_ROSTER_REVISION_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+_ROSTER_CONTINUATION_CURSOR_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:provider:mref_ecf_[0-9a-f]{12}|manual:[0-9]{18})$"
+)
 MAX_EXPORT_BYTES: int = 5242880  # 5 MiB
 MAX_EXPORT_MATCHES: int = 100
 CLOCK_SKEW_TOLERANCE_SECONDS: float = 300.0
@@ -2415,6 +2428,138 @@ def _validate_discord_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if contains_discord_mention(serialized) or contains_prohibited_url(serialized):
         raise ValueError("Discord job payload contains prohibited mention or URL")
     return normalized
+
+
+def compute_roster_revision_from_updated_at(updated_at: datetime) -> str:
+    """Compute a deterministic, player-name-independent revision token from UTC ``updated_at``."""
+    if not isinstance(updated_at, datetime) or updated_at.tzinfo is None:
+        raise ValueError("updated_at must be a timezone-aware datetime")
+    utc_dt = updated_at.astimezone(UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    epoch_us = (utc_dt - epoch) // timedelta(microseconds=1)
+    if epoch_us < 0:
+        epoch_us = 0
+    return f"u{epoch_us:014x}"
+
+
+def build_roster_refresh_idempotency_key(
+    *,
+    player_id: str,
+    roster_revision: str,
+    continuation_index: int | None = None,
+) -> str:
+    """Build the canonical deterministic idempotency key for a roster-refresh job."""
+    clean_pid = (player_id or "").strip()
+    if (
+        not _ROSTER_PLAYER_ID_RE.fullmatch(clean_pid)
+        or clean_pid.startswith(FORMULA_INJECTION_PREFIXES)
+    ):
+        raise ValueError("player_id is invalid for roster-refresh idempotency key")
+    clean_rev = (roster_revision or "").strip()
+    if not _ROSTER_REVISION_RE.fullmatch(clean_rev):
+        raise ValueError("roster_revision must match ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    if continuation_index is None:
+        key = f"roster-refresh:{clean_pid}:{clean_rev}:v1"
+    else:
+        if isinstance(continuation_index, bool) or not 1 <= int(continuation_index) <= 100:
+            raise ValueError("continuation_index must be between 1 and 100")
+        key = f"roster-refresh:{clean_pid}:{clean_rev}:cont:{int(continuation_index)}:v1"
+    if len(key) > 128:
+        raise ValueError("roster-refresh idempotency key exceeds 128 characters")
+    return key
+
+
+class FC27RosterRefreshPayload(BaseModel):
+    """Minimal, versioned ``refresh_roster_messages`` queue payload."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal["fc27-roster-refresh-v1"] = "fc27-roster-refresh-v1"
+    event_type: Literal["refresh_roster_messages"] = "refresh_roster_messages"
+    player_id: str = Field(min_length=1, max_length=64)
+    roster_revision: str = Field(min_length=1, max_length=32)
+    reason_code: Literal["ROSTER_UPSERT", "ROSTER_RENAME", "TOKEN_REDEEM", "CONTINUATION"]
+    requested_at: str = Field(min_length=1, max_length=64)
+    after_match_key: str | None = Field(default=None, min_length=1, max_length=128)
+    continuation_index: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator("player_id")
+    @classmethod
+    def _validate_player_id(cls, value: str) -> str:
+        clean = value.strip()
+        if (
+            clean != value
+            or not _ROSTER_PLAYER_ID_RE.fullmatch(clean)
+            or clean.startswith(FORMULA_INJECTION_PREFIXES)
+        ):
+            raise ValueError(
+                "player_id must be a valid bounded canonical roster ID without spaces or colons"
+            )
+        return clean
+
+    @field_validator("roster_revision")
+    @classmethod
+    def _validate_roster_revision(cls, value: str) -> str:
+        clean = value.strip()
+        if clean != value or not _ROSTER_REVISION_RE.fullmatch(clean):
+            raise ValueError("roster_revision must match ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+        return clean
+
+    @field_validator("requested_at")
+    @classmethod
+    def _validate_requested_at(cls, value: str) -> str:
+        raw = value.strip()
+        iso_cand = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+        parsed = datetime.fromisoformat(iso_cand)
+        if parsed.tzinfo is None:
+            raise ValueError("requested_at must be timezone-aware UTC")
+        return raw
+
+    @model_validator(mode="after")
+    def _validate_continuation_contract(self) -> FC27RosterRefreshPayload:
+        if self.reason_code == "CONTINUATION":
+            if self.after_match_key is None or self.continuation_index is None:
+                raise ValueError(
+                    "CONTINUATION roster-refresh payload requires both after_match_key and continuation_index"
+                )
+            if not _ROSTER_CONTINUATION_CURSOR_RE.fullmatch(self.after_match_key):
+                raise ValueError(
+                    "after_match_key must be a deterministic provider/manual match cursor"
+                )
+        else:
+            if self.after_match_key is not None or self.continuation_index is not None:
+                raise ValueError(
+                    "Non-continuation roster-refresh payload cannot set after_match_key or continuation_index"
+                )
+        return self
+
+    def to_payload(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "event_type": self.event_type,
+            "player_id": self.player_id,
+            "roster_revision": self.roster_revision,
+            "reason_code": self.reason_code,
+            "requested_at": self.requested_at,
+        }
+        if self.after_match_key is not None:
+            data["after_match_key"] = self.after_match_key
+        if self.continuation_index is not None:
+            data["continuation_index"] = self.continuation_index
+        return data
+
+
+def validate_roster_refresh_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a ``refresh_roster_messages`` payload against strict size, key, and privacy rules."""
+    if scan_for_sensitive_fields(payload):
+        raise ValueError("prohibited sensitive fields detected in roster-refresh payload")
+    validated = FC27RosterRefreshPayload.model_validate(dict(payload)).to_payload()
+    serialized = json.dumps(validated, sort_keys=True, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > 4096:
+        raise ValueError("Roster-refresh job payload exceeds 4096-byte limit")
+    if contains_discord_mention(serialized) or contains_prohibited_url(serialized):
+        raise ValueError("Roster-refresh job payload contains prohibited mention or URL")
+    return validated
 
 
 def _discord_job_payloads_equivalent(
