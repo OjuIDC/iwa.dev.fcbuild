@@ -28,6 +28,9 @@ from src.fc27_discord_dispatcher import (
     FC27DiscordDispatchAccessDeniedError,
     FC27DiscordDispatchConfig,
     FC27DiscordDispatchTransportError,
+    FC27DiscordEmbed,
+    FC27PostNewResultsMessage,
+    FC27TeamChatMessage,
     GuardedDiscordJobQueueConnection,
     PERMITTED_DISPATCH_JOB_TYPES,
     SyntheticDiscordNotificationTransport,
@@ -37,6 +40,7 @@ from src.fc27_discord_dispatcher import (
 )
 from src.fc27_match_results import (
     ReconciliationTokenStore,
+    build_match_post_tag,
     get_match_discord_message_links,
     list_unresolved_players,
     record_match_discord_message_links,
@@ -1023,7 +1027,7 @@ def test_15_transient_retry_and_permanent_dead_letter_classifications(pg_db_migr
         match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
     )
     transport.non_bot_message_ids.clear()
-    # Mark non-bot test message deleted from roster link scenario by deleting its job effect? Wait: restore bot authorship on mref_nonbot cleanly above!
+    # Restore bot authorship on mref_nonbot before exercising transient SerializationFailure retry.
     rename_roster_player(
         pg_db_migrated.match_results_writer,
         player_id_or_name="NonBotBlocked",
@@ -1377,3 +1381,521 @@ def test_18_gateway_transport_snapshot_and_candidate_recovery() -> None:
         assert len(cands) == 2
     finally:
         loop.close()
+
+
+def test_19_manual_match_positive_in_place_refresh_formal_and_team_chat(pg_db_migrated) -> None:
+    """Manual match formal embed + team-chat summary refresh in place without creating duplicates."""
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ManualStar",
+        position="ST",
+    )
+    cfg = _dispatch_config()
+    transport = SyntheticDiscordNotificationTransport()
+    # Drain initial upsert job cleanly
+    r0 = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert r0.jobs_completed == 1
+
+    manual = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Manual Rivals FC",
+        home_score=2,
+        away_score=0,
+        actor_discord_user_id=ADMIN_USER_ID,
+        scorers="ManualStar x2",
+        player_stats="ManualStar: 2 goals",
+        discord_guild_id=APPROVED_GUILD_ID,
+        discord_channel_id=RESULTS_CHANNEL_ID,
+        discord_message_id="870000000000000101",
+    )
+    m_ref = f"manual:{manual.match_id}"
+    res_msg_id = "870000000000000101"
+    tc_msg_id = "890000000000000202"
+    record_match_discord_message_links(
+        pg_db_migrated.match_results_writer,
+        match_id=manual.match_id,
+        discord_guild_id=APPROVED_GUILD_ID,
+        results_channel_id=RESULTS_CHANNEL_ID,
+        results_message_id=res_msg_id,
+        team_chat_channel_id=TEAM_CHAT_CHANNEL_ID,
+        team_chat_message_id=tc_msg_id,
+    )
+    transport._channel_history.setdefault(RESULTS_CHANNEL_ID, []).append(  # noqa: SLF001
+        (
+            res_msg_id,
+            FC27PostNewResultsMessage(
+                channel_id=RESULTS_CHANNEL_ID,
+                idempotency_key=f"fc27:manual:{manual.match_id}",
+                match_ref=m_ref,
+                content="Manual result announcement",
+                embed=FC27DiscordEmbed(
+                    title="Old Embed",
+                    description="East Coasters FC",
+                    fields={"Scorers": "ManualStar x2"},
+                    footer_text="East Coasters FC",
+                ),
+            ),
+        )
+    )
+    transport._team_chat_history.setdefault(TEAM_CHAT_CHANNEL_ID, []).append(  # noqa: SLF001
+        (
+            tc_msg_id,
+            FC27TeamChatMessage(
+                channel_id=TEAM_CHAT_CHANNEL_ID,
+                idempotency_key=f"fc27:manual:{manual.match_id}",
+                match_ref=m_ref,
+                discriminator=build_match_post_tag(m_ref),
+                content=f"ManualStar 2 goals [{build_match_post_tag(m_ref)}]",
+            ),
+        )
+    )
+
+    rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="ManualStar",
+        new_name="ManualLegend",
+    )
+    res_refresh = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res_refresh.jobs_completed == 1
+    assert res_refresh.messages_edited == 1
+    assert res_refresh.team_chat_messages_edited == 1
+    assert res_refresh.messages_sent == 0
+    assert res_refresh.team_chat_messages_sent == 0
+    edited_formal = transport.edited_messages[-1][2]
+    assert edited_formal.content == "Manual result announcement"
+    assert "ManualLegend" in json.dumps(edited_formal.embed.fields)
+    edited_tc = transport.edited_team_chat_messages[-1][2]
+    assert "ManualLegend" in edited_tc.content
+
+    # Re-running with up-to-date snapshots skips both edits cleanly
+    with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
+        wconn.execute(
+            "SELECT public.fc27_enqueue_roster_refresh_job(%s, %s, %s, clock_timestamp())",
+            (PLAYER_A, "rev_manual_noop", "ROSTER_UPSERT"),
+        )
+        wconn.commit()
+    res_noop = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res_noop.jobs_completed == 1
+    assert res_noop.messages_unchanged == 2
+    assert res_noop.messages_edited == 0
+    assert res_noop.team_chat_messages_edited == 0
+
+    # Also verify gateway-style edit_embed / edit_text hooks are invoked for manual matches
+    embed_calls: list[tuple[str, str, Any]] = []
+    text_calls: list[tuple[str, str, str]] = []
+
+    class _GatewayStyleTransport(SyntheticDiscordNotificationTransport):
+        def edit_embed(self, channel_id: str, message_id: str, embed: Any) -> bool:
+            embed_calls.append((channel_id, message_id, embed))
+            return True
+
+        def edit_text(self, channel_id: str, message_id: str, content: str) -> bool:
+            text_calls.append((channel_id, message_id, content))
+            return True
+
+    gw_transport = _GatewayStyleTransport()
+    gw_transport._channel_history[RESULTS_CHANNEL_ID] = list(transport._channel_history[RESULTS_CHANNEL_ID])  # noqa: SLF001
+    gw_transport._team_chat_history[TEAM_CHAT_CHANNEL_ID] = list(transport._team_chat_history[TEAM_CHAT_CHANNEL_ID])  # noqa: SLF001
+    rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="ManualLegend",
+        new_name="ManualIcon",
+    )
+    res_gw = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=gw_transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res_gw.jobs_completed == 1
+    assert len(embed_calls) == 1
+    assert embed_calls[0][1] == res_msg_id
+    assert len(text_calls) == 1
+    assert text_calls[0][1] == tc_msg_id
+    assert "ManualIcon" in text_calls[0][2]
+
+
+def test_20_unnamed_player_does_not_enqueue_and_rapid_upserts_immediately_claimable(
+    pg_db_migrated,
+) -> None:
+    """Unresolved 'Unnamed Player' does not enqueue; rapid roster updates remain immediately claimable."""
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="Unnamed Player",
+        position="ST",
+    )
+    assert _fetch_refresh_jobs(pg_db_migrated) == []
+
+    # Updating position while name remains unresolved still does not enqueue
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="Unnamed Player",
+        position="LW",
+    )
+    assert _fetch_refresh_jobs(pg_db_migrated) == []
+
+    # Resolving the name mapping to a real display name enqueues immediately
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ResolvedAce",
+        position="LW",
+    )
+    for idx in range(5):
+        rename_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id_or_name=PLAYER_A,
+            new_name=f"RapidName{idx}",
+        )
+
+    jobs = _fetch_refresh_jobs(pg_db_migrated)
+    assert len(jobs) == 6
+    with psycopg.connect(pg_db_migrated.discord_reader) as rconn:
+        future_row = rconn.execute(
+            """
+            SELECT COUNT(*)
+            FROM public.fc27_discord_jobs
+            WHERE job_type = 'refresh_roster_messages'
+              AND available_at > pg_catalog.clock_timestamp()
+            """
+        ).fetchone()
+    assert future_row is not None and future_row[0] == 0
+
+
+def test_21_gateway_snapshot_fails_closed_without_bot_or_author_id() -> None:
+    """_async_fetch_notification_snapshot must return is_bot_authored=False when bot_id or author_id is missing."""
+
+    @dataclass
+    class _Msg:
+        id: int
+        author: Any
+        content: str = "hello"
+        embeds: tuple[Any, ...] = ()
+        guild: Any = None
+
+    class _FakeChan:
+        def __init__(self, msgs: dict[int, _Msg]) -> None:
+            self._msgs = msgs
+            self.guild = types.SimpleNamespace(id=int(APPROVED_GUILD_ID))
+
+        async def send(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+        async def fetch_message(self, msg_id: int) -> _Msg:
+            return self._msgs[msg_id]
+
+    msgs = {
+        601: _Msg(id=601, author=types.SimpleNamespace(id=111)),
+        602: _Msg(id=602, author=None),
+    }
+    chan = _FakeChan(msgs)
+    fake_client = types.SimpleNamespace(
+        user=None,
+        get_channel=lambda cid: chan if str(cid) == RESULTS_CHANNEL_ID else None,
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        fake_discord = types.SimpleNamespace(
+            NotFound=KeyError,
+            Forbidden=PermissionError,
+            HTTPException=RuntimeError,
+        )
+        prev = sys.modules.get("discord")
+        sys.modules["discord"] = fake_discord  # type: ignore[assignment]
+        try:
+            transport = DiscordGatewayChannelTransport(fake_client, loop)
+            snap_no_bot = loop.run_until_complete(
+                transport._async_fetch_notification_snapshot(  # noqa: SLF001
+                    channel_id=RESULTS_CHANNEL_ID,
+                    message_id="601",
+                )
+            )
+            fake_client.user = types.SimpleNamespace(id=111)
+            snap_no_author = loop.run_until_complete(
+                transport._async_fetch_notification_snapshot(  # noqa: SLF001
+                    channel_id=RESULTS_CHANNEL_ID,
+                    message_id="602",
+                )
+            )
+        finally:
+            if prev is None:
+                sys.modules.pop("discord", None)
+            else:
+                sys.modules["discord"] = prev
+        assert snap_no_bot is not None and snap_no_bot.is_bot_authored is False
+        assert snap_no_author is not None and snap_no_author.is_bot_authored is False
+    finally:
+        loop.close()
+
+
+def test_22_zero_scan_cap_and_deferred_verified_linkage_persistence(pg_db_migrated) -> None:
+    """refresh_max_history_scans_per_job=0 skips scans without stalling; unverified recovery does not persist; verified cache persists even on unchanged snapshot."""
+    mref = _seed_provider_match(pg_db_migrated, suffix="defer_22")
+    transport = SyntheticDiscordNotificationTransport()
+    cfg = _dispatch_config()
+    # Post without writer URI so DB links are absent initially
+    r_init = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=None,
+    )
+    assert r_init.jobs_completed == 1
+    posted_res_id = transport._channel_history[RESULTS_CHANNEL_ID][0][0]  # noqa: SLF001
+    posted_tc_id = transport._team_chat_history[TEAM_CHAT_CHANNEL_ID][0][0]  # noqa: SLF001
+
+    # 1) With scans_per_job=0 and cleared cache, completes safely without stalling
+    transport._linkages.clear()  # noqa: SLF001
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ZeroScanKai",
+        position="ST",
+    )
+    r_zero = run_discord_dispatch_cycle(
+        config=_dispatch_config(refresh_max_history_scans_per_job=0),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert r_zero.jobs_completed == 1
+    assert r_zero.jobs_failed == 0
+    assert r_zero.messages_edited == 0
+
+    # 2) Recovered candidate failing snapshot verification (wrong guild) fails BEFORE persisting linkage
+    transport.message_guilds[posted_res_id] = "999888777666555444"
+    transport.message_guilds[posted_tc_id] = "999888777666555444"
+    rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="ZeroScanKai",
+        new_name="RejectedRecoveryKai",
+    )
+    r_bad_rec = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert r_bad_rec.jobs_failed == 1
+    assert r_bad_rec.audit_entries[0].error_category == "UNAUTHORIZED_DESTINATION"
+    db_after_rej = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref)
+    assert db_after_rej is None or db_after_rej.results_message_id is None
+
+    # 3) Verified cached linkage IS persisted even when snapshot already matches (needs_*_edit=False)
+    transport.message_guilds.clear()
+    transport._linkages.clear()  # noqa: SLF001
+    # First edit transport messages (without DB writer) so Discord snapshots already match RejectedRecoveryKai
+    with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
+        wconn.execute(
+            "SELECT public.fc27_enqueue_roster_refresh_job(%s, %s, %s, clock_timestamp())",
+            (PLAYER_A, "rev_sync_transport_only", "ROSTER_UPSERT"),
+        )
+        wconn.commit()
+    r_sync = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=None,
+    )
+    assert r_sync.jobs_completed == 1
+    assert get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref) is None
+
+    # Cache already knows posted_res_id & posted_tc_id, snapshots match (unchanged), writer URI now supplied
+    transport.record_match_linkage(
+        match_ref=mref,
+        results_channel_id=RESULTS_CHANNEL_ID,
+        results_message_id=posted_res_id,
+        team_chat_channel_id=TEAM_CHAT_CHANNEL_ID,
+        team_chat_message_id=posted_tc_id,
+    )
+    with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
+        wconn.execute(
+            "SELECT public.fc27_enqueue_roster_refresh_job(%s, %s, %s, clock_timestamp())",
+            (PLAYER_A, "rev_persist_unchanged_cache", "ROSTER_UPSERT"),
+        )
+        wconn.commit()
+    r_persist = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert r_persist.jobs_completed == 1
+    assert r_persist.messages_unchanged == 2
+    persisted = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref)
+    assert persisted is not None
+    assert persisted.results_message_id == posted_res_id
+    assert persisted.team_chat_message_id == posted_tc_id
+
+
+def test_23_partial_permanent_error_refreshes_healthy_sibling_matches(pg_db_migrated) -> None:
+    """Permanent failure on one match's linked message still refreshes healthy sibling matches in the same job."""
+    mref_bad = _seed_provider_match(
+        pg_db_migrated,
+        suffix="bad_23",
+        opponent="Bad Sibling FC",
+        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=timezone.utc),
+    )
+    mref_ok = _seed_provider_match(
+        pg_db_migrated,
+        suffix="ok_23",
+        opponent="Good Sibling FC",
+        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc),
+    )
+    transport = SyntheticDiscordNotificationTransport()
+    cfg = _dispatch_config()
+    init_res = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert init_res.jobs_completed == 2
+
+    bad_links = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref_bad)
+    ok_links = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref_ok)
+    assert bad_links is not None and bad_links.results_message_id is not None
+    assert ok_links is not None and ok_links.results_message_id is not None
+    transport.deleted_message_ids.add(bad_links.results_message_id)
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="HealthySiblingStar",
+        position="ST",
+    )
+    res = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res.jobs_failed == 1
+    assert res.audit_entries[0].error_category == "LINKED_MESSAGE_MISSING"
+    assert res.messages_edited == 1
+    assert res.team_chat_messages_edited == 2
+    edited_ids = {msg_id for _, msg_id, _ in transport.edited_messages}
+    assert ok_links.results_message_id in edited_ids
+
+
+def test_24_lease_loss_during_completion_rolls_back_continuation(pg_db_migrated) -> None:
+    """Losing the job lease right before completion rolls back continuation enqueue atomically."""
+    _seed_provider_match(
+        pg_db_migrated,
+        suffix="ll_1",
+        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=timezone.utc),
+    )
+    _seed_provider_match(
+        pg_db_migrated,
+        suffix="ll_2",
+        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc),
+    )
+    transport = SyntheticDiscordNotificationTransport()
+    init_res = run_discord_dispatch_cycle(
+        config=_dispatch_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert init_res.jobs_completed == 2
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="LeaseLossCheck",
+        position="ST",
+    )
+
+    def _steal_lease_on_first_edit(channel_id: str, message_id: str, msg: Any) -> None:
+        del channel_id, message_id, msg
+        with psycopg.connect(pg_db_migrated.player_dev_writer, autocommit=True) as thief:
+            thief.execute(
+                """
+                UPDATE public.fc27_discord_jobs
+                SET claim_owner = 'stolen-owner',
+                    lease_expires_at = clock_timestamp() + interval '5 minutes'
+                WHERE state = 'claimed'
+                  AND job_type = 'refresh_roster_messages'
+                """
+            )
+
+    transport.on_before_team_chat_edit = _steal_lease_on_first_edit
+    res = run_discord_dispatch_cycle(
+        config=_dispatch_config(refresh_max_matches_per_job=1),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    transport.on_before_team_chat_edit = None
+    assert res.continuations_enqueued == 0
+    assert any(a.action == "LEASE_LOST" for a in res.audit_entries)
+
+    jobs = _fetch_refresh_jobs(pg_db_migrated)
+    cont_jobs = [j for j in jobs if ":cont:" in j["idempotency_key"]]
+    assert cont_jobs == []
+
+
+def test_25_scan_cap_one_does_not_stall_on_first_match(pg_db_migrated) -> None:
+    """refresh_max_history_scans_per_job=1 completes first unlinked match formal scan without dead-lettering."""
+    mref = _seed_provider_match(pg_db_migrated, suffix="scan1_25")
+    transport = SyntheticDiscordNotificationTransport()
+    r_init = run_discord_dispatch_cycle(
+        config=_dispatch_config(),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=None,
+    )
+    assert r_init.jobs_completed == 1
+
+    transport._linkages.clear()  # noqa: SLF001
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ScanOneStar",
+        position="ST",
+    )
+    res = run_discord_dispatch_cycle(
+        config=_dispatch_config(refresh_max_history_scans_per_job=1),
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res.jobs_completed == 1
+    assert res.jobs_failed == 0
+    assert res.messages_edited == 1
+    assert res.team_chat_messages_edited == 0
+    links = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref)
+    assert links is not None and links.results_message_id is not None

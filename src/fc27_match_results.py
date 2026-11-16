@@ -2483,10 +2483,14 @@ def upsert_roster_player(
                 assert row is not None
                 effective_pos = str(row[3]) if row[3] is not None else None
                 effective_active = bool(row[5])
+                unresolved_norm = UNRESOLVED_PLAYER_DISPLAY_NAME.lower()
                 if prev_row is None:
-                    public_changed = effective_active
+                    public_changed = effective_active and norm_name != unresolved_norm
                 else:
-                    public_changed = (
+                    both_unresolved = (
+                        old_norm_name == unresolved_norm and norm_name == unresolved_norm
+                    )
+                    public_changed = not both_unresolved and (
                         old_display_name != str(row[1])
                         or old_position != effective_pos
                         or old_active != effective_active
@@ -2631,14 +2635,16 @@ def rename_roster_player(
                     safe_new=safe_new,
                     norm_new=norm_new,
                 )
-                roster_revision = compute_roster_revision_from_updated_at(row[7])
-                enqueue_roster_refresh_job_in_tx(
-                    cur,
-                    player_id=resolved_pid,
-                    roster_revision=roster_revision,
-                    reason_code="ROSTER_RENAME",
-                    requested_at=row[7],
-                )
+                unresolved_norm = UNRESOLVED_PLAYER_DISPLAY_NAME.lower()
+                if not (old_norm_name == unresolved_norm and norm_new == unresolved_norm):
+                    roster_revision = compute_roster_revision_from_updated_at(row[7])
+                    enqueue_roster_refresh_job_in_tx(
+                        cur,
+                        player_id=resolved_pid,
+                        roster_revision=roster_revision,
+                        reason_code="ROSTER_RENAME",
+                        requested_at=row[7],
+                    )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),

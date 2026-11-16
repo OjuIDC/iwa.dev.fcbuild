@@ -101,7 +101,7 @@ BEGIN
         'pending',
         0,
         v_idempotency_key,
-        v_requested_at
+        LEAST(v_requested_at, pg_catalog.clock_timestamp())
     )
     ON CONFLICT (idempotency_key) DO NOTHING
     RETURNING job_id INTO v_job_id;
