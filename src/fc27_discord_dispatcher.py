@@ -29,7 +29,6 @@ Security & Least-Privilege Boundaries:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import logging
 import os
@@ -102,8 +101,6 @@ from src.fc27_repository import (
     FC27RosterRefreshPayload,
     POST_NEW_RESULTS_EVENT_TYPE,
     REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
-    ROSTER_REFRESH_PRODUCER_REASON_CODES,
-    ROSTER_REFRESH_REASON_CODES,
     build_roster_refresh_idempotency_key,
     validate_roster_refresh_payload,
 )
@@ -1183,11 +1180,10 @@ class SyntheticDiscordNotificationTransport:
                     or msg.embed.fields.get("📅 Played") == expected_played
                 )
             )
-            if by_ref or by_sig:
-                if msg_id not in matched:
-                    matched.append(msg_id)
-                    if len(matched) >= max_candidates:
-                        return tuple(matched)
+            if (by_ref or by_sig) and msg_id not in matched:
+                matched.append(msg_id)
+                if len(matched) >= max_candidates:
+                    return tuple(matched)
         return tuple(matched)
 
     def send_notification(
@@ -2116,8 +2112,6 @@ class DiscordGatewayChannelTransport:
         not_before: datetime | None,
         message: FC27TeamChatMessage | None = None,
     ) -> str | None:
-        import discord
-
         del match_ref
         channel = await self._resolve_channel(channel_id)
         history_lookup = getattr(channel, "history", None)
@@ -2477,8 +2471,6 @@ class DiscordGatewayChannelTransport:
         content: str,
         discriminator: str | None = None,
     ) -> str | None:
-        import discord
-
         channel = await self._resolve_channel(channel_id)
         history_lookup = getattr(channel, "history", None)
         if history_lookup is None:

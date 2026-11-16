@@ -168,7 +168,6 @@ from src.fc27_privacy import (
 )
 from src.fc27_repository import (
     FC27RosterRefreshPayload,
-    REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
     ROSTER_REFRESH_PRODUCER_REASON_CODES,
     compute_roster_revision_from_updated_at,
 )

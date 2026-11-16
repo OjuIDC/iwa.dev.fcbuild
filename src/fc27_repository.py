@@ -2437,8 +2437,7 @@ def compute_roster_revision_from_updated_at(updated_at: datetime) -> str:
     utc_dt = updated_at.astimezone(UTC)
     epoch = datetime(1970, 1, 1, tzinfo=UTC)
     epoch_us = (utc_dt - epoch) // timedelta(microseconds=1)
-    if epoch_us < 0:
-        epoch_us = 0
+    epoch_us = max(epoch_us, 0)
     return f"u{epoch_us:014x}"
 
 

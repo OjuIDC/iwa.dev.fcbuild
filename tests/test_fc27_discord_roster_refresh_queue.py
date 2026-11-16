@@ -9,33 +9,30 @@ import sys
 import time
 import types
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import psycopg
 import pytest
+from pydantic import ValidationError
 
 from src.db_migrate import GRANTS_POLICY, migrate, verify_postconditions
-from src.db_roles import GRANTS_POLICY_VERSION, ROLE_DISCORD_READER, ROLE_MATCH_RESULTS_WRITER
+from src.db_roles import GRANTS_POLICY_VERSION
 from src.fc27_discord_bot import (
     FC27DiscordBotConfig,
     FC27DiscordBotService,
 )
 from src.fc27_discord_dispatcher import (
     DISPATCH_PROVIDER_REQUESTS,
+    PERMITTED_DISPATCH_JOB_TYPES,
     DiscordGatewayChannelTransport,
-    FC27DiscordDispatchAccessDeniedError,
     FC27DiscordDispatchConfig,
     FC27DiscordDispatchTransportError,
     FC27DiscordEmbed,
     FC27PostNewResultsMessage,
     FC27TeamChatMessage,
-    GuardedDiscordJobQueueConnection,
-    PERMITTED_DISPATCH_JOB_TYPES,
     SyntheticDiscordNotificationTransport,
-    claim_discord_jobs_batch,
-    complete_discord_job,
     run_discord_dispatch_cycle,
 )
 from src.fc27_match_results import (
@@ -55,9 +52,9 @@ from src.fc27_privacy import (
     pseudonymize_match_ref,
 )
 from src.fc27_repository import (
+    REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
     FC27PostNewResultsPayload,
     FC27RosterRefreshPayload,
-    REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
     build_roster_refresh_idempotency_key,
 )
 
@@ -114,7 +111,7 @@ def _seed_provider_match(
     played_at: datetime | None = None,
     enqueue_post_job: bool = True,
 ) -> str:
-    now = played_at or datetime(2026, 10, 24, 1, 0, tzinfo=timezone.utc)
+    now = played_at or datetime(2026, 10, 24, 1, 0, tzinfo=UTC)
     export_id = f"exp_{suffix}"
     raw_ext_id = f"ext_{suffix}"
     match_ref = pseudonymize_match_ref(raw_ext_id, club_id=EAST_COASTERS_CLUB_ID)
@@ -175,7 +172,7 @@ def _seed_provider_match(
                     export_id,
                     now,
                     opponent,
-                    hashlib.sha256(f"match-{suffix}".encode("utf-8")).hexdigest(),
+                    hashlib.sha256(f"match-{suffix}".encode()).hexdigest(),
                     now,
                 ),
             )
@@ -520,12 +517,14 @@ def test_07_security_definer_producer_boundary_and_role_matrix(pg_db_migrated) -
         pg_db_migrated.player_dev_writer,
         pg_db_migrated.discord_reader,
     ):
-        with psycopg.connect(forbidden_uri, autocommit=True) as fconn:
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                fconn.execute(
-                    "SELECT public.fc27_enqueue_roster_refresh_job(%s, 'rev_x', 'ROSTER_UPSERT', now())",
-                    (PLAYER_A,),
-                )
+        with (
+            psycopg.connect(forbidden_uri, autocommit=True) as fconn,
+            pytest.raises(psycopg.errors.InsufficientPrivilege),
+        ):
+            fconn.execute(
+                "SELECT public.fc27_enqueue_roster_refresh_job(%s, 'rev_x', 'ROSTER_UPSERT', now())",
+                (PLAYER_A,),
+            )
 
     # fc27_match_results_writer still has ZERO direct privileges on public.fc27_discord_jobs (no SELECT/INSERT/UPDATE/DELETE)
     with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as wconn:
@@ -559,15 +558,17 @@ def test_07_security_definer_producer_boundary_and_role_matrix(pg_db_migrated) -
                 )
 
     # Direct arbitrary job_type / arbitrary payload keys rejected by DB CHECK constraints & payload validator
-    with psycopg.connect(pg_db_migrated.poll_writer, autocommit=True) as pconn:
-        with pytest.raises(psycopg.errors.CheckViolation):
-            pconn.execute(
-                """
-                INSERT INTO public.fc27_discord_jobs (job_type, idempotency_key, payload)
-                VALUES ('arbitrary_job_type', 'bad-type-1', '{"a":1}'::jsonb)
-                """
-            )
-    with pytest.raises(Exception):
+    with (
+        psycopg.connect(pg_db_migrated.poll_writer, autocommit=True) as pconn,
+        pytest.raises(psycopg.errors.CheckViolation),
+    ):
+        pconn.execute(
+            """
+            INSERT INTO public.fc27_discord_jobs (job_type, idempotency_key, payload)
+            VALUES ('arbitrary_job_type', 'bad-type-1', '{"a":1}'::jsonb)
+            """
+        )
+    with pytest.raises(ValidationError):
         FC27RosterRefreshPayload.model_validate(
             {
                 "schema_version": "fc27-roster-refresh-v1",
@@ -633,7 +634,7 @@ def test_09_to_15_consumer_selectivity_edits_noop_skip_and_no_repost(pg_db_migra
         opponent="Seaside United",
         scorer_ref=PLAYER_C,
         other_ref=PLAYER_B,
-        played_at=datetime(2026, 10, 25, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 25, 1, 0, tzinfo=UTC),
     )
 
     transport = SyntheticDiscordNotificationTransport()
@@ -744,7 +745,7 @@ def test_13_ambiguous_recovery_skipped_and_unambiguous_recovered_linkage_persist
     mref_ambig = _seed_provider_match(
         pg_db_migrated,
         suffix="rec_ambig",
-        played_at=datetime(2026, 10, 26, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 26, 1, 0, tzinfo=UTC),
     )
 
     transport = SyntheticDiscordNotificationTransport()
@@ -762,8 +763,8 @@ def test_13_ambiguous_recovery_skipped_and_unambiguous_recovered_linkage_persist
 
     # Clear transport in-memory linkage map to force history recovery, and plant duplicate candidate for mref_ambig
     orig_ambig_msg = next(m for m in transport.sent_messages if m.match_ref == mref_ambig)
-    transport._linkages.clear()  # noqa: SLF001
-    transport._channel_history[RESULTS_CHANNEL_ID].append(("880000000000099999", orig_ambig_msg))  # noqa: SLF001
+    transport._linkages.clear()
+    transport._channel_history[RESULTS_CHANNEL_ID].append(("880000000000099999", orig_ambig_msg))
 
     upsert_roster_player(
         pg_db_migrated.match_results_writer,
@@ -801,7 +802,7 @@ def test_14_bounded_batches_and_deterministic_continuation(pg_db_migrated) -> No
             pg_db_migrated,
             suffix=f"bound_{idx}",
             opponent=f"Club{idx}",
-            played_at=datetime(2026, 10, 20 + idx, 1, 0, tzinfo=timezone.utc),
+            played_at=datetime(2026, 10, 20 + idx, 1, 0, tzinfo=UTC),
         )
     transport = SyntheticDiscordNotificationTransport()
     cfg = _dispatch_config(refresh_max_matches_per_job=2)
@@ -985,7 +986,7 @@ def test_15_transient_retry_and_permanent_dead_letter_classifications(pg_db_migr
     mref_nonbot = _seed_provider_match(
         pg_db_migrated,
         suffix="nonbot_15",
-        played_at=datetime(2026, 10, 29, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 29, 1, 0, tzinfo=UTC),
     )
     run_discord_dispatch_cycle(
         config=cfg,
@@ -1017,7 +1018,7 @@ def test_15_transient_retry_and_permanent_dead_letter_classifications(pg_db_migr
     _seed_provider_match(
         pg_db_migrated,
         suffix="ser_15",
-        played_at=datetime(2026, 10, 30, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 30, 1, 0, tzinfo=UTC),
     )
     run_discord_dispatch_cycle(
         config=cfg,
@@ -1346,17 +1347,17 @@ def test_18_gateway_transport_snapshot_and_candidate_recovery() -> None:
     try:
         async def _exercise() -> tuple[Any, Any, tuple[str, ...]]:
             transport = DiscordGatewayChannelTransport(fake_client, loop)
-            cands = await transport._async_find_existing_candidates(  # noqa: SLF001
+            cands = await transport._async_find_existing_candidates(
                 channel_id=RESULTS_CHANNEL_ID,
                 match_ref="mref_ecf_000011112222",
                 not_before=None,
                 max_candidates=2,
             )
-            snap_bot = await transport._async_fetch_notification_snapshot(  # noqa: SLF001
+            snap_bot = await transport._async_fetch_notification_snapshot(
                 channel_id=RESULTS_CHANNEL_ID,
                 message_id="501",
             )
-            snap_user = await transport._async_fetch_notification_snapshot(  # noqa: SLF001
+            snap_user = await transport._async_fetch_notification_snapshot(
                 channel_id=RESULTS_CHANNEL_ID,
                 message_id="503",
             )
@@ -1427,7 +1428,7 @@ def test_19_manual_match_positive_in_place_refresh_formal_and_team_chat(pg_db_mi
         team_chat_channel_id=TEAM_CHAT_CHANNEL_ID,
         team_chat_message_id=tc_msg_id,
     )
-    transport._channel_history.setdefault(RESULTS_CHANNEL_ID, []).append(  # noqa: SLF001
+    transport._channel_history.setdefault(RESULTS_CHANNEL_ID, []).append(
         (
             res_msg_id,
             FC27PostNewResultsMessage(
@@ -1444,7 +1445,7 @@ def test_19_manual_match_positive_in_place_refresh_formal_and_team_chat(pg_db_mi
             ),
         )
     )
-    transport._team_chat_history.setdefault(TEAM_CHAT_CHANNEL_ID, []).append(  # noqa: SLF001
+    transport._team_chat_history.setdefault(TEAM_CHAT_CHANNEL_ID, []).append(
         (
             tc_msg_id,
             FC27TeamChatMessage(
@@ -1513,8 +1514,8 @@ def test_19_manual_match_positive_in_place_refresh_formal_and_team_chat(pg_db_mi
             return True
 
     gw_transport = _GatewayStyleTransport()
-    gw_transport._channel_history[RESULTS_CHANNEL_ID] = list(transport._channel_history[RESULTS_CHANNEL_ID])  # noqa: SLF001
-    gw_transport._team_chat_history[TEAM_CHAT_CHANNEL_ID] = list(transport._team_chat_history[TEAM_CHAT_CHANNEL_ID])  # noqa: SLF001
+    gw_transport._channel_history[RESULTS_CHANNEL_ID] = list(transport._channel_history[RESULTS_CHANNEL_ID])
+    gw_transport._team_chat_history[TEAM_CHAT_CHANNEL_ID] = list(transport._team_chat_history[TEAM_CHAT_CHANNEL_ID])
     rename_roster_player(
         pg_db_migrated.match_results_writer,
         player_id_or_name="ManualLegend",
@@ -1627,14 +1628,14 @@ def test_21_gateway_snapshot_fails_closed_without_bot_or_author_id() -> None:
         try:
             transport = DiscordGatewayChannelTransport(fake_client, loop)
             snap_no_bot = loop.run_until_complete(
-                transport._async_fetch_notification_snapshot(  # noqa: SLF001
+                transport._async_fetch_notification_snapshot(
                     channel_id=RESULTS_CHANNEL_ID,
                     message_id="601",
                 )
             )
             fake_client.user = types.SimpleNamespace(id=111)
             snap_no_author = loop.run_until_complete(
-                transport._async_fetch_notification_snapshot(  # noqa: SLF001
+                transport._async_fetch_notification_snapshot(
                     channel_id=RESULTS_CHANNEL_ID,
                     message_id="602",
                 )
@@ -1664,11 +1665,11 @@ def test_22_zero_scan_cap_and_deferred_verified_linkage_persistence(pg_db_migrat
         match_results_writer_db_conn_or_uri=None,
     )
     assert r_init.jobs_completed == 1
-    posted_res_id = transport._channel_history[RESULTS_CHANNEL_ID][0][0]  # noqa: SLF001
-    posted_tc_id = transport._team_chat_history[TEAM_CHAT_CHANNEL_ID][0][0]  # noqa: SLF001
+    posted_res_id = transport._channel_history[RESULTS_CHANNEL_ID][0][0]
+    posted_tc_id = transport._team_chat_history[TEAM_CHAT_CHANNEL_ID][0][0]
 
     # 1) With scans_per_job=0 and cleared cache, completes safely without stalling
-    transport._linkages.clear()  # noqa: SLF001
+    transport._linkages.clear()
     upsert_roster_player(
         pg_db_migrated.match_results_writer,
         player_id=PLAYER_A,
@@ -1708,7 +1709,7 @@ def test_22_zero_scan_cap_and_deferred_verified_linkage_persistence(pg_db_migrat
 
     # 3) Verified cached linkage IS persisted even when snapshot already matches (needs_*_edit=False)
     transport.message_guilds.clear()
-    transport._linkages.clear()  # noqa: SLF001
+    transport._linkages.clear()
     # First edit transport messages (without DB writer) so Discord snapshots already match RejectedRecoveryKai
     with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
         wconn.execute(
@@ -1761,13 +1762,13 @@ def test_23_partial_permanent_error_refreshes_healthy_sibling_matches(pg_db_migr
         pg_db_migrated,
         suffix="bad_23",
         opponent="Bad Sibling FC",
-        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=UTC),
     )
     mref_ok = _seed_provider_match(
         pg_db_migrated,
         suffix="ok_23",
         opponent="Good Sibling FC",
-        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=UTC),
     )
     transport = SyntheticDiscordNotificationTransport()
     cfg = _dispatch_config()
@@ -1812,12 +1813,12 @@ def test_24_lease_loss_during_completion_rolls_back_continuation(pg_db_migrated)
     _seed_provider_match(
         pg_db_migrated,
         suffix="ll_1",
-        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 20, 1, 0, tzinfo=UTC),
     )
     _seed_provider_match(
         pg_db_migrated,
         suffix="ll_2",
-        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc),
+        played_at=datetime(2026, 10, 21, 1, 0, tzinfo=UTC),
     )
     transport = SyntheticDiscordNotificationTransport()
     init_res = run_discord_dispatch_cycle(
@@ -1879,7 +1880,7 @@ def test_25_scan_cap_one_does_not_stall_on_first_match(pg_db_migrated) -> None:
     )
     assert r_init.jobs_completed == 1
 
-    transport._linkages.clear()  # noqa: SLF001
+    transport._linkages.clear()
     upsert_roster_player(
         pg_db_migrated.match_results_writer,
         player_id=PLAYER_A,
