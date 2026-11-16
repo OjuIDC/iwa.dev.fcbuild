@@ -14,6 +14,7 @@ import yaml
 
 from scripts.fc27_discord_bot import main as discord_cli_main
 from src.fc27_discord_bot import (
+    ANALYTICS_GROUP_SUBCOMMANDS,
     DISCORD_DATABASE_WRITE_ACCESS,
     DISCORD_PROVIDER_REQUESTS,
     FC27DiscordAuthzError,
@@ -21,17 +22,23 @@ from src.fc27_discord_bot import (
     FC27DiscordBotService,
     FC27DiscordDisabledError,
     FC27DiscordPrivacyError,
+    FC27DiscordResponse,
     FC27DiscordWriteAccessDeniedError,
     GuardedDiscordReadOnlyConnection,
     MAX_DISCORD_CONTENT_LENGTH,
     MAX_DISCORD_EMBEDS,
     MAX_DISCORD_EXPORT_BYTES,
+    MAX_DISCORD_GROUP_CHILDREN,
     NOT_AVAILABLE_NOT_IMPLEMENTED,
+    P0_TOP_LEVEL_SUBCOMMANDS,
     PSEUDONYM_PLAYER_REF_RE,
+    RegisteredCommandSummary,
+    SUPPORTED_DISCORD_SUBCOMMANDS,
     assert_discord_output_sanitized,
     assert_sql_is_readonly_fc27_select,
     dispatch_interaction_response,
     load_discord_bot_token,
+    register_fc27_application_commands,
 )
 from src.fc27_polling_worker import FC27PollingRuntime, run_fc27_poll_cycle
 from tests.test_fc27_polling_worker import (
@@ -1486,5 +1493,345 @@ def test_59_gateway_channel_transport_and_ephemeral_slash_sync(
         assert ix_3.response.defer_calls == [{"ephemeral": True, "thinking": True}]
         assert fake_channel.send_count == 2
         assert 800000000000000002 in fake_channel.messages
+
+    asyncio.run(_run())
+
+
+def test_60_discord_command_tree_respects_group_child_limit_and_preserves_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """60. Real discord.app_commands registration respects the 25-child Group limit and preserves P0/analytics routing & schemas."""
+    import discord
+    from discord import app_commands
+
+    member_role_id = "444444444444444441"
+    manager_role_id = "444444444444444442"
+    captain_role_id = "444444444444444443"
+    admin_role_id = "444444444444444444"
+
+    cfg = _build_enabled_config(
+        application_id="999999999999999999",
+        allowed_role_ids=frozenset(
+            {member_role_id, manager_role_id, captain_role_id, admin_role_id}
+        ),
+        manager_role_ids=frozenset({manager_role_id}),
+        captain_role_ids=frozenset({captain_role_id}),
+        admin_role_ids=frozenset({admin_role_id}),
+    )
+    svc = FC27DiscordBotService(cfg)
+
+    assert len(ANALYTICS_GROUP_SUBCOMMANDS) == 13
+    assert len(P0_TOP_LEVEL_SUBCOMMANDS) == 13
+    assert len(SUPPORTED_DISCORD_SUBCOMMANDS) == 26
+    assert set(ANALYTICS_GROUP_SUBCOMMANDS).isdisjoint(P0_TOP_LEVEL_SUBCOMMANDS)
+    assert (
+        set(SUPPORTED_DISCORD_SUBCOMMANDS)
+        == set(ANALYTICS_GROUP_SUBCOMMANDS) | set(P0_TOP_LEVEL_SUBCOMMANDS)
+    )
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.defer_calls: list[dict[str, Any]] = []
+
+        async def defer(self, *, ephemeral: bool = False, thinking: bool = True) -> None:
+            self.defer_calls.append({"ephemeral": ephemeral, "thinking": thinking})
+
+    class _FakeFollowup:
+        def __init__(self) -> None:
+            self.send_calls: list[dict[str, Any]] = []
+
+        async def send(self, **kwargs: Any) -> None:
+            self.send_calls.append(kwargs)
+
+    def _make_interaction(
+        *,
+        user_id: str,
+        role_ids: tuple[str, ...],
+        is_admin: bool = False,
+    ) -> Any:
+        deleted_originals: list[bool] = []
+
+        async def _delete_original_response() -> None:
+            deleted_originals.append(True)
+
+        return types.SimpleNamespace(
+            id="999888777666555060",
+            guild_id=int(APPROVED_GUILD_ID),
+            channel_id=int(APPROVED_CHANNEL_ID),
+            user=types.SimpleNamespace(
+                id=int(user_id),
+                roles=[types.SimpleNamespace(id=int(rid)) for rid in role_ids],
+                guild_permissions=types.SimpleNamespace(administrator=is_admin),
+            ),
+            response=_FakeResponse(),
+            followup=_FakeFollowup(),
+            deleted_originals=deleted_originals,
+            delete_original_response=_delete_original_response,
+        )
+
+    async def _run() -> None:
+        assert cfg.application_id is not None
+        intents = discord.Intents.none()
+        intents.guilds = True
+        client = discord.Client(intents=intents, application_id=int(cfg.application_id))
+        tree = app_commands.CommandTree(client)
+        try:
+            summary = register_fc27_application_commands(
+                tree,
+                svc,
+                allowed_guild_ids=cfg.allowed_guild_ids,
+                discord_module=discord,
+                app_commands_module=app_commands,
+            )
+            assert isinstance(summary, RegisteredCommandSummary)
+            assert summary.group_name == "fc27"
+            assert summary.global_command_names == ()
+            assert tree.get_commands(guild=None) == []
+
+            guild_obj = discord.Object(id=int(APPROVED_GUILD_ID))
+            top_cmds = tree.get_commands(guild=guild_obj)
+            top_names = [cmd.name for cmd in top_cmds]
+            assert len(top_names) == len(set(top_names)) == 14
+            assert summary.total_guild_top_level_commands == 14
+            assert "fc27" in top_names
+            assert set(P0_TOP_LEVEL_SUBCOMMANDS).issubset(top_names)
+            assert set(summary.top_level_guild_commands) == set(P0_TOP_LEVEL_SUBCOMMANDS)
+
+            fc27_group = tree.get_command("fc27", guild=guild_obj)
+            assert isinstance(fc27_group, app_commands.Group)
+            assert len(fc27_group.commands) <= MAX_DISCORD_GROUP_CHILDREN
+            group_child_names = [cmd.name for cmd in fc27_group.commands]
+            assert len(group_child_names) == len(set(group_child_names)) == 13
+            assert set(group_child_names) == set(ANALYTICS_GROUP_SUBCOMMANDS)
+            assert set(group_child_names).isdisjoint(P0_TOP_LEVEL_SUBCOMMANDS)
+            assert "unresolvedplayers" not in group_child_names
+
+            top_by_name: dict[str, app_commands.Command[Any, ..., Any]] = {
+                cmd.name: cmd
+                for cmd in top_cmds
+                if isinstance(cmd, app_commands.Command)
+            }
+            assert set(top_by_name) == set(P0_TOP_LEVEL_SUBCOMMANDS)
+            assert "unresolvedplayers" in top_by_name
+
+            group_by_name: dict[str, app_commands.Command[Any, ..., Any]] = {
+                cmd.name: cmd
+                for cmd in fc27_group.commands
+                if isinstance(cmd, app_commands.Command)
+            }
+
+            # Parameter schemas preserved on P0 top-level and analytics subcommands
+            assert [(p.name, p.required) for p in top_by_name["setplayer"].parameters] == [
+                ("player_id", True),
+                ("name", True),
+                ("position", False),
+                ("discord_user_id", False),
+            ]
+            assert [p.name for p in top_by_name["roster"].parameters] == []
+            assert [p.name for p in top_by_name["unresolvedplayers"].parameters] == []
+            assert [(p.name, p.required) for p in top_by_name["renameplayer"].parameters] == [
+                ("player", True),
+                ("new_name", True),
+            ]
+            assert [p.name for p in top_by_name["matchday"].parameters] == [
+                "opponent",
+                "date",
+                "time",
+                "competition",
+                "formation",
+                "notes",
+            ]
+            assert [p.name for p in top_by_name["result"].parameters] == [
+                "opponent",
+                "our_score",
+                "opponent_score",
+                "competition",
+                "formation",
+                "scorers",
+                "motm",
+                "possession",
+                "shots",
+                "shots_on_target",
+                "passes",
+                "pass_accuracy",
+                "corners",
+                "tackles",
+                "fouls",
+                "player_stats",
+                "match_id",
+            ]
+            assert [p.name for p in top_by_name["editresult"].parameters] == [
+                "match_id",
+                "opponent",
+                "our_score",
+                "opponent_score",
+                "competition",
+                "formation",
+                "scorers",
+                "motm",
+                "possession",
+                "shots",
+                "shots_on_target",
+                "passes",
+                "pass_accuracy",
+                "corners",
+                "tackles",
+                "fouls",
+                "player_stats",
+                "expected_revision",
+            ]
+            assert [p.name for p in top_by_name["lastresult"].parameters] == ["opponent"]
+            assert [p.name for p in top_by_name["results"].parameters] == [
+                "page",
+                "page_size",
+                "opponent",
+            ]
+            assert [p.name for p in top_by_name["match"].parameters] == [
+                "match_id",
+                "opponent",
+            ]
+            assert [(p.name, p.required) for p in top_by_name["deletematch"].parameters] == [
+                ("match_id", True),
+                ("confirm_delete", False),
+                ("reason", False),
+                ("expected_revision", False),
+            ]
+            assert [p.name for p in top_by_name["topscorers"].parameters] == ["limit"]
+            assert [(p.name, p.required) for p in top_by_name["playerstats"].parameters] == [
+                ("player_name", True),
+            ]
+            assert [p.name for p in group_by_name["status"].parameters] == ["page", "page_size"]
+            assert [p.name for p in group_by_name["help"].parameters] == ["page", "page_size"]
+
+            # 1. Real authz checks through callbacks (member denied P0 write / admin commands)
+            ix_member_unres = _make_interaction(
+                user_id="345678901234567801", role_ids=(member_role_id,)
+            )
+            await top_by_name["unresolvedplayers"].callback(ix_member_unres)
+            assert ix_member_unres.response.defer_calls == [{"ephemeral": True, "thinking": True}]
+            assert ix_member_unres.followup.send_calls[0]["ephemeral"] is True
+            assert ix_member_unres.followup.send_calls[0]["content"] == "You don't have permission."
+
+            ix_member_set = _make_interaction(
+                user_id="345678901234567802", role_ids=(member_role_id,)
+            )
+            await top_by_name["setplayer"].callback(
+                ix_member_set,
+                player_id="9000001",
+                name="Player A",
+            )
+            assert ix_member_set.followup.send_calls[0]["ephemeral"] is True
+            assert ix_member_set.followup.send_calls[0]["content"] == "You don't have permission."
+
+            ix_mgr_del = _make_interaction(
+                user_id="345678901234567803", role_ids=(manager_role_id,)
+            )
+            await top_by_name["deletematch"].callback(
+                ix_mgr_del,
+                match_id="1",
+                confirm_delete=True,
+                reason="Duplicate",
+            )
+            assert ix_mgr_del.followup.send_calls[0]["ephemeral"] is True
+            assert ix_mgr_del.followup.send_calls[0]["content"] == "You don't have permission."
+
+            # 2. Real /fc27 help output reflects top-level P0 + /fc27 analytics topology
+            ix_help = _make_interaction(
+                user_id="345678901234567804", role_ids=(member_role_id,)
+            )
+            await group_by_name["help"].callback(ix_help)
+            help_msg = ix_help.followup.send_calls[0]["content"]
+            assert "**Analytics (`/fc27`)**" in help_msg
+            assert "`/fc27 help`" in help_msg or "`help`" in help_msg
+            assert "/unresolvedplayers" in help_msg
+            assert "/fc27 ..." not in help_msg
+
+            # 3. Authorized Manager, Captain, Admin, and Member callbacks route cleanly after real authz
+            recorded_dispatches: list[dict[str, Any]] = []
+            orig_handle = svc.handle_slash_command
+
+            def _spy_handle_slash_command(subcommand: str, **kwargs: Any) -> FC27DiscordResponse:
+                recorded_dispatches.append({"subcommand": subcommand, **kwargs})
+                return orig_handle(subcommand, **kwargs)
+
+            def _stub_mr_dispatch(cmd_clean: str, **kwargs: Any) -> FC27DiscordResponse:
+                return FC27DiscordResponse(
+                    command=cmd_clean,
+                    status="OK",
+                    ephemeral=cmd_clean in {"unresolvedplayers", "deletematch"},
+                    content=f"stubbed:{cmd_clean}",
+                    provider_requests_executed=0,
+                )
+
+            def _stub_authz_dispatch(cmd_clean: str, **kwargs: Any) -> FC27DiscordResponse:
+                return FC27DiscordResponse(
+                    command=cmd_clean,
+                    status="OK",
+                    ephemeral=False,
+                    content=f"stubbed:{cmd_clean}",
+                    provider_requests_executed=0,
+                )
+
+            monkeypatch.setattr(svc, "handle_slash_command", _spy_handle_slash_command)
+            monkeypatch.setattr(svc, "_dispatch_match_results_subcommand", _stub_mr_dispatch)
+            monkeypatch.setattr(svc, "_dispatch_authorized_subcommand", _stub_authz_dispatch)
+
+            ix_mgr_set = _make_interaction(
+                user_id="345678901234567805", role_ids=(manager_role_id,)
+            )
+            await top_by_name["setplayer"].callback(
+                ix_mgr_set,
+                player_id="9000001",
+                name="Alex",
+                position="CM",
+                discord_user_id="<@!345678901234567899>",
+            )
+            assert ix_mgr_set.followup.send_calls[0]["content"] == "stubbed:setplayer"
+
+            ix_cap_res = _make_interaction(
+                user_id="345678901234567806", role_ids=(captain_role_id,)
+            )
+            await top_by_name["result"].callback(
+                ix_cap_res,
+                opponent="Harbor City",
+                our_score=3,
+                opponent_score=1,
+            )
+            assert ix_cap_res.followup.send_calls[0]["content"] == "stubbed:result"
+
+            ix_adm_unres = _make_interaction(
+                user_id="345678901234567807",
+                role_ids=(admin_role_id,),
+                is_admin=True,
+            )
+            await top_by_name["unresolvedplayers"].callback(ix_adm_unres)
+            assert ix_adm_unres.followup.send_calls[0]["content"] == "stubbed:unresolvedplayers"
+            assert ix_adm_unres.followup.send_calls[0]["ephemeral"] is True
+
+            ix_mem_top = _make_interaction(
+                user_id="345678901234567808", role_ids=(member_role_id,)
+            )
+            await top_by_name["topscorers"].callback(ix_mem_top, limit=5)
+            assert ix_mem_top.followup.send_calls[0]["content"] == "stubbed:topscorers"
+
+            ix_mem_status = _make_interaction(
+                user_id="345678901234567809", role_ids=(member_role_id,)
+            )
+            await group_by_name["status"].callback(ix_mem_status, page=2, page_size=5)
+            assert ix_mem_status.followup.send_calls[0]["content"] == "stubbed:status"
+
+            assert recorded_dispatches[0]["subcommand"] == "setplayer"
+            assert recorded_dispatches[0]["discord_user_id"] == "345678901234567899"
+            assert recorded_dispatches[1]["subcommand"] == "result"
+            assert recorded_dispatches[1]["our_score"] == 3
+            assert recorded_dispatches[2]["subcommand"] == "unresolvedplayers"
+            assert recorded_dispatches[2]["is_admin"] is True
+            assert recorded_dispatches[3]["subcommand"] == "topscorers"
+            assert recorded_dispatches[3]["page_size"] == 5
+            assert recorded_dispatches[4]["subcommand"] == "status"
+            assert recorded_dispatches[4]["page"] == 2
+            assert DISCORD_PROVIDER_REQUESTS == 0
+        finally:
+            await client.close()
 
     asyncio.run(_run())

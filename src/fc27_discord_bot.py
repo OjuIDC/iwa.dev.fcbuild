@@ -251,6 +251,40 @@ SUPPORTED_DISCORD_SUBCOMMANDS: Final[tuple[str, ...]] = (
     "deletematch",
 )
 
+MAX_DISCORD_GROUP_CHILDREN: Final[int] = 25
+
+ANALYTICS_GROUP_SUBCOMMANDS: Final[tuple[str, ...]] = (
+    "status",
+    "latest",
+    "form",
+    "analysis",
+    "data-gaps",
+    "polling",
+    "coach",
+    "tactics",
+    "director",
+    "export-records",
+    "export-csv",
+    "export-excel",
+    "help",
+)
+
+P0_TOP_LEVEL_SUBCOMMANDS: Final[tuple[str, ...]] = (
+    "setplayer",
+    "roster",
+    "renameplayer",
+    "unresolvedplayers",
+    "matchday",
+    "result",
+    "editresult",
+    "lastresult",
+    "results",
+    "match",
+    "deletematch",
+    "topscorers",
+    "playerstats",
+)
+
 DISCORD_SUBCOMMAND_ALIASES: Final[dict[str, str]] = {
     "last5": "latest",
     "summary": "form",
@@ -2635,10 +2669,10 @@ class FC27DiscordBotService:
                     "Analytics & Match Results Bot:\n"
                     "**Analytics (`/fc27`)**: `status`, `latest`, `form`, `analysis`, `data-gaps`, "
                     "`polling`, `coach`, `tactics`, `director`, `export-records`, `export-csv`, `export-excel`, `help`\n"
-                    "**Roster & Match Results** (top-level `/...` or `/fc27 ...`):\n"
+                    "**Roster & Match Results** (top-level `/...` guild commands):\n"
                     "- `/setplayer`, `/renameplayer`, `/matchday`, `/result`, `/editresult` (Manager/Captain/Admin)\n"
                     "- `/roster`, `/lastresult`, `/match`, `/results`, `/topscorers`, `/playerstats` (Members)\n"
-                    "- `/deletematch` (Admin only, confirmation required)\n"
+                    "- `/unresolvedplayers`, `/deletematch` (Admin only; `confirm_delete` required for `/deletematch`)\n"
                     "Governance: `DISCORD_PROVIDER_REQUESTS=0 | RECOMMENDATIONS=DISABLED | APPROVAL=DISABLED | DISPATCH=DISABLED`"
                 ),
             )
@@ -3608,6 +3642,384 @@ async def dispatch_interaction_response(
         return None
 
 
+@dataclass(frozen=True)
+class RegisteredCommandSummary:
+    """Summary of application commands registered on a Discord CommandTree."""
+
+    group_name: str
+    group_subcommands: tuple[str, ...]
+    top_level_guild_commands: tuple[str, ...]
+    global_command_names: tuple[str, ...]
+    total_guild_top_level_commands: int
+
+
+def register_fc27_application_commands(
+    tree: Any,
+    bot_service: FC27DiscordBotService,
+    *,
+    allowed_guild_ids: Sequence[str] | frozenset[str] | None = None,
+    discord_module: Any = None,
+    app_commands_module: Any = None,
+) -> RegisteredCommandSummary:
+    """Register `/fc27` group and top-level guild slash commands on `tree`."""
+    if discord_module is None:
+        try:
+            import discord as imported_discord
+
+            discord_mod = imported_discord
+        except ModuleNotFoundError as exc:
+            missing = str(getattr(exc, "name", "") or "")
+            if missing != "discord" and not missing.startswith("discord."):
+                raise
+            raise FC27DiscordDisabledError(
+                "Required dependency 'discord.py' is not installed. "
+                "Install runtime dependencies with: pip install -r requirements.txt"
+            ) from exc
+    else:
+        discord_mod = discord_module
+
+    if app_commands_module is None:
+        app_commands_mod = getattr(discord_mod, "app_commands", None)
+        if app_commands_mod is None:
+            from discord import app_commands as imported_app_commands
+
+            app_commands_mod = imported_app_commands
+    else:
+        app_commands_mod = app_commands_module
+
+    guild_id_values = sorted(
+        allowed_guild_ids if allowed_guild_ids is not None else bot_service.config.allowed_guild_ids
+    )
+    guild_objects = [discord_mod.Object(id=int(gid)) for gid in guild_id_values]
+
+    async def _send_fc27_response(
+        interaction: Any,
+        *,
+        subcmd_name: str,
+        ephemeral_defer: bool = False,
+        **cmd_kwargs: Any,
+    ) -> None:
+        await dispatch_interaction_response(
+            interaction,
+            bot_service,
+            subcmd_name=subcmd_name,
+            ephemeral_defer=ephemeral_defer,
+            discord_module=discord_mod,
+            **cmd_kwargs,
+        )
+
+    def _build_p0_callback(subcmd_name: str) -> tuple[str, Any]:
+        if subcmd_name == "setplayer":
+            async def _cb_setplayer(
+                interaction: Any,
+                player_id: str,
+                name: str,
+                position: Optional[str] = None,
+                discord_user_id: Optional[str] = None,
+            ) -> None:
+                cleaned_uid = (
+                    discord_user_id.strip().lstrip("<@!").rstrip(">")
+                    if discord_user_id
+                    else None
+                )
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="setplayer",
+                    player_id=player_id,
+                    player_name=name,
+                    position=position,
+                    discord_user_id=cleaned_uid,
+                )
+            return ("Register or update a club roster player", _cb_setplayer)
+
+        if subcmd_name == "roster":
+            async def _cb_roster(interaction: Any) -> None:
+                await _send_fc27_response(interaction, subcmd_name="roster")
+            return ("Show the active East Coasters FC club roster", _cb_roster)
+
+        if subcmd_name == "unresolvedplayers":
+            async def _cb_unresolvedplayers(interaction: Any) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="unresolvedplayers",
+                    ephemeral_defer=True,
+                )
+            return ("List unresolved club player tokens (Admin only)", _cb_unresolvedplayers)
+
+        if subcmd_name == "renameplayer":
+            async def _cb_renameplayer(
+                interaction: Any,
+                player: str,
+                new_name: str,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="renameplayer",
+                    player_name=player,
+                    new_name=new_name,
+                )
+            return ("Rename an active club roster player", _cb_renameplayer)
+
+        if subcmd_name == "matchday":
+            async def _cb_matchday(
+                interaction: Any,
+                opponent: str,
+                date: str,
+                time: str = DEFAULT_MATCHDAY_TIME,
+                competition: str = "League Match",
+                formation: Optional[str] = None,
+                notes: Optional[str] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="matchday",
+                    opponent=opponent,
+                    date_str=date,
+                    time_str=time,
+                    competition=competition,
+                    formation=formation,
+                    notes=notes,
+                )
+            return ("Schedule a Matchday fixture card", _cb_matchday)
+
+        if subcmd_name == "result":
+            async def _cb_result(
+                interaction: Any,
+                opponent: str,
+                our_score: int,
+                opponent_score: int,
+                competition: str = "League Match",
+                formation: Optional[str] = None,
+                scorers: Optional[str] = None,
+                motm: Optional[str] = None,
+                possession: Optional[int] = None,
+                shots: Optional[int] = None,
+                shots_on_target: Optional[int] = None,
+                passes: Optional[int] = None,
+                pass_accuracy: Optional[int] = None,
+                corners: Optional[int] = None,
+                tackles: Optional[int] = None,
+                fouls: Optional[int] = None,
+                player_stats: Optional[str] = None,
+                match_id: Optional[str] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="result",
+                    opponent=opponent,
+                    our_score=our_score,
+                    opponent_score=opponent_score,
+                    competition=competition,
+                    formation=formation,
+                    scorers=scorers,
+                    motm=motm,
+                    possession=possession,
+                    shots=shots,
+                    shots_on_target=shots_on_target,
+                    passes=passes,
+                    pass_accuracy=pass_accuracy,
+                    corners=corners,
+                    tackles=tackles,
+                    fouls=fouls,
+                    player_stats=player_stats,
+                    match_id=match_id,
+                )
+            return ("Record a Full-Time match result", _cb_result)
+
+        if subcmd_name == "editresult":
+            async def _cb_editresult(
+                interaction: Any,
+                match_id: Optional[str] = None,
+                opponent: Optional[str] = None,
+                our_score: Optional[int] = None,
+                opponent_score: Optional[int] = None,
+                competition: Optional[str] = None,
+                formation: Optional[str] = None,
+                scorers: Optional[str] = None,
+                motm: Optional[str] = None,
+                possession: Optional[int] = None,
+                shots: Optional[int] = None,
+                shots_on_target: Optional[int] = None,
+                passes: Optional[int] = None,
+                pass_accuracy: Optional[int] = None,
+                corners: Optional[int] = None,
+                tackles: Optional[int] = None,
+                fouls: Optional[int] = None,
+                player_stats: Optional[str] = None,
+                expected_revision: Optional[int] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="editresult",
+                    match_id=match_id,
+                    opponent=opponent,
+                    our_score=our_score,
+                    opponent_score=opponent_score,
+                    competition=competition,
+                    formation=formation,
+                    scorers=scorers,
+                    motm=motm,
+                    possession=possession,
+                    shots=shots,
+                    shots_on_target=shots_on_target,
+                    passes=passes,
+                    pass_accuracy=pass_accuracy,
+                    corners=corners,
+                    tackles=tackles,
+                    fouls=fouls,
+                    player_stats=player_stats,
+                    expected_revision=expected_revision,
+                )
+            return ("Edit an existing match result in place", _cb_editresult)
+
+        if subcmd_name == "lastresult":
+            async def _cb_lastresult(
+                interaction: Any,
+                opponent: Optional[str] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="lastresult",
+                    opponent=opponent,
+                )
+            return ("Show the latest Full-Time match result", _cb_lastresult)
+
+        if subcmd_name == "results":
+            async def _cb_results(
+                interaction: Any,
+                page: int = 1,
+                page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
+                opponent: Optional[str] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="results",
+                    page=page,
+                    page_size=page_size,
+                    opponent=opponent,
+                )
+            return ("List paginated manual match results", _cb_results)
+
+        if subcmd_name == "match":
+            async def _cb_match(
+                interaction: Any,
+                match_id: Optional[str] = None,
+                opponent: Optional[str] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="match",
+                    match_id=match_id,
+                    opponent=opponent,
+                )
+            return ("Look up a match result by ID or opponent", _cb_match)
+
+        if subcmd_name == "deletematch":
+            async def _cb_deletematch(
+                interaction: Any,
+                match_id: str,
+                confirm_delete: bool = False,
+                reason: Optional[str] = None,
+                expected_revision: Optional[int] = None,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="deletematch",
+                    ephemeral_defer=True,
+                    match_id=match_id,
+                    confirm_delete=confirm_delete,
+                    notes=reason,
+                    expected_revision=expected_revision,
+                )
+            return ("Soft-delete a manual match (Admin only)", _cb_deletematch)
+
+        if subcmd_name == "topscorers":
+            async def _cb_topscorers(
+                interaction: Any,
+                limit: int = DEFAULT_DISCORD_PAGE_SIZE,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="topscorers",
+                    page_size=limit,
+                )
+            return ("Show club top scorers & goal contributions", _cb_topscorers)
+
+        if subcmd_name == "playerstats":
+            async def _cb_playerstats(
+                interaction: Any,
+                player_name: str,
+            ) -> None:
+                await _send_fc27_response(
+                    interaction,
+                    subcmd_name="playerstats",
+                    player_name=player_name,
+                )
+            return ("Show career manual stats for a player", _cb_playerstats)
+
+        raise ValueError(f"Unsupported P0 callback subcommand: {subcmd_name}")
+
+    fc27_group = app_commands_mod.Group(
+        name="fc27",
+        description="East Coasters FC27 analytics commands",
+        guild_ids=[int(gid) for gid in guild_id_values],
+    )
+
+    registered_group_subcommands: list[str] = []
+    registered_top_level_commands: list[str] = []
+
+    def _register_analytics_subcommand(subcmd_name: str) -> None:
+        async def _callback(
+            interaction: Any,
+            page: int = 1,
+            page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
+        ) -> None:
+            await _send_fc27_response(
+                interaction,
+                subcmd_name=subcmd_name,
+                page=page,
+                page_size=page_size,
+            )
+
+        _callback.__name__ = f"fc27_{subcmd_name.replace('-', '_')}"
+        fc27_group.command(
+            name=subcmd_name,
+            description=f"East Coasters FC27 read-only {subcmd_name} command",
+        )(_callback)
+        registered_group_subcommands.append(subcmd_name)
+
+    for sub in SUPPORTED_DISCORD_SUBCOMMANDS:
+        if sub in P0_TOP_LEVEL_SUBCOMMANDS:
+            desc_top, cb_top = _build_p0_callback(sub)
+            cb_top.__name__ = f"top_{sub}"
+            tree.command(name=sub, description=desc_top, guilds=guild_objects)(cb_top)
+            registered_top_level_commands.append(sub)
+        else:
+            _register_analytics_subcommand(sub)
+
+    if len(registered_group_subcommands) > MAX_DISCORD_GROUP_CHILDREN:
+        raise FC27DiscordError(
+            f"/fc27 group child count {len(registered_group_subcommands)} exceeds "
+            f"Discord limit {MAX_DISCORD_GROUP_CHILDREN}"
+        )
+
+    tree.add_command(fc27_group)
+
+    global_commands = tuple(cmd.name for cmd in tree.get_commands(guild=None))
+    top_level_for_first_guild = (
+        tuple(cmd.name for cmd in tree.get_commands(guild=guild_objects[0]))
+        if guild_objects
+        else ()
+    )
+    return RegisteredCommandSummary(
+        group_name=fc27_group.name,
+        group_subcommands=tuple(registered_group_subcommands),
+        top_level_guild_commands=tuple(registered_top_level_commands),
+        global_command_names=global_commands,
+        total_guild_top_level_commands=len(top_level_for_first_guild),
+    )
+
+
 def run_discord_gateway_bot(
     config: FC27DiscordBotConfig,
     *,
@@ -3754,327 +4166,14 @@ def run_discord_gateway_bot(
                 flush=True,
             )
 
-    async def _send_fc27_response(
-        interaction: Any,
-        *,
-        subcmd_name: str,
-        ephemeral_defer: bool = False,
-        **cmd_kwargs: Any,
-    ) -> None:
-        await dispatch_interaction_response(
-            interaction,
-            bot_service,
-            subcmd_name=subcmd_name,
-            ephemeral_defer=ephemeral_defer,
-            discord_module=discord,
-            **cmd_kwargs,
-        )
-
-    def _build_p0_callback(subcmd_name: str) -> tuple[str, Any]:
-        if subcmd_name == "setplayer":
-            async def _cb_setplayer(
-                interaction: discord.Interaction,
-                player_id: str,
-                name: str,
-                position: Optional[str] = None,
-                discord_user_id: Optional[str] = None,
-            ) -> None:
-                cleaned_uid = (
-                    discord_user_id.strip().lstrip("<@!").rstrip(">")
-                    if discord_user_id
-                    else None
-                )
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="setplayer",
-                    player_id=player_id,
-                    player_name=name,
-                    position=position,
-                    discord_user_id=cleaned_uid,
-                )
-            return ("Register or update a club roster player", _cb_setplayer)
-
-        if subcmd_name == "roster":
-            async def _cb_roster(interaction: discord.Interaction) -> None:
-                await _send_fc27_response(interaction, subcmd_name="roster")
-            return ("Show the active East Coasters FC club roster", _cb_roster)
-
-        if subcmd_name == "unresolvedplayers":
-            async def _cb_unresolvedplayers(interaction: discord.Interaction) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="unresolvedplayers",
-                    ephemeral_defer=True,
-                )
-            return ("List unresolved club player tokens (Admin only)", _cb_unresolvedplayers)
-
-        if subcmd_name == "renameplayer":
-            async def _cb_renameplayer(
-                interaction: discord.Interaction,
-                player: str,
-                new_name: str,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="renameplayer",
-                    player_name=player,
-                    new_name=new_name,
-                )
-            return ("Rename an active club roster player", _cb_renameplayer)
-
-        if subcmd_name == "matchday":
-            async def _cb_matchday(
-                interaction: discord.Interaction,
-                opponent: str,
-                date: str,
-                time: str = DEFAULT_MATCHDAY_TIME,
-                competition: str = "League Match",
-                formation: Optional[str] = None,
-                notes: Optional[str] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="matchday",
-                    opponent=opponent,
-                    date_str=date,
-                    time_str=time,
-                    competition=competition,
-                    formation=formation,
-                    notes=notes,
-                )
-            return ("Schedule a Matchday fixture card", _cb_matchday)
-
-        if subcmd_name == "result":
-            async def _cb_result(
-                interaction: discord.Interaction,
-                opponent: str,
-                our_score: int,
-                opponent_score: int,
-                competition: str = "League Match",
-                formation: Optional[str] = None,
-                scorers: Optional[str] = None,
-                motm: Optional[str] = None,
-                possession: Optional[int] = None,
-                shots: Optional[int] = None,
-                shots_on_target: Optional[int] = None,
-                passes: Optional[int] = None,
-                pass_accuracy: Optional[int] = None,
-                corners: Optional[int] = None,
-                tackles: Optional[int] = None,
-                fouls: Optional[int] = None,
-                player_stats: Optional[str] = None,
-                match_id: Optional[str] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="result",
-                    opponent=opponent,
-                    our_score=our_score,
-                    opponent_score=opponent_score,
-                    competition=competition,
-                    formation=formation,
-                    scorers=scorers,
-                    motm=motm,
-                    possession=possession,
-                    shots=shots,
-                    shots_on_target=shots_on_target,
-                    passes=passes,
-                    pass_accuracy=pass_accuracy,
-                    corners=corners,
-                    tackles=tackles,
-                    fouls=fouls,
-                    player_stats=player_stats,
-                    match_id=match_id,
-                )
-            return ("Record a Full-Time match result", _cb_result)
-
-        if subcmd_name == "editresult":
-            async def _cb_editresult(
-                interaction: discord.Interaction,
-                match_id: Optional[str] = None,
-                opponent: Optional[str] = None,
-                our_score: Optional[int] = None,
-                opponent_score: Optional[int] = None,
-                competition: Optional[str] = None,
-                formation: Optional[str] = None,
-                scorers: Optional[str] = None,
-                motm: Optional[str] = None,
-                possession: Optional[int] = None,
-                shots: Optional[int] = None,
-                shots_on_target: Optional[int] = None,
-                passes: Optional[int] = None,
-                pass_accuracy: Optional[int] = None,
-                corners: Optional[int] = None,
-                tackles: Optional[int] = None,
-                fouls: Optional[int] = None,
-                player_stats: Optional[str] = None,
-                expected_revision: Optional[int] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="editresult",
-                    match_id=match_id,
-                    opponent=opponent,
-                    our_score=our_score,
-                    opponent_score=opponent_score,
-                    competition=competition,
-                    formation=formation,
-                    scorers=scorers,
-                    motm=motm,
-                    possession=possession,
-                    shots=shots,
-                    shots_on_target=shots_on_target,
-                    passes=passes,
-                    pass_accuracy=pass_accuracy,
-                    corners=corners,
-                    tackles=tackles,
-                    fouls=fouls,
-                    player_stats=player_stats,
-                    expected_revision=expected_revision,
-                )
-            return ("Edit an existing match result in place", _cb_editresult)
-
-        if subcmd_name == "lastresult":
-            async def _cb_lastresult(
-                interaction: discord.Interaction,
-                opponent: Optional[str] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="lastresult",
-                    opponent=opponent,
-                )
-            return ("Show the latest Full-Time match result", _cb_lastresult)
-
-        if subcmd_name == "results":
-            async def _cb_results(
-                interaction: discord.Interaction,
-                page: int = 1,
-                page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
-                opponent: Optional[str] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="results",
-                    page=page,
-                    page_size=page_size,
-                    opponent=opponent,
-                )
-            return ("List paginated manual match results", _cb_results)
-
-        if subcmd_name == "match":
-            async def _cb_match(
-                interaction: discord.Interaction,
-                match_id: Optional[str] = None,
-                opponent: Optional[str] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="match",
-                    match_id=match_id,
-                    opponent=opponent,
-                )
-            return ("Look up a match result by ID or opponent", _cb_match)
-
-        if subcmd_name == "deletematch":
-            async def _cb_deletematch(
-                interaction: discord.Interaction,
-                match_id: str,
-                confirm_delete: bool = False,
-                reason: Optional[str] = None,
-                expected_revision: Optional[int] = None,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="deletematch",
-                    ephemeral_defer=True,
-                    match_id=match_id,
-                    confirm_delete=confirm_delete,
-                    notes=reason,
-                    expected_revision=expected_revision,
-                )
-            return ("Soft-delete a manual match (Admin only)", _cb_deletematch)
-
-        if subcmd_name == "topscorers":
-            async def _cb_topscorers(
-                interaction: discord.Interaction,
-                limit: int = DEFAULT_DISCORD_PAGE_SIZE,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="topscorers",
-                    page_size=limit,
-                )
-            return ("Show club top scorers & goal contributions", _cb_topscorers)
-
-        if subcmd_name == "playerstats":
-            async def _cb_playerstats(
-                interaction: discord.Interaction,
-                player_name: str,
-            ) -> None:
-                await _send_fc27_response(
-                    interaction,
-                    subcmd_name="playerstats",
-                    player_name=player_name,
-                )
-            return ("Show career manual stats for a player", _cb_playerstats)
-
-        raise ValueError(f"Unsupported P0 callback subcommand: {subcmd_name}")
-
     client = _FC27ReadOnlyGatewayClient()
-    fc27_group = app_commands.Group(
-        name="fc27",
-        description="East Coasters FC27 analytics & match results commands",
-        guild_ids=[int(gid) for gid in sorted(config.allowed_guild_ids)],
+    register_fc27_application_commands(
+        client.tree,
+        bot_service,
+        allowed_guild_ids=config.allowed_guild_ids,
+        discord_module=discord,
+        app_commands_module=app_commands,
     )
-
-    p0_commands: tuple[str, ...] = (
-        "setplayer",
-        "roster",
-        "renameplayer",
-        "unresolvedplayers",
-        "matchday",
-        "result",
-        "editresult",
-        "lastresult",
-        "results",
-        "match",
-        "deletematch",
-        "topscorers",
-        "playerstats",
-    )
-
-    def _register_analytics_subcommand(subcmd_name: str) -> None:
-        async def _callback(
-            interaction: discord.Interaction,
-            page: int = 1,
-            page_size: int = DEFAULT_DISCORD_PAGE_SIZE,
-        ) -> None:
-            await _send_fc27_response(
-                interaction,
-                subcmd_name=subcmd_name,
-                page=page,
-                page_size=page_size,
-            )
-
-        _callback.__name__ = f"fc27_{subcmd_name.replace('-', '_')}"
-        fc27_group.command(
-            name=subcmd_name,
-            description=f"East Coasters FC27 read-only {subcmd_name} command",
-        )(_callback)
-
-    for sub in SUPPORTED_DISCORD_SUBCOMMANDS:
-        if sub in p0_commands:
-            desc_group, cb_group = _build_p0_callback(sub)
-            cb_group.__name__ = f"fc27_{sub}"
-            fc27_group.command(name=sub, description=desc_group)(cb_group)
-            desc_top, cb_top = _build_p0_callback(sub)
-            cb_top.__name__ = f"top_{sub}"
-            client.tree.command(name=sub, description=desc_top, guilds=guild_objects)(cb_top)
-        else:
-            _register_analytics_subcommand(sub)
-
-    client.tree.add_command(fc27_group)
 
     async def _runner() -> int:
         loop = asyncio.get_running_loop()
@@ -4131,6 +4230,7 @@ def run_discord_gateway_bot(
 
 __all__ = [
     "ALLOWED_READONLY_TABLES",
+    "ANALYTICS_GROUP_SUBCOMMANDS",
     "DEFAULT_DISCORD_PAGE_SIZE",
     "DEFAULT_EXPORT_COOLDOWN_SECONDS",
     "DEFAULT_GUILD_COMMANDS_PER_MINUTE",
@@ -4161,13 +4261,17 @@ __all__ = [
     "MAX_DISCORD_CONTENT_LENGTH",
     "MAX_DISCORD_EMBEDS",
     "MAX_DISCORD_EXPORT_BYTES",
+    "MAX_DISCORD_GROUP_CHILDREN",
     "MAX_DISCORD_ROWS_PER_PAGE",
     "MAX_RETAINED_DISCORD_EXPORTS",
     "NOT_AVAILABLE_NOT_IMPLEMENTED",
+    "P0_TOP_LEVEL_SUBCOMMANDS",
+    "RegisteredCommandSummary",
     "SUPPORTED_DISCORD_SUBCOMMANDS",
     "assert_discord_output_sanitized",
     "assert_sql_is_readonly_fc27_select",
     "dispatch_interaction_response",
     "load_discord_bot_token",
+    "register_fc27_application_commands",
     "run_discord_gateway_bot",
 ]
