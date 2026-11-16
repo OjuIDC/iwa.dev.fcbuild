@@ -28,7 +28,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Generator, Literal, Sequence, TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -2290,7 +2290,7 @@ def enqueue_roster_refresh_job_in_tx(
         )
     if not isinstance(requested_at, datetime) or requested_at.tzinfo is None:
         raise MatchResultsValidationError("requested_at must be timezone-aware UTC datetime.")
-    iso_ts = requested_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    iso_ts = requested_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     try:
         validated = FC27RosterRefreshPayload(
             player_id=player_id,
@@ -3925,6 +3925,24 @@ def record_match_discord_message_links(
         with conn.transaction():
             with conn.cursor() as cur:
                 prev = _fetch_latest_linkage_row(cur, match_id=match_id, match_ref=clean_ref)
+                if prev is None and match_id is not None:
+                    cur.execute(
+                        """
+                        SELECT discord_guild_id, discord_channel_id, discord_message_id
+                        FROM public.fc27_manual_matches
+                        WHERE match_id = %s AND deleted_at IS NULL
+                        """,
+                        (match_id,),
+                    )
+                    mm_row = cur.fetchone()
+                    if mm_row is not None and (mm_row[1] is not None or mm_row[2] is not None):
+                        prev = (
+                            str(mm_row[0]) if mm_row[0] is not None else None,
+                            str(mm_row[1]) if mm_row[1] is not None else None,
+                            str(mm_row[2]) if mm_row[2] is not None else None,
+                            None,
+                            None,
+                        )
                 prev_guild, prev_rc, prev_rm, prev_tc_c, prev_tc_m = prev or (None, None, None, None, None)
 
                 final_guild = guild_id or prev_guild

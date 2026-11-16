@@ -30,15 +30,18 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import re
 import socket
 import uuid
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable, Final, Literal, LiteralString, Mapping, Protocol, Sequence, cast
+from typing import Any, Final, Literal, LiteralString, Protocol, cast
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -611,7 +614,6 @@ class GuardedDiscordJobQueueConnection:
                 "Continuation idempotency_key mismatch"
             )
         normalized_dict = validate_roster_refresh_payload(payload.to_payload())
-        import json as _json
 
         with self._conn.cursor() as cur:
             cur.execute(
@@ -637,7 +639,7 @@ class GuardedDiscordJobQueueConnection:
                 ON CONFLICT (idempotency_key) DO NOTHING
                 RETURNING job_id
                 """,
-                (expected_key, _json.dumps(normalized_dict)),
+                (expected_key, json.dumps(normalized_dict)),
             )
             row = cur.fetchone()
         return int(row[0]) if row is not None else None
@@ -3769,7 +3771,7 @@ def _discover_affected_matches_for_player(
             skey = f"manual:{mid:018d}"
             targets_by_key[skey] = (skey, "manual", mid)
 
-    readonly_conn._conn.commit()  # noqa: SLF001
+    readonly_conn._conn.commit()
     ordered = sorted(targets_by_key.values(), key=lambda t: t[0])
     if after_match_key is not None:
         ordered = [t for t in ordered if t[0] > after_match_key]
@@ -4142,7 +4144,7 @@ def run_discord_dispatch_cycle(
                 record_match_discord_message_links(
                     match_results_writer_db_conn_or_uri,
                     match_id=m_id,
-                    match_ref=m_ref,
+                    match_ref=None if m_id is not None else m_ref,
                     discord_guild_id=discord_guild_id,
                     results_channel_id=results_channel_id,
                     results_message_id=results_message_id,
@@ -4167,7 +4169,7 @@ def run_discord_dispatch_cycle(
             db_tc_id: str | None = None
             try:
                 links = get_match_discord_message_links(
-                    readonly_conn._conn,  # noqa: SLF001
+                    readonly_conn._conn,
                     match_id=m_id,
                     match_ref=None if m_id is not None else m_ref,
                 )
@@ -4256,9 +4258,9 @@ def run_discord_dispatch_cycle(
                                     readonly_conn,
                                     match_ref=target_m_ref,
                                 )
-                                readonly_conn._conn.commit()  # noqa: SLF001
+                                readonly_conn._conn.commit()
                             except _JobVerificationError as m_exc:
-                                readonly_conn._conn.rollback()  # noqa: SLF001
+                                readonly_conn._conn.rollback()
                                 if m_exc.category in {
                                     "MATCH_QUARANTINED",
                                     "REPLAY_CONFLICT_QUARANTINED",
@@ -4297,10 +4299,10 @@ def run_discord_dispatch_cycle(
                             manual_match_id = int(target_ident)
                             target_m_ref = f"manual:{manual_match_id}"
                             detail = fetch_manual_match(
-                                readonly_conn._conn,  # noqa: SLF001
+                                readonly_conn._conn,
                                 match_id=manual_match_id,
                             )
-                            readonly_conn._conn.commit()  # noqa: SLF001
+                            readonly_conn._conn.commit()
                             if detail is None or detail.deleted_at is not None:
                                 matches_examined += 1
                                 last_completed_key = target_key
@@ -4311,8 +4313,10 @@ def run_discord_dispatch_cycle(
                                 else render_match_result_embed(detail)
                             )
                             fc27_emb = _discord_embed_to_fc27_embed_for_refresh(manual_d_embed)
+                            manual_content = build_result_content(detail)[:MAX_DISCORD_CONTENT_LENGTH]
                             _validate_outgoing_texts(
                                 [
+                                    manual_content,
                                     fc27_emb.title,
                                     fc27_emb.description,
                                     fc27_emb.footer_text or "",
@@ -4325,7 +4329,7 @@ def run_discord_dispatch_cycle(
                                 channel_id=config.results_channel_id,
                                 idempotency_key=f"fc27:manual:{manual_match_id}",
                                 match_ref=target_m_ref,
-                                content=build_result_content(detail)[:MAX_DISCORD_CONTENT_LENGTH],
+                                content=manual_content,
                                 embed=fc27_emb,
                             )
                             if config.team_chat_channel_id is not None and detail.status != "SCHEDULED":
@@ -4376,7 +4380,6 @@ def run_discord_dispatch_cycle(
                         res_can_process = True
                         tc_can_process = True
                         formal_scanned_this_match = False
-                        formal_edited_this_match = False
                         hit_batch_cap = False
 
                         # Validate stored guild & destination channels per destination before any Discord read/edit.
@@ -4555,7 +4558,6 @@ def run_discord_dispatch_cycle(
                                         else:
                                             formal_edits_in_job += 1
                                             messages_edited += 1
-                                            formal_edited_this_match = True
                                             if (
                                                 not callable(snapshot_fn)
                                                 and db_res_id is None
@@ -4591,13 +4593,15 @@ def run_discord_dispatch_cycle(
                                     and config.refresh_max_history_scans_per_job > 0
                                 ):
                                     if scans_in_job >= config.refresh_max_history_scans_per_job:
-                                        if (
+                                        can_continue_from_prior = (
                                             last_completed_key is not None
-                                            and not formal_edited_this_match
                                             and not (
-                                                formal_scanned_this_match and res_msg_id is None
+                                                config.refresh_max_history_scans_per_job <= 1
+                                                and formal_scanned_this_match
+                                                and db_res_id is None
                                             )
-                                        ):
+                                        )
+                                        if can_continue_from_prior:
                                             needs_continuation = True
                                             break
                                         LOGGER.debug(
@@ -4772,7 +4776,7 @@ def run_discord_dispatch_cycle(
                             player_id=validated_rr.player_id,
                             roster_revision=validated_rr.roster_revision,
                             reason_code="CONTINUATION",
-                            requested_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                            requested_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                             after_match_key=last_completed_key,
                             continuation_index=next_cont_idx,
                         )
@@ -5106,7 +5110,7 @@ def run_discord_dispatch_cycle(
             except _JobVerificationError as exc:
                 try:
                     if readonly_conn is not None:
-                        readonly_conn._conn.rollback()  # noqa: SLF001
+                        readonly_conn._conn.rollback()
                 except Exception:
                     pass
                 outcome = release_or_fail_discord_job(
@@ -5187,15 +5191,11 @@ def run_discord_dispatch_cycle(
                     job.job_id,
                     safe_diag,
                 )
-                try:
+                with suppress(psycopg.Error, OSError):
                     queue_conn.rollback()
-                except Exception:
-                    pass
-                try:
+                with suppress(psycopg.Error, OSError):
                     if readonly_conn is not None:
-                        readonly_conn._conn.rollback()  # noqa: SLF001
-                except Exception:
-                    pass
+                        readonly_conn._conn.rollback()
                 outcome = release_or_fail_discord_job(
                     queue_conn,
                     job_id=job.job_id,
@@ -5242,7 +5242,7 @@ def run_discord_dispatch_cycle(
                     pass
                 try:
                     if readonly_conn is not None:
-                        readonly_conn._conn.rollback()  # noqa: SLF001
+                        readonly_conn._conn.rollback()
                 except Exception:
                     pass
                 outcome = release_or_fail_discord_job(

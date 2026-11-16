@@ -43,6 +43,7 @@ from src.fc27_match_results import (
     record_match_discord_message_links,
     record_match_result,
     rename_roster_player,
+    tag_match_post_content,
     upsert_roster_player,
 )
 from src.fc27_privacy import (
@@ -1900,3 +1901,351 @@ def test_25_scan_cap_one_does_not_stall_on_first_match(pg_db_migrated) -> None:
     assert res.team_chat_messages_edited == 0
     links = get_match_discord_message_links(pg_db_migrated.discord_reader, match_ref=mref)
     assert links is not None and links.results_message_id is not None
+
+
+def test_26_default_scan_budget_continuation_refreshes_all_formal_and_team_chat(
+    pg_db_migrated,
+) -> None:
+    """Default refresh_max_history_scans_per_job=5 with 3 unlinked matches continues cleanly so all team-chat cards refresh too."""
+    for idx in range(3):
+        _seed_provider_match(
+            pg_db_migrated,
+            suffix=f"scan_cont_{idx}",
+            opponent=f"ScanClub{idx}",
+            played_at=datetime(2026, 11, 1 + idx, 1, 0, tzinfo=UTC),
+        )
+    transport = SyntheticDiscordNotificationTransport()
+    cfg = _dispatch_config()
+    assert cfg.refresh_max_history_scans_per_job == 5
+    r_init = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=None,
+    )
+    assert r_init.jobs_completed == 3
+    transport._linkages.clear()
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="DefaultBudgetStar",
+        position="ST",
+    )
+    c1 = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert c1.jobs_completed == 1
+    assert c1.continuations_enqueued == 1
+    assert c1.messages_edited == 3
+    assert c1.team_chat_messages_edited == 2
+
+    c2 = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert c2.jobs_completed == 1
+    assert c2.continuations_enqueued == 0
+    assert c2.messages_edited == 0
+    assert c2.team_chat_messages_edited == 1
+    assert len({mid for _, mid, _ in transport.edited_messages}) == 3
+    assert len({mid for _, mid, _ in transport.edited_team_chat_messages}) == 3
+
+
+def test_27_manual_match_table_linkage_preserved_when_team_chat_persisted(
+    pg_db_migrated,
+) -> None:
+    """Persisting cached team-chat linkage on a manual match must preserve formal results_message_id from fc27_manual_matches."""
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ManualPreserveInit",
+        position="ST",
+    )
+    cfg = _dispatch_config()
+    transport = SyntheticDiscordNotificationTransport()
+    run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+
+    formal_msg_id = "870000000000000911"
+    tc_msg_id = "890000000000000912"
+    manual = record_match_result(
+        pg_db_migrated.match_results_writer,
+        opponent="Manual Table Link FC",
+        home_score=3,
+        away_score=1,
+        actor_discord_user_id=ADMIN_USER_ID,
+        scorers="ManualPreserveInit x1",
+        player_stats="ManualPreserveInit: 1 goal",
+        discord_guild_id=APPROVED_GUILD_ID,
+        discord_channel_id=RESULTS_CHANNEL_ID,
+        discord_message_id=formal_msg_id,
+    )
+    m_ref = f"manual:{manual.match_id}"
+    transport.record_match_linkage(
+        match_ref=m_ref,
+        team_chat_channel_id=TEAM_CHAT_CHANNEL_ID,
+        team_chat_message_id=tc_msg_id,
+    )
+    transport._channel_history.setdefault(RESULTS_CHANNEL_ID, []).append(
+        (
+            formal_msg_id,
+            FC27PostNewResultsMessage(
+                channel_id=RESULTS_CHANNEL_ID,
+                idempotency_key=f"fc27:manual:{manual.match_id}",
+                match_ref=m_ref,
+                content="Manual result announcement",
+                embed=FC27DiscordEmbed(
+                    title="Old Manual Embed",
+                    description="East Coasters FC",
+                    fields={"Scorers": "ManualPreserveInit x1"},
+                    footer_text="East Coasters FC",
+                ),
+            ),
+        )
+    )
+    transport._team_chat_history.setdefault(TEAM_CHAT_CHANNEL_ID, []).append(
+        (
+            tc_msg_id,
+            FC27TeamChatMessage(
+                channel_id=TEAM_CHAT_CHANNEL_ID,
+                idempotency_key=f"fc27:manual:{manual.match_id}",
+                match_ref=m_ref,
+                discriminator=build_match_post_tag(m_ref),
+                content=f"ManualPreserveInit 1 goal [{build_match_post_tag(m_ref)}]",
+            ),
+        )
+    )
+
+    rename_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id_or_name="ManualPreserveInit",
+        new_name="ManualPreserveAfter",
+    )
+    res = run_discord_dispatch_cycle(
+        config=cfg,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert res.jobs_completed == 1
+    assert res.messages_edited == 1
+    assert res.team_chat_messages_edited == 1
+
+    links = get_match_discord_message_links(
+        pg_db_migrated.discord_reader, match_id=manual.match_id
+    )
+    assert links is not None
+    assert links.discord_guild_id == APPROVED_GUILD_ID
+    assert links.results_channel_id == RESULTS_CHANNEL_ID
+    assert links.results_message_id == formal_msg_id
+    assert links.team_chat_channel_id == TEAM_CHAT_CHANNEL_ID
+    assert links.team_chat_message_id == tc_msg_id
+
+
+def test_28_retry_exhaustion_dead_letters_and_shared_destination_gateway(
+    pg_db_migrated,
+) -> None:
+    """Exhausted transient retries dead-letter to failed; shared results/team-chat channel gateway recovery separates both message types."""
+    mref = _seed_provider_match(pg_db_migrated, suffix="exhaust_28")
+    transport = SyntheticDiscordNotificationTransport()
+    cfg_exhaust = _dispatch_config(max_attempts=2, retry_backoff_seconds=0)
+    run_discord_dispatch_cycle(
+        config=cfg_exhaust,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=PLAYER_A,
+        display_name="ExhaustStar",
+        position="ST",
+    )
+
+    def _always_503(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise FC27DiscordDispatchTransportError(
+            "upstream 503",
+            category="DISCORD_TRANSIENT_FAILURE",
+            retryable=True,
+        )
+
+    transport.on_before_edit = _always_503
+    r1 = run_discord_dispatch_cycle(
+        config=cfg_exhaust,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    assert r1.jobs_retried == 1
+    assert r1.jobs_failed == 0
+
+    with psycopg.connect(pg_db_migrated.player_dev_writer, autocommit=True) as qconn:
+        qconn.execute("UPDATE public.fc27_discord_jobs SET available_at = clock_timestamp() - interval '1 second'")
+
+    r2 = run_discord_dispatch_cycle(
+        config=cfg_exhaust,
+        transport=transport,
+        queue_db_conn_or_uri=pg_db_migrated.player_dev_writer,
+        readonly_db_conn_or_uri=pg_db_migrated.discord_reader,
+        match_results_writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+    )
+    transport.on_before_edit = None
+    assert r2.jobs_failed == 1
+    assert r2.messages_sent == 0
+    assert r2.audit_entries[0].error_category == "DISCORD_TRANSIENT_FAILURE"
+
+    refresh_jobs = [
+        j for j in _fetch_refresh_jobs(pg_db_migrated) if j["job_type"] == REFRESH_ROSTER_MESSAGES_EVENT_TYPE
+    ]
+    assert len(refresh_jobs) == 1
+    assert refresh_jobs[0]["state"] == "failed"
+    assert refresh_jobs[0]["attempt_count"] == 2
+
+    # Shared-destination gateway history candidate recovery distinguishes formal embed vs team-chat text in one channel
+    @dataclass
+    class _Author:
+        id: int
+
+    @dataclass
+    class _EmbedField:
+        name: str
+        value: str
+
+    @dataclass
+    class _EmbedFooter:
+        text: str
+
+    @dataclass
+    class _Embed:
+        title: str
+        description: str
+        fields: list[_EmbedField]
+        footer: _EmbedFooter
+
+    @dataclass
+    class _Msg:
+        id: int
+        author: _Author
+        content: str
+        embeds: list[_Embed]
+        guild: Any = None
+
+    bot_user = _Author(id=111)
+    tag = build_match_post_tag(mref)
+    shared_msgs = [
+        _Msg(
+            id=901,
+            author=bot_user,
+            content="✅ FULL TIME — East Coasters 2-1 Harbor City FC",
+            embeds=[
+                _Embed(
+                    title="⚽ FULL TIME — WIN 2-1 vs Harbor City FC",
+                    description="East Coasters",
+                    fields=[_EmbedField("📅 Played", "2026-10-23")],
+                    footer=_EmbedFooter(f"East Coasters FC • ref:{mref}"),
+                )
+            ],
+        ),
+        _Msg(
+            id=902,
+            author=bot_user,
+            content=tag_match_post_content(
+                "East Coasters FC: Win 2-1 vs Harbor City FC", seed=mref
+            ),
+            embeds=[],
+        ),
+    ]
+
+    class _SharedChan:
+        def __init__(self) -> None:
+            self.guild = types.SimpleNamespace(id=int(APPROVED_GUILD_ID))
+
+        async def send(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+        def history(self, **kwargs: Any) -> Any:
+            del kwargs
+
+            class _Iter:
+                def __init__(self) -> None:
+                    self._idx = 0
+
+                def __aiter__(self) -> Any:
+                    return self
+
+                async def __anext__(self) -> _Msg:
+                    if self._idx >= len(shared_msgs):
+                        raise StopAsyncIteration
+                    item = shared_msgs[self._idx]
+                    self._idx += 1
+                    return item
+
+            return _Iter()
+
+    shared_chan = _SharedChan()
+    fake_client = types.SimpleNamespace(
+        user=bot_user,
+        get_channel=lambda cid: shared_chan if str(cid) == RESULTS_CHANNEL_ID else None,
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        async def _check_shared() -> tuple[tuple[str, ...], tuple[str, ...]]:
+            gw = DiscordGatewayChannelTransport(fake_client, loop)
+            f_cands = await gw._async_find_existing_candidates(
+                channel_id=RESULTS_CHANNEL_ID,
+                match_ref=mref,
+                not_before=None,
+                max_candidates=2,
+            )
+            tc_cands = await gw._async_find_existing_team_chat_candidates(
+                channel_id=RESULTS_CHANNEL_ID,
+                match_ref=mref,
+                not_before=None,
+                message=FC27TeamChatMessage(
+                    channel_id=RESULTS_CHANNEL_ID,
+                    idempotency_key="k",
+                    match_ref=mref,
+                    discriminator=tag,
+                    content=tag_match_post_content("Different body", seed=mref),
+                ),
+                max_candidates=2,
+            )
+            return f_cands, tc_cands
+
+        fake_discord = types.SimpleNamespace(
+            NotFound=KeyError,
+            Forbidden=PermissionError,
+            HTTPException=RuntimeError,
+        )
+        prev = sys.modules.get("discord")
+        sys.modules["discord"] = fake_discord  # type: ignore[assignment]
+        try:
+            f_cands, tc_cands = loop.run_until_complete(_check_shared())
+        finally:
+            if prev is None:
+                sys.modules.pop("discord", None)
+            else:
+                sys.modules["discord"] = prev
+        assert f_cands == ("901",)
+        assert tc_cands == ("902",)
+    finally:
+        loop.close()
