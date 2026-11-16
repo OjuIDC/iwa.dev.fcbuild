@@ -20,24 +20,28 @@ Security & Least-Privilege Boundaries:
   role guarded by ``GuardedDiscordJobQueueConnection``, permitting only lifecycle
   updates on ``public.fc27_discord_jobs`` and session advisory locks, never
   deleting rows or mutating ``job_type``, ``payload``, or ``idempotency_key``.
-- Permitted ``job_type`` is strictly ``post_new_results``; unknown or unimplemented
-  ``job_type`` values (such as ``evaluate_suggestions``) are left untouched and
-  audited safely without failing the worker.
+- Permitted ``job_type`` values are strictly ``post_new_results`` and
+  ``refresh_roster_messages``; unimplemented ``job_type`` values (such as
+  ``evaluate_suggestions``) are left untouched and audited safely without
+  failing the worker.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import re
 import socket
 import uuid
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable, Final, Literal, Mapping, Protocol, Sequence
+from typing import Any, Final, Literal, LiteralString, Protocol, cast
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -68,12 +72,15 @@ from src.fc27_match_results import (
     build_team_chat_result_summary,
     clean_opponent,
     extract_match_post_tag,
+    fetch_manual_match,
     get_match_discord_message_links,
     get_player_name,
     normalize_competition_label,
     normalize_display_label,
     normalize_formation_label,
     record_match_discord_message_links,
+    render_match_result_embed,
+    render_matchday_embed,
     resolve_player_names,
     tag_match_post_content,
 )
@@ -84,6 +91,7 @@ from src.fc27_privacy import (
     EAST_COASTERS_PLATFORM,
     PSEUDONYM_MATCH_REF_RE,
     PSEUDONYM_PLAYER_REF_RE,
+    contains_discord_mention,
     contains_prohibited_url,
     pseudonymize_match_ref,
     redact_sensitive_text,
@@ -93,14 +101,18 @@ from src.fc27_privacy import (
 )
 from src.fc27_repository import (
     FC27PostNewResultsPayload,
+    FC27RosterRefreshPayload,
     POST_NEW_RESULTS_EVENT_TYPE,
+    REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
+    build_roster_refresh_idempotency_key,
+    validate_roster_refresh_payload,
 )
 
 LOGGER = logging.getLogger(__name__)
 
 DISPATCH_PROVIDER_REQUESTS: Final[int] = 0
 PERMITTED_DISPATCH_JOB_TYPES: Final[frozenset[str]] = frozenset(
-    {POST_NEW_RESULTS_EVENT_TYPE}
+    {POST_NEW_RESULTS_EVENT_TYPE, REFRESH_ROSTER_MESSAGES_EVENT_TYPE}
 )
 PERMITTED_DISCORD_JOBS_UPDATE_COLUMNS: Final[frozenset[str]] = frozenset(
     {
@@ -127,6 +139,11 @@ MAX_DISCORD_PLAYER_SUMMARY_LINES: Final[int] = 8
 CHANNEL_HISTORY_DEDUP_LIMIT: Final[int] = 50
 CHANNEL_HISTORY_MAX_SCAN: Final[int] = 1000
 CHANNEL_HISTORY_LOOKBEHIND_SECONDS: Final[int] = 5
+DEFAULT_REFRESH_MAX_MATCHES_PER_JOB: Final[int] = 10
+DEFAULT_REFRESH_MAX_FORMAL_EDITS_PER_JOB: Final[int] = 10
+DEFAULT_REFRESH_MAX_TEAM_CHAT_EDITS_PER_JOB: Final[int] = 10
+DEFAULT_REFRESH_MAX_HISTORY_SCANS_PER_JOB: Final[int] = 5
+DEFAULT_REFRESH_MAX_CONTINUATION_DEPTH: Final[int] = 20
 
 _SAFE_ERROR_CATEGORY_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z0-9_]{1,64}$")
 _SAFE_CLAIM_OWNER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -567,6 +584,66 @@ class GuardedDiscordJobQueueConnection:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         return self._conn.__exit__(exc_type, exc, tb)
 
+    def enqueue_roster_refresh_continuation(
+        self,
+        *,
+        payload: FC27RosterRefreshPayload,
+        idempotency_key: str,
+    ) -> int | None:
+        """Atomically enqueue a deterministic bounded ``refresh_roster_messages`` continuation job.
+
+        Restricts insertion strictly to validated ``CONTINUATION`` payloads with an
+        internally verified deterministic idempotency key; callers cannot pass arbitrary
+        SQL, job types, channels, or message IDs.
+        """
+        if not isinstance(payload, FC27RosterRefreshPayload):
+            raise FC27DiscordDispatchValidationError(
+                "Continuation payload must be an FC27RosterRefreshPayload"
+            )
+        if payload.reason_code != "CONTINUATION" or payload.continuation_index is None:
+            raise FC27DiscordDispatchValidationError(
+                "Continuation enqueue requires reason_code=CONTINUATION and continuation_index"
+            )
+        expected_key = build_roster_refresh_idempotency_key(
+            player_id=payload.player_id,
+            roster_revision=payload.roster_revision,
+            continuation_index=payload.continuation_index,
+        )
+        if idempotency_key != expected_key:
+            raise FC27DiscordDispatchValidationError(
+                "Continuation idempotency_key mismatch"
+            )
+        normalized_dict = validate_roster_refresh_payload(payload.to_payload())
+
+        with self._conn.cursor() as cur:
+            cur.execute(
+                cast(LiteralString, f"SET LOCAL statement_timeout = {int(self._query_timeout_ms)}")
+            )
+            cur.execute(
+                """
+                INSERT INTO public.fc27_discord_jobs (
+                    job_type,
+                    idempotency_key,
+                    payload,
+                    state,
+                    attempt_count,
+                    available_at
+                ) VALUES (
+                    'refresh_roster_messages',
+                    %s,
+                    %s::jsonb,
+                    'pending',
+                    0,
+                    pg_catalog.clock_timestamp()
+                )
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING job_id
+                """,
+                (expected_key, json.dumps(normalized_dict)),
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
 
 def resolve_discord_job_writer_uri(*, required: bool = False) -> str | None:
     """Resolve dedicated least-privilege ``fc27_player_dev_writer`` URI for ``fc27_discord_jobs``."""
@@ -600,6 +677,7 @@ class FC27DiscordDispatchConfig:
     results_channel_id: str | None = None
     team_chat_channel_id: str | None = None
     allowed_channel_ids: frozenset[str] = frozenset()
+    allowed_guild_ids: frozenset[str] = frozenset()
     max_jobs_per_cycle: int = DEFAULT_MAX_JOBS_PER_CYCLE
     lease_minutes: int = DEFAULT_LEASE_MINUTES
     single_flight: bool = True
@@ -608,6 +686,11 @@ class FC27DiscordDispatchConfig:
     retry_backoff_seconds: int = DEFAULT_RETRY_BACKOFF_SECONDS
     query_timeout_ms: int = DEFAULT_QUERY_TIMEOUT_MS
     claim_owner_prefix: str = "fc27-discord-dispatcher"
+    refresh_max_matches_per_job: int = DEFAULT_REFRESH_MAX_MATCHES_PER_JOB
+    refresh_max_formal_edits_per_job: int = DEFAULT_REFRESH_MAX_FORMAL_EDITS_PER_JOB
+    refresh_max_team_chat_edits_per_job: int = DEFAULT_REFRESH_MAX_TEAM_CHAT_EDITS_PER_JOB
+    refresh_max_history_scans_per_job: int = DEFAULT_REFRESH_MAX_HISTORY_SCANS_PER_JOB
+    refresh_max_continuation_depth: int = DEFAULT_REFRESH_MAX_CONTINUATION_DEPTH
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_jobs_per_cycle <= 25:
@@ -633,6 +716,26 @@ class FC27DiscordDispatchConfig:
         if self.query_timeout_ms < 250 or self.query_timeout_ms > 30000:
             raise FC27DiscordDispatchValidationError(
                 f"query_timeout_ms must be between 250 and 30000, got {self.query_timeout_ms}"
+            )
+        if not 1 <= self.refresh_max_matches_per_job <= 50:
+            raise FC27DiscordDispatchValidationError(
+                "refresh_max_matches_per_job must be between 1 and 50"
+            )
+        if not 1 <= self.refresh_max_formal_edits_per_job <= 50:
+            raise FC27DiscordDispatchValidationError(
+                "refresh_max_formal_edits_per_job must be between 1 and 50"
+            )
+        if not 1 <= self.refresh_max_team_chat_edits_per_job <= 50:
+            raise FC27DiscordDispatchValidationError(
+                "refresh_max_team_chat_edits_per_job must be between 1 and 50"
+            )
+        if not 0 <= self.refresh_max_history_scans_per_job <= 25:
+            raise FC27DiscordDispatchValidationError(
+                "refresh_max_history_scans_per_job must be between 0 and 25"
+            )
+        if not 1 <= self.refresh_max_continuation_depth <= 100:
+            raise FC27DiscordDispatchValidationError(
+                "refresh_max_continuation_depth must be between 1 and 100"
             )
         if self.results_channel_id is not None:
             clean_chan = self.results_channel_id.strip()
@@ -671,6 +774,7 @@ class FC27DiscordDispatchConfig:
             enabled = settings.is_fc27_discord_dispatch_enabled(strict=strict)
             results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
             allowed_chans = settings.get_fc27_discord_allowed_channel_ids(strict=strict)
+            allowed_guilds = settings.get_fc27_discord_allowed_guild_ids(strict=False)
             team_chat_chan = settings.get_fc27_discord_team_chat_channel_id(strict=strict)
             max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
             lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
@@ -688,6 +792,7 @@ class FC27DiscordDispatchConfig:
             results_channel_id=results_chan,
             team_chat_channel_id=team_chat_chan,
             allowed_channel_ids=allowed_chans,
+            allowed_guild_ids=allowed_guilds,
             max_jobs_per_cycle=max_jobs,
             lease_minutes=lease_mins,
             single_flight=single_flight,
@@ -787,6 +892,18 @@ class FC27MatchMessageLinkage(BaseModel):
 
 
 @dataclass(frozen=True)
+class FC27DiscordMessageSnapshot:
+    """Normalized read-back snapshot of an existing Discord message for safe idempotent diffing."""
+
+    channel_id: str
+    message_id: str
+    guild_id: str | None = None
+    is_bot_authored: bool = True
+    content: str = ""
+    embed: FC27DiscordEmbed | None = None
+
+
+@dataclass(frozen=True)
 class FC27DiscordDispatchAuditEntry:
     """Privacy-safe structured outcome record for a processed or skipped job."""
 
@@ -806,6 +923,7 @@ class FC27DiscordDispatchAuditEntry:
     discord_message_id: str | None = None
     team_chat_message_id: str | None = None
     attempt_count: int = 0
+    player_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -824,6 +942,11 @@ class FC27DiscordDispatchCycleResult:
     jobs_deduplicated: int = 0
     messages_sent: int = 0
     team_chat_messages_sent: int = 0
+    messages_edited: int = 0
+    team_chat_messages_edited: int = 0
+    messages_unchanged: int = 0
+    continuations_enqueued: int = 0
+    ambiguous_recoveries_skipped: int = 0
     provider_requests_executed: int = DISPATCH_PROVIDER_REQUESTS
     audit_entries: tuple[FC27DiscordDispatchAuditEntry, ...] = ()
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -874,23 +997,20 @@ def _team_chat_history_matches(
     return bool(expected_content) and candidate == expected_content
 
 
-async def _scan_team_chat_history(
+async def _scan_team_chat_history_candidates(
     history_lookup: Any,
     *,
     bot_id: int | None,
     expected_discriminator: str,
     expected_content: str,
     history_kwargs: dict[str, Any],
-) -> str | None:
-    """Scan Discord channel history for the expected team-chat message.
-
-    Both gateway history-recovery entry points delegate here so the scan bounds, the
-    author filter and the Discord error mapping (including 429 retryability) stay
-    identical.
-    """
+    max_candidates: int = 1,
+) -> tuple[str, ...]:
+    """Scan Discord channel history for up to ``max_candidates`` matching team-chat messages."""
     import discord
 
     scanned = 0
+    matched: list[str] = []
     try:
         async for msg in history_lookup(**history_kwargs):
             scanned += 1
@@ -909,7 +1029,11 @@ async def _scan_team_chat_history(
                 expected_discriminator=expected_discriminator,
                 expected_content=expected_content,
             ):
-                return str(msg.id)
+                mid = str(msg.id)
+                if mid not in matched:
+                    matched.append(mid)
+                    if len(matched) >= max_candidates:
+                        return tuple(matched)
     except FC27DiscordDispatchTransportError:
         raise
     except discord.Forbidden as exc:
@@ -945,7 +1069,27 @@ async def _scan_team_chat_history(
             category="DISCORD_HISTORY_LOOKUP_FAILED",
             retryable=True,
         ) from exc
-    return None
+    return tuple(matched)
+
+
+async def _scan_team_chat_history(
+    history_lookup: Any,
+    *,
+    bot_id: int | None,
+    expected_discriminator: str,
+    expected_content: str,
+    history_kwargs: dict[str, Any],
+) -> str | None:
+    """Scan Discord channel history for the expected team-chat message."""
+    found = await _scan_team_chat_history_candidates(
+        history_lookup,
+        bot_id=bot_id,
+        expected_discriminator=expected_discriminator,
+        expected_content=expected_content,
+        history_kwargs=history_kwargs,
+        max_candidates=1,
+    )
+    return found[0] if found else None
 
 
 class SyntheticDiscordNotificationTransport:
@@ -960,11 +1104,16 @@ class SyntheticDiscordNotificationTransport:
         self._team_chat_history: dict[str, list[tuple[str, FC27TeamChatMessage]]] = {}
         self._linkages: dict[str, FC27MatchMessageLinkage] = {}
         self.deleted_message_ids: set[str] = set()
+        self.non_bot_message_ids: set[str] = set()
+        self.message_guilds: dict[str, str] = {}
         self._seq: int = 0
         self.on_before_send: Callable[[FC27PostNewResultsMessage], None] | None = None
         self.on_after_send: Callable[[FC27PostNewResultsMessage, str], None] | None = None
         self.on_before_team_chat_send: Callable[[FC27TeamChatMessage], None] | None = None
         self.on_after_team_chat_send: Callable[[FC27TeamChatMessage, str], None] | None = None
+        self.on_before_fetch: Callable[[str, str], None] | None = None
+        self.on_before_edit: Callable[[str, str, FC27PostNewResultsMessage], None] | None = None
+        self.on_before_team_chat_edit: Callable[[str, str, FC27TeamChatMessage], None] | None = None
 
     def get_match_linkage(self, match_ref: str) -> FC27MatchMessageLinkage | None:
         return self._linkages.get(match_ref)
@@ -1004,6 +1153,40 @@ class SyntheticDiscordNotificationTransport:
             if msg.idempotency_key == idempotency_key or msg.match_ref == match_ref:
                 return msg_id
         return None
+
+    def find_existing_notification_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: FC27PostNewResultsMessage | None = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        del not_before
+        expected_title = message.embed.title if message is not None else None
+        expected_played = (
+            message.embed.fields.get("📅 Played") if message is not None else None
+        )
+        matched: list[str] = []
+        for msg_id, msg in reversed(self._channel_history.get(channel_id, [])):
+            if msg_id in self.deleted_message_ids or msg_id in self.non_bot_message_ids:
+                continue
+            by_ref = msg.idempotency_key == idempotency_key or msg.match_ref == match_ref
+            by_sig = (
+                expected_title is not None
+                and msg.embed.title == expected_title
+                and (
+                    expected_played is None
+                    or msg.embed.fields.get("📅 Played") == expected_played
+                )
+            )
+            if (by_ref or by_sig) and msg_id not in matched:
+                matched.append(msg_id)
+                if len(matched) >= max_candidates:
+                    return tuple(matched)
+        return tuple(matched)
 
     def send_notification(
         self,
@@ -1055,6 +1238,74 @@ class SyntheticDiscordNotificationTransport:
                 return msg_id
         return None
 
+    def find_existing_team_chat_notification_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: FC27TeamChatMessage | None = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        del not_before
+        expected_discriminator = (
+            str(getattr(message, "discriminator", "") or "").strip()
+            if message is not None
+            else ""
+        )
+        expected_content = message.content.strip() if message is not None else ""
+        matched: list[str] = []
+        for msg_id, msg in reversed(self._team_chat_history.get(channel_id, [])):
+            if msg_id in self.deleted_message_ids or msg_id in self.non_bot_message_ids:
+                continue
+            is_match = (
+                _team_chat_history_matches(
+                    msg.content,
+                    expected_discriminator=expected_discriminator,
+                    expected_content=expected_content,
+                )
+                or msg.idempotency_key == idempotency_key
+                or msg.match_ref == match_ref
+            )
+            if is_match and msg_id not in matched:
+                matched.append(msg_id)
+                if len(matched) >= max_candidates:
+                    return tuple(matched)
+        return tuple(matched)
+
+    def fetch_notification_snapshot(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+    ) -> FC27DiscordMessageSnapshot | None:
+        if self.on_before_fetch is not None:
+            self.on_before_fetch(channel_id, message_id)
+        if message_id in self.deleted_message_ids:
+            return None
+        for mid, msg in self._channel_history.get(channel_id, []):
+            if mid == message_id:
+                return FC27DiscordMessageSnapshot(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    guild_id=self.message_guilds.get(message_id),
+                    is_bot_authored=(message_id not in self.non_bot_message_ids),
+                    content=msg.content,
+                    embed=msg.embed,
+                )
+        for mid, msg in self._team_chat_history.get(channel_id, []):
+            if mid == message_id:
+                return FC27DiscordMessageSnapshot(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    guild_id=self.message_guilds.get(message_id),
+                    is_bot_authored=(message_id not in self.non_bot_message_ids),
+                    content=msg.content,
+                    embed=None,
+                )
+        return None
+
     def find_existing_text(
         self,
         *,
@@ -1104,6 +1355,8 @@ class SyntheticDiscordNotificationTransport:
         message_id: str,
         message: FC27PostNewResultsMessage,
     ) -> bool:
+        if self.on_before_edit is not None:
+            self.on_before_edit(channel_id, message_id, message)
         if message_id in self.deleted_message_ids:
             return False
         hist = self._channel_history.get(channel_id, [])
@@ -1121,6 +1374,8 @@ class SyntheticDiscordNotificationTransport:
         message_id: str,
         message: FC27TeamChatMessage,
     ) -> bool:
+        if self.on_before_team_chat_edit is not None:
+            self.on_before_team_chat_edit(channel_id, message_id, message)
         if message_id in self.deleted_message_ids:
             return False
         hist = self._team_chat_history.get(channel_id, [])
@@ -1211,14 +1466,15 @@ class DiscordGatewayChannelTransport:
             )
         return channel
 
-    async def _async_find_existing(
+    async def _async_find_existing_candidates(
         self,
         *,
         channel_id: str,
         match_ref: str,
         not_before: datetime | None,
         message: FC27PostNewResultsMessage | None = None,
-    ) -> str | None:
+        max_candidates: int = 1,
+    ) -> tuple[str, ...]:
         import discord
 
         channel = await self._resolve_channel(channel_id)
@@ -1247,6 +1503,7 @@ class DiscordGatewayChannelTransport:
         else:
             history_kwargs["limit"] = CHANNEL_HISTORY_DEDUP_LIMIT
         scanned = 0
+        matched: list[str] = []
         try:
             async for msg in history_lookup(**history_kwargs):
                 scanned += 1
@@ -1259,38 +1516,49 @@ class DiscordGatewayChannelTransport:
                 if bot_id is not None and getattr(getattr(msg, "author", None), "id", None) != bot_id:
                     continue
                 content = str(getattr(msg, "content", "") or "")
+                msg_matched = False
                 if match_ref in content or marker in content:
-                    return str(msg.id)
-                for emb in getattr(msg, "embeds", ()) or ():
-                    footer_txt = str(getattr(getattr(emb, "footer", None), "text", "") or "")
-                    desc_txt = str(getattr(emb, "description", "") or "")
-                    title_txt = str(getattr(emb, "title", "") or "")
-                    if match_ref in footer_txt or marker in footer_txt or match_ref in desc_txt:
-                        return str(msg.id)
-                    played_match = False
-                    for fld in getattr(emb, "fields", ()) or ():
-                        fld_name = str(getattr(fld, "name", "") or "")
-                        fld_val = str(getattr(fld, "value", "") or "")
-                        if match_ref in fld_val:
-                            return str(msg.id)
-                        if (
-                            expected_played is not None
-                            and fld_name == "📅 Played"
-                            and fld_val == expected_played
-                        ):
-                            played_match = True
-                    if expected_title is not None and title_txt == expected_title:
-                        content_matches = (
-                            expected_content is None or content == expected_content
-                        )
-                        if expected_played is not None:
-                            # Require BOTH title AND Played field to match for identity.
-                            # Do not accept headline equality alone, as two matches against
-                            # the same opponent with the same score would be treated as one.
-                            if played_match and content_matches:
-                                return str(msg.id)
-                        elif expected_content is not None and content == expected_content:
-                            return str(msg.id)
+                    msg_matched = True
+                if not msg_matched:
+                    for emb in getattr(msg, "embeds", ()) or ():
+                        footer_txt = str(getattr(getattr(emb, "footer", None), "text", "") or "")
+                        desc_txt = str(getattr(emb, "description", "") or "")
+                        title_txt = str(getattr(emb, "title", "") or "")
+                        if match_ref in footer_txt or marker in footer_txt or match_ref in desc_txt:
+                            msg_matched = True
+                            break
+                        played_match = False
+                        for fld in getattr(emb, "fields", ()) or ():
+                            fld_name = str(getattr(fld, "name", "") or "")
+                            fld_val = str(getattr(fld, "value", "") or "")
+                            if match_ref in fld_val:
+                                msg_matched = True
+                                break
+                            if (
+                                expected_played is not None
+                                and fld_name == "📅 Played"
+                                and fld_val == expected_played
+                            ):
+                                played_match = True
+                        if msg_matched:
+                            break
+                        if expected_title is not None and title_txt == expected_title:
+                            content_matches = (
+                                expected_content is None or content == expected_content
+                            )
+                            if expected_played is not None:
+                                if played_match and content_matches:
+                                    msg_matched = True
+                                    break
+                            elif expected_content is not None and content == expected_content:
+                                msg_matched = True
+                                break
+                if msg_matched:
+                    mid = str(msg.id)
+                    if mid not in matched:
+                        matched.append(mid)
+                        if len(matched) >= max_candidates:
+                            return tuple(matched)
         except FC27DiscordDispatchTransportError:
             raise
         except discord.Forbidden as exc:
@@ -1327,7 +1595,24 @@ class DiscordGatewayChannelTransport:
                 category="DISCORD_HISTORY_LOOKUP_FAILED",
                 retryable=True,
             ) from exc
-        return None
+        return tuple(matched)
+
+    async def _async_find_existing(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        not_before: datetime | None,
+        message: FC27PostNewResultsMessage | None = None,
+    ) -> str | None:
+        found = await self._async_find_existing_candidates(
+            channel_id=channel_id,
+            match_ref=match_ref,
+            not_before=not_before,
+            message=message,
+            max_candidates=1,
+        )
+        return found[0] if found else None
 
     async def _async_find_existing_bounded(
         self,
@@ -1468,6 +1753,156 @@ class DiscordGatewayChannelTransport:
                 message=message,
             ),
             operation="history lookup",
+        )
+
+    def find_existing_notification_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: FC27PostNewResultsMessage | None = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        del idempotency_key
+        return tuple(
+            self._run_loop_coroutine(
+                asyncio.wait_for(
+                    self._async_find_existing_candidates(
+                        channel_id=channel_id,
+                        match_ref=match_ref,
+                        not_before=not_before,
+                        message=message,
+                        max_candidates=max_candidates,
+                    ),
+                    timeout=self._timeout_seconds,
+                ),
+                operation="history candidate lookup",
+            )
+        )
+
+    async def _async_fetch_notification_snapshot(
+        self, *, channel_id: str, message_id: str
+    ) -> FC27DiscordMessageSnapshot | None:
+        import discord
+
+        try:
+            msg_int = int(str(message_id).strip())
+        except (TypeError, ValueError):
+            return None
+        try:
+            channel = await self._resolve_channel(channel_id)
+        except FC27DiscordDispatchTransportError as exc:
+            if exc.category == "DISCORD_CHANNEL_NOT_FOUND":
+                return None
+            raise
+        fetch_message = getattr(channel, "fetch_message", None)
+        if fetch_message is None:
+            return None
+        try:
+            msg = await fetch_message(msg_int)
+        except discord.NotFound:
+            return None
+        except discord.Forbidden as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Discord bot lacks permission to fetch linked message in channel",
+                category="DISCORD_CHANNEL_FORBIDDEN",
+                retryable=False,
+            ) from exc
+        except discord.HTTPException as exc:
+            status = getattr(exc, "status", 0) or 0
+            retry_after = getattr(exc, "retry_after", None)
+            if status == 429:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord API rate limited message fetch",
+                    category="DISCORD_RATE_LIMITED",
+                    retryable=True,
+                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+                ) from exc
+            if status >= 500 or status == 0:
+                raise FC27DiscordDispatchTransportError(
+                    f"Discord API transient error status {status} while fetching message",
+                    category="DISCORD_TRANSIENT_FAILURE",
+                    retryable=True,
+                ) from exc
+            raise FC27DiscordDispatchTransportError(
+                f"Discord API failed fetching message with HTTP status {status}",
+                category="DISCORD_PAYLOAD_REJECTED",
+                retryable=False,
+            ) from exc
+        except (TimeoutError, OSError) as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Network or timeout failure while fetching Discord message",
+                category="DISCORD_TRANSIENT_FAILURE",
+                retryable=True,
+            ) from exc
+
+        bot_user = getattr(self._client, "user", None)
+        bot_id = getattr(bot_user, "id", None)
+        author = getattr(msg, "author", None)
+        author_id = getattr(author, "id", None)
+        is_bot_authored = (
+            bot_id is not None
+            and author_id is not None
+            and str(author_id) == str(bot_id)
+        )
+        msg_guild = getattr(msg, "guild", None) or getattr(channel, "guild", None)
+        guild_id_raw = getattr(msg_guild, "id", None)
+        guild_id = str(guild_id_raw) if guild_id_raw is not None else None
+        fc27_embed: FC27DiscordEmbed | None = None
+        embeds = getattr(msg, "embeds", ()) or ()
+        if embeds:
+            emb = embeds[0]
+            field_map: dict[str, str] = {}
+            for fld in getattr(emb, "fields", ()) or ():
+                fname = str(getattr(fld, "name", "") or "").strip()
+                fval = str(getattr(fld, "value", "") or "").strip()
+                if fname:
+                    field_map[fname] = fval
+            footer_obj = getattr(emb, "footer", None)
+            footer_txt = (
+                str(getattr(footer_obj, "text", "") or "").strip()
+                if footer_obj is not None
+                else ""
+            )
+            raw_color = getattr(emb, "color", None)
+            color_val: int | None = None
+            if raw_color is not None:
+                c_int = getattr(raw_color, "value", raw_color)
+                if isinstance(c_int, int) and not isinstance(c_int, bool):
+                    color_val = c_int
+            fc27_embed = FC27DiscordEmbed(
+                title=str(getattr(emb, "title", "") or ""),
+                description=str(getattr(emb, "description", "") or ""),
+                fields=field_map,
+                color=color_val,
+                footer_text=footer_txt or None,
+            )
+        return FC27DiscordMessageSnapshot(
+            channel_id=str(channel_id),
+            message_id=str(message_id),
+            guild_id=guild_id,
+            is_bot_authored=is_bot_authored,
+            content=str(getattr(msg, "content", "") or ""),
+            embed=fc27_embed,
+        )
+
+    def fetch_notification_snapshot(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+    ) -> FC27DiscordMessageSnapshot | None:
+        return self._run_loop_coroutine(
+            asyncio.wait_for(
+                self._async_fetch_notification_snapshot(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                ),
+                timeout=self._timeout_seconds,
+            ),
+            operation="fetch notification snapshot",
         )
 
     def send_notification(
@@ -1679,8 +2114,6 @@ class DiscordGatewayChannelTransport:
         not_before: datetime | None,
         message: FC27TeamChatMessage | None = None,
     ) -> str | None:
-        import discord
-
         del match_ref
         channel = await self._resolve_channel(channel_id)
         history_lookup = getattr(channel, "history", None)
@@ -1867,6 +2300,33 @@ class DiscordGatewayChannelTransport:
                 category="DISCORD_CHANNEL_FORBIDDEN",
                 retryable=False,
             ) from exc
+        except discord.HTTPException as exc:
+            status = getattr(exc, "status", 0) or 0
+            retry_after = getattr(exc, "retry_after", None)
+            if status == 429:
+                raise FC27DiscordDispatchTransportError(
+                    "Discord API rate limited notification edit",
+                    category="DISCORD_RATE_LIMITED",
+                    retryable=True,
+                    retry_after_seconds=float(retry_after) if retry_after is not None else 60.0,
+                ) from exc
+            if status >= 500 or status == 0:
+                raise FC27DiscordDispatchTransportError(
+                    f"Discord API transient error status {status} while editing notification",
+                    category="DISCORD_TRANSIENT_FAILURE",
+                    retryable=True,
+                ) from exc
+            raise FC27DiscordDispatchTransportError(
+                f"Discord API rejected notification edit with HTTP status {status}",
+                category="DISCORD_PAYLOAD_REJECTED",
+                retryable=False,
+            ) from exc
+        except (TimeoutError, OSError) as exc:
+            raise FC27DiscordDispatchTransportError(
+                "Network or timeout failure while editing Discord notification",
+                category="DISCORD_TRANSIENT_FAILURE",
+                retryable=True,
+            ) from exc
 
     def find_existing_team_chat_notification(
         self,
@@ -1889,6 +2349,79 @@ class DiscordGatewayChannelTransport:
                 timeout=self._timeout_seconds,
             ),
             operation="team-chat history lookup",
+        )
+
+    async def _async_find_existing_team_chat_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        not_before: datetime | None,
+        message: FC27TeamChatMessage | None = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        del match_ref
+        channel = await self._resolve_channel(channel_id)
+        history_lookup = getattr(channel, "history", None)
+        if history_lookup is None:
+            raise FC27DiscordDispatchTransportError(
+                "Configured Discord team-chat channel does not support history lookup; "
+                "absence of a prior notification cannot be proven",
+                category="DISCORD_HISTORY_UNAVAILABLE",
+                retryable=False,
+            )
+        bot_user = getattr(self._client, "user", None)
+        bot_id = getattr(bot_user, "id", None)
+        expected_content = message.content.strip() if message is not None else None
+        expected_discriminator = (
+            str(getattr(message, "discriminator", "") or "").strip()
+            if message is not None
+            else ""
+        )
+        if not expected_content and not expected_discriminator:
+            return ()
+        history_kwargs: dict[str, Any] = {}
+        if not_before is not None:
+            history_kwargs["after"] = not_before - timedelta(
+                seconds=CHANNEL_HISTORY_LOOKBEHIND_SECONDS
+            )
+            history_kwargs["limit"] = None
+        else:
+            history_kwargs["limit"] = CHANNEL_HISTORY_DEDUP_LIMIT
+        return await _scan_team_chat_history_candidates(
+            history_lookup,
+            bot_id=bot_id,
+            expected_discriminator=expected_discriminator,
+            expected_content=expected_content or "",
+            history_kwargs=history_kwargs,
+            max_candidates=max_candidates,
+        )
+
+    def find_existing_team_chat_notification_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: FC27TeamChatMessage | None = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        del idempotency_key
+        return tuple(
+            self._run_loop_coroutine(
+                asyncio.wait_for(
+                    self._async_find_existing_team_chat_candidates(
+                        channel_id=channel_id,
+                        match_ref=match_ref,
+                        not_before=not_before,
+                        message=message,
+                        max_candidates=max_candidates,
+                    ),
+                    timeout=self._timeout_seconds,
+                ),
+                operation="team-chat candidate history lookup",
+            )
         )
 
     def send_team_chat_notification(
@@ -1940,8 +2473,6 @@ class DiscordGatewayChannelTransport:
         content: str,
         discriminator: str | None = None,
     ) -> str | None:
-        import discord
-
         channel = await self._resolve_channel(channel_id)
         history_lookup = getattr(channel, "history", None)
         if history_lookup is None:
@@ -3091,6 +3622,248 @@ def load_authoritative_match_by_ref(
     )
 
 
+def _validate_roster_refresh_job_payload(
+    raw_payload: Any,
+    *,
+    idempotency_key: str,
+) -> FC27RosterRefreshPayload:
+    """Strictly validate a claimed ``refresh_roster_messages`` payload and its idempotency key."""
+    if not isinstance(raw_payload, Mapping):
+        raise _JobVerificationError(
+            "INVALID_JOB_PAYLOAD", "Roster-refresh payload must be a JSON object"
+        )
+    sensitive = scan_for_sensitive_fields(raw_payload, allow_local_player_reference=False)
+    if sensitive:
+        raise _JobVerificationError(
+            "SENSITIVE_FIELD_IN_PAYLOAD",
+            f"Roster-refresh payload contains prohibited sensitive fields: {','.join(sensitive)}",
+        )
+    for raw_v in raw_payload.values():
+        if isinstance(raw_v, str) and (
+            contains_discord_mention(raw_v) or contains_prohibited_url(raw_v)
+        ):
+            raise _JobVerificationError(
+                "INTERNAL_POLICY_VIOLATION",
+                "Roster-refresh payload contains prohibited mention or URL",
+            )
+    raw_rev = raw_payload.get("roster_revision")
+    if not isinstance(raw_rev, str) or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$", raw_rev):
+        raise _JobVerificationError(
+            "INVALID_ROSTER_REVISION",
+            "Roster-refresh payload contains invalid roster_revision",
+        )
+    try:
+        validated = FC27RosterRefreshPayload.model_validate(dict(raw_payload))
+    except Exception as exc:
+        raise _JobVerificationError(
+            "INVALID_JOB_PAYLOAD",
+            "Job payload failed refresh_roster_messages schema validation",
+        ) from exc
+
+    try:
+        expected_key = build_roster_refresh_idempotency_key(
+            player_id=validated.player_id,
+            roster_revision=validated.roster_revision,
+            continuation_index=validated.continuation_index,
+        )
+    except Exception as exc:
+        raise _JobVerificationError(
+            "INVALID_ROSTER_REVISION",
+            "Roster-refresh payload failed idempotency key construction",
+        ) from exc
+
+    if idempotency_key != expected_key:
+        raise _JobVerificationError(
+            "IDEMPOTENCY_KEY_MISMATCH",
+            "Job idempotency_key does not match canonical refresh_roster_messages key",
+        )
+    return validated
+
+
+def _discover_affected_matches_for_player(
+    readonly_conn: GuardedDiscordReadOnlyConnection,
+    *,
+    player_id: str,
+    after_match_key: str | None = None,
+) -> tuple[list[tuple[str, str, str | int]], tuple[str, ...]]:
+    """Verify canonical roster player existence and load sorted deterministic match targets.
+
+    Returns ``(ordered_targets, extra_forbidden_tokens)`` where each target is
+    ``(sort_key, kind, identifier)``:
+    - ``("manual:<18-digit>", "manual", <int match_id>)``
+    - ``("provider:<match_ref>", "provider", <str match_ref>)``
+    """
+    clean_pid = player_id.strip()
+    targets_by_key: dict[str, tuple[str, str, str | int]] = {}
+    extra_forbidden: list[str] = [clean_pid]
+
+    with readonly_conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(f"SET LOCAL statement_timeout = {DEFAULT_QUERY_TIMEOUT_MS}")
+        cur.execute(
+            """
+            SELECT player_id, active
+            FROM public.fc27_roster
+            WHERE player_id = %s
+            """,
+            (clean_pid,),
+        )
+        roster_row = cur.fetchone()
+        if roster_row is None:
+            raise _JobVerificationError(
+                "UNKNOWN_ROSTER_PLAYER",
+                "Canonical roster player referenced by refresh job does not exist",
+            )
+
+        cur.execute(
+            """
+            SELECT DISTINCT m.external_match_id, m.club_id
+            FROM public.fc27_player_match_stats AS pms
+            INNER JOIN public.fc27_matches AS m
+                ON m.match_id = pms.match_id
+            WHERE pms.club_id = %s
+              AND pms.local_player_reference = %s
+              AND m.club_id = %s
+              AND m.platform = %s
+              AND m.game_version = %s
+              AND COALESCE(m.data_quality_status, 'VERIFIED') <> 'REJECTED'
+            """,
+            (
+                EAST_COASTERS_CLUB_ID,
+                clean_pid,
+                EAST_COASTERS_CLUB_ID,
+                EAST_COASTERS_PLATFORM,
+                EAST_COASTERS_GAME_VERSION,
+            ),
+        )
+        for prow in cur.fetchall():
+            ext_id = str(prow["external_match_id"]).strip()
+            c_id = str(prow["club_id"]).strip()
+            m_ref = (
+                ext_id
+                if PSEUDONYM_MATCH_REF_RE.fullmatch(ext_id)
+                else pseudonymize_match_ref(ext_id, club_id=c_id)
+            )
+            skey = f"provider:{m_ref}"
+            targets_by_key[skey] = (skey, "provider", m_ref)
+
+        cur.execute(
+            """
+            SELECT DISTINCT m.match_id
+            FROM public.fc27_manual_matches AS m
+            INNER JOIN public.fc27_manual_match_players AS p
+                ON p.match_id = m.match_id
+            WHERE m.deleted_at IS NULL
+              AND m.club_id = %s
+              AND m.platform = %s
+              AND m.game_version = %s
+              AND p.player_id = %s
+            ORDER BY m.match_id ASC
+            """,
+            (
+                EAST_COASTERS_CLUB_ID,
+                EAST_COASTERS_PLATFORM,
+                EAST_COASTERS_GAME_VERSION,
+                clean_pid,
+            ),
+        )
+        for mrow in cur.fetchall():
+            mid = int(mrow["match_id"])
+            skey = f"manual:{mid:018d}"
+            targets_by_key[skey] = (skey, "manual", mid)
+
+    readonly_conn._conn.commit()
+    ordered = sorted(targets_by_key.values(), key=lambda t: t[0])
+    if after_match_key is not None:
+        ordered = [t for t in ordered if t[0] > after_match_key]
+    return ordered, tuple(extra_forbidden)
+
+
+def _discord_embed_to_fc27_embed_for_refresh(d_emb: Any) -> FC27DiscordEmbed:
+    field_map: dict[str, str] = {}
+    for fld in getattr(d_emb, "fields", ()) or ():
+        fname = str(getattr(fld, "name", "") or "").strip()
+        fval = str(getattr(fld, "value", "") or "").strip()
+        if fname and fval:
+            field_map[fname] = fval[:MAX_DISCORD_FIELD_VALUE_LENGTH]
+    raw_color = getattr(d_emb, "color", None)
+    color_val: int | None = None
+    if raw_color is not None:
+        c_int = getattr(raw_color, "value", raw_color)
+        if isinstance(c_int, int) and not isinstance(c_int, bool):
+            color_val = c_int
+    footer_obj = getattr(d_emb, "footer", None)
+    footer_txt = (
+        str(getattr(footer_obj, "text", "") or "").strip()
+        if footer_obj is not None
+        else ""
+    ) or EAST_COASTERS_FOOTER_TEXT
+    return FC27DiscordEmbed(
+        title=str(getattr(d_emb, "title", "") or EAST_COASTERS_SHORT_NAME)[:256],
+        description=str(getattr(d_emb, "description", "") or EAST_COASTERS_SHORT_NAME)[:1800],
+        fields=field_map,
+        color=color_val,
+        footer_text=footer_txt,
+    )
+
+
+def _embed_matches_snapshot(
+    desired_embed: FC27DiscordEmbed,
+    existing_embed: FC27DiscordEmbed | None,
+) -> bool:
+    if existing_embed is None:
+        return False
+    desired_footer = desired_embed.footer_text or EAST_COASTERS_FOOTER_TEXT
+    existing_footer = existing_embed.footer_text or EAST_COASTERS_FOOTER_TEXT
+    return (
+        desired_embed.title == existing_embed.title
+        and (desired_embed.description or "") == (existing_embed.description or "")
+        and list(desired_embed.fields.items()) == list(existing_embed.fields.items())
+        and desired_footer == existing_footer
+        and desired_embed.color == existing_embed.color
+    )
+
+
+def _formal_notification_matches_snapshot(
+    desired: FC27PostNewResultsMessage,
+    snapshot: FC27DiscordMessageSnapshot,
+) -> bool:
+    return (
+        desired.content == snapshot.content
+        and _embed_matches_snapshot(desired.embed, snapshot.embed)
+    )
+
+
+def _team_chat_matches_snapshot(
+    desired: FC27TeamChatMessage,
+    snapshot: FC27DiscordMessageSnapshot,
+) -> bool:
+    return desired.content == snapshot.content
+
+
+def _verify_refresh_destination(
+    *,
+    channel_id: str,
+    guild_id: str | None,
+    allowed_channels: set[str],
+    allowed_guilds: frozenset[str],
+) -> None:
+    if not _SNOWFLAKE_RE.fullmatch((channel_id or "").strip()):
+        raise _JobVerificationError(
+            "UNAUTHORIZED_DESTINATION",
+            "Linked Discord destination channel is invalid",
+        )
+    if allowed_channels and channel_id not in allowed_channels:
+        raise _JobVerificationError(
+            "UNAUTHORIZED_DESTINATION",
+            "Linked Discord destination channel is outside the configured allowlist",
+        )
+    if allowed_guilds and guild_id is not None and guild_id not in allowed_guilds:
+        raise _JobVerificationError(
+            "UNAUTHORIZED_DESTINATION",
+            "Linked Discord destination guild is outside the configured allowlist",
+        )
+
+
 def _open_queue_connection(
     queue_db_conn_or_uri: Any,
     *,
@@ -3273,6 +4046,11 @@ def run_discord_dispatch_cycle(
     jobs_deduplicated = 0
     messages_sent = 0
     team_chat_messages_sent = 0
+    messages_edited = 0
+    team_chat_messages_edited = 0
+    messages_unchanged = 0
+    continuations_enqueued = 0
+    ambiguous_recoveries_skipped = 0
 
     try:
         if config.single_flight:
@@ -3326,6 +4104,8 @@ def run_discord_dispatch_cycle(
             job: FC27ClaimedDiscordJob,
             match_ref: str | None,
             category: str,
+            *,
+            player_id: str | None = None,
         ) -> None:
             audit_entries.append(
                 FC27DiscordDispatchAuditEntry(
@@ -3336,30 +4116,36 @@ def run_discord_dispatch_cycle(
                     action="LEASE_LOST",
                     error_category=category,
                     attempt_count=job.attempt_count,
+                    player_id=player_id,
                 )
             )
 
         def _persist_linkage(
             *,
-            m_ref: str,
+            m_ref: str | None = None,
+            m_id: int | None = None,
+            discord_guild_id: str | None = None,
             results_channel_id: str | None = None,
             results_message_id: str | None = None,
             team_chat_channel_id: str | None = None,
             team_chat_message_id: str | None = None,
         ) -> None:
-            record_fn = getattr(transport, "record_match_linkage", None)
-            if callable(record_fn):
-                record_fn(
-                    match_ref=m_ref,
-                    results_channel_id=results_channel_id,
-                    results_message_id=results_message_id,
-                    team_chat_channel_id=team_chat_channel_id,
-                    team_chat_message_id=team_chat_message_id,
-                )
+            if m_ref is not None:
+                record_fn = getattr(transport, "record_match_linkage", None)
+                if callable(record_fn):
+                    record_fn(
+                        match_ref=m_ref,
+                        results_channel_id=results_channel_id,
+                        results_message_id=results_message_id,
+                        team_chat_channel_id=team_chat_channel_id,
+                        team_chat_message_id=team_chat_message_id,
+                    )
             if match_results_writer_db_conn_or_uri is not None:
                 record_match_discord_message_links(
                     match_results_writer_db_conn_or_uri,
-                    match_ref=m_ref,
+                    match_id=m_id,
+                    match_ref=None if m_id is not None else m_ref,
+                    discord_guild_id=discord_guild_id,
                     results_channel_id=results_channel_id,
                     results_message_id=results_message_id,
                     team_chat_channel_id=team_chat_channel_id,
@@ -3369,17 +4155,24 @@ def run_discord_dispatch_cycle(
 
         def _load_existing_linkage(
             m_ref: str,
-        ) -> tuple[str | None, str | None, str | None, str | None]:
-            """Return ``(db_results_id, db_team_chat_id, cached_results_id, cached_team_chat_id)``.
+            *,
+            m_id: int | None = None,
+        ) -> tuple[MatchDiscordMessageLinks | None, str | None, str | None, str | None, str | None]:
+            """Return ``(db_links, db_results_id, db_team_chat_id, cached_results_id, cached_team_chat_id)``.
 
             Database linkage is authoritative; the transport cache is reported separately so
             callers can persist an ID they recovered from the cache instead of losing it on
             the next restart.
             """
+            links: MatchDiscordMessageLinks | None = None
             db_res_id: str | None = None
             db_tc_id: str | None = None
             try:
-                links = get_match_discord_message_links(readonly_conn._conn, match_ref=m_ref)  # noqa: SLF001
+                links = get_match_discord_message_links(
+                    readonly_conn._conn,
+                    match_id=m_id,
+                    match_ref=None if m_id is not None else m_ref,
+                )
                 readonly_conn._conn.commit()  # noqa: SLF001
                 if links is not None:
                     db_res_id = links.results_message_id
@@ -3397,7 +4190,13 @@ def run_discord_dispatch_cycle(
                 if t_links is not None:
                     cache_res_id = getattr(t_links, "results_message_id", None)
                     cache_tc_id = getattr(t_links, "team_chat_message_id", None)
-            return db_res_id, db_tc_id, cache_res_id, cache_tc_id
+            return links, db_res_id, db_tc_id, cache_res_id, cache_tc_id
+
+        effective_allowed_channels: set[str] = set(config.allowed_channel_ids)
+        if config.results_channel_id:
+            effective_allowed_channels.add(config.results_channel_id)
+        if config.team_chat_channel_id:
+            effective_allowed_channels.add(config.team_chat_channel_id)
 
         for job in claimed_jobs:
             match_ref = (
@@ -3405,7 +4204,668 @@ def run_discord_dispatch_cycle(
                 if isinstance(job.payload, Mapping) and job.payload.get("match_ref")
                 else None
             )
+            job_player_id = (
+                str(job.payload.get("player_id")).strip()
+                if isinstance(job.payload, Mapping) and job.payload.get("player_id")
+                else None
+            )
             try:
+                if job.job_type == REFRESH_ROSTER_MESSAGES_EVENT_TYPE:
+                    validated_rr = _validate_roster_refresh_job_payload(
+                        job.payload,
+                        idempotency_key=job.idempotency_key,
+                    )
+                    job_player_id = validated_rr.player_id
+                    assert readonly_conn is not None
+                    ordered_targets, rr_forbidden = _discover_affected_matches_for_player(
+                        readonly_conn,
+                        player_id=validated_rr.player_id,
+                        after_match_key=validated_rr.after_match_key,
+                    )
+                    matches_examined = 0
+                    formal_edits_in_job = 0
+                    tc_edits_in_job = 0
+                    scans_in_job = 0
+                    last_completed_key: str | None = None
+                    needs_continuation = False
+                    lease_lost_during_refresh = False
+                    first_permanent_error: (
+                        _JobVerificationError | FC27DiscordDispatchTransportError | None
+                    ) = None
+
+                    def _record_perm_error(
+                        err: _JobVerificationError | FC27DiscordDispatchTransportError,
+                    ) -> None:
+                        nonlocal first_permanent_error
+                        if first_permanent_error is None:
+                            first_permanent_error = err
+
+                    for target_key, target_kind, target_ident in ordered_targets:
+                        if matches_examined >= config.refresh_max_matches_per_job:
+                            needs_continuation = True
+                            break
+
+                        # Load rendered formal + team-chat targets for provider or manual match.
+                        formal_msg: FC27PostNewResultsMessage | None = None
+                        tc_msg: FC27TeamChatMessage | None = None
+                        manual_d_embed: Any = None
+                        manual_match_id: int | None = None
+                        target_m_ref: str
+                        if target_kind == "provider":
+                            target_m_ref = str(target_ident)
+                            try:
+                                m_data, extra_forb = load_authoritative_match_by_ref(
+                                    readonly_conn,
+                                    match_ref=target_m_ref,
+                                )
+                                readonly_conn._conn.commit()
+                            except _JobVerificationError as m_exc:
+                                readonly_conn._conn.rollback()
+                                if m_exc.category in {
+                                    "MATCH_QUARANTINED",
+                                    "REPLAY_CONFLICT_QUARANTINED",
+                                    "MATCH_QUALITY_REJECTED",
+                                }:
+                                    LOGGER.warning(
+                                        "fc27_roster_refresh_match_skipped category=%s",
+                                        m_exc.category,
+                                    )
+                                    matches_examined += 1
+                                    last_completed_key = target_key
+                                    continue
+                                raise
+                            merged_rr_forb = tuple(
+                                dict.fromkeys(
+                                    t
+                                    for t in (*extra_forb, *rr_forbidden, *secret_tokens_to_scrub)
+                                    if t and len(t.strip()) >= 6
+                                )
+                            )
+                            formal_idem = f"fc27:post_new_results:{target_m_ref}"
+                            formal_msg = build_post_new_results_notification(
+                                m_data,
+                                channel_id=config.results_channel_id,
+                                idempotency_key=formal_idem,
+                                extra_forbidden_tokens=merged_rr_forb,
+                            )
+                            if config.team_chat_channel_id is not None:
+                                tc_msg = build_post_new_results_team_chat_message(
+                                    m_data,
+                                    channel_id=config.team_chat_channel_id,
+                                    idempotency_key=formal_idem,
+                                    extra_forbidden_tokens=merged_rr_forb,
+                                )
+                        else:
+                            manual_match_id = int(target_ident)
+                            target_m_ref = f"manual:{manual_match_id}"
+                            detail = fetch_manual_match(
+                                readonly_conn._conn,
+                                match_id=manual_match_id,
+                            )
+                            readonly_conn._conn.commit()
+                            if detail is None or detail.deleted_at is not None:
+                                matches_examined += 1
+                                last_completed_key = target_key
+                                continue
+                            manual_d_embed = (
+                                render_matchday_embed(detail)
+                                if detail.status == "SCHEDULED"
+                                else render_match_result_embed(detail)
+                            )
+                            fc27_emb = _discord_embed_to_fc27_embed_for_refresh(manual_d_embed)
+                            manual_content = build_result_content(detail)[:MAX_DISCORD_CONTENT_LENGTH]
+                            _validate_outgoing_texts(
+                                [
+                                    manual_content,
+                                    fc27_emb.title,
+                                    fc27_emb.description,
+                                    fc27_emb.footer_text or "",
+                                    *fc27_emb.fields.keys(),
+                                    *fc27_emb.fields.values(),
+                                ],
+                                tuple(t for t in (*rr_forbidden, *secret_tokens_to_scrub) if t and len(t.strip()) >= 6),
+                            )
+                            formal_msg = FC27PostNewResultsMessage(
+                                channel_id=config.results_channel_id,
+                                idempotency_key=f"fc27:manual:{manual_match_id}",
+                                match_ref=target_m_ref,
+                                content=manual_content,
+                                embed=fc27_emb,
+                            )
+                            if config.team_chat_channel_id is not None and detail.status != "SCHEDULED":
+                                summary_txt = tag_match_post_content(
+                                    build_team_chat_result_summary(detail),
+                                    seed=target_m_ref,
+                                )
+                                _validate_outgoing_texts(
+                                    [summary_txt],
+                                    tuple(t for t in (*rr_forbidden, *secret_tokens_to_scrub) if t and len(t.strip()) >= 6),
+                                )
+                                tc_msg = FC27TeamChatMessage(
+                                    channel_id=config.team_chat_channel_id,
+                                    idempotency_key=f"fc27:manual:{manual_match_id}",
+                                    match_ref=target_m_ref,
+                                    discriminator=build_match_post_tag(target_m_ref),
+                                    content=summary_txt[:MAX_DISCORD_CONTENT_LENGTH],
+                                )
+
+                        db_links, db_res_id, db_tc_id, cached_res_id, cached_tc_id = (
+                            _load_existing_linkage(target_m_ref, m_id=manual_match_id)
+                        )
+                        linked_guild_id = db_links.discord_guild_id if db_links else None
+                        res_chan = (
+                            (db_links.results_channel_id if db_links else None)
+                            or config.results_channel_id
+                        )
+                        tc_chan = (
+                            (db_links.team_chat_channel_id if db_links else None)
+                            or config.team_chat_channel_id
+                        )
+                        res_msg_id = db_res_id or cached_res_id
+                        tc_msg_id = db_tc_id or cached_tc_id
+                        known_res_linkage = res_msg_id is not None
+                        known_tc_linkage = tc_msg_id is not None
+
+                        if res_msg_id and tc_msg_id and res_msg_id == tc_msg_id:
+                            _record_perm_error(
+                                _JobVerificationError(
+                                    "AMBIGUOUS_MESSAGE_LINKAGE",
+                                    "Formal and team-chat destination links share the same message ID",
+                                )
+                            )
+                            matches_examined += 1
+                            last_completed_key = target_key
+                            continue
+
+                        res_can_process = True
+                        tc_can_process = True
+                        formal_scanned_this_match = False
+                        hit_batch_cap = False
+
+                        # Validate stored guild & destination channels per destination before any Discord read/edit.
+                        if res_msg_id is not None and res_chan is not None:
+                            try:
+                                _verify_refresh_destination(
+                                    channel_id=res_chan,
+                                    guild_id=linked_guild_id,
+                                    allowed_channels=effective_allowed_channels,
+                                    allowed_guilds=config.allowed_guild_ids,
+                                )
+                            except _JobVerificationError as perm_exc:
+                                _record_perm_error(perm_exc)
+                                res_can_process = False
+                        if tc_msg_id is not None and tc_chan is not None:
+                            try:
+                                _verify_refresh_destination(
+                                    channel_id=tc_chan,
+                                    guild_id=linked_guild_id,
+                                    allowed_channels=effective_allowed_channels,
+                                    allowed_guilds=config.allowed_guild_ids,
+                                )
+                            except _JobVerificationError as perm_exc:
+                                _record_perm_error(perm_exc)
+                                tc_can_process = False
+
+                        snapshot_fn = getattr(transport, "fetch_notification_snapshot", None)
+
+                        # Formal destination: recover unambiguously if unlinked (provider matches)
+                        if (
+                            res_can_process
+                            and res_msg_id is None
+                            and target_kind == "provider"
+                            and res_chan is not None
+                        ):
+                            cand_fn = getattr(transport, "find_existing_notification_candidates", None)
+                            if callable(cand_fn) and config.refresh_max_history_scans_per_job > 0:
+                                if scans_in_job >= config.refresh_max_history_scans_per_job:
+                                    needs_continuation = True
+                                    break
+                                scans_in_job += 1
+                                formal_scanned_this_match = True
+                                try:
+                                    cands = tuple(
+                                        cand_fn(
+                                            channel_id=res_chan,
+                                            match_ref=target_m_ref,
+                                            idempotency_key=f"fc27:post_new_results:{target_m_ref}",
+                                            message=formal_msg,
+                                            max_candidates=2,
+                                        )
+                                    )
+                                except FC27DiscordDispatchTransportError as trans_exc:
+                                    if trans_exc.retryable:
+                                        raise
+                                    _record_perm_error(trans_exc)
+                                    cands = ()
+                                    res_can_process = False
+                                if res_can_process:
+                                    if len(cands) > 1:
+                                        ambiguous_recoveries_skipped += 1
+                                        res_msg_id = None
+                                    elif len(cands) == 1:
+                                        rec_id = str(cands[0])
+                                        if tc_msg_id is not None and rec_id == tc_msg_id:
+                                            ambiguous_recoveries_skipped += 1
+                                        else:
+                                            res_msg_id = rec_id
+
+                        if (
+                            res_can_process
+                            and res_msg_id is not None
+                            and res_chan is not None
+                            and formal_msg is not None
+                        ):
+                            try:
+                                needs_formal_edit = True
+                                effective_manual_msg = formal_msg
+                                if callable(snapshot_fn):
+                                    snap = snapshot_fn(channel_id=res_chan, message_id=res_msg_id)
+                                    if snap is None:
+                                        raise _JobVerificationError(
+                                            "LINKED_MESSAGE_MISSING",
+                                            "Linked formal result message is missing on Discord (no repost allowed)",
+                                        )
+                                    if not snap.is_bot_authored:
+                                        raise _JobVerificationError(
+                                            "NON_BOT_AUTHORED_MESSAGE",
+                                            "Refusing to edit formal result message not authored by bot",
+                                        )
+                                    _verify_refresh_destination(
+                                        channel_id=snap.channel_id,
+                                        guild_id=snap.guild_id,
+                                        allowed_channels=effective_allowed_channels,
+                                        allowed_guilds=config.allowed_guild_ids,
+                                    )
+                                    persist_res_guild = (
+                                        snap.guild_id
+                                        if (
+                                            snap.guild_id is not None
+                                            and _SNOWFLAKE_RE.fullmatch(snap.guild_id)
+                                        )
+                                        else None
+                                    )
+                                    if _SNOWFLAKE_RE.fullmatch(res_msg_id) and (
+                                        db_res_id is None
+                                        or (linked_guild_id is None and persist_res_guild is not None)
+                                    ):
+                                        _persist_linkage(
+                                            m_id=manual_match_id,
+                                            m_ref=target_m_ref,
+                                            discord_guild_id=persist_res_guild,
+                                            results_channel_id=res_chan,
+                                            results_message_id=res_msg_id,
+                                        )
+                                        db_res_id = res_msg_id
+                                        if persist_res_guild is not None:
+                                            linked_guild_id = persist_res_guild
+                                    if target_kind == "manual":
+                                        needs_formal_edit = not _embed_matches_snapshot(
+                                            formal_msg.embed, snap.embed
+                                        )
+                                        effective_manual_msg = formal_msg.model_copy(
+                                            update={"content": snap.content}
+                                        )
+                                    else:
+                                        needs_formal_edit = not _formal_notification_matches_snapshot(
+                                            formal_msg, snap
+                                        )
+                                if not needs_formal_edit:
+                                    messages_unchanged += 1
+                                elif formal_edits_in_job >= config.refresh_max_formal_edits_per_job:
+                                    hit_batch_cap = True
+                                else:
+                                    if not renew_discord_job_lease(
+                                        queue_conn,
+                                        job_id=job.job_id,
+                                        claim_owner=eff_claim_owner,
+                                        lease_minutes=config.lease_minutes,
+                                    ):
+                                        queue_conn.commit()
+                                        _record_lease_lost(
+                                            job,
+                                            None,
+                                            "LEASE_LOST_BEFORE_REFRESH_EDIT",
+                                            player_id=validated_rr.player_id,
+                                        )
+                                        lease_lost_during_refresh = True
+                                    else:
+                                        queue_conn.commit()
+                                        edited_ok = False
+                                        if (
+                                            target_kind == "manual"
+                                            and callable(getattr(transport, "edit_embed", None))
+                                            and manual_d_embed is not None
+                                        ):
+                                            edited_ok = bool(
+                                                transport.edit_embed(res_chan, res_msg_id, manual_d_embed)  # type: ignore[attr-defined]
+                                            )
+                                        else:
+                                            edit_fn = getattr(transport, "edit_notification", None)
+                                            if callable(edit_fn):
+                                                edited_ok = bool(
+                                                    edit_fn(
+                                                        channel_id=res_chan,
+                                                        message_id=res_msg_id,
+                                                        message=effective_manual_msg,
+                                                    )
+                                                )
+                                        if not edited_ok:
+                                            if known_res_linkage or callable(snapshot_fn):
+                                                raise _JobVerificationError(
+                                                    "LINKED_MESSAGE_MISSING",
+                                                    "Linked formal result message could not be edited (deleted/missing; no repost allowed)",
+                                                )
+                                        else:
+                                            formal_edits_in_job += 1
+                                            messages_edited += 1
+                                            if (
+                                                not callable(snapshot_fn)
+                                                and db_res_id is None
+                                                and _SNOWFLAKE_RE.fullmatch(res_msg_id)
+                                            ):
+                                                _persist_linkage(
+                                                    m_id=manual_match_id,
+                                                    m_ref=target_m_ref,
+                                                    results_channel_id=res_chan,
+                                                    results_message_id=res_msg_id,
+                                                )
+                                                db_res_id = res_msg_id
+                            except _JobVerificationError as perm_exc:
+                                _record_perm_error(perm_exc)
+                            except FC27DiscordDispatchTransportError as trans_exc:
+                                if trans_exc.retryable:
+                                    raise
+                                _record_perm_error(trans_exc)
+                            if lease_lost_during_refresh:
+                                break
+                            if hit_batch_cap:
+                                needs_continuation = True
+                                break
+
+                        # Team-chat destination
+                        if tc_can_process and tc_msg is not None and tc_chan is not None:
+                            if tc_msg_id is None and target_kind == "provider":
+                                tc_cand_fn = getattr(
+                                    transport, "find_existing_team_chat_notification_candidates", None
+                                )
+                                if (
+                                    callable(tc_cand_fn)
+                                    and config.refresh_max_history_scans_per_job > 0
+                                ):
+                                    if scans_in_job >= config.refresh_max_history_scans_per_job:
+                                        can_continue_from_prior = (
+                                            last_completed_key is not None
+                                            and not (
+                                                config.refresh_max_history_scans_per_job <= 1
+                                                and formal_scanned_this_match
+                                                and db_res_id is None
+                                            )
+                                        )
+                                        if can_continue_from_prior:
+                                            needs_continuation = True
+                                            break
+                                        LOGGER.debug(
+                                            "fc27_roster_refresh_tc_scan_skipped_budget player_id=%s match_ref=%s",
+                                            validated_rr.player_id,
+                                            target_m_ref,
+                                        )
+                                        tc_can_process = False
+                                    if tc_can_process:
+                                        scans_in_job += 1
+                                        try:
+                                            tc_cands = tuple(
+                                                tc_cand_fn(
+                                                    channel_id=tc_chan,
+                                                    match_ref=target_m_ref,
+                                                    idempotency_key=f"fc27:post_new_results:{target_m_ref}",
+                                                    message=tc_msg,
+                                                    max_candidates=2,
+                                                )
+                                            )
+                                        except FC27DiscordDispatchTransportError as trans_exc:
+                                            if trans_exc.retryable:
+                                                raise
+                                            _record_perm_error(trans_exc)
+                                            tc_cands = ()
+                                            tc_can_process = False
+                                        if tc_can_process:
+                                            if len(tc_cands) > 1:
+                                                ambiguous_recoveries_skipped += 1
+                                                tc_msg_id = None
+                                            elif len(tc_cands) == 1:
+                                                rec_tc_id = str(tc_cands[0])
+                                                if res_msg_id is not None and rec_tc_id == res_msg_id:
+                                                    ambiguous_recoveries_skipped += 1
+                                                else:
+                                                    tc_msg_id = rec_tc_id
+
+                            if tc_can_process and tc_msg_id is not None:
+                                try:
+                                    needs_tc_edit = True
+                                    if callable(snapshot_fn):
+                                        tc_snap = snapshot_fn(channel_id=tc_chan, message_id=tc_msg_id)
+                                        if tc_snap is None:
+                                            raise _JobVerificationError(
+                                                "LINKED_MESSAGE_MISSING",
+                                                "Linked team-chat message is missing on Discord (no repost allowed)",
+                                            )
+                                        if not tc_snap.is_bot_authored:
+                                            raise _JobVerificationError(
+                                                "NON_BOT_AUTHORED_MESSAGE",
+                                                "Refusing to edit team-chat message not authored by bot",
+                                            )
+                                        _verify_refresh_destination(
+                                            channel_id=tc_snap.channel_id,
+                                            guild_id=tc_snap.guild_id,
+                                            allowed_channels=effective_allowed_channels,
+                                            allowed_guilds=config.allowed_guild_ids,
+                                        )
+                                        persist_tc_guild = (
+                                            tc_snap.guild_id
+                                            if (
+                                                tc_snap.guild_id is not None
+                                                and _SNOWFLAKE_RE.fullmatch(tc_snap.guild_id)
+                                            )
+                                            else None
+                                        )
+                                        if _SNOWFLAKE_RE.fullmatch(tc_msg_id) and (
+                                            db_tc_id is None
+                                            or (linked_guild_id is None and persist_tc_guild is not None)
+                                        ):
+                                            _persist_linkage(
+                                                m_id=manual_match_id,
+                                                m_ref=target_m_ref,
+                                                discord_guild_id=persist_tc_guild,
+                                                team_chat_channel_id=tc_chan,
+                                                team_chat_message_id=tc_msg_id,
+                                            )
+                                            db_tc_id = tc_msg_id
+                                            if persist_tc_guild is not None:
+                                                linked_guild_id = persist_tc_guild
+                                        needs_tc_edit = not _team_chat_matches_snapshot(tc_msg, tc_snap)
+                                    if not needs_tc_edit:
+                                        messages_unchanged += 1
+                                    elif tc_edits_in_job >= config.refresh_max_team_chat_edits_per_job:
+                                        hit_batch_cap = True
+                                    else:
+                                        if not renew_discord_job_lease(
+                                            queue_conn,
+                                            job_id=job.job_id,
+                                            claim_owner=eff_claim_owner,
+                                            lease_minutes=config.lease_minutes,
+                                        ):
+                                            queue_conn.commit()
+                                            _record_lease_lost(
+                                                job,
+                                                None,
+                                                "LEASE_LOST_BEFORE_TC_REFRESH_EDIT",
+                                                player_id=validated_rr.player_id,
+                                            )
+                                            lease_lost_during_refresh = True
+                                        else:
+                                            queue_conn.commit()
+                                            tc_edited_ok = False
+                                            if target_kind == "manual" and callable(getattr(transport, "edit_text", None)):
+                                                tc_edited_ok = bool(
+                                                    transport.edit_text(tc_chan, tc_msg_id, tc_msg.content)  # type: ignore[attr-defined]
+                                                )
+                                            else:
+                                                tc_edit_fn = getattr(transport, "edit_team_chat_notification", None)
+                                                if callable(tc_edit_fn):
+                                                    tc_edited_ok = bool(
+                                                        tc_edit_fn(
+                                                            channel_id=tc_chan,
+                                                            message_id=tc_msg_id,
+                                                            message=tc_msg,
+                                                        )
+                                                    )
+                                            if not tc_edited_ok:
+                                                if known_tc_linkage or callable(snapshot_fn):
+                                                    raise _JobVerificationError(
+                                                        "LINKED_MESSAGE_MISSING",
+                                                        "Linked team-chat message could not be edited (deleted/missing; no repost allowed)",
+                                                    )
+                                            else:
+                                                tc_edits_in_job += 1
+                                                team_chat_messages_edited += 1
+                                                if (
+                                                    not callable(snapshot_fn)
+                                                    and db_tc_id is None
+                                                    and _SNOWFLAKE_RE.fullmatch(tc_msg_id)
+                                                ):
+                                                    _persist_linkage(
+                                                        m_id=manual_match_id,
+                                                        m_ref=target_m_ref,
+                                                        team_chat_channel_id=tc_chan,
+                                                        team_chat_message_id=tc_msg_id,
+                                                    )
+                                                    db_tc_id = tc_msg_id
+                                except _JobVerificationError as perm_exc:
+                                    _record_perm_error(perm_exc)
+                                except FC27DiscordDispatchTransportError as trans_exc:
+                                    if trans_exc.retryable:
+                                        raise
+                                    _record_perm_error(trans_exc)
+                                if lease_lost_during_refresh:
+                                    break
+                                if hit_batch_cap:
+                                    needs_continuation = True
+                                    break
+
+                        matches_examined += 1
+                        last_completed_key = target_key
+
+                    if lease_lost_during_refresh:
+                        continue
+
+                    cont_payload: FC27RosterRefreshPayload | None = None
+                    cont_key: str | None = None
+                    if needs_continuation:
+                        if last_completed_key is None:
+                            raise _JobVerificationError(
+                                "REFRESH_PROGRESS_STALLED",
+                                "Roster-refresh batch could not process at least one match within configured bounds",
+                            )
+                        next_cont_idx = (validated_rr.continuation_index or 0) + 1
+                        if next_cont_idx > config.refresh_max_continuation_depth:
+                            raise _JobVerificationError(
+                                "REFRESH_CONTINUATION_DEPTH_EXCEEDED",
+                                "Roster-refresh continuation chain exceeded configured depth limit",
+                            )
+                        cont_payload = FC27RosterRefreshPayload(
+                            player_id=validated_rr.player_id,
+                            roster_revision=validated_rr.roster_revision,
+                            reason_code="CONTINUATION",
+                            requested_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                            after_match_key=last_completed_key,
+                            continuation_index=next_cont_idx,
+                        )
+                        cont_key = build_roster_refresh_idempotency_key(
+                            player_id=cont_payload.player_id,
+                            roster_revision=cont_payload.roster_revision,
+                            continuation_index=next_cont_idx,
+                        )
+
+                    if first_permanent_error is not None:
+                        outcome = release_or_fail_discord_job(
+                            queue_conn,
+                            job_id=job.job_id,
+                            claim_owner=eff_claim_owner,
+                            error_category=first_permanent_error.category,
+                            retryable=False,
+                            current_attempt_count=job.attempt_count,
+                            max_attempts=config.max_attempts,
+                            backoff_seconds=config.retry_backoff_seconds,
+                        )
+                        if outcome == "failed":
+                            if cont_payload is not None and cont_key is not None:
+                                inserted_cont_id = queue_conn.enqueue_roster_refresh_continuation(
+                                    payload=cont_payload,
+                                    idempotency_key=cont_key,
+                                )
+                                if inserted_cont_id is not None:
+                                    continuations_enqueued += 1
+                            queue_conn.commit()
+                            jobs_failed += 1
+                            audit_entries.append(
+                                FC27DiscordDispatchAuditEntry(
+                                    job_id=job.job_id,
+                                    job_type=job.job_type,
+                                    idempotency_key=job.idempotency_key,
+                                    match_ref=None,
+                                    action="FAILED",
+                                    error_category=first_permanent_error.category,
+                                    attempt_count=job.attempt_count,
+                                    player_id=validated_rr.player_id,
+                                )
+                            )
+                        else:
+                            queue_conn.rollback()
+                            _record_lease_lost(
+                                job,
+                                None,
+                                "LEASE_LOST_AFTER_REFRESH",
+                                player_id=validated_rr.player_id,
+                            )
+                        continue
+
+                    completed_ok = complete_discord_job(
+                        queue_conn,
+                        job_id=job.job_id,
+                        claim_owner=eff_claim_owner,
+                    )
+                    if completed_ok:
+                        if cont_payload is not None and cont_key is not None:
+                            inserted_cont_id = queue_conn.enqueue_roster_refresh_continuation(
+                                payload=cont_payload,
+                                idempotency_key=cont_key,
+                            )
+                            if inserted_cont_id is not None:
+                                continuations_enqueued += 1
+                        queue_conn.commit()
+                        jobs_completed += 1
+                        audit_entries.append(
+                            FC27DiscordDispatchAuditEntry(
+                                job_id=job.job_id,
+                                job_type=job.job_type,
+                                idempotency_key=job.idempotency_key,
+                                match_ref=None,
+                                action="COMPLETED",
+                                attempt_count=job.attempt_count,
+                                player_id=validated_rr.player_id,
+                            )
+                        )
+                    else:
+                        queue_conn.rollback()
+                        _record_lease_lost(
+                            job,
+                            None,
+                            "LEASE_LOST_AFTER_REFRESH",
+                            player_id=validated_rr.player_id,
+                        )
+                    continue
+
+                assert readonly_conn is not None
                 match_data, extra_forbidden = load_authoritative_match_for_job(
                     readonly_conn,
                     raw_payload=job.payload,
@@ -3438,6 +4898,7 @@ def run_discord_dispatch_cycle(
                     )
 
                 (
+                    _db_links_obj,
                     db_linked_res_id,
                     db_linked_tc_id,
                     cached_res_id,
@@ -3648,7 +5109,8 @@ def run_discord_dispatch_cycle(
                     )
             except _JobVerificationError as exc:
                 try:
-                    readonly_conn._conn.rollback()  # noqa: SLF001
+                    if readonly_conn is not None:
+                        readonly_conn._conn.rollback()
                 except Exception:
                     pass
                 outcome = release_or_fail_discord_job(
@@ -3673,6 +5135,7 @@ def run_discord_dispatch_cycle(
                         action="FAILED" if outcome == "failed" else "LEASE_LOST",
                         error_category=exc.category,
                         attempt_count=job.attempt_count,
+                        player_id=job_player_id,
                     )
                 )
             except FC27DiscordDispatchTransportError as exc:
@@ -3710,10 +5173,60 @@ def run_discord_dispatch_cycle(
                         action=action,
                         error_category=exc.category,
                         attempt_count=job.attempt_count,
+                        player_id=job_player_id,
                     )
                 )
             except FC27DiscordWriteAccessDeniedError:
                 raise
+            except (
+                psycopg.errors.SerializationFailure,
+                psycopg.errors.DeadlockDetected,
+                psycopg.OperationalError,
+            ) as exc:
+                safe_diag = redact_sensitive_text(
+                    str(exc), extra_secrets=secret_tokens_to_scrub
+                )
+                LOGGER.warning(
+                    "Transient DB serialization/connection error while processing job_id=%s (%s)",
+                    job.job_id,
+                    safe_diag,
+                )
+                with suppress(psycopg.Error, OSError):
+                    queue_conn.rollback()
+                with suppress(psycopg.Error, OSError):
+                    if readonly_conn is not None:
+                        readonly_conn._conn.rollback()
+                outcome = release_or_fail_discord_job(
+                    queue_conn,
+                    job_id=job.job_id,
+                    claim_owner=eff_claim_owner,
+                    error_category="DB_TRANSIENT_SERIALIZATION",
+                    retryable=True,
+                    current_attempt_count=job.attempt_count,
+                    max_attempts=config.max_attempts,
+                    backoff_seconds=config.retry_backoff_seconds,
+                )
+                queue_conn.commit()
+                if outcome == "released_pending":
+                    jobs_retried += 1
+                    action = "RETRIED_PENDING"
+                elif outcome == "failed":
+                    jobs_failed += 1
+                    action = "FAILED"
+                else:
+                    action = "LEASE_LOST"
+                audit_entries.append(
+                    FC27DiscordDispatchAuditEntry(
+                        job_id=job.job_id,
+                        job_type=job.job_type,
+                        idempotency_key=job.idempotency_key,
+                        match_ref=match_ref,
+                        action=action,
+                        error_category="DB_TRANSIENT_SERIALIZATION",
+                        attempt_count=job.attempt_count,
+                        player_id=job_player_id,
+                    )
+                )
             except Exception as exc:
                 safe_diag = redact_sensitive_text(
                     str(exc), extra_secrets=secret_tokens_to_scrub
@@ -3728,7 +5241,8 @@ def run_discord_dispatch_cycle(
                 except Exception:
                     pass
                 try:
-                    readonly_conn._conn.rollback()  # noqa: SLF001
+                    if readonly_conn is not None:
+                        readonly_conn._conn.rollback()
                 except Exception:
                     pass
                 outcome = release_or_fail_discord_job(
@@ -3759,6 +5273,7 @@ def run_discord_dispatch_cycle(
                         action=action,
                         error_category="UNEXPECTED_DISPATCH_ERROR",
                         attempt_count=job.attempt_count,
+                        player_id=job_player_id,
                     )
                 )
 
@@ -3775,6 +5290,11 @@ def run_discord_dispatch_cycle(
             jobs_deduplicated=jobs_deduplicated,
             messages_sent=messages_sent,
             team_chat_messages_sent=team_chat_messages_sent,
+            messages_edited=messages_edited,
+            team_chat_messages_edited=team_chat_messages_edited,
+            messages_unchanged=messages_unchanged,
+            continuations_enqueued=continuations_enqueued,
+            ambiguous_recoveries_skipped=ambiguous_recoveries_skipped,
             audit_entries=tuple(audit_entries),
             started_at=started_at,
             finished_at=datetime.now(timezone.utc),

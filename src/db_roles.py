@@ -20,7 +20,7 @@ ROLE_MATCH_RESULTS_WRITER = "fc27_match_results_writer"
 ROLE_POLL_WRITER = "fc27_poll_writer"
 ROLE_PLAYER_DEV_WRITER = "fc27_player_dev_writer"
 ROLE_DISCORD_READER = "fc27_discord_reader"
-GRANTS_POLICY_VERSION = 18
+GRANTS_POLICY_VERSION = 19
 
 
 @dataclass

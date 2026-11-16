@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 18
+GRANTS_POLICY_VERSION = 19
 
 
 def _compute_grants_sha256() -> str:
@@ -638,6 +638,81 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                             violations.append(f"missing_{role_name}_{priv.lower()}_on_{tok_tbl}")
                         elif priv not in allowed_privs and has_priv:
                             violations.append(f"forbidden_{role_name}_{priv.lower()}_on_{tok_tbl}")
+
+        # check Migration 0018 roster-refresh enqueue SECURITY DEFINER function and job_type constraint
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0018%'")
+            has_0018 = cur.fetchone() is not None
+        else:
+            has_0018 = False
+
+        if has_0018:
+            cur.execute(
+                """
+                SELECT pg_get_constraintdef(c.oid)
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'fc27_discord_jobs'
+                  AND c.conname = 'fc27_discord_jobs_job_type_chk'
+                """
+            )
+            chk_row = cur.fetchone()
+            if not chk_row or "refresh_roster_messages" not in str(chk_row[0]):
+                violations.append("missing_refresh_roster_messages_job_type_chk")
+
+            cur.execute(
+                """
+                SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname = 'fc27_enqueue_roster_refresh_job'
+                """
+            )
+            enq_row = cur.fetchone()
+            if not enq_row:
+                violations.append("missing_fc27_enqueue_roster_refresh_job")
+            else:
+                e_oid, e_secdef, e_owner, e_config = enq_row
+                if not e_secdef:
+                    violations.append("roster_refresh_enqueue_not_secdef")
+                if e_owner != "fc27_owner":
+                    violations.append("roster_refresh_enqueue_not_owner")
+                e_cfg = " ".join(e_config) if e_config else ""
+                if "search_path=pg_catalog, pg_temp" not in e_cfg:
+                    violations.append("roster_refresh_enqueue_search_path")
+
+                for no_exec_role in (
+                    "public",
+                    "fc27_app",
+                    "fc27_dispatch",
+                    "fc27_relay",
+                    "fc27_poll_writer",
+                    "fc27_player_dev_writer",
+                    "fc27_discord_reader",
+                ):
+                    if no_exec_role != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (no_exec_role,))
+                        if not cur.fetchone():
+                            continue
+                    cur.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (no_exec_role, e_oid))
+                    p_has = cur.fetchone()
+                    if p_has and p_has[0]:
+                        violations.append(f"roster_refresh_enqueue_{no_exec_role}_exec")
+
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+                if cur.fetchone():
+                    cur.execute(
+                        "SELECT has_function_privilege('fc27_match_results_writer', %s, 'EXECUTE')",
+                        (e_oid,),
+                    )
+                    w_has = cur.fetchone()
+                    if not (w_has and w_has[0]):
+                        violations.append("roster_refresh_enqueue_writer_missing_exec")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

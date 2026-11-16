@@ -1266,8 +1266,8 @@ def test_25_dispatcher_lease_and_single_flight_intact(pg_db_migrated) -> None:
 
 
 def test_26_migration_0016_and_audit_linkage_compatibility(pg_db) -> None:
-    """26. Fresh migration + idempotent re-run stay at Grants Policy v17 with nullable match_id RELINK linkage."""
-    assert GRANTS_POLICY_VERSION == 18
+    """26. Fresh migration + idempotent re-run stay at current Grants Policy with nullable match_id RELINK linkage."""
+    assert GRANTS_POLICY_VERSION == 19
     migrate(pg_db.migrator)
     migrate(pg_db.migrator)
 
@@ -2094,7 +2094,11 @@ def test_37_migration_0016_to_0017_upgrade_path(pg_db) -> None:
     applied_0016 = migrate(pg_db.migrator, target="0016")
     assert "0016_fc27_canonical_roster_and_legacy_matches.sql" in applied_0016
     assert "0017_fc27_roster_reconciliation_tokens.sql" not in applied_0016
-    applied_0017 = migrate(pg_db.migrator)
+    applied_0017 = migrate(pg_db.migrator, target="0017")
     assert applied_0017 == ["0017_fc27_roster_reconciliation_tokens.sql"]
+    with psycopg.connect(pg_db.admin) as uconn:
+        assert verify_postconditions(uconn) == []
+    applied_0018 = migrate(pg_db.migrator)
+    assert applied_0018 == ["0018_fc27_roster_refresh_queue.sql"]
     with psycopg.connect(pg_db.admin) as uconn:
         assert verify_postconditions(uconn) == []

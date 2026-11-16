@@ -1,4 +1,4 @@
--- grants-policy-version: 18
+-- grants-policy-version: 19
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -799,6 +799,27 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.fc27_roster_reconciliation_tokens TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    -- Least-privilege roster-refresh enqueue SECURITY DEFINER function (0018)
+    IF to_regprocedure('public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;
