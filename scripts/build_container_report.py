@@ -61,7 +61,7 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
     "fc27-community-worker": {
         "ghcr_name": f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY', 'OjuIDC/iwa.dev.fcbuild').lower()}/fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
-        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+        "base_image": "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
         "user": "10001:65534",
         "entrypoint": ["python", "scripts/fc27_polling_worker.py"],
         "cmd": ["--status"],
@@ -80,7 +80,7 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
     "fc27-discord-bot": {
         "ghcr_name": f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY', 'OjuIDC/iwa.dev.fcbuild').lower()}/fc27-discord-bot",
         "dockerfile": "Dockerfile.discord",
-        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+        "base_image": "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
         "user": "10001:65534",
         "entrypoint": ["python", "scripts/fc27_discord_bot.py"],
         "cmd": ["--status"],
@@ -180,7 +180,7 @@ def scan_image_filesystem_tar_names(paths: Iterable[str]) -> tuple[bool, list[st
 
 BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
     "waiver_id": "NONE",
-    "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+    "base_image": "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
     "expires_on": "NONE",
     "max_os_high_fixed": 0,
     "waived_base_python_build_pkgs": (),
@@ -188,7 +188,7 @@ BASE_IMAGE_OS_WAIVER_POLICY: dict[str, Any] = {
     "allow_library_high_fixed": False,
     "rationale": (
         "No vulnerability waiver is active. Dockerfile.community-worker and Dockerfile.discord "
-        "pin python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545, "
+        "pin python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535, "
         "upgrade zlib1g from Debian, and upgrade setuptools>=84.2.1 and wheel>=0.48.0 so both "
         "images pass Trivy with zero CRITICAL and zero fixed HIGH vulnerabilities without waivers."
     ),

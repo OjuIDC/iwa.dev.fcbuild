@@ -635,7 +635,7 @@ def test_container_secret_scanners_trivy_gate_and_report_sanitization(tmp_path: 
     validation_data = {
         "image_name": "fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
-        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+        "base_image": "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
         "target_platform": "linux/amd64",
         "size_bytes": 185000000,
         "local_digest": "sha256:" + "a" * 64,
@@ -682,7 +682,7 @@ def test_base_image_waiver_remediation_contracts_and_operational_overlay_unchang
     )
 
     expected_base = (
-        "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+        "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535"
     )
     assert re.match(r"^python:3\.11\.\d+-slim@sha256:[0-9a-f]{64}$", expected_base)
 
@@ -739,7 +739,7 @@ def test_container_report_pr_and_main_modes_and_fail_closed_invariants(tmp_path:
         "image_name": "fc27-community-worker",
         "ghcr_name": "ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/fc27-community-worker",
         "dockerfile": "Dockerfile.community-worker",
-        "base_image": "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545",
+        "base_image": "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
         "target_platform": "linux/amd64",
         "size_bytes": 59322596,
         "size_mb": 56.6,
