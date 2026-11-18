@@ -328,6 +328,7 @@ ALLOWED_READONLY_TABLES: Final[frozenset[str]] = frozenset(
         "fc27_manual_match_events",
         "fc27_manual_match_audit",
         "fc27_player_alias_fingerprints",
+        "fc27_player_alias_candidates",
         "fc27_discord_jobs",
     }
 )
@@ -337,6 +338,7 @@ FORBIDDEN_SQL_TABLE_SUBSTRINGS: Final[tuple[str, ...]] = (
     "approval_",
     "fc27_decision_evidence",
     "fc27_approval_inconsistencies",
+    "fc27_player_alias_candidate_observations",
     "dispatch",
     "outbox",
     "domain_event",
@@ -441,6 +443,7 @@ class FC27DiscordBotConfig(BaseModel):
     manager_role_ids: frozenset[str] = Field(default_factory=frozenset)
     captain_role_ids: frozenset[str] = Field(default_factory=frozenset)
     admin_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    identity_operator_role_ids: frozenset[str] = Field(default_factory=frozenset)
     results_channel_id: str | None = None
     team_chat_channel_id: str | None = None
     dispatch_enabled: bool = False
@@ -498,6 +501,9 @@ class FC27DiscordBotConfig(BaseModel):
         for rid in self.manager_role_ids | self.captain_role_ids | self.admin_role_ids:
             if not rid.isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError(f"Invalid Match Results writer role ID: '{rid}'")
+        for rid in self.identity_operator_role_ids:
+            if not str(rid).isdecimal() or int(rid) <= 0:
+                raise FC27DiscordAuthzError("Invalid Identity Operator role ID in allowlist")
         if self.results_channel_id is not None:
             rc_clean = self.results_channel_id.strip()
             if not rc_clean.isdecimal() or int(rc_clean) <= 0:
@@ -550,6 +556,9 @@ class FC27DiscordBotConfig(BaseModel):
             manager_roles = settings.get_fc27_discord_manager_role_ids(strict=strict)
             captain_roles = settings.get_fc27_discord_captain_role_ids(strict=strict)
             admin_roles = settings.get_fc27_discord_admin_role_ids(strict=strict)
+            identity_operator_roles = settings.get_fc27_discord_identity_operator_role_ids(
+                strict=strict
+            )
             results_chan = settings.get_fc27_discord_results_channel_id(strict=strict)
             team_chat_chan = settings.get_fc27_discord_team_chat_channel_id(strict=strict)
             dispatch_enabled = settings.is_fc27_discord_dispatch_enabled(strict=strict)
@@ -574,6 +583,7 @@ class FC27DiscordBotConfig(BaseModel):
             manager_role_ids=manager_roles,
             captain_role_ids=captain_roles,
             admin_role_ids=admin_roles,
+            identity_operator_role_ids=identity_operator_roles,
             results_channel_id=results_chan,
             team_chat_channel_id=team_chat_chan,
             dispatch_enabled=dispatch_enabled,
@@ -1391,16 +1401,39 @@ class FC27DiscordBotService:
         *,
         user_role_ids: Sequence[str | int] | None,
         is_admin: bool,
+        player_id: str | None = None,
+        token: str | None = None,
     ) -> bool:
-        """Return whether the caller holds the required role or admin authorization for a P0 write."""
+        """Return whether the caller holds the required numeric role or admin authorization for a P0 write."""
         caller_role_set = {
-            str(r).strip() for r in (user_role_ids or ()) if str(r).strip().isdecimal()
+            s
+            for r in (user_role_ids or ())
+            if (s := str(r).strip()).isdecimal() and int(s) > 0
         }
-        if cmd_clean in {"deletematch", "unresolvedplayers"}:
-            admin_roles = self._config.admin_role_ids
-            return bool(is_admin or (admin_roles and (caller_role_set & admin_roles)))
+        admin_roles = self._config.admin_role_ids
+        identity_op_roles = self._config.identity_operator_role_ids
         writer_roles = self._config.match_results_writer_role_ids
-        return bool(writer_roles and (caller_role_set & writer_roles))
+        is_admin_caller = bool(is_admin or (admin_roles and (caller_role_set & admin_roles)))
+        is_identity_op_caller = bool(
+            identity_op_roles and (caller_role_set & identity_op_roles)
+        )
+        is_writer_caller = bool(
+            is_admin_caller or (writer_roles and (caller_role_set & writer_roles))
+        )
+
+        if cmd_clean == "deletematch":
+            return is_admin_caller
+        if cmd_clean == "unresolvedplayers":
+            return is_admin_caller or is_identity_op_caller
+        if cmd_clean == "setplayer":
+            raw_ref = (player_id or token or "").strip()
+            is_reconcile_token = bool(token and token.strip()) or bool(
+                re.fullmatch(r"^T[1-9][0-9]{0,2}$", raw_ref, re.IGNORECASE)
+            )
+            if is_reconcile_token:
+                return is_admin_caller or is_identity_op_caller
+            return is_writer_caller
+        return is_writer_caller
 
     def _has_preflight_validation_error(
         self,
@@ -1431,7 +1464,8 @@ class FC27DiscordBotService:
                     str(cmd_kwargs.get("player_id") or cmd_kwargs.get("token") or "")
                 )
                 _, safe_pname = normalize_display_label(
-                    str(cmd_kwargs.get("player_name") or ""), field_name="Player name"
+                    str(cmd_kwargs.get("player_name") or cmd_kwargs.get("display_name") or ""),
+                    field_name="Player name",
                 )
                 if len(safe_pname) > 40:
                     return True
@@ -1673,8 +1707,27 @@ class FC27DiscordBotService:
             return True
         if cid_str not in self._config.allowed_channel_ids:
             return True
-        if self._config.allowed_role_ids:
-            caller_roles = {str(r).strip() for r in (user_role_ids or ())}
+        if cmd_clean not in SUPPORTED_DISCORD_SUBCOMMANDS:
+            return True
+        if cmd_clean in {"deletematch", "unresolvedplayers"}:
+            return True
+        if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
+            if not self._match_results_write_authorized(
+                cmd_clean,
+                user_role_ids=user_role_ids,
+                is_admin=is_admin,
+                player_id=cmd_kwargs.get("player_id"),
+                token=cmd_kwargs.get("token"),
+            ):
+                return True
+            if self._resolve_writer_conn_or_uri(required=False) is None:
+                return True
+        elif self._config.allowed_role_ids:
+            caller_roles = {
+                s
+                for r in (user_role_ids or ())
+                if (s := str(r).strip()).isdecimal() and int(s) > 0
+            }
             if not (caller_roles & self._config.allowed_role_ids):
                 return True
         if raw_argument:
@@ -1686,17 +1739,6 @@ class FC27DiscordBotService:
                 or ";" in arg_lower
                 or "--" in arg_lower
             ):
-                return True
-        if cmd_clean not in SUPPORTED_DISCORD_SUBCOMMANDS:
-            return True
-        if cmd_clean in {"deletematch", "unresolvedplayers"}:
-            return True
-        if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
-            if not self._match_results_write_authorized(
-                cmd_clean, user_role_ids=user_role_ids, is_admin=is_admin
-            ):
-                return True
-            if self._resolve_writer_conn_or_uri(required=False) is None:
                 return True
         if user_id is not None:
             uid_str = str(user_id).strip() or "0"
@@ -1759,6 +1801,7 @@ class FC27DiscordBotService:
         player_stats: str | None = None,
         expected_revision: int | None = None,
         player_name: str | None = None,
+        display_name: str | None = None,
         player_id: str | None = None,
         token: str | None = None,
         position: str | None = None,
@@ -1851,24 +1894,6 @@ class FC27DiscordBotService:
                 content="This Discord channel is not allowlisted for East Coasters FC27 analytics.",
             )
 
-        if self._config.allowed_role_ids:
-            caller_roles = {str(r).strip() for r in (user_role_ids or ())}
-            if not (caller_roles & self._config.allowed_role_ids):
-                self._record_audit(
-                    guild_id=gid_str,
-                    channel_id=cid_str,
-                    user_id=uid_str,
-                    command=cmd_clean,
-                    outcome_category="REJECTED_UNAPPROVED_ROLE",
-                    started_mono=started,
-                )
-                return FC27DiscordResponse(
-                    command=cmd_clean,
-                    status="REJECTED_UNAUTHORIZED",
-                    ephemeral=True,
-                    content="Your Discord role is not allowlisted for East Coasters FC27 analytics.",
-                )
-
         if raw_argument:
             arg_lower = raw_argument.lower()
             if (
@@ -1911,7 +1936,11 @@ class FC27DiscordBotService:
 
         if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
             authorized_write = self._match_results_write_authorized(
-                cmd_clean, user_role_ids=user_role_ids, is_admin=is_admin
+                cmd_clean,
+                user_role_ids=user_role_ids,
+                is_admin=is_admin,
+                player_id=player_id,
+                token=token,
             )
             if not authorized_write:
                 record_unauthorized_write_attempt(
@@ -1935,6 +1964,27 @@ class FC27DiscordBotService:
                     status="REJECTED_UNAUTHORIZED",
                     ephemeral=True,
                     content=PERMISSION_DENIED_MESSAGE,
+                )
+        elif self._config.allowed_role_ids:
+            caller_roles = {
+                s
+                for r in (user_role_ids or ())
+                if (s := str(r).strip()).isdecimal() and int(s) > 0
+            }
+            if not (caller_roles & self._config.allowed_role_ids):
+                self._record_audit(
+                    guild_id=gid_str,
+                    channel_id=cid_str,
+                    user_id=uid_str,
+                    command=cmd_clean,
+                    outcome_category="REJECTED_UNAPPROVED_ROLE",
+                    started_mono=started,
+                )
+                return FC27DiscordResponse(
+                    command=cmd_clean,
+                    status="REJECTED_UNAUTHORIZED",
+                    ephemeral=True,
+                    content="Your Discord role is not allowlisted for East Coasters FC27 analytics.",
                 )
 
         is_export = cmd_clean in EXPORT_SUBCOMMANDS
@@ -1992,7 +2042,7 @@ class FC27DiscordBotService:
                         fouls=fouls,
                         player_stats=player_stats,
                         expected_revision=expected_revision,
-                        player_name=player_name,
+                        player_name=player_name if player_name is not None else display_name,
                         player_id=player_id,
                         token=token,
                         position=position,
@@ -2105,6 +2155,7 @@ class FC27DiscordBotService:
         player_stats: str | None = None,
         expected_revision: int | None = None,
         player_name: str | None = None,
+        display_name: str | None = None,
         player_id: str | None = None,
         token: str | None = None,
         position: str | None = None,

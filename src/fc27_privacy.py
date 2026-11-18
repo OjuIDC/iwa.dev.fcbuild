@@ -67,6 +67,23 @@ POSTGRES_URI_SECRET_RE: Final[re.Pattern[str]] = re.compile(
 HEX_SHA256_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
 SAFE_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.:-]+$")
 SAFE_DISPLAY_ALIAS_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9 _.-]{1,48}$")
+MAX_PUBLIC_PLAYER_ALIAS_LENGTH: Final[int] = 32
+PUBLIC_PLAYER_ALIAS_FIELDS: Final[tuple[str, ...]] = (
+    "player_name",
+    "playername",
+    "pro_name",
+    "proName",
+    "display_alias",
+    "name",
+)
+_PUBLIC_ALIAS_SECRET_VALUE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:plr_ecf_[0-9a-f]{12}|mref_ecf_[0-9a-f]{12,64}|"
+    r"(?:postgres(?:ql)?|redis|mysql|sqlite|mongodb(?:\+srv)?)://|"
+    r"discord\.gg/|discord(?:app)?\.com/invite/|"
+    r"password|passphrase|secret|bearer\s+|"
+    r"(?:^|[\s_.-])(?:token|api[_-]?key|private[_-]?key|session[_-]?id|cookie)(?:$|[\s_.-]))",
+    re.IGNORECASE,
+)
 
 # Prohibited sensitive key tokens (normalized lowercase alphanumeric)
 PROHIBITED_SENSITIVE_TOKENS: Final[frozenset[str]] = frozenset(
@@ -1122,6 +1139,66 @@ def validate_safe_display_alias(alias: str | None) -> str | None:
     return cleaned
 
 
+def validate_public_player_alias_text(raw_value: Any) -> tuple[str, str]:
+    """Validate and normalize a public Pro Clubs player tag into `(display_value, normalized_value)`.
+
+    Preserves safe Unicode letters/digits, safe display casing, and gamer-tag punctuation
+    (` `, `_`, `-`, `.`) while rejecting internal pseudonyms, URLs, Discord mentions,
+    control characters, formulas, database URIs, serialized objects, and secret-like values.
+    Error messages never echo the raw alias value.
+    """
+    if not isinstance(raw_value, str):
+        raise FC27ValidationError("Public player alias must be a string")
+    reject_control_characters(raw_value, field_name="public_alias")
+    nfkc = unicodedata.normalize("NFKC", raw_value)
+    display_value = re.sub(r"\s+", " ", nfkc).strip()
+    if not display_value:
+        raise FC27ValidationError("Public player alias cannot be empty")
+    if display_value.startswith(FORMULA_PREFIXES):
+        raise FC27FormulaInjectionError(
+            "Public player alias cannot begin with a formula prefix"
+        )
+    if len(display_value) > MAX_PUBLIC_PLAYER_ALIAS_LENGTH:
+        raise FC27ValidationError(
+            f"Public player alias exceeds maximum length of {MAX_PUBLIC_PLAYER_ALIAS_LENGTH} characters"
+        )
+    lowered = display_value.casefold()
+    if (
+        lowered.startswith(("plr_ecf_", "mref_ecf_"))
+        or "unnamed player" == lowered
+        or _PUBLIC_ALIAS_SECRET_VALUE_RE.search(display_value)
+    ):
+        raise FC27PrivacyViolationError(
+            "Public player alias contains a prohibited pseudonym, URI, or secret-like pattern"
+        )
+    if contains_discord_mention(display_value):
+        raise FC27PrivacyError("Public player alias cannot contain a Discord mention")
+    if contains_prohibited_url(display_value):
+        raise FC27PrivacyError("Public player alias cannot contain a URL")
+    if "@" in display_value or "=" in display_value or "{" in display_value or "}" in display_value or "[" in display_value or "]" in display_value:
+        raise FC27ValidationError(
+            "Public player alias contains prohibited punctuation or serialized syntax"
+        )
+    if re.fullmatch(r"[0-9a-f]{32,}", lowered):
+        raise FC27PrivacyError(
+            "Public player alias cannot resemble a raw hexadecimal credential or digest"
+        )
+    if not all(ch.isalnum() or ch in (" ", "_", "-", ".") for ch in display_value):
+        raise FC27ValidationError(
+            "Public player alias may only contain Unicode letters, digits, spaces, underscores, hyphens, or dots"
+        )
+    if not any(ch.isalnum() for ch in display_value):
+        raise FC27ValidationError(
+            "Public player alias must contain at least one letter or digit"
+        )
+    normalized_value = lowered
+    if len(normalized_value) > MAX_PUBLIC_PLAYER_ALIAS_LENGTH:
+        raise FC27ValidationError(
+            f"Normalized public player alias exceeds maximum length of {MAX_PUBLIC_PLAYER_ALIAS_LENGTH} characters"
+        )
+    return display_value, normalized_value
+
+
 _validate_safe_display_alias = validate_safe_display_alias
 
 
@@ -1196,6 +1273,7 @@ __all__ = [
     "HEX_SHA256_RE",
     "MATCH_EQUIVALENCE_CONTRACT_VERSION",
     "MAX_IDENTIFIER_LENGTH",
+    "MAX_PUBLIC_PLAYER_ALIAS_LENGTH",
     "MAX_SAFE_TEXT_LENGTH",
     "MIN_ALIAS_HMAC_KEY_BYTES",
     "POSTGRES_URI_SECRET_RE",
@@ -1204,6 +1282,7 @@ __all__ = [
     "PROHIBITED_TOKEN_COMBINATIONS",
     "PSEUDONYM_MATCH_REF_RE",
     "PSEUDONYM_PLAYER_REF_RE",
+    "PUBLIC_PLAYER_ALIAS_FIELDS",
     "RAW_EVENT_BITMAP_RE",
     "SAFE_DISPLAY_ALIAS_RE",
     "SAFE_IDENTIFIER_RE",
@@ -1254,6 +1333,7 @@ __all__ = [
     "reject_prohibited_url",
     "scan_for_sensitive_fields",
     "suppress_discord_mentions",
+    "validate_public_player_alias_text",
     "validate_safe_display_alias",
     "validate_safe_text",
 ]

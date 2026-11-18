@@ -1,4 +1,4 @@
--- grants-policy-version: 19
+-- grants-policy-version: 20
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -820,6 +820,68 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_enqueue_roster_refresh_job(text, text, text, timestamptz) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    -- Protected provider alias candidates & observation evidence (0019)
+    IF to_regclass('public.fc27_player_alias_candidates') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_alias_candidates FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidates FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidates FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidates FROM fc27_poll_writer';
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (public_alias, last_seen_at, observation_count, distinct_match_count, verification_status, conflict_status, updated_at) ON public.fc27_player_alias_candidates TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidates FROM fc27_discord_reader';
+            EXECUTE 'GRANT SELECT (candidate_id, player_id, public_alias, public_alias_normalized, source_classification, first_seen_at, last_seen_at, observation_count, distinct_match_count, verification_status, conflict_status, promoted_at, created_at, updated_at) ON public.fc27_player_alias_candidates TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidates FROM fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT (candidate_id, player_id, public_alias, public_alias_normalized, source_classification, first_seen_at, last_seen_at, observation_count, distinct_match_count, verification_status, conflict_status, promoted_at, created_at, updated_at), UPDATE (verification_status, conflict_status, promoted_at, updated_at) ON public.fc27_player_alias_candidates TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_alias_candidates_candidate_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_alias_candidates_candidate_id_seq TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_poll_writer';
+            EXECUTE 'GRANT SELECT, INSERT ON public.fc27_player_alias_candidate_observations TO fc27_poll_writer';
         END IF;
     END IF;
 END $$;

@@ -36,8 +36,10 @@ from src.fc27_privacy import (
     EAST_COASTERS_PLATFORM,
     FORMULA_PREFIXES,
     PSEUDONYM_MATCH_REF_RE,
+    PUBLIC_PLAYER_ALIAS_FIELDS,
     FC27FingerprintCollisionError,
     FC27SensitiveFieldDetectedError,
+    FC27ValidationError,
     canonicalize_for_hashing,
     canonicalize_match_type_for_equivalence,
     compare_digest_constant_time,
@@ -50,6 +52,7 @@ from src.fc27_privacy import (
     project_match_equivalence_v1,
     pseudonymize_match_ref,
     scan_for_sensitive_fields,
+    validate_public_player_alias_text,
 )
 from src.schemas import (
     VALID_FC27_FORMATIONS,
@@ -1241,6 +1244,67 @@ class FC27FingerprintPersistenceResult(BaseModel):
     collision_count: int = Field(default=0, ge=0)
 
 
+class FC27AliasCandidateObservation(BaseModel):
+    """Protected public player-alias candidate observation linked to a pseudonymous player ID."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    player_id: str = Field(pattern=r"^plr_ecf_[0-9a-f]{12}$")
+    public_alias: str = Field(min_length=1, max_length=32, repr=False)
+    public_alias_normalized: str = Field(min_length=1, max_length=32, repr=False)
+    alias_hmac_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    matched_field: Literal[
+        "player_name",
+        "playername",
+        "pro_name",
+        "proName",
+        "display_alias",
+        "name",
+    ] = "player_name"
+    source_classification: Literal[
+        "AUTHORIZED_MATCH_PAYLOAD",
+        "OPERATOR_CONFIRMED",
+        "USER_SUPPLIED_EXPORT",
+    ] = "AUTHORIZED_MATCH_PAYLOAD"
+    match_ref: str = Field(pattern=r"^(mref_ecf_[0-9a-f]{12,64}|[0-9a-f]{64})$")
+
+    @model_validator(mode="after")
+    def _validate_candidate_fields(self) -> FC27AliasCandidateObservation:
+        display_val, norm_val = validate_public_player_alias_text(self.public_alias)
+        if self.public_alias != display_val or self.public_alias_normalized != norm_val:
+            raise FC27ValidationError(
+                "Candidate alias fields must be pre-normalized via validate_public_player_alias_text"
+            )
+        if self.matched_field not in PUBLIC_PLAYER_ALIAS_FIELDS:
+            raise FC27ValidationError("Unsupported matched_field for public player alias")
+        return self
+
+    def __repr__(self) -> str:
+        return (
+            "FC27AliasCandidateObservation("
+            f"player_id={self.player_id!r}, "
+            f"hmac_prefix={self.alias_hmac_fingerprint[:8]!r}, "
+            f"matched_field={self.matched_field!r}, "
+            f"source_classification={self.source_classification!r}, "
+            f"match_ref={self.match_ref!r})"
+        )
+
+    def __str__(self) -> str:
+        return repr(self)
+
+
+class FC27CandidatePersistenceResult(BaseModel):
+    """Summary of persisting protected player-alias candidates in a transaction."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    inserted_count: int = Field(default=0, ge=0)
+    updated_count: int = Field(default=0, ge=0)
+    observation_links_inserted: int = Field(default=0, ge=0)
+    stable_count: int = Field(default=0, ge=0)
+    conflicted_count: int = Field(default=0, ge=0)
+
+
 class FC27DiscordJobEnqueueResult(BaseModel):
     """Summary of idempotent Discord job production in a poll batch."""
 
@@ -1335,6 +1399,10 @@ class FC27ExportApplyResult(BaseModel):
     fingerprints_refreshed: int = 0
     fingerprint_duplicate_observations: int = 0
     fingerprint_collisions: int = 0
+    candidates_inserted: int = 0
+    candidates_updated: int = 0
+    candidate_stable_count: int = 0
+    candidate_conflicted_count: int = 0
     discord_jobs_inserted: int = 0
     discord_jobs_existing: int = 0
     discord_job_conflicts: int = 0
@@ -2584,18 +2652,20 @@ def persist_player_alias_fingerprints_in_tx(
     observations: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]],
     *,
     observed_at: datetime | None = None,
+    allow_conflict_pairs: frozenset[tuple[str, str]] | None = None,
 ) -> FC27FingerprintPersistenceResult:
     """Persists or refreshes player alias HMAC fingerprints inside an active PostgreSQL transaction.
 
     Enforces strict 1:1 mapping between `pseudonym` and `gamertag_hmac`. Any collision where an
     existing `pseudonym` maps to a different `gamertag_hmac` or an existing `gamertag_hmac` maps
-    to a different `pseudonym` raises `FC27FingerprintCollisionError` so the caller transaction
-    rolls back cleanly.
+    to a different `pseudonym` raises `FC27FingerprintCollisionError` unless that pair is
+    explicitly backed by a tracked `fc27_player_alias_candidates` conflict entry.
     """
     if not observations:
         return FC27FingerprintPersistenceResult()
 
     now = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    allowed_conflicts = allow_conflict_pairs or frozenset()
     normalized_obs: list[FC27AliasFingerprintObservation] = []
     for item in observations:
         if isinstance(item, FC27AliasFingerprintObservation):
@@ -2618,15 +2688,20 @@ def persist_player_alias_fingerprints_in_tx(
     duplicate_observation_count = 0
 
     for obs in normalized_obs:
+        pair = (obs.pseudonym, obs.gamertag_hmac)
         existing_hmac = seen_by_pseudonym.get(obs.pseudonym)
         existing_pseudo = seen_by_hmac.get(obs.gamertag_hmac)
         if existing_hmac is not None and not compare_digest_constant_time(
             existing_hmac, obs.gamertag_hmac
         ):
+            if pair in allowed_conflicts:
+                continue
             raise FC27FingerprintCollisionError(
                 f"in-batch fingerprint collision for pseudonym {obs.pseudonym}"
             )
         if existing_pseudo is not None and existing_pseudo != obs.pseudonym:
+            if pair in allowed_conflicts:
+                continue
             raise FC27FingerprintCollisionError(
                 f"in-batch fingerprint collision for pseudonym {obs.pseudonym}"
             )
@@ -2642,6 +2717,7 @@ def persist_player_alias_fingerprints_in_tx(
 
     with conn.cursor() as cur:
         for obs in unique_ordered:
+            pair = (obs.pseudonym, obs.gamertag_hmac)
             cur.execute(
                 """
                 SELECT pseudonym, gamertag_hmac
@@ -2664,6 +2740,8 @@ def persist_player_alias_fingerprints_in_tx(
                 continue
 
             if len(rows) > 1:
+                if pair in allowed_conflicts:
+                    continue
                 raise FC27FingerprintCollisionError(
                     f"persisted fingerprint collision detected for pseudonym {obs.pseudonym}"
                 )
@@ -2673,6 +2751,8 @@ def persist_player_alias_fingerprints_in_tx(
             if db_pseudo != obs.pseudonym or not compare_digest_constant_time(
                 db_hmac, obs.gamertag_hmac
             ):
+                if pair in allowed_conflicts:
+                    continue
                 raise FC27FingerprintCollisionError(
                     f"persisted fingerprint collision detected for pseudonym {obs.pseudonym}"
                 )
@@ -2694,6 +2774,307 @@ def persist_player_alias_fingerprints_in_tx(
         duplicate_observation_count=duplicate_observation_count,
         collision_count=0,
     )
+
+
+def _normalize_candidate_observations(
+    observations: Sequence[FC27AliasCandidateObservation | Mapping[str, Any]],
+) -> list[FC27AliasCandidateObservation]:
+    normalized_obs: list[FC27AliasCandidateObservation] = []
+    for item in observations:
+        if isinstance(item, FC27AliasCandidateObservation):
+            normalized_obs.append(item)
+        elif isinstance(item, Mapping):
+            raw_alias = str(item.get("public_alias", ""))
+            disp_val, norm_val = validate_public_player_alias_text(raw_alias)
+            normalized_obs.append(
+                FC27AliasCandidateObservation(
+                    player_id=str(item.get("player_id", "")),
+                    public_alias=disp_val,
+                    public_alias_normalized=norm_val,
+                    alias_hmac_fingerprint=str(item.get("alias_hmac_fingerprint", "")),
+                    matched_field=str(item.get("matched_field") or "player_name"),  # type: ignore[arg-type]
+                    source_classification=str(
+                        item.get("source_classification") or "AUTHORIZED_MATCH_PAYLOAD"
+                    ),  # type: ignore[arg-type]
+                    match_ref=str(item.get("match_ref", "")),
+                )
+            )
+        else:
+            raise ValueError(
+                "unsupported alias candidate observation type"
+            )
+    return normalized_obs
+
+
+def persist_player_alias_candidates_in_tx(
+    conn: psycopg.Connection,
+    observations: Sequence[FC27AliasCandidateObservation | Mapping[str, Any]],
+    *,
+    observed_at: datetime | None = None,
+) -> FC27CandidatePersistenceResult:
+    """Persist validated provider alias candidates and match observations inside an active transaction."""
+    if not observations:
+        return FC27CandidatePersistenceResult()
+
+    normalized_obs = _normalize_candidate_observations(observations)
+    now = (observed_at or datetime.now(UTC)).astimezone(UTC)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT (
+                pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL
+                AND pg_catalog.to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL
+            ),
+            current_user
+            """
+        )
+        chk_row = cur.fetchone()
+        if not chk_row or not bool(chk_row[0]) or str(chk_row[1] or "") == "fc27_app":
+            return FC27CandidatePersistenceResult()
+
+        inserted_count = 0
+        updated_count = 0
+        observation_links_inserted = 0
+        affected_player_ids: set[str] = set()
+        affected_norm_aliases: set[str] = set()
+
+        for obs in normalized_obs:
+            affected_player_ids.add(obs.player_id)
+            affected_norm_aliases.add(obs.public_alias_normalized)
+
+            cur.execute(
+                """
+                SELECT
+                    candidate_id,
+                    public_alias,
+                    public_alias_normalized,
+                    first_seen_at,
+                    last_seen_at,
+                    observation_count,
+                    distinct_match_count,
+                    verification_status,
+                    conflict_status,
+                    updated_at
+                FROM public.fc27_player_alias_candidates
+                WHERE player_id = %s
+                  AND alias_hmac_fingerprint = %s
+                  AND source_classification = %s
+                FOR UPDATE
+                """,
+                (
+                    obs.player_id,
+                    obs.alias_hmac_fingerprint,
+                    obs.source_classification,
+                ),
+            )
+            existing_row = cur.fetchone()
+            if existing_row is None:
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_player_alias_candidates (
+                        player_id,
+                        public_alias,
+                        public_alias_normalized,
+                        alias_hmac_fingerprint,
+                        source_classification,
+                        first_seen_at,
+                        last_seen_at,
+                        observation_count,
+                        distinct_match_count,
+                        verification_status,
+                        conflict_status,
+                        promoted_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, 1, 1, 'OBSERVED', 'NONE', NULL, %s, %s
+                    )
+                    RETURNING candidate_id
+                    """,
+                    (
+                        obs.player_id,
+                        obs.public_alias,
+                        obs.public_alias_normalized,
+                        obs.alias_hmac_fingerprint,
+                        obs.source_classification,
+                        now,
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                ins_row = cur.fetchone()
+                assert ins_row is not None
+                candidate_id = int(ins_row[0])
+                inserted_count += 1
+
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_player_alias_candidate_observations (
+                        candidate_id, match_ref, observed_at
+                    ) VALUES (%s, %s, %s)
+                    ON CONFLICT (candidate_id, match_ref) DO NOTHING
+                    """,
+                    (candidate_id, obs.match_ref, now),
+                )
+                if cur.rowcount == 1:
+                    observation_links_inserted += 1
+            else:
+                candidate_id = int(existing_row[0])
+                old_norm_alias = str(existing_row[2])
+                first_seen_existing = existing_row[3]
+                last_seen_existing = existing_row[4]
+                obs_count_existing = int(existing_row[5])
+                distinct_existing = int(existing_row[6])
+                updated_existing = existing_row[9]
+                affected_norm_aliases.add(old_norm_alias)
+
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_player_alias_candidate_observations (
+                        candidate_id, match_ref, observed_at
+                    ) VALUES (%s, %s, %s)
+                    ON CONFLICT (candidate_id, match_ref) DO NOTHING
+                    """,
+                    (candidate_id, obs.match_ref, now),
+                )
+                is_new_match = cur.rowcount == 1
+                if is_new_match:
+                    observation_links_inserted += 1
+
+                new_obs_count = obs_count_existing + 1
+                new_distinct_count = distinct_existing + (1 if is_new_match else 0)
+                new_last_seen = max(last_seen_existing, now) if last_seen_existing is not None else now
+                if first_seen_existing is not None and new_last_seen < first_seen_existing:
+                    new_last_seen = first_seen_existing
+                new_updated_at = max(updated_existing, now) if updated_existing is not None else now
+
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET public_alias = %s,
+                        last_seen_at = %s,
+                        observation_count = %s,
+                        distinct_match_count = %s,
+                        updated_at = %s
+                    WHERE candidate_id = %s
+                    """,
+                    (
+                        obs.public_alias,
+                        new_last_seen,
+                        new_obs_count,
+                        new_distinct_count,
+                        new_updated_at,
+                        candidate_id,
+                    ),
+                )
+                updated_count += 1
+
+        # Re-evaluate conflict and stability statuses across all touched players & normalized aliases
+        cur.execute(
+            """
+            SELECT
+                candidate_id,
+                player_id,
+                public_alias_normalized,
+                distinct_match_count,
+                verification_status,
+                conflict_status,
+                updated_at
+            FROM public.fc27_player_alias_candidates
+            WHERE (player_id = ANY(%s) OR public_alias_normalized = ANY(%s))
+              AND verification_status <> 'REJECTED'
+            ORDER BY candidate_id ASC
+            FOR UPDATE
+            """,
+            (sorted(affected_player_ids), sorted(affected_norm_aliases)),
+        )
+        scope_rows = cur.fetchall()
+        aliases_by_player: dict[str, set[str]] = {}
+        players_by_alias: dict[str, set[str]] = {}
+        for _, pid_val, norm_val, _, _, _, _ in scope_rows:
+            aliases_by_player.setdefault(str(pid_val), set()).add(str(norm_val))
+            players_by_alias.setdefault(str(norm_val), set()).add(str(pid_val))
+
+        stable_count = 0
+        conflicted_count = 0
+        for row_item in scope_rows:
+            cand_id = int(row_item[0])
+            pid_val = str(row_item[1])
+            norm_val = str(row_item[2])
+            distinct_cnt = int(row_item[3])
+            cur_ver_status = str(row_item[4])
+            cur_conf_status = str(row_item[5])
+            cur_upd_at = row_item[6]
+
+            same_player_multi = len(aliases_by_player.get(pid_val, set())) > 1
+            cross_player_same = len(players_by_alias.get(norm_val, set())) > 1
+            if same_player_multi and cross_player_same:
+                new_conf_status = "BOTH"
+            elif same_player_multi:
+                new_conf_status = "SAME_PLAYER_MULTIPLE_ALIASES"
+            elif cross_player_same:
+                new_conf_status = "CROSS_PLAYER_SAME_ALIAS"
+            else:
+                new_conf_status = "NONE"
+
+            if cur_ver_status == "PROMOTED":
+                new_ver_status = "PROMOTED"
+            elif cur_ver_status == "OPERATOR_VERIFIED":
+                new_ver_status = "CONFLICTED" if new_conf_status != "NONE" else "OPERATOR_VERIFIED"
+            elif new_conf_status != "NONE":
+                new_ver_status = "CONFLICTED"
+            elif distinct_cnt >= 2:
+                new_ver_status = "STABLE"
+            else:
+                new_ver_status = "OBSERVED"
+
+            if new_ver_status == "STABLE":
+                stable_count += 1
+            if new_ver_status == "CONFLICTED" or new_conf_status != "NONE":
+                conflicted_count += 1
+
+            if new_conf_status != cur_conf_status or new_ver_status != cur_ver_status:
+                eff_upd = max(cur_upd_at, now) if cur_upd_at is not None else now
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET conflict_status = %s,
+                        verification_status = %s,
+                        updated_at = %s
+                    WHERE candidate_id = %s
+                    """,
+                    (new_conf_status, new_ver_status, eff_upd, cand_id),
+                )
+
+    return FC27CandidatePersistenceResult(
+        inserted_count=inserted_count,
+        updated_count=updated_count,
+        observation_links_inserted=observation_links_inserted,
+        stable_count=stable_count,
+        conflicted_count=conflicted_count,
+    )
+
+
+def persist_player_alias_candidates(
+    conn_or_uri: psycopg.Connection | str | Any,
+    observations: Sequence[FC27AliasCandidateObservation | Mapping[str, Any]],
+    *,
+    observed_at: datetime | None = None,
+    enforce_posture: bool = True,
+) -> FC27CandidatePersistenceResult:
+    """Atomically persists protected player-alias candidates and observations in PostgreSQL."""
+    with _managed_connection(conn_or_uri) as conn:
+        if enforce_posture:
+            _enforce_runtime_posture(conn)
+        with conn.transaction():
+            return persist_player_alias_candidates_in_tx(
+                conn,
+                observations,
+                observed_at=observed_at,
+            )
 
 
 def persist_player_alias_fingerprints(
@@ -2999,6 +3380,8 @@ def apply_export_plan(
     quarantine_conflicts: bool = True,
     source_classification_override: Literal["AUTHORIZED_CAPTURE"] | None = None,
     alias_fingerprints: Sequence[FC27AliasFingerprintObservation | Mapping[str, str]]
+    | None = None,
+    alias_candidates: Sequence[FC27AliasCandidateObservation | Mapping[str, Any]]
     | None = None,
     enqueue_discord_jobs: bool = False,
     match_type_override: str | None = None,
@@ -3315,6 +3698,16 @@ def apply_export_plan(
                 )
 
             # Step 6: Handle idempotent duplicate reapply (either batch already processed or 0 new matches)
+            resolved_candidates = (
+                _normalize_candidate_observations(alias_candidates)
+                if alias_candidates
+                else []
+            )
+            candidate_conflict_pairs = frozenset(
+                (c.player_id, c.alias_hmac_fingerprint)
+                for c in resolved_candidates
+            )
+
             if (
                 envelope.export_id in existing_batches_by_id
                 or envelope.payload_sha256 in processed_payload_hashes
@@ -3325,9 +3718,19 @@ def apply_export_plan(
                         conn,
                         alias_fingerprints,
                         observed_at=now,
+                        allow_conflict_pairs=candidate_conflict_pairs,
                     )
                     if alias_fingerprints
                     else FC27FingerprintPersistenceResult()
+                )
+                cand_dup_res = (
+                    persist_player_alias_candidates_in_tx(
+                        conn,
+                        resolved_candidates,
+                        observed_at=now,
+                    )
+                    if resolved_candidates
+                    else FC27CandidatePersistenceResult()
                 )
                 job_dup_res = (
                     enqueue_post_new_results_jobs_in_tx(
@@ -3389,6 +3792,10 @@ def apply_export_plan(
                     fingerprints_refreshed=fp_dup_res.refreshed_count,
                     fingerprint_duplicate_observations=fp_dup_res.duplicate_observation_count,
                     fingerprint_collisions=fp_dup_res.collision_count,
+                    candidates_inserted=cand_dup_res.inserted_count,
+                    candidates_updated=cand_dup_res.updated_count,
+                    candidate_stable_count=cand_dup_res.stable_count,
+                    candidate_conflicted_count=cand_dup_res.conflicted_count,
                     discord_jobs_inserted=job_dup_res.inserted_count,
                     discord_jobs_existing=job_dup_res.existing_equivalent_count,
                     discord_job_conflicts=job_dup_res.conflict_count,
@@ -3599,15 +4006,25 @@ def apply_export_plan(
                         )
                         player_stats_count += 1
 
-            # Step 10: Persist alias fingerprints and enqueue Discord jobs atomically in the same transaction
+            # Step 10: Persist alias fingerprints/candidates and enqueue Discord jobs atomically in the same transaction
             fp_res = (
                 persist_player_alias_fingerprints_in_tx(
                     conn,
                     alias_fingerprints,
                     observed_at=now,
+                    allow_conflict_pairs=candidate_conflict_pairs,
                 )
                 if alias_fingerprints
                 else FC27FingerprintPersistenceResult()
+            )
+            cand_res = (
+                persist_player_alias_candidates_in_tx(
+                    conn,
+                    resolved_candidates,
+                    observed_at=now,
+                )
+                if resolved_candidates
+                else FC27CandidatePersistenceResult()
             )
             job_res = (
                 enqueue_post_new_results_jobs_in_tx(
@@ -3672,6 +4089,10 @@ def apply_export_plan(
                 fingerprints_refreshed=fp_res.refreshed_count,
                 fingerprint_duplicate_observations=fp_res.duplicate_observation_count,
                 fingerprint_collisions=fp_res.collision_count,
+                candidates_inserted=cand_res.inserted_count,
+                candidates_updated=cand_res.updated_count,
+                candidate_stable_count=cand_res.stable_count,
+                candidate_conflicted_count=cand_res.conflicted_count,
                 discord_jobs_inserted=job_res.inserted_count,
                 discord_jobs_existing=job_res.existing_equivalent_count,
                 discord_job_conflicts=job_res.conflict_count,

@@ -437,6 +437,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Migration 0018, Grants Policy 19 SECURITY DEFINER producer boundary, roster-refresh queue triggers, dispatcher refresh consumer, linkage, and retry/dead-letter tests using per-test DBs.",
         ),
         _entry(
+            "tests/test_fc27_provider_alias_candidates.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Migration 0019 provider-alias candidate pipeline, Grants Policy 20 privileges, narrow Identity Operator authorization, real CommandTree wiring, and backup/restore tests using per-test DBs.",
+        ),
+        _entry(
             "tests/test_fc27_match_results.py",
             "POSTGRES_PARALLEL_SAFE",
             ("postgres", "domain", "security", "offline", "network_forbidden"),

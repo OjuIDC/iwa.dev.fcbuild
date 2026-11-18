@@ -48,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0018"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0019"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -66,6 +66,8 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_manual_match_events",
     "fc27_manual_match_audit",
     "fc27_player_alias_fingerprints",
+    "fc27_player_alias_candidates",
+    "fc27_player_alias_candidate_observations",
     "fc27_player_links",
     "fc27_build_catalog",
     "fc27_build_catalog_audit",
@@ -214,6 +216,8 @@ class FC27BackupTableCounts(BaseModel):
     fc27_manual_match_audit: int = Field(default=0, ge=0)
     fc27_manual_discord_linked_matches: int = Field(default=0, ge=0)
     fc27_player_alias_fingerprints: int = Field(default=0, ge=0)
+    fc27_player_alias_candidates: int = Field(default=0, ge=0)
+    fc27_player_alias_candidate_observations: int = Field(default=0, ge=0)
     fc27_player_links: int = Field(default=0, ge=0)
     fc27_build_catalog: int = Field(default=0, ge=0)
     fc27_build_catalog_audit: int = Field(default=0, ge=0)
@@ -539,6 +543,8 @@ def inspect_database_state_for_manifest(
             player_dev_counts: dict[str, int] = {}
             for pd_tbl in (
                 "fc27_player_alias_fingerprints",
+                "fc27_player_alias_candidates",
+                "fc27_player_alias_candidate_observations",
                 "fc27_player_links",
                 "fc27_build_catalog",
                 "fc27_build_catalog_audit",
@@ -747,6 +753,10 @@ def inspect_database_state_for_manifest(
         fc27_manual_match_audit=manual_audit_cnt,
         fc27_manual_discord_linked_matches=manual_linked_cnt,
         fc27_player_alias_fingerprints=player_dev_counts["fc27_player_alias_fingerprints"],
+        fc27_player_alias_candidates=player_dev_counts["fc27_player_alias_candidates"],
+        fc27_player_alias_candidate_observations=player_dev_counts[
+            "fc27_player_alias_candidate_observations"
+        ],
         fc27_player_links=player_dev_counts["fc27_player_links"],
         fc27_build_catalog=player_dev_counts["fc27_build_catalog"],
         fc27_build_catalog_audit=player_dev_counts["fc27_build_catalog_audit"],
@@ -827,13 +837,21 @@ def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
 
     with psycopg.connect(db_uri, autocommit=True) as probe_conn:
         probe_row = probe_conn.execute(
-            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_candidates') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL"
         ).fetchone()
         has_roster_table = bool(probe_row and probe_row[0])
+        has_candidates_table = bool(probe_row and probe_row[1])
+        has_candidate_obs_table = bool(probe_row and probe_row[2])
 
     table_args: list[str] = []
     for tbl in FC27_DOMAIN_TABLES:
         if tbl == "fc27_roster" and not has_roster_table:
+            continue
+        if tbl == "fc27_player_alias_candidates" and not has_candidates_table:
+            continue
+        if tbl == "fc27_player_alias_candidate_observations" and not has_candidate_obs_table:
             continue
         table_args.extend(["-t", f"public.{tbl}"])
 
@@ -917,52 +935,42 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
 
     with psycopg.connect(db_uri, autocommit=True) as conn:
         roster_row = conn.execute(
-            "SELECT to_regclass('public.fc27_roster') IS NOT NULL"
+            "SELECT to_regclass('public.fc27_roster') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_candidates') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL"
         ).fetchone()
         has_target_roster = bool(roster_row and roster_row[0])
+        has_target_candidates = bool(roster_row and roster_row[1])
+        has_target_candidate_obs = bool(roster_row and roster_row[2])
+        truncate_targets = [
+            "public.schema_migrations",
+            "public.schema_policy_versions",
+            "public.fc27_player_match_stats",
+            "public.fc27_matches",
+            "public.fc27_quarantine_records",
+            "public.fc27_export_batches",
+            "public.fc27_clubs",
+            "public.fc27_manual_match_audit",
+            "public.fc27_manual_match_events",
+            "public.fc27_manual_match_players",
+            "public.fc27_manual_matches",
+            "public.fc27_suggestion_assessments",
+            "public.fc27_player_suggestions",
+            "public.fc27_build_catalog_audit",
+            "public.fc27_build_catalog",
+            "public.fc27_player_links",
+            "public.fc27_player_alias_fingerprints",
+            "public.fc27_discord_jobs",
+        ]
         if has_target_roster:
-            conn.execute(
-                "TRUNCATE public.schema_migrations, "
-                "public.schema_policy_versions, "
-                "public.fc27_player_match_stats, "
-                "public.fc27_matches, "
-                "public.fc27_quarantine_records, "
-                "public.fc27_export_batches, "
-                "public.fc27_clubs, "
-                "public.fc27_roster, "
-                "public.fc27_manual_match_audit, "
-                "public.fc27_manual_match_events, "
-                "public.fc27_manual_match_players, "
-                "public.fc27_manual_matches, "
-                "public.fc27_suggestion_assessments, "
-                "public.fc27_player_suggestions, "
-                "public.fc27_build_catalog_audit, "
-                "public.fc27_build_catalog, "
-                "public.fc27_player_links, "
-                "public.fc27_player_alias_fingerprints, "
-                "public.fc27_discord_jobs CASCADE"
-            )
-        else:
-            conn.execute(
-                "TRUNCATE public.schema_migrations, "
-                "public.schema_policy_versions, "
-                "public.fc27_player_match_stats, "
-                "public.fc27_matches, "
-                "public.fc27_quarantine_records, "
-                "public.fc27_export_batches, "
-                "public.fc27_clubs, "
-                "public.fc27_manual_match_audit, "
-                "public.fc27_manual_match_events, "
-                "public.fc27_manual_match_players, "
-                "public.fc27_manual_matches, "
-                "public.fc27_suggestion_assessments, "
-                "public.fc27_player_suggestions, "
-                "public.fc27_build_catalog_audit, "
-                "public.fc27_build_catalog, "
-                "public.fc27_player_links, "
-                "public.fc27_player_alias_fingerprints, "
-                "public.fc27_discord_jobs CASCADE"
-            )
+            truncate_targets.append("public.fc27_roster")
+        if has_target_candidate_obs:
+            truncate_targets.append("public.fc27_player_alias_candidate_observations")
+        if has_target_candidates:
+            truncate_targets.append("public.fc27_player_alias_candidates")
+        conn.execute(
+            cast(LiteralString, f"TRUNCATE {', '.join(truncate_targets)} CASCADE")
+        )
 
         def _run_pg_restore_for_table(tbl: str) -> None:
             if host_pg_restore:
@@ -1039,6 +1047,16 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
         for tbl in FC27_DOMAIN_TABLES:
             if tbl == "fc27_roster" and (
                 not has_target_roster
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
+            if tbl == "fc27_player_alias_candidates" and (
+                not has_target_candidates
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
+            if tbl == "fc27_player_alias_candidate_observations" and (
+                not has_target_candidate_obs
                 or (archive_tables is not None and tbl not in archive_tables)
             ):
                 continue
@@ -1342,8 +1360,20 @@ def verify_fc27_backup_restore(
             )
             migration_ok = (
                 restored_mig_cnt >= 13
-                and any(v in restored_mig for v in ("0013", "0014", "0015", "0016", "0017", "0018"))
-                and manifest.migration_version in ("0001_THROUGH_0013", "0001_THROUGH_0014", "0001_THROUGH_0015", "0001_THROUGH_0016", "0001_THROUGH_0017", EXPECTED_MIGRATION_VERSION)
+                and any(
+                    v in restored_mig
+                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019")
+                )
+                and manifest.migration_version
+                in (
+                    "0001_THROUGH_0013",
+                    "0001_THROUGH_0014",
+                    "0001_THROUGH_0015",
+                    "0001_THROUGH_0016",
+                    "0001_THROUGH_0017",
+                    "0001_THROUGH_0018",
+                    EXPECTED_MIGRATION_VERSION,
+                )
             )
             if not migration_ok:
                 raise FC27RestoreVerificationError(

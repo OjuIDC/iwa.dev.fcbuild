@@ -534,6 +534,28 @@ def get_fc27_discord_admin_role_ids(*, strict: bool = False) -> frozenset[str]:
     return _parse_discord_snowflake_allowlist("DISCORD_ADMIN_ROLE_IDS", strict=strict)
 
 
+def get_fc27_discord_identity_operator_role_ids(*, strict: bool = True) -> frozenset[str]:
+    """Return configured numeric Discord role IDs for Identity Operator reconciliation workflows.
+
+    Never trusts visible Discord tags (`[GDev]`), role names, usernames, or nicknames.
+    Permits empty configuration and deduplicates positive numeric snowflake IDs.
+    """
+    for env_name in (
+        "FC27_DISCORD_IDENTITY_OPERATOR_ROLE_IDS",
+        "DISCORD_IDENTITY_OPERATOR_ROLE_IDS",
+    ):
+        raw = os.getenv(env_name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return _parse_discord_snowflake_allowlist(env_name, strict=strict)
+        except ConfigError as exc:
+            raise ConfigError(
+                f"{env_name} must contain only comma-separated positive numeric Discord role IDs"
+            ) from exc
+    return frozenset()
+
+
 def get_fc27_discord_match_results_writer_role_ids(*, strict: bool = False) -> frozenset[str]:
     """Return union of configured Discord Manager, Captain, and Admin role IDs."""
     return (
