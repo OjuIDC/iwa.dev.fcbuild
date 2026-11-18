@@ -275,6 +275,8 @@ ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
         "fc27_player_match_stats",
         "fc27_quarantine_records",
         "fc27_player_alias_fingerprints",
+        "fc27_player_alias_candidates",
+        "fc27_player_alias_candidate_observations",
         "fc27_discord_jobs",
     }
 )
@@ -301,6 +303,11 @@ _FORBIDDEN_FINGERPRINT_DELETE_REGEX = re.compile(
 
 _FORBIDDEN_FINGERPRINT_IMMUTABLE_UPDATE_REGEX = re.compile(
     r"\bUPDATE\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_fingerprints\b(?:(?!\bWHERE\b)[\s\S])*?\bSET\b(?:(?!\bWHERE\b)[\s\S])*?\b(?:pseudonym|gamertag_hmac|created_at)\s*=",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_CANDIDATE_DELETE_REGEX = re.compile(
+    r"\bDELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_candidate(?:s|_observations)\b",
     re.IGNORECASE,
 )
 
@@ -829,6 +836,10 @@ def assert_polling_sql_allowed(sql: Any) -> None:
     if _FORBIDDEN_FINGERPRINT_IMMUTABLE_UPDATE_REGEX.search(sql_text):
         raise FC27PollingTableAccessDeniedError(
             "FC27 polling worker role cannot UPDATE immutable columns in fc27_player_alias_fingerprints"
+        )
+    if _FORBIDDEN_CANDIDATE_DELETE_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role cannot DELETE from player alias candidate or observation tables"
         )
     for tbl_match in _PUBLIC_TABLE_CLAUSE_REGEX.finditer(sql_text):
         candidate = tbl_match.group(1).lower()
@@ -1460,6 +1471,9 @@ def persist_polled_match_envelope(
     eff_alias_fingerprints = (
         match_envelope.alias_fingerprints if c1_tables_ready else ()
     )
+    eff_alias_candidates = (
+        match_envelope.alias_candidates if c1_tables_ready else ()
+    )
     eff_enqueue_jobs = bool(c1_tables_ready)
 
     with _suppress_domain_event_outbox_writes():
@@ -1520,6 +1534,7 @@ def persist_polled_match_envelope(
                         export_id=eff_export_id,
                         generated_at=deterministic_gen_dt,
                         alias_fingerprints=eff_alias_fingerprints,
+                        alias_candidates=eff_alias_candidates,
                         enqueue_discord_jobs=eff_enqueue_jobs,
                         match_type_override=eff_match_type,
                         emit_domain_events=False,
@@ -1573,6 +1588,7 @@ def persist_polled_match_envelope(
                     enforce_posture=enforce_posture,
                     quarantine_conflicts=False,
                     alias_fingerprints=eff_alias_fingerprints,
+                    alias_candidates=eff_alias_candidates,
                     enqueue_discord_jobs=eff_enqueue_jobs,
                     match_type_override=eff_match_type,
                     emit_domain_events=False,
@@ -1607,6 +1623,10 @@ def persist_polled_match_envelope(
                 fingerprints_refreshed=apply_res.fingerprints_refreshed,
                 fingerprint_duplicate_observations=apply_res.fingerprint_duplicate_observations,
                 fingerprint_collisions=apply_res.fingerprint_collisions,
+                candidates_inserted=apply_res.candidates_inserted,
+                candidates_updated=apply_res.candidates_updated,
+                candidate_stable_count=apply_res.candidate_stable_count,
+                candidate_conflicted_count=apply_res.candidate_conflicted_count,
                 discord_jobs_inserted=apply_res.discord_jobs_inserted,
                 discord_jobs_existing=apply_res.discord_jobs_existing,
                 discord_job_conflicts=apply_res.discord_job_conflicts,

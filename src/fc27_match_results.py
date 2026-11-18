@@ -291,6 +291,7 @@ _STAT_POSITION_RE = re.compile(
 _FORBIDDEN_WRITER_TABLES_RE = re.compile(
     r"\b("
     r"fc27_matches|fc27_player_match_stats|fc27_clubs|fc27_export_batches|fc27_quarantine_records|"
+    r"fc27_player_alias_candidate_observations|"
     r"fc27_discord_jobs|approval_requests|approval_audit|approval_nonces|dispatches|outbox|domain_events|"
     r"schema_migrations|schema_policy_versions|fc27_users|fc27_credentials"
     r")\b",
@@ -1763,6 +1764,12 @@ class UnresolvedPlayerSummary(BaseModel):
     observed_positions: tuple[str, ...] = ()
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+    candidate_alias: str | None = None
+    candidate_aliases: tuple[str, ...] = ()
+    candidate_verification_status: str | None = None
+    candidate_conflict_status: str | None = None
+    candidate_observation_count: int = 0
+    candidate_distinct_match_count: int = 0
     player_id: str | None = Field(default=None, exclude=True, repr=False)
 
 
@@ -2147,10 +2154,55 @@ def list_unresolved_players(
             (clean_club_id, clean_game_version, bounded_limit),
         ).fetchall()
 
-    if not rows:
-        return ()
+        if not rows:
+            return ()
 
-    player_ids = [str(r[0]) for r in rows]
+        player_ids = [str(r[0]) for r in rows]
+        candidate_rows_by_player: dict[str, list[tuple[str, str, int, int, str, str]]] = {}
+        try:
+            tbl_chk = conn.execute(
+                """
+                SELECT pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL
+                   AND pg_catalog.has_column_privilege(
+                       current_user,
+                       'public.fc27_player_alias_candidates',
+                       'public_alias',
+                       'SELECT'
+                   )
+                """
+            ).fetchone()
+            if tbl_chk and bool(tbl_chk[0]):
+                cand_rows = conn.execute(
+                    """
+                    SELECT
+                        player_id,
+                        public_alias,
+                        public_alias_normalized,
+                        observation_count,
+                        distinct_match_count,
+                        verification_status,
+                        conflict_status
+                    FROM public.fc27_player_alias_candidates
+                    WHERE player_id = ANY(%s)
+                      AND verification_status <> 'REJECTED'
+                    ORDER BY player_id ASC, last_seen_at DESC, candidate_id DESC
+                    """,
+                    (player_ids,),
+                ).fetchall()
+                for c_row in cand_rows:
+                    candidate_rows_by_player.setdefault(str(c_row[0]), []).append(
+                        (
+                            str(c_row[1]),
+                            str(c_row[2]),
+                            int(c_row[3]),
+                            int(c_row[4]),
+                            str(c_row[5]),
+                            str(c_row[6]),
+                        )
+                    )
+        except Exception:
+            candidate_rows_by_player = {}
+
     tokens = store.issue_tokens(
         player_ids,
         actor_discord_user_id=actor_discord_user_id,
@@ -2158,8 +2210,15 @@ def list_unresolved_players(
         now=now,
     )
 
+    status_rank = {
+        "PROMOTED": 4,
+        "OPERATOR_VERIFIED": 3,
+        "STABLE": 2,
+        "OBSERVED": 1,
+    }
     summaries: list[UnresolvedPlayerSummary] = []
     for token, r in zip(tokens, rows):
+        pid_str = str(r[0])
         raw_positions = r[2] if len(r) > 2 and r[2] is not None else ()
         cleaned_positions = tuple(
             str(pos).strip().upper()
@@ -2168,6 +2227,44 @@ def list_unresolved_players(
             and str(pos).strip()
             and str(pos).strip().upper() not in {"UNKNOWN", "N/A", "NONE", "NULL"}
         )
+
+        cand_list = candidate_rows_by_player.get(pid_str, [])
+        cand_alias: str | None = None
+        cand_aliases: tuple[str, ...] = ()
+        cand_ver_status: str | None = None
+        cand_conf_status: str | None = None
+        cand_obs_cnt = 0
+        cand_distinct_cnt = 0
+        if cand_list:
+            unique_norm_aliases = {item[1] for item in cand_list}
+            has_conflict = (
+                len(unique_norm_aliases) > 1
+                or any(item[4] == "CONFLICTED" or item[5] != "NONE" for item in cand_list)
+            )
+            distinct_safe_display: list[str] = []
+            for item in cand_list:
+                safe_disp = redact_internal_player_refs(item[0])
+                if safe_disp not in distinct_safe_display:
+                    distinct_safe_display.append(safe_disp)
+            cand_aliases = tuple(distinct_safe_display)
+            cand_obs_cnt = sum(item[2] for item in cand_list)
+            cand_distinct_cnt = max(item[3] for item in cand_list)
+            if has_conflict:
+                cand_ver_status = "CONFLICTED"
+                first_non_none_conf = next(
+                    (item[5] for item in cand_list if item[5] != "NONE"),
+                    "CONFLICTED",
+                )
+                cand_conf_status = first_non_none_conf
+                cand_alias = None
+            else:
+                cand_alias = distinct_safe_display[0]
+                cand_conf_status = "NONE"
+                cand_ver_status = max(
+                    (item[4] for item in cand_list),
+                    key=lambda st: status_rank.get(st, 0),
+                )
+
         summaries.append(
             UnresolvedPlayerSummary(
                 token=token,
@@ -2175,7 +2272,13 @@ def list_unresolved_players(
                 observed_positions=cleaned_positions,
                 first_seen_at=r[3],
                 last_seen_at=r[4],
-                player_id=str(r[0]),
+                candidate_alias=cand_alias,
+                candidate_aliases=cand_aliases,
+                candidate_verification_status=cand_ver_status,
+                candidate_conflict_status=cand_conf_status,
+                candidate_observation_count=cand_obs_cnt,
+                candidate_distinct_match_count=cand_distinct_cnt,
+                player_id=pid_str,
             )
         )
     return tuple(summaries)
@@ -2188,8 +2291,36 @@ def _format_seen_timestamp(dt: datetime | None) -> str:
     return local_dt.strftime("%Y-%m-%d %I:%M %p %Z")
 
 
+def _format_candidate_evidence_line(entry: UnresolvedPlayerSummary) -> str | None:
+    status = entry.candidate_verification_status
+    if not status or status == "REJECTED":
+        return None
+    obs_cnt = entry.candidate_observation_count
+    match_cnt = entry.candidate_distinct_match_count
+    if status == "CONFLICTED":
+        return "Conflicting candidate tags — operator review required"
+    alias = redact_internal_player_refs(entry.candidate_alias or "")
+    if not alias:
+        return None
+    if status == "STABLE":
+        return (
+            f"Candidate tag: {alias} — Candidate stable — confirmation required "
+            f"({obs_cnt} obs across {match_cnt} matches)"
+        )
+    if status in {"OPERATOR_VERIFIED", "PROMOTED"}:
+        return (
+            f"Candidate tag: {alias} — Candidate operator verified "
+            f"({obs_cnt} obs across {match_cnt} matches)"
+        )
+    match_word = "match" if match_cnt == 1 else "matches"
+    return (
+        f"Candidate tag: {alias} — Candidate unverified "
+        f"({obs_cnt} obs across {match_cnt} {match_word})"
+    )
+
+
 def format_unresolved_players_ephemeral(entries: Sequence[UnresolvedPlayerSummary]) -> str:
-    """Format an administrator-only, privacy-safe summary of unresolved player tokens."""
+    """Format an authorized, privacy-safe summary of unresolved player tokens and safe candidates."""
     if not entries:
         return "✅ All recorded East Coasters FC players currently have verified roster names."
 
@@ -2198,21 +2329,30 @@ def format_unresolved_players_ephemeral(entries: Sequence[UnresolvedPlayerSummar
         "Map a token with `/setplayer player_id:<Token> display_name:<Name> [position:<POS>]`:",
         "",
     ]
+    shown = 0
     for entry in entries[:25]:
         pos_part = ", ".join(entry.observed_positions) if entry.observed_positions else "No position recorded"
         first_str = _format_seen_timestamp(entry.first_seen_at)
         last_str = _format_seen_timestamp(entry.last_seen_at)
-        lines.append(
+        entry_lines = [
             f"• `{entry.token}` — **{entry.appearance_count}** appearance(s) | "
             f"Pos: {pos_part} | First: {first_str} | Last: {last_str}"
-        )
-    if len(entries) > 25:
-        lines.append(f"...and {len(entries) - 25} more unresolved identities.")
+        ]
+        cand_line = _format_candidate_evidence_line(entry)
+        if cand_line:
+            entry_lines.append(f"  {cand_line}")
+        projected = redact_internal_player_refs("\n".join([*lines, *entry_lines]))
+        if len(projected) > 1920 and shown > 0:
+            break
+        lines.extend(entry_lines)
+        shown += 1
+    if len(entries) > shown:
+        lines.append(f"...and {len(entries) - shown} more unresolved identities.")
     return redact_internal_player_refs("\n".join(lines))[:2000]
 
 
 def render_unresolved_players_embed(entries: Sequence[UnresolvedPlayerSummary]) -> discord.Embed:
-    """Render an administrator-only embed listing temporary reconciliation tokens without raw IDs."""
+    """Render an authorized embed listing temporary reconciliation tokens without raw IDs."""
     embed = discord.Embed(
         title="🔎 Unresolved Players",
         description=(
@@ -2227,10 +2367,14 @@ def render_unresolved_players_embed(entries: Sequence[UnresolvedPlayerSummary]) 
         pos_part = ", ".join(entry.observed_positions) if entry.observed_positions else "No position recorded"
         first_str = _format_seen_timestamp(entry.first_seen_at)
         last_str = _format_seen_timestamp(entry.last_seen_at)
-        val = redact_internal_player_refs(
-            f"Appearances: **{entry.appearance_count}** • Positions: {pos_part}\n"
-            f"First seen: {first_str} • Last seen: {last_str}"
-        )
+        cand_line = _format_candidate_evidence_line(entry)
+        val_parts = [
+            f"Appearances: **{entry.appearance_count}** • Positions: {pos_part}",
+            f"First seen: {first_str} • Last seen: {last_str}",
+        ]
+        if cand_line:
+            val_parts.append(cand_line)
+        val = redact_internal_player_refs("\n".join(val_parts))
         embed.add_field(name=f"Token `{entry.token}`", value=val[:1024], inline=False)
     embed.set_footer(text=EAST_COASTERS_FOOTER_TEXT)
     return embed
@@ -2503,6 +2647,31 @@ def upsert_roster_player(
                     norm_new=norm_name,
                     position=safe_pos,
                 )
+                if effective_active and norm_name != unresolved_norm:
+                    cand_chk = cur.execute(
+                        """
+                        SELECT pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL
+                           AND pg_catalog.has_column_privilege(
+                               current_user,
+                               'public.fc27_player_alias_candidates',
+                               'verification_status',
+                               'UPDATE'
+                           )
+                        """
+                    ).fetchone()
+                    if cand_chk and bool(cand_chk[0]):
+                        cur.execute(
+                            """
+                            UPDATE public.fc27_player_alias_candidates
+                            SET verification_status = 'PROMOTED',
+                                promoted_at = GREATEST(%s, first_seen_at),
+                                updated_at = GREATEST(%s, updated_at)
+                            WHERE player_id = %s
+                              AND public_alias_normalized = %s
+                              AND verification_status <> 'REJECTED'
+                            """,
+                            (row[7], row[7], safe_pid, norm_name),
+                        )
                 if (
                     (actor_discord_user_id is not None and actor_discord_user_id.strip())
                     or has_token
@@ -2546,6 +2715,150 @@ def upsert_roster_player(
                     created_at=row[6],
                     updated_at=row[7],
                 )
+
+
+def verify_player_alias_candidate(
+    conn_or_uri: Any,
+    *,
+    candidate_id: int,
+    require_dedicated_writer_role: bool = True,
+) -> str:
+    """Explicitly mark a non-conflicted alias candidate `OPERATOR_VERIFIED` via writer role."""
+    with open_guarded_match_results_writer_connection(
+        conn_or_uri, require_dedicated_writer_role=require_dedicated_writer_role
+    ) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT verification_status, conflict_status
+                    FROM public.fc27_player_alias_candidates
+                    WHERE candidate_id = %s
+                    FOR UPDATE
+                    """,
+                    (int(candidate_id),),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise MatchResultsNotFoundError("Alias candidate not found.")
+                ver_status = str(row[0])
+                conf_status = str(row[1])
+                if ver_status == "REJECTED":
+                    raise MatchResultsValidationError("Cannot verify a rejected alias candidate.")
+                if ver_status == "PROMOTED":
+                    return "PROMOTED"
+                if conf_status != "NONE" or ver_status == "CONFLICTED":
+                    raise MatchResultsValidationError(
+                        "Conflicted alias candidates must be resolved before verification."
+                    )
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET verification_status = 'OPERATOR_VERIFIED',
+                        updated_at = GREATEST(pg_catalog.clock_timestamp(), updated_at)
+                    WHERE candidate_id = %s
+                    """,
+                    (int(candidate_id),),
+                )
+                return "OPERATOR_VERIFIED"
+
+
+def reject_player_alias_candidate(
+    conn_or_uri: Any,
+    *,
+    candidate_id: int,
+    require_dedicated_writer_role: bool = True,
+) -> str:
+    """Explicitly reject an alias candidate and re-evaluate remaining active sibling candidates."""
+    with open_guarded_match_results_writer_connection(
+        conn_or_uri, require_dedicated_writer_role=require_dedicated_writer_role
+    ) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT player_id, public_alias_normalized
+                    FROM public.fc27_player_alias_candidates
+                    WHERE candidate_id = %s
+                    FOR UPDATE
+                    """,
+                    (int(candidate_id),),
+                )
+                target_row = cur.fetchone()
+                if target_row is None:
+                    raise MatchResultsNotFoundError("Alias candidate not found.")
+                target_pid = str(target_row[0])
+                target_norm = str(target_row[1])
+
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET verification_status = 'REJECTED',
+                        promoted_at = NULL,
+                        updated_at = GREATEST(pg_catalog.clock_timestamp(), updated_at)
+                    WHERE candidate_id = %s
+                    """,
+                    (int(candidate_id),),
+                )
+
+                cur.execute(
+                    """
+                    SELECT candidate_id, player_id, public_alias_normalized,
+                           distinct_match_count, verification_status, conflict_status, updated_at
+                    FROM public.fc27_player_alias_candidates
+                    WHERE (player_id = %s OR public_alias_normalized = %s)
+                      AND verification_status <> 'REJECTED'
+                    ORDER BY candidate_id ASC
+                    FOR UPDATE
+                    """,
+                    (target_pid, target_norm),
+                )
+                scope_rows = cur.fetchall()
+                aliases_by_player: dict[str, set[str]] = {}
+                players_by_alias: dict[str, set[str]] = {}
+                for _, pid_v, norm_v, _, _, _, _ in scope_rows:
+                    aliases_by_player.setdefault(str(pid_v), set()).add(str(norm_v))
+                    players_by_alias.setdefault(str(norm_v), set()).add(str(pid_v))
+
+                for sib in scope_rows:
+                    sib_id = int(sib[0])
+                    sib_pid = str(sib[1])
+                    sib_norm = str(sib[2])
+                    sib_dist = int(sib[3])
+                    sib_ver = str(sib[4])
+                    sib_conf = str(sib[5])
+                    same_multi = len(aliases_by_player.get(sib_pid, set())) > 1
+                    cross_same = len(players_by_alias.get(sib_norm, set())) > 1
+                    if same_multi and cross_same:
+                        new_conf = "BOTH"
+                    elif same_multi:
+                        new_conf = "SAME_PLAYER_MULTIPLE_ALIASES"
+                    elif cross_same:
+                        new_conf = "CROSS_PLAYER_SAME_ALIAS"
+                    else:
+                        new_conf = "NONE"
+
+                    if sib_ver in ("PROMOTED", "OPERATOR_VERIFIED"):
+                        new_ver = "CONFLICTED" if (new_conf != "NONE" and sib_ver != "PROMOTED") else sib_ver
+                    elif new_conf != "NONE":
+                        new_ver = "CONFLICTED"
+                    elif sib_dist >= 2:
+                        new_ver = "STABLE"
+                    else:
+                        new_ver = "OBSERVED"
+
+                    if new_conf != sib_conf or new_ver != sib_ver:
+                        cur.execute(
+                            """
+                            UPDATE public.fc27_player_alias_candidates
+                            SET conflict_status = %s,
+                                verification_status = %s,
+                                updated_at = GREATEST(pg_catalog.clock_timestamp(), updated_at)
+                            WHERE candidate_id = %s
+                            """,
+                            (new_conf, new_ver, sib_id),
+                        )
+                return "REJECTED"
 
 
 def rename_roster_player(

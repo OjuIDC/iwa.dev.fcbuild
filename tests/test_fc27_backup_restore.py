@@ -105,7 +105,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
-        "schema_migrations": 18,
+        "schema_migrations": 19,
         "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,
@@ -120,6 +120,8 @@ def test_backup_manifest_records_counts_and_sha256_hash(
         "fc27_manual_match_audit": 0,
         "fc27_manual_discord_linked_matches": 0,
         "fc27_player_alias_fingerprints": 0,
+        "fc27_player_alias_candidates": 0,
+        "fc27_player_alias_candidate_observations": 0,
         "fc27_player_links": 0,
         "fc27_build_catalog": 0,
         "fc27_build_catalog_audit": 0,
@@ -300,6 +302,8 @@ def test_backup_scope_inventory_and_derived_alias_accuracy() -> None:
         "fc27_manual_match_events",
         "fc27_manual_match_audit",
         "fc27_player_alias_fingerprints",
+        "fc27_player_alias_candidates",
+        "fc27_player_alias_candidate_observations",
         "fc27_player_links",
         "fc27_build_catalog",
         "fc27_build_catalog_audit",
@@ -397,7 +401,7 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         pg_db_migrated.admin,
         backup_dir=backup_dir,
     )
-    assert manifest.table_counts.schema_migrations == 18
+    assert manifest.table_counts.schema_migrations == 19
     assert manifest.table_counts.schema_policy_versions == 1
     assert manifest.table_counts.fc27_roster == 1
     assert manifest.table_counts.fc27_manual_matches == 1

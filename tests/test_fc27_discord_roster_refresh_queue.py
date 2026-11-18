@@ -490,8 +490,8 @@ def test_06_duplicate_same_revision_is_idempotent_and_new_revision_creates_new_j
 
 def test_07_security_definer_producer_boundary_and_role_matrix(pg_db_migrated) -> None:
     """8-10, 31-34. Verify SECURITY DEFINER owner/search_path, PUBLIC & sibling denial, writer table isolation, and SQL injection rejection."""
-    assert GRANTS_POLICY_VERSION == 19
-    assert GRANTS_POLICY.version == 19
+    assert GRANTS_POLICY_VERSION == 20
+    assert GRANTS_POLICY.version == 20
 
     # Function metadata checks (owner, secdef, strict search_path)
     with psycopg.connect(pg_db_migrated.admin) as aconn:
@@ -596,9 +596,9 @@ def test_08_migration_0017_to_0018_upgrade_preserves_existing_and_completed_jobs
             """
         )
 
-    applied = migrate(pg_db.migrator)
+    applied = migrate(pg_db.migrator, target="0018")
     assert applied == ["0018_fc27_roster_refresh_queue.sql"]
-    assert migrate(pg_db.migrator) == []
+    assert migrate(pg_db.migrator, target="0018") == []
 
     with psycopg.connect(pg_db.admin) as aconn:
         assert verify_postconditions(aconn) == []
