@@ -754,16 +754,40 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     if not cur.fetchone():
                         continue
                 for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
-                    cur.execute(
-                        "SELECT has_table_privilege(%s, 'public.fc27_player_alias_candidates', %s)",
-                        (role_name, priv),
-                    )
+                    if priv == "DELETE":
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, 'public.fc27_player_alias_candidates', %s)",
+                            (role_name, priv),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT has_any_column_privilege(%s, 'public.fc27_player_alias_candidates', %s)",
+                            (role_name, priv),
+                        )
                     p_row = cur.fetchone()
                     has_priv = bool(p_row and p_row[0])
                     if priv in allowed_privs and not has_priv:
                         violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_player_alias_candidates")
                     elif priv not in allowed_privs and has_priv:
                         violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_player_alias_candidates")
+
+            for restricted_role, scoped_priv in (
+                ("fc27_poll_writer", "UPDATE"),
+                ("fc27_discord_reader", "SELECT"),
+                ("fc27_match_results_writer", "SELECT"),
+                ("fc27_match_results_writer", "UPDATE"),
+            ):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (restricted_role,))
+                if cur.fetchone():
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_player_alias_candidates', %s)",
+                        (restricted_role, scoped_priv),
+                    )
+                    tbl_row = cur.fetchone()
+                    if tbl_row and tbl_row[0]:
+                        violations.append(
+                            f"overbroad_table_{restricted_role}_{scoped_priv.lower()}_on_fc27_player_alias_candidates"
+                        )
 
             for restricted_role in ("fc27_discord_reader", "fc27_match_results_writer"):
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (restricted_role,))
