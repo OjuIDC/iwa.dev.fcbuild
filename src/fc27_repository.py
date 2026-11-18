@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -49,6 +49,7 @@ from src.fc27_privacy import (
     contains_discord_mention,
     contains_prohibited_url,
     is_community_provider_provenance,
+    normalize_public_player_alias_key,
     project_match_equivalence_v1,
     pseudonymize_match_ref,
     scan_for_sensitive_fields,
@@ -2806,6 +2807,143 @@ def _normalize_candidate_observations(
     return normalized_obs
 
 
+def recompute_player_alias_candidate_conflicts_in_tx(
+    cur: Any,
+    *,
+    seed_player_ids: Iterable[str] = (),
+    seed_normalized_aliases: Iterable[str] = (),
+    updated_at: datetime | None = None,
+) -> tuple[int, int]:
+    """Recompute conflict and stability statuses across complete non-REJECTED connected components.
+
+    Iteratively expands connected candidates over `(player_id, public_alias_normalized)` starting
+    from the seed sets until a fixed point is reached, excluding `REJECTED` rows while never
+    reading restricted columns such as `alias_hmac_fingerprint`.
+    """
+    known_pids: set[str] = {str(p).strip() for p in seed_player_ids if str(p or "").strip()}
+    known_aliases: set[str] = {
+        normalize_public_player_alias_key(str(a))
+        for a in seed_normalized_aliases
+        if str(a or "").strip()
+    }
+    if not known_pids and not known_aliases:
+        return (0, 0)
+
+    seen_rows_by_id: dict[int, tuple[Any, ...]] = {}
+    while True:
+        cur.execute(
+            """
+            SELECT
+                candidate_id,
+                player_id,
+                public_alias_normalized,
+                distinct_match_count,
+                verification_status,
+                conflict_status,
+                updated_at
+            FROM public.fc27_player_alias_candidates
+            WHERE verification_status <> 'REJECTED'
+              AND (player_id = ANY(%s) OR public_alias_normalized = ANY(%s))
+            ORDER BY candidate_id ASC
+            FOR UPDATE
+            """,
+            (sorted(known_pids), sorted(known_aliases)),
+        )
+        batch = cur.fetchall()
+        discovered_new = False
+        for row_item in batch:
+            cand_id = int(row_item[0])
+            pid_val = str(row_item[1])
+            norm_alias = normalize_public_player_alias_key(str(row_item[2]))
+            if cand_id not in seen_rows_by_id:
+                discovered_new = True
+            seen_rows_by_id[cand_id] = row_item
+            if pid_val not in known_pids:
+                known_pids.add(pid_val)
+                discovered_new = True
+            if norm_alias not in known_aliases:
+                known_aliases.add(norm_alias)
+                discovered_new = True
+        if not discovered_new:
+            break
+
+    if not seen_rows_by_id:
+        return (0, 0)
+
+    scope_rows = [seen_rows_by_id[cid] for cid in sorted(seen_rows_by_id)]
+    aliases_by_player: dict[str, set[str]] = {}
+    players_by_alias: dict[str, set[str]] = {}
+    for _, pid_val, norm_val, _, _, _, _ in scope_rows:
+        norm_key = normalize_public_player_alias_key(str(norm_val))
+        aliases_by_player.setdefault(str(pid_val), set()).add(norm_key)
+        players_by_alias.setdefault(norm_key, set()).add(str(pid_val))
+
+    stable_count = 0
+    conflicted_count = 0
+    for row_item in scope_rows:
+        cand_id = int(row_item[0])
+        pid_val = str(row_item[1])
+        norm_key = normalize_public_player_alias_key(str(row_item[2]))
+        distinct_cnt = int(row_item[3])
+        cur_ver_status = str(row_item[4])
+        cur_conf_status = str(row_item[5])
+        cur_upd_at = row_item[6]
+
+        same_player_multi = len(aliases_by_player.get(pid_val, set())) > 1
+        cross_player_same = len(players_by_alias.get(norm_key, set())) > 1
+        if same_player_multi and cross_player_same:
+            new_conf_status = "BOTH"
+        elif same_player_multi:
+            new_conf_status = "SAME_PLAYER_MULTIPLE_ALIASES"
+        elif cross_player_same:
+            new_conf_status = "CROSS_PLAYER_SAME_ALIAS"
+        else:
+            new_conf_status = "NONE"
+
+        if cur_ver_status == "PROMOTED":
+            new_ver_status = "PROMOTED"
+        elif cur_ver_status == "OPERATOR_VERIFIED":
+            new_ver_status = "CONFLICTED" if new_conf_status != "NONE" else "OPERATOR_VERIFIED"
+        elif new_conf_status != "NONE":
+            new_ver_status = "CONFLICTED"
+        elif distinct_cnt >= 2:
+            new_ver_status = "STABLE"
+        else:
+            new_ver_status = "OBSERVED"
+
+        if new_ver_status == "STABLE":
+            stable_count += 1
+        if new_ver_status == "CONFLICTED" or new_conf_status != "NONE":
+            conflicted_count += 1
+
+        if new_conf_status != cur_conf_status or new_ver_status != cur_ver_status:
+            if updated_at is not None:
+                eff_upd = max(cur_upd_at, updated_at) if cur_upd_at is not None else updated_at
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET conflict_status = %s,
+                        verification_status = %s,
+                        updated_at = %s
+                    WHERE candidate_id = %s
+                    """,
+                    (new_conf_status, new_ver_status, eff_upd, cand_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE public.fc27_player_alias_candidates
+                    SET conflict_status = %s,
+                        verification_status = %s,
+                        updated_at = GREATEST(pg_catalog.clock_timestamp(), updated_at)
+                    WHERE candidate_id = %s
+                    """,
+                    (new_conf_status, new_ver_status, cand_id),
+                )
+
+    return (stable_count, conflicted_count)
+
+
 def persist_player_alias_candidates_in_tx(
     conn: psycopg.Connection,
     observations: Sequence[FC27AliasCandidateObservation | Mapping[str, Any]],
@@ -2972,82 +3110,12 @@ def persist_player_alias_candidates_in_tx(
                 )
                 updated_count += 1
 
-        # Re-evaluate conflict and stability statuses across all touched players & normalized aliases
-        cur.execute(
-            """
-            SELECT
-                candidate_id,
-                player_id,
-                public_alias_normalized,
-                distinct_match_count,
-                verification_status,
-                conflict_status,
-                updated_at
-            FROM public.fc27_player_alias_candidates
-            WHERE (player_id = ANY(%s) OR public_alias_normalized = ANY(%s))
-              AND verification_status <> 'REJECTED'
-            ORDER BY candidate_id ASC
-            FOR UPDATE
-            """,
-            (sorted(affected_player_ids), sorted(affected_norm_aliases)),
+        stable_count, conflicted_count = recompute_player_alias_candidate_conflicts_in_tx(
+            cur,
+            seed_player_ids=affected_player_ids,
+            seed_normalized_aliases=affected_norm_aliases,
+            updated_at=now,
         )
-        scope_rows = cur.fetchall()
-        aliases_by_player: dict[str, set[str]] = {}
-        players_by_alias: dict[str, set[str]] = {}
-        for _, pid_val, norm_val, _, _, _, _ in scope_rows:
-            aliases_by_player.setdefault(str(pid_val), set()).add(str(norm_val))
-            players_by_alias.setdefault(str(norm_val), set()).add(str(pid_val))
-
-        stable_count = 0
-        conflicted_count = 0
-        for row_item in scope_rows:
-            cand_id = int(row_item[0])
-            pid_val = str(row_item[1])
-            norm_val = str(row_item[2])
-            distinct_cnt = int(row_item[3])
-            cur_ver_status = str(row_item[4])
-            cur_conf_status = str(row_item[5])
-            cur_upd_at = row_item[6]
-
-            same_player_multi = len(aliases_by_player.get(pid_val, set())) > 1
-            cross_player_same = len(players_by_alias.get(norm_val, set())) > 1
-            if same_player_multi and cross_player_same:
-                new_conf_status = "BOTH"
-            elif same_player_multi:
-                new_conf_status = "SAME_PLAYER_MULTIPLE_ALIASES"
-            elif cross_player_same:
-                new_conf_status = "CROSS_PLAYER_SAME_ALIAS"
-            else:
-                new_conf_status = "NONE"
-
-            if cur_ver_status == "PROMOTED":
-                new_ver_status = "PROMOTED"
-            elif cur_ver_status == "OPERATOR_VERIFIED":
-                new_ver_status = "CONFLICTED" if new_conf_status != "NONE" else "OPERATOR_VERIFIED"
-            elif new_conf_status != "NONE":
-                new_ver_status = "CONFLICTED"
-            elif distinct_cnt >= 2:
-                new_ver_status = "STABLE"
-            else:
-                new_ver_status = "OBSERVED"
-
-            if new_ver_status == "STABLE":
-                stable_count += 1
-            if new_ver_status == "CONFLICTED" or new_conf_status != "NONE":
-                conflicted_count += 1
-
-            if new_conf_status != cur_conf_status or new_ver_status != cur_ver_status:
-                eff_upd = max(cur_upd_at, now) if cur_upd_at is not None else now
-                cur.execute(
-                    """
-                    UPDATE public.fc27_player_alias_candidates
-                    SET conflict_status = %s,
-                        verification_status = %s,
-                        updated_at = %s
-                    WHERE candidate_id = %s
-                    """,
-                    (new_conf_status, new_ver_status, eff_upd, cand_id),
-                )
 
     return FC27CandidatePersistenceResult(
         inserted_count=inserted_count,

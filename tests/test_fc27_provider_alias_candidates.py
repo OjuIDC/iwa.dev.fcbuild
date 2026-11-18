@@ -12,6 +12,7 @@ from typing import Any
 import discord
 from discord import app_commands
 import psycopg
+from psycopg import sql
 import pytest
 
 from src import settings
@@ -24,9 +25,11 @@ from src.fc27_backup_restore import (
 )
 from src.fc27_community_provider import (
     PublicPlayerAlias,
+    PublicPlayerAliasSource,
     extract_public_player_alias,
     normalize_community_match_records,
     persist_community_provider_batch,
+    resolve_public_player_alias_source,
 )
 from src.fc27_discord_bot import (
     ANALYTICS_GROUP_SUBCOMMANDS,
@@ -37,6 +40,7 @@ from src.fc27_discord_bot import (
     FC27DiscordAuthzError,
     FC27DiscordBotConfig,
     FC27DiscordBotService,
+    assert_discord_output_sanitized,
     register_fc27_application_commands,
 )
 from src.fc27_discord_dispatcher import (
@@ -46,12 +50,24 @@ from src.fc27_discord_dispatcher import (
     run_discord_dispatch_cycle,
 )
 from src.fc27_match_results import (
+    DISCORD_EMBED_MAX_DESCRIPTION_CHARS,
+    DISCORD_EMBED_MAX_FIELDS,
+    DISCORD_EMBED_MAX_FIELD_NAME_CHARS,
+    DISCORD_EMBED_MAX_FIELD_VALUE_CHARS,
+    DISCORD_EMBED_MAX_FOOTER_CHARS,
+    DISCORD_EMBED_MAX_TITLE_CHARS,
+    DISCORD_EMBED_MAX_TOTAL_CHARS,
+    EAST_COASTERS_FOOTER_TEXT,
+    MatchResultsValidationError,
     ReconciliationTokenStore,
+    UnresolvedPlayerSummary,
+    _embed_aggregate_char_count,
     format_unresolved_players_ephemeral,
     get_match_discord_message_links,
     list_unresolved_players,
     record_match_discord_message_links,
     reject_player_alias_candidate,
+    rename_roster_player,
     render_unresolved_players_embed,
     upsert_roster_player,
     verify_player_alias_candidate,
@@ -72,6 +88,7 @@ from src.fc27_privacy import (
     PSEUDONYM_MATCH_REF_RE,
     PSEUDONYM_PLAYER_REF_RE,
     compute_alias_hmac_fingerprint,
+    normalize_public_player_alias_key,
     pseudonymize_east_coasters_identifier,
     pseudonymize_match_ref,
     validate_public_player_alias_text,
@@ -80,6 +97,7 @@ from src.fc27_repository import (
     FC27AliasCandidateObservation,
     FC27RepositoryError,
     persist_player_alias_candidates,
+    recompute_player_alias_candidate_conflicts_in_tx,
 )
 from src.settings import ConfigError
 
@@ -1364,3 +1382,949 @@ class TestBackupRestoreWithAliasCandidates:
         assert ("BakObs", "OBSERVED", "NONE") in restored_statuses
         assert ("BakRej", "REJECTED", "NONE") in restored_statuses
         assert ("BakStable", "PROMOTED", "NONE") in restored_statuses
+
+
+# ==============================================================================
+# POST-MERGE PR #125 REMEDIATION REGRESSION SUITES (Phases 2-7)
+# ==============================================================================
+
+
+class TestSharedAliasSourcePrecedence:
+    """Phase 2 (Thread 4608588139): Single authoritative alias-source precedence across candidates and HMACs."""
+
+    def test_precedence_top_level_vs_raw_multiple_fields_and_invalid_fallthrough(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+
+        # 1. Identical top-level and raw values
+        identical_rec = _raw_community_match(
+            match_id="980001",
+            timestamp=1763000000,
+            players=[
+                _player_payload(
+                    "9301",
+                    alias_field="player_name",
+                    alias_value="SameTag",
+                    extra_fields={"raw": {"playername": "SameTag"}},
+                )
+            ],
+        )
+        env_ident, _ = normalize_community_match_records(
+            [identical_rec], alias_hmac_key=TEST_ALIAS_HMAC_KEY
+        )
+        expected_hmac = compute_alias_hmac_fingerprint("SameTag", TEST_ALIAS_HMAC_KEY)
+        assert env_ident.alias_candidates[0].public_alias == "SameTag"
+        assert env_ident.alias_candidates[0].alias_hmac_fingerprint == expected_hmac
+        assert env_ident.alias_fingerprints[0].gamertag_hmac == expected_hmac
+
+        # 2. Differing top-level (`display_alias`) and `raw.playername`: ALL top-level fields beat `raw.*`
+        diff_player = {
+            "display_alias": "TopDisplayTag",
+            "raw": {"playername": "RawInternalTag"},
+        }
+        src_diff = resolve_public_player_alias_source(diff_player)
+        assert isinstance(src_diff, PublicPlayerAliasSource)
+        assert src_diff.display_value == "TopDisplayTag"
+        assert src_diff.matched_field == "display_alias"
+        assert src_diff.source_scope == "top_level"
+
+        diff_match = _raw_community_match(
+            match_id="980002",
+            timestamp=1763000300,
+            players=[
+                _player_payload(
+                    "9302",
+                    alias_field="display_alias",
+                    alias_value="TopDisplayTag",
+                    extra_fields={"raw": {"playername": "RawInternalTag"}},
+                )
+            ],
+        )
+        env_diff, _ = normalize_community_match_records(
+            [diff_match], alias_hmac_key=TEST_ALIAS_HMAC_KEY
+        )
+        top_hmac = compute_alias_hmac_fingerprint("TopDisplayTag", TEST_ALIAS_HMAC_KEY)
+        assert len(env_diff.alias_candidates) == 1
+        assert len(env_diff.alias_fingerprints) == 1
+        assert env_diff.alias_candidates[0].public_alias == "TopDisplayTag"
+        assert env_diff.alias_candidates[0].matched_field == "display_alias"
+        assert env_diff.alias_candidates[0].alias_hmac_fingerprint == top_hmac
+        assert env_diff.alias_fingerprints[0].gamertag_hmac == top_hmac
+
+        # 3 & 4. Multiple top-level fields & multiple raw fields precedence
+        multi_top = {
+            "player_name": "Top1",
+            "playername": "Top2",
+            "pro_name": "Top3",
+            "proName": "Top4",
+            "display_alias": "Top5",
+            "name": "Top6",
+            "raw": {"player_name": "Raw1"},
+        }
+        src_top = resolve_public_player_alias_source(multi_top)
+        assert src_top is not None
+        assert src_top.display_value == "Top1"
+
+        multi_raw = {
+            "player_name": "   ",
+            "display_alias": "",
+            "raw": {
+                "playername": "RawSecond",
+                "pro_name": "RawThird",
+                "proName": "RawFourth",
+                "display_alias": "RawFifth",
+                "name": "RawSixth",
+            },
+        }
+        src_multi_raw = resolve_public_player_alias_source(multi_raw)
+        assert src_multi_raw is not None
+        assert src_multi_raw.display_value == "RawSecond"
+        assert src_multi_raw.source_scope == "raw"
+
+        # 5. Top-level empty / None and raw populated -> both candidate & HMAC use raw
+        empty_top_match = _raw_community_match(
+            match_id="980003",
+            timestamp=1763000600,
+            players=[
+                _player_payload(
+                    "9303",
+                    alias_field="player_name",
+                    alias_value="   ",
+                    extra_fields={"display_alias": None, "raw": {"proName": "RawPopulatedTag"}},
+                )
+            ],
+        )
+        env_empty_top, _ = normalize_community_match_records(
+            [empty_top_match], alias_hmac_key=TEST_ALIAS_HMAC_KEY
+        )
+        raw_hmac = compute_alias_hmac_fingerprint("RawPopulatedTag", TEST_ALIAS_HMAC_KEY)
+        assert env_empty_top.alias_candidates[0].public_alias == "RawPopulatedTag"
+        assert env_empty_top.alias_candidates[0].alias_hmac_fingerprint == raw_hmac
+        assert env_empty_top.alias_fingerprints[0].gamertag_hmac == raw_hmac
+
+        # 6 & 9. Invalid higher-priority value + valid lower-priority value -> consistent fall-through for BOTH
+        invalid_high_match = _raw_community_match(
+            match_id="980004",
+            timestamp=1763000900,
+            players=[
+                _player_payload(
+                    "9304",
+                    alias_field="player_name",
+                    alias_value="https://evil.example",
+                    extra_fields={"raw": {"playername": "FallbackValidTag"}},
+                ),
+                _player_payload(
+                    "9305",
+                    alias_field="player_name",
+                    alias_value="@everyone",
+                    extra_fields={"raw": {"playername": "plr_ecf_001122334455"}},
+                ),
+            ],
+        )
+        env_fall, _ = normalize_community_match_records(
+            [invalid_high_match], alias_hmac_key=TEST_ALIAS_HMAC_KEY
+        )
+        # Player 9304 falls through consistently to FallbackValidTag; player 9305 has no valid source -> emits NEITHER
+        fall_hmac = compute_alias_hmac_fingerprint("FallbackValidTag", TEST_ALIAS_HMAC_KEY)
+        assert len(env_fall.alias_candidates) == 1
+        assert len(env_fall.alias_fingerprints) == 1
+        assert env_fall.alias_candidates[0].public_alias == "FallbackValidTag"
+        assert env_fall.alias_candidates[0].alias_hmac_fingerprint == fall_hmac
+        assert env_fall.alias_fingerprints[0].gamertag_hmac == fall_hmac
+
+        # 7 & 10. Log leakage check across all normalized matches
+        all_logs = "\n".join(rec.getMessage() for rec in caplog.records)
+        for sensitive_tag in (
+            "SameTag",
+            "TopDisplayTag",
+            "RawInternalTag",
+            "RawPopulatedTag",
+            "FallbackValidTag",
+        ):
+            assert sensitive_tag not in all_logs
+        assert TEST_ALIAS_HMAC_KEY not in all_logs
+
+    def test_differing_top_level_and_raw_replay_updates_fingerprint_safely_in_postgres(
+        self, monkeypatch: pytest.MonkeyPatch, pg_db_migrated
+    ) -> None:
+        _enable_all_polling_gates(monkeypatch)
+        # Match 1: player 9310 has display_alias="TagAlpha" and raw.playername="RawUnused"
+        m1 = _raw_community_match(
+            match_id="980101",
+            timestamp=1763010000,
+            players=[
+                _player_payload(
+                    "9310",
+                    alias_field="display_alias",
+                    alias_value="TagAlpha",
+                    extra_fields={"raw": {"playername": "RawUnused"}},
+                )
+            ],
+        )
+        env1, _ = normalize_community_match_records([m1], alias_hmac_key=TEST_ALIAS_HMAC_KEY)
+        res1 = persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=env1)
+        assert res1.match_rows_inserted == 1
+
+        # Replay exact same match 1 -> deterministic & idempotent
+        env1_rep, _ = normalize_community_match_records([m1], alias_hmac_key=TEST_ALIAS_HMAC_KEY)
+        assert env1_rep.alias_candidates == env1.alias_candidates
+        assert env1_rep.alias_fingerprints == env1.alias_fingerprints
+        res1_rep = persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=env1_rep)
+        assert res1_rep.duplicates_ignored == 1
+
+        # Match 2: player 9310 changes display_alias to "TagBeta" while raw.playername stays "RawUnused"
+        # Because both extractors select display_alias="TagBeta", candidate_conflict_pairs includes TagBeta's HMAC!
+        m2 = _raw_community_match(
+            match_id="980102",
+            timestamp=1763020000,
+            players=[
+                _player_payload(
+                    "9310",
+                    alias_field="display_alias",
+                    alias_value="TagBeta",
+                    extra_fields={"raw": {"playername": "RawUnused"}},
+                )
+            ],
+        )
+        env2, _ = normalize_community_match_records([m2], alias_hmac_key=TEST_ALIAS_HMAC_KEY)
+        res2 = persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=env2)
+        assert res2.match_rows_inserted == 1
+
+        p9310 = pseudonymize_east_coasters_identifier("9310", club_id=EAST_COASTERS_CLUB_ID)
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            rows = aconn.execute(
+                """
+                SELECT public_alias, verification_status, conflict_status
+                FROM public.fc27_player_alias_candidates
+                WHERE player_id = %s
+                ORDER BY public_alias ASC
+                """,
+                (p9310,),
+            ).fetchall()
+            assert rows == [
+                ("TagAlpha", "CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES"),
+                ("TagBeta", "CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES"),
+            ]
+
+
+class TestCompleteConflictComponentRecomputation:
+    """Phase 3 (Thread 4608588175): Transitive connected-component conflict recomputation."""
+
+    def test_transitive_connected_components_replay_rejection_promotion_and_rollback(
+        self, pg_db_migrated, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        pA = pseudonymize_east_coasters_identifier("9401", club_id=EAST_COASTERS_CLUB_ID)
+        pB = pseudonymize_east_coasters_identifier("9402", club_id=EAST_COASTERS_CLUB_ID)
+        mref = lambda idx: pseudonymize_match_ref(f"98100{idx}", club_id=EAST_COASTERS_CLUB_ID)
+
+        def _obs(pid: str, alias: str, match_idx: int) -> FC27AliasCandidateObservation:
+            disp, norm = validate_public_player_alias_text(alias)
+            return FC27AliasCandidateObservation(
+                player_id=pid,
+                public_alias=disp,
+                public_alias_normalized=norm,
+                alias_hmac_fingerprint=compute_alias_hmac_fingerprint(disp, TEST_ALIAS_HMAC_KEY),
+                matched_field="player_name",
+                source_classification="AUTHORIZED_MATCH_PAYLOAD",
+                match_ref=mref(match_idx),
+            )
+
+        # Build 4-node connected component: A/X (>=2 matches), A/Y, B/Y, B/Z
+        persist_player_alias_candidates(
+            pg_db_migrated.poll_writer,
+            [
+                _obs(pA, "AliasX", 1),
+                _obs(pA, "AliasX", 2),
+                _obs(pA, "AliasY", 3),
+                _obs(pB, "AliasY", 4),
+                _obs(pB, "AliasZ", 5),
+            ],
+            enforce_posture=False,
+        )
+
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            cids = {
+                (pid, norm): (cid, ver, conf)
+                for cid, pid, norm, ver, conf in aconn.execute(
+                    """
+                    SELECT candidate_id, player_id, public_alias_normalized, verification_status, conflict_status
+                    FROM public.fc27_player_alias_candidates
+                    WHERE player_id = ANY(%s)
+                    """,
+                    ([pA, pB],),
+                ).fetchall()
+            }
+
+        assert cids[(pA, "aliasx")][1:] == ("CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES")
+        assert cids[(pA, "aliasy")][1:] == ("CONFLICTED", "BOTH")
+        assert cids[(pB, "aliasy")][1:] == ("CONFLICTED", "BOTH")
+        assert cids[(pB, "aliasz")][1:] == ("CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES")
+
+        # Cannot verify a conflicted candidate
+        with pytest.raises(MatchResultsValidationError):
+            verify_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cids[(pA, "aliasx")][0])
+
+        # Reject B/Z (outer edge of 4-node component): B/Y stays CROSS_PLAYER_SAME_ALIAS with A/Y,
+        # A/Y stays BOTH, A/X stays SAME_PLAYER_MULTIPLE_ALIASES!
+        assert reject_player_alias_candidate(
+            pg_db_migrated.match_results_writer, candidate_id=cids[(pB, "aliasz")][0]
+        ) == "REJECTED"
+
+        # Now add B/X (forming A/X, A/Y, B/X, B/Y) and reject B/X -> replay B/X via poll_writer!
+        persist_player_alias_candidates(
+            pg_db_migrated.poll_writer,
+            [_obs(pB, "AliasX", 6)],
+            enforce_posture=False,
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            cid_bx = aconn.execute(
+                "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s AND public_alias_normalized = 'aliasx'",
+                (pB,),
+            ).fetchone()[0]
+
+        # Rejecting B/X still leaves A/X <-> A/Y active! A/X MUST stay CONFLICTED (never falsely STABLE)
+        # and verification of A/X MUST continue to fail!
+        reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_bx)
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            row_ax_after = aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cids[(pA, "aliasx")][0],),
+            ).fetchone()
+            assert row_ax_after == ("CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES")
+        with pytest.raises(MatchResultsValidationError):
+            verify_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cids[(pA, "aliasx")][0])
+
+        # Replaying the rejected B/X observation alone (seeds only B & 'aliasx') expands transitively A -> 'aliasy'
+        # and keeps A/X CONFLICTED!
+        res_bx_replay = persist_player_alias_candidates(
+            pg_db_migrated.poll_writer,
+            [_obs(pB, "AliasX", 7)],
+            enforce_posture=False,
+        )
+        assert res_bx_replay.updated_count == 1
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cids[(pA, "aliasx")][0],),
+            ).fetchone() == ("CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES")
+            assert aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cid_bx,),
+            ).fetchone() == ("REJECTED", "NONE")
+
+        # Repeated idempotent recomputation preserves identical statuses
+        with psycopg.connect(pg_db_migrated.poll_writer) as pw_conn, pw_conn.cursor() as cur:
+            st1 = recompute_player_alias_candidate_conflicts_in_tx(
+                cur, seed_player_ids=(pA,), seed_normalized_aliases=("aliasx",)
+            )
+            st2 = recompute_player_alias_candidate_conflicts_in_tx(
+                cur, seed_player_ids=(pB,), seed_normalized_aliases=("aliasy",)
+            )
+            pw_conn.commit()
+        assert st1 == st2
+
+        # Rollback when an error occurs inside a mutation transaction does not leak partial conflict updates
+        with pytest.raises(RuntimeError):
+            with psycopg.connect(pg_db_migrated.match_results_writer) as wconn:
+                with wconn.transaction():
+                    with wconn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE public.fc27_player_alias_candidates SET verification_status = 'REJECTED', conflict_status = 'NONE' WHERE candidate_id = %s",
+                            (cids[(pA, "aliasy")][0],),
+                        )
+                        recompute_player_alias_candidate_conflicts_in_tx(
+                            cur, seed_player_ids=(pA,), seed_normalized_aliases=("aliasy",)
+                        )
+                        raise RuntimeError("abort_tx")
+
+        # Rejecting A/Y clears A/X to STABLE (distinct_match_count=2) and B/Y to OBSERVED (distinct_match_count=1)
+        reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cids[(pA, "aliasy")][0])
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cids[(pA, "aliasx")][0],),
+            ).fetchone() == ("STABLE", "NONE")
+            assert aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cids[(pB, "aliasy")][0],),
+            ).fetchone() == ("OBSERVED", "NONE")
+
+        # Now A/X can be verified & promoted via upsert_roster_player, and remains PROMOTED even if sibling added later
+        assert verify_player_alias_candidate(
+            pg_db_migrated.match_results_writer, candidate_id=cids[(pA, "aliasx")][0]
+        ) == "OPERATOR_VERIFIED"
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pA,
+            display_name="AliasX",
+            position="ST",
+        )
+        persist_player_alias_candidates(
+            pg_db_migrated.poll_writer,
+            [_obs(pA, "AliasNew", 8)],
+            enforce_posture=False,
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cids[(pA, "aliasx")][0],),
+            ).fetchone() == ("PROMOTED",)
+            assert aconn.execute(
+                "SELECT verification_status, conflict_status FROM public.fc27_player_alias_candidates WHERE player_id = %s AND public_alias_normalized = 'aliasnew'",
+                (pA,),
+            ).fetchone() == ("CONFLICTED", "SAME_PLAYER_MULTIPLE_ALIASES")
+
+        # Zero raw alias leakage in logs
+        all_logs = "\n".join(rec.getMessage() for rec in caplog.records)
+        for alias in ("AliasX", "AliasY", "AliasZ", "AliasNew"):
+            assert alias not in all_logs
+
+
+class TestPreservedTokenAuthorizationContract:
+    """Phase 4 (Thread 4608588212): Preserve Manager/Captain/Admin token /setplayer alongside Identity Operator."""
+
+    def test_token_authorization_matrix_for_manager_captain_admin_identity_operator_and_member(
+        self, pg_db_migrated
+    ) -> None:
+        clock = _Clock()
+        store = ReconciliationTokenStore(clock=clock)
+        env, _ = normalize_community_match_records(
+            [
+                _raw_community_match(
+                    match_id="982001",
+                    timestamp=1763030000,
+                    players=[
+                        _player_payload("9501", alias_field="player_name", alias_value="MgrTarget"),
+                        _player_payload("9502", alias_field="player_name", alias_value="CapTarget", position="CM", goals=0),
+                        _player_payload("9503", alias_field="player_name", alias_value="IdOpTarget", position="CB", goals=0),
+                        _player_payload("9504", alias_field="player_name", alias_value="AdmTarget", position="GK", goals=0),
+                    ],
+                )
+            ],
+            alias_hmac_key=TEST_ALIAS_HMAC_KEY,
+        )
+        persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=env)
+
+        svc = FC27DiscordBotService(
+            _bot_config(),
+            db_conn_or_uri=pg_db_migrated.discord_reader,
+            writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+            reconciliation_token_store=store,
+            now_utc_fn=clock,
+        )
+
+        # Issue actor-bound tokens for Manager, Captain, Identity Operator, and Admin
+        mgr_entries = list_unresolved_players(
+            pg_db_migrated.discord_reader,
+            token_store=store,
+            actor_discord_user_id=MANAGER_USER_ID,
+            now=clock.now,
+        )
+        cap_entries = list_unresolved_players(
+            pg_db_migrated.discord_reader,
+            token_store=store,
+            actor_discord_user_id=CAPTAIN_USER_ID,
+            now=clock.now,
+        )
+        idop_entries = list_unresolved_players(
+            pg_db_migrated.discord_reader,
+            token_store=store,
+            actor_discord_user_id=IDENTITY_OP_USER_ID,
+            now=clock.now,
+        )
+        adm_entries = list_unresolved_players(
+            pg_db_migrated.discord_reader,
+            token_store=store,
+            actor_discord_user_id=ADMIN_USER_ID,
+            now=clock.now,
+        )
+
+        # Member & decorative [GDev] / "GDev" role-name denied with exact ephemeral message
+        for uid, roles in (
+            (MEMBER_USER_ID, (MEMBER_ROLE_ID,)),
+            (MEMBER_USER_ID, (GDEV_DECORATIVE_ROLE_ID, "GDev", "[GDev]")),
+        ):
+            r_den = svc.handle_slash_command(
+                "setplayer",
+                guild_id=APPROVED_GUILD_ID,
+                channel_id=RESULTS_CHANNEL_ID,
+                user_id=uid,
+                user_role_ids=roles,
+                player_id="T1",
+                display_name="MemberTry",
+            )
+            assert r_den.status == "REJECTED_UNAUTHORIZED"
+            assert r_den.ephemeral is True
+            assert r_den.content == PERMISSION_DENIED_MESSAGE
+
+        # Cross-actor token submission rejected cleanly (actor-bound enforcement preserved for Manager/Captain/Admin/Identity Operator)
+        isolated_store = ReconciliationTokenStore(clock=clock)
+        isolated_svc = FC27DiscordBotService(
+            _bot_config(),
+            db_conn_or_uri=pg_db_migrated.discord_reader,
+            writer_db_conn_or_uri=pg_db_migrated.match_results_writer,
+            reconciliation_token_store=isolated_store,
+            now_utc_fn=clock,
+        )
+        cap_tok = isolated_store.issue_tokens(
+            [pseudonymize_east_coasters_identifier("9502", club_id=EAST_COASTERS_CLUB_ID)],
+            actor_discord_user_id=CAPTAIN_USER_ID,
+            now=clock.now,
+        )[0]
+        cross_res = isolated_svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=MANAGER_USER_ID,
+            user_role_ids=(MANAGER_ROLE_ID,),
+            player_id=cap_tok,
+            display_name="CapTarget",
+        )
+        assert cross_res.status == "ERROR"
+        assert cross_res.ephemeral is True
+
+        # Cross-actor token for Identity Operator also fails even on fresh isolated store
+        cross_idop = isolated_svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=IDENTITY_OP_USER_ID,
+            user_role_ids=(IDENTITY_OPERATOR_ROLE_ID,),
+            player_id=cap_tok,
+            display_name="CapTarget",
+        )
+        assert cross_idop.status == "ERROR"
+        assert cross_idop.ephemeral is True
+
+        # Manager can confirm own unexpired actor-bound token (both player_id=tok and token=tok)
+        mgr_tok_entry = next(e for e in mgr_entries if "MgrTarget" in e.candidate_aliases)
+        mgr_ok = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=MANAGER_USER_ID,
+            user_role_ids=(MANAGER_ROLE_ID,),
+            player_id=mgr_tok_entry.token,
+            display_name="MgrTarget",
+            position="ST",
+        )
+        assert mgr_ok.status == "OK"
+        assert "MgrTarget" in mgr_ok.content
+
+        # Captain can confirm own unexpired actor-bound token
+        cap_tok_entry = next(e for e in cap_entries if "CapTarget" in e.candidate_aliases)
+        cap_ok = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=CAPTAIN_USER_ID,
+            user_role_ids=(CAPTAIN_ROLE_ID,),
+            token=cap_tok_entry.token,
+            display_name="CapTarget",
+            position="CM",
+        )
+        assert cap_ok.status == "OK"
+        assert "CapTarget" in cap_ok.content
+
+        # Identity Operator can confirm own unexpired token, CANNOT bypass canonical plr_ecf_* check via token kwarg
+        idop_tok_entry = next(e for e in idop_entries if "IdOpTarget" in e.candidate_aliases)
+        p9503 = pseudonymize_east_coasters_identifier("9503", club_id=EAST_COASTERS_CLUB_ID)
+        bypass_attempt = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=IDENTITY_OP_USER_ID,
+            user_role_ids=(IDENTITY_OPERATOR_ROLE_ID,),
+            player_id=p9503,
+            token=idop_tok_entry.token,
+            display_name="IdOpTarget",
+        )
+        assert bypass_attempt.status == "REJECTED_UNAUTHORIZED"
+        assert bypass_attempt.ephemeral is True
+        assert bypass_attempt.content == PERMISSION_DENIED_MESSAGE
+
+        idop_ok = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=IDENTITY_OP_USER_ID,
+            user_role_ids=(IDENTITY_OPERATOR_ROLE_ID,),
+            player_id=idop_tok_entry.token,
+            display_name="IdOpTarget",
+            position="CB",
+        )
+        assert idop_ok.status == "OK"
+
+        # Unknown & expired tokens fail for Manager/Captain/Identity Operator
+        unknown_mgr = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=MANAGER_USER_ID,
+            user_role_ids=(MANAGER_ROLE_ID,),
+            player_id="T999",
+            display_name="Nobody",
+        )
+        assert unknown_mgr.status == "ERROR"
+        assert unknown_mgr.ephemeral is True
+
+        # Admin can redeem own token
+        adm_tok_entry = next(e for e in adm_entries if "AdmTarget" in e.candidate_aliases)
+        adm_ok = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=ADMIN_USER_ID,
+            user_role_ids=(ADMIN_ROLE_ID,),
+            player_id=adm_tok_entry.token,
+            display_name="AdmTarget",
+            position="GK",
+        )
+        assert adm_ok.status == "OK"
+
+        # Expired token fails cleanly
+        clock.now = clock.now + timedelta(minutes=16)
+        expired_cap = svc.handle_slash_command(
+            "setplayer",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=CAPTAIN_USER_ID,
+            user_role_ids=(CAPTAIN_ROLE_ID,),
+            player_id=cap_tok_entry.token,
+            display_name="CapTarget",
+        )
+        assert expired_cap.status == "ERROR"
+        assert expired_cap.ephemeral is True
+
+        # Identity Operator remains isolated from /deletematch even with is_admin=False
+        del_denied = svc.handle_slash_command(
+            "deletematch",
+            guild_id=APPROVED_GUILD_ID,
+            channel_id=RESULTS_CHANNEL_ID,
+            user_id=IDENTITY_OP_USER_ID,
+            user_role_ids=(IDENTITY_OPERATOR_ROLE_ID,),
+            match_id=1,
+            confirm_delete=True,
+        )
+        assert del_denied.status == "REJECTED_UNAUTHORIZED"
+        assert del_denied.content == PERMISSION_DENIED_MESSAGE
+
+
+class TestDiscordEmbedAggregateLimit:
+    """Phase 5 (Thread 4608588260): Enforce Discord 6,000-char aggregate and individual embed limits."""
+
+    @staticmethod
+    def _summary(
+        idx: int,
+        *,
+        alias: str | None = "PlayerTag",
+        ver_status: str | None = "STABLE",
+        positions: tuple[str, ...] = ("ST", "CAM", "CM"),
+    ) -> UnresolvedPlayerSummary:
+        dt = datetime(2026, 11, 5, 18, 0, tzinfo=UTC)
+        return UnresolvedPlayerSummary(
+            token=f"T{idx}",
+            appearance_count=idx + 1,
+            observed_positions=positions,
+            first_seen_at=dt,
+            last_seen_at=dt,
+            candidate_alias=alias,
+            candidate_aliases=(alias,) if alias else (),
+            candidate_verification_status=ver_status,
+            candidate_conflict_status="SAME_PLAYER_MULTIPLE_ALIASES" if ver_status == "CONFLICTED" else "NONE",
+            candidate_observation_count=3,
+            candidate_distinct_match_count=2,
+            player_id=pseudonymize_east_coasters_identifier(f"96{idx:02d}", club_id=EAST_COASTERS_CLUB_ID),
+        )
+
+    def test_embed_total_budget_exact_boundary_one_over_25_fields_and_sanitization(self) -> None:
+        # 1. Small output unchanged + OBSERVED / STABLE / CONFLICTED labels preserved
+        small_entries = [
+            self._summary(1, alias="ObsAlpha", ver_status="OBSERVED"),
+            self._summary(2, alias="StabBeta", ver_status="STABLE"),
+            self._summary(3, alias=None, ver_status="CONFLICTED"),
+        ]
+        small_embed = render_unresolved_players_embed(small_entries)
+        assert len(small_embed.fields) == 3
+        assert small_embed.description == (
+            "Every identity has a short-lived reconciliation token (`T1`, `T2`, ...) "
+            "valid for 15 minutes. Never shares raw internal references."
+        )
+        assert "Candidate unverified" in small_embed.fields[0].value
+        assert "Candidate stable — confirmation required" in small_embed.fields[1].value
+        assert "Conflicting candidate tags — operator review required" in small_embed.fields[2].value
+        assert _embed_aggregate_char_count(small_embed) <= DISCORD_EMBED_MAX_TOTAL_CHARS
+
+        # 2 & 3 & 9. Exact 6,000-character boundary vs 6,001-character boundary (footer included in total)
+        boundary_entries = [
+            self._summary(
+                i,
+                alias=f"ÜñîcødêTag_{i:02d}_123456789012345678",
+                ver_status="STABLE",
+                positions=("ST", "CF", "LW", "RW", "CAM", "CM", "CDM", "LB", "RB", "CB"),
+            )
+            for i in range(1, 20)
+        ]
+        probe_embed = render_unresolved_players_embed(boundary_entries, footer_text="")
+        assert len(probe_embed.fields) == 19
+        used_no_footer = _embed_aggregate_char_count(probe_embed)
+        pad_len = DISCORD_EMBED_MAX_TOTAL_CHARS - used_no_footer
+        assert 1 <= pad_len <= DISCORD_EMBED_MAX_FOOTER_CHARS
+        exact_footer = "F" * pad_len
+        over_footer = "F" * (pad_len + 1)
+
+        exact_embed = render_unresolved_players_embed(boundary_entries, footer_text=exact_footer)
+        assert len(exact_embed.fields) == 19
+        assert _embed_aggregate_char_count(exact_embed) == DISCORD_EMBED_MAX_TOTAL_CHARS
+        assert "...and" not in (exact_embed.description or "")
+
+        over_embed = render_unresolved_players_embed(boundary_entries, footer_text=over_footer)
+        assert _embed_aggregate_char_count(over_embed) <= DISCORD_EMBED_MAX_TOTAL_CHARS
+        assert len(over_embed.fields) < 19
+        assert "...and " in (over_embed.description or "")
+        assert [f.name for f in over_embed.fields] == [f"Token `T{i}`" for i in range(1, len(over_embed.fields) + 1)]
+        for f in over_embed.fields:
+            f_name = f.name or ""
+            f_val = f.value or ""
+            assert "Candidate stable — confirmation required" in f_val
+            assert f_name.strip() and f_val.strip()
+
+        # 4. 25-field boundary: 25 short entries fit cleanly in 25 fields; 28 entries cap at <= 25
+        exact_25_entries = [self._summary(i, alias=f"Short{i}", positions=("ST",)) for i in range(1, 26)]
+        embed_25 = render_unresolved_players_embed(exact_25_entries)
+        assert len(embed_25.fields) == 25
+        assert _embed_aggregate_char_count(embed_25) <= DISCORD_EMBED_MAX_TOTAL_CHARS
+        assert "...and" not in (embed_25.description or "")
+
+        many_entries = [self._summary(i, alias=f"Short{i}", positions=("ST",)) for i in range(1, 29)]
+        many_embed = render_unresolved_players_embed(many_entries)
+        assert len(many_embed.fields) == 25
+        assert _embed_aggregate_char_count(many_embed) <= DISCORD_EMBED_MAX_TOTAL_CHARS
+        assert "...and 3 more unresolved identities." in (many_embed.description or "")
+
+        # 5, 10, 11, 12, 13, 14. Author included in total, long Unicode + giant positions, zero leakage, no broken separator
+        huge_pos = tuple(f"POS{j:02d}" for j in range(250))
+        uni_entries = [
+            self._summary(i, alias="CaféStraße_" + ("Ж" * 20), ver_status="OBSERVED", positions=huge_pos)
+            for i in range(1, 26)
+        ]
+        auth_embed = render_unresolved_players_embed(
+            uni_entries,
+            author_name="East Coasters Roster Review",
+            footer_text=EAST_COASTERS_FOOTER_TEXT,
+        )
+        assert auth_embed.author.name == "East Coasters Roster Review"
+        assert len(auth_embed.title or "") <= DISCORD_EMBED_MAX_TITLE_CHARS
+        assert len(auth_embed.description or "") <= DISCORD_EMBED_MAX_DESCRIPTION_CHARS
+        assert len(auth_embed.footer.text or "") <= DISCORD_EMBED_MAX_FOOTER_CHARS
+        assert len(auth_embed.fields) <= DISCORD_EMBED_MAX_FIELDS
+        assert _embed_aggregate_char_count(auth_embed) <= DISCORD_EMBED_MAX_TOTAL_CHARS
+        for f in auth_embed.fields:
+            f_name = f.name or ""
+            f_val = f.value or ""
+            assert len(f_name) <= DISCORD_EMBED_MAX_FIELD_NAME_CHARS
+            assert len(f_val) <= DISCORD_EMBED_MAX_FIELD_VALUE_CHARS
+            assert "Candidate unverified" in f_val
+            assert not f_val.endswith((",", "•", "—"))
+            assert_discord_output_sanitized(f_name)
+            assert_discord_output_sanitized(f_val)
+        assert_discord_output_sanitized(auth_embed.title or "")
+        assert_discord_output_sanitized(auth_embed.description or "")
+        assert_discord_output_sanitized(auth_embed.footer.text or "")
+        joined = "\n".join(
+            [auth_embed.title or "", auth_embed.description or "", auth_embed.footer.text or ""]
+            + [(f.name or "") + "\n" + (f.value or "") for f in auth_embed.fields]
+        )
+        assert not PSEUDONYM_PLAYER_REF_RE.search(joined)
+        assert not PSEUDONYM_MATCH_REF_RE.search(joined)
+
+
+class TestSharedUnicodeNormalization:
+    """Phase 6 (Thread 4608588301): Shared NFKC + whitespace-collapse + casefold normalizer."""
+
+    def test_unicode_key_normalization_promotion_and_verification(self, pg_db_migrated) -> None:
+        # 1. Pure normalizer equivalence checks
+        assert normalize_public_player_alias_key("Straße") == "strasse"
+        assert normalize_public_player_alias_key("Ｓｔｒａßｅ") == "strasse"  # NFKC + casefold
+        assert normalize_public_player_alias_key("Cafe\u0301") == normalize_public_player_alias_key("Café")
+        assert normalize_public_player_alias_key("  Lao   Jr \t ") == "lao jr"
+        assert normalize_public_player_alias_key("Lao_Jr-1.0") != normalize_public_player_alias_key("Lao Jr 1 0")
+        assert normalize_public_player_alias_key("Lao") == "lao"
+
+        # 2. Candidate ingestion stores NFKC+casefold normalized key for "Straße" -> "strasse"
+        env, _ = normalize_community_match_records(
+            [
+                _raw_community_match(
+                    match_id="983001",
+                    timestamp=1763040000,
+                    players=[
+                        _player_payload("9701", alias_field="player_name", alias_value="Straße"),
+                        _player_payload("9702", alias_field="player_name", alias_value="Cafe\u0301 Tag", position="CM", goals=0),
+                        _player_payload("9703", alias_field="player_name", alias_value="Rejectedß", position="CB", goals=0),
+                    ],
+                )
+            ],
+            alias_hmac_key=TEST_ALIAS_HMAC_KEY,
+        )
+        persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=env)
+
+        p9701 = pseudonymize_east_coasters_identifier("9701", club_id=EAST_COASTERS_CLUB_ID)
+        p9702 = pseudonymize_east_coasters_identifier("9702", club_id=EAST_COASTERS_CLUB_ID)
+        p9703 = pseudonymize_east_coasters_identifier("9703", club_id=EAST_COASTERS_CLUB_ID)
+
+        # Reject p9703 before upsert: rejected candidates must NEVER be promoted
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            cid_9702 = aconn.execute(
+                "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+                (p9702,),
+            ).fetchone()[0]
+            cid_9703 = aconn.execute(
+                "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+                (p9703,),
+            ).fetchone()[0]
+        reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_9703)
+
+        # Verify Café Tag using composed NFC string matches decomposed candidate
+        assert (
+            verify_player_alias_candidate(
+                pg_db_migrated.match_results_writer,
+                candidate_id=cid_9702,
+                expected_alias="  Ｃａｆé   Ｔａｇ ",
+            )
+            == "OPERATOR_VERIFIED"
+        )
+
+        # Confirming "Straße" in upsert_roster_player marks candidate PROMOTED (even though .lower() was "straße"!)
+        clock = _Clock()
+        store = ReconciliationTokenStore(clock=clock)
+        entries = list_unresolved_players(
+            pg_db_migrated.discord_reader,
+            token_store=store,
+            actor_discord_user_id=IDENTITY_OP_USER_ID,
+            now=clock.now,
+        )
+        tok_strasse = next(e.token for e in entries if e.player_id == p9701)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            token=tok_strasse,
+            token_store=store,
+            actor_discord_user_id=IDENTITY_OP_USER_ID,
+            display_name="Straße",
+            position="ST",
+        )
+        # Attempting upsert matching a REJECTED candidate alias must NOT mark it PROMOTED
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=p9703,
+            display_name="Rejectedß",
+            position="CB",
+        )
+        # Manual roster name with non-provider punctuation (parentheses/apostrophe) still works cleanly
+        p9704 = pseudonymize_east_coasters_identifier("9704", club_id=EAST_COASTERS_CLUB_ID)
+        manual_rec = upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=p9704,
+            display_name="O'Connor (C)",
+            position="CM",
+        )
+        assert manual_rec.display_name == "O'Connor (C)"
+
+        # Upserting p9702 manually then renaming to "Café Tag" promotes decomposed candidate
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=p9702,
+            display_name="OtherManualName",
+            position="CM",
+        )
+        rename_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id_or_name=p9702,
+            new_name="Café Tag",
+        )
+
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+                (p9701,),
+            ).fetchone() == ("PROMOTED",)
+            assert aconn.execute(
+                "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+                (p9702,),
+            ).fetchone() == ("PROMOTED",)
+            assert aconn.execute(
+                "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+                (p9703,),
+            ).fetchone() == ("REJECTED",)
+
+
+class TestDbMigratePrivilegePostconditionsRegression:
+    """Phase 7 (Thread 4608588087): Column-scoped Policy 20 pass vs overbroad_table_* and forbidden DELETE failure."""
+
+    def test_verify_postconditions_detects_overbroad_table_and_forbidden_delete_on_0019(
+        self, pg_db
+    ) -> None:
+        migrate(pg_db.migrator)
+
+        class _RollbackProbe(Exception):
+            pass
+
+        with psycopg.connect(pg_db.admin) as aconn:
+            # 1. Intended column-scoped Policy 20 grants pass cleanly
+            assert verify_postconditions(aconn) == []
+
+            # 2. Unintended table-wide privileges report overbroad_table_* violations
+            for grant_sql, expected_violation in (
+                (
+                    "GRANT SELECT ON public.fc27_player_alias_candidates TO fc27_discord_reader",
+                    "overbroad_table_fc27_discord_reader_select_on_fc27_player_alias_candidates",
+                ),
+                (
+                    "GRANT SELECT ON public.fc27_player_alias_candidates TO fc27_match_results_writer",
+                    "overbroad_table_fc27_match_results_writer_select_on_fc27_player_alias_candidates",
+                ),
+                (
+                    "GRANT UPDATE ON public.fc27_player_alias_candidates TO fc27_match_results_writer",
+                    "overbroad_table_fc27_match_results_writer_update_on_fc27_player_alias_candidates",
+                ),
+                (
+                    "GRANT UPDATE ON public.fc27_player_alias_candidates TO fc27_poll_writer",
+                    "overbroad_table_fc27_poll_writer_update_on_fc27_player_alias_candidates",
+                ),
+            ):
+                with pytest.raises(_RollbackProbe):
+                    with aconn.transaction():
+                        aconn.execute(grant_sql)
+                        violations = verify_postconditions(aconn)
+                        assert expected_violation in violations
+                        raise _RollbackProbe()
+
+            # 3. Forbidden DELETE grant fails with forbidden_*_delete_on_fc27_player_alias_candidates
+            for role_name in ("fc27_poll_writer", "fc27_match_results_writer"):
+                with pytest.raises(_RollbackProbe):
+                    with aconn.transaction():
+                        aconn.execute(
+                            sql.SQL("GRANT DELETE ON public.fc27_player_alias_candidates TO {}").format(
+                                sql.Identifier(role_name)
+                            )
+                        )
+                        violations = verify_postconditions(aconn)
+                        assert f"forbidden_{role_name}_delete_on_fc27_player_alias_candidates" in violations
+                        raise _RollbackProbe()
+
+            # 4. Granting SELECT(alias_hmac_fingerprint) fails with forbidden_*_select_alias_hmac
+            for role_name in ("fc27_discord_reader", "fc27_match_results_writer"):
+                with pytest.raises(_RollbackProbe):
+                    with aconn.transaction():
+                        aconn.execute(
+                            sql.SQL(
+                                "GRANT SELECT (alias_hmac_fingerprint) ON public.fc27_player_alias_candidates TO {}"
+                            ).format(sql.Identifier(role_name))
+                        )
+                        violations = verify_postconditions(aconn)
+                        assert f"forbidden_{role_name}_select_alias_hmac" in violations
+                        raise _RollbackProbe()
+
+            # Confirm rollbacks left intended least-privilege posture clean
+            assert verify_postconditions(aconn) == []

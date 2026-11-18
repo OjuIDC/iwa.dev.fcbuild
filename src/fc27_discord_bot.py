@@ -1426,12 +1426,17 @@ class FC27DiscordBotService:
         if cmd_clean == "unresolvedplayers":
             return is_admin_caller or is_identity_op_caller
         if cmd_clean == "setplayer":
-            raw_ref = (player_id or token or "").strip()
-            is_reconcile_token = bool(token and token.strip()) or bool(
-                re.fullmatch(r"^T[1-9][0-9]{0,2}$", raw_ref, re.IGNORECASE)
+            pid_clean = (player_id or "").strip()
+            tok_clean = (token or "").strip()
+            has_non_token_pid = bool(pid_clean) and not bool(
+                re.fullmatch(r"^T[1-9][0-9]*$", pid_clean, re.IGNORECASE)
+            )
+            token_ref = tok_clean or pid_clean
+            is_reconcile_token = (not has_non_token_pid) and bool(
+                re.fullmatch(r"^T[1-9][0-9]*$", token_ref, re.IGNORECASE)
             )
             if is_reconcile_token:
-                return is_admin_caller or is_identity_op_caller
+                return is_writer_caller or is_identity_op_caller
             return is_writer_caller
         return is_writer_caller
 
@@ -2168,14 +2173,19 @@ class FC27DiscordBotService:
 
         if cmd == "setplayer":
             writer_target = self._resolve_writer_conn_or_uri(required=True)
-            raw_ref = (player_id or token or "").strip()
-            is_reconcile_token = bool(token and token.strip()) or bool(
-                re.fullmatch(r"^T[1-9][0-9]*$", raw_ref, re.IGNORECASE)
+            pid_clean = (player_id or "").strip()
+            tok_clean = (token or "").strip()
+            has_non_token_pid = bool(pid_clean) and not bool(
+                re.fullmatch(r"^T[1-9][0-9]*$", pid_clean, re.IGNORECASE)
+            )
+            token_ref = tok_clean or pid_clean
+            is_reconcile_token = (not has_non_token_pid) and bool(
+                re.fullmatch(r"^T[1-9][0-9]*$", token_ref, re.IGNORECASE)
             )
             rec = upsert_roster_player(
                 writer_target,
-                player_id=None if is_reconcile_token else raw_ref,
-                token=raw_ref if is_reconcile_token else None,
+                player_id=None if is_reconcile_token else (pid_clean or tok_clean),
+                token=token_ref if is_reconcile_token else None,
                 token_store=self._reconciliation_token_store,
                 actor_discord_user_id=user_id,
                 display_name=player_name or "",
