@@ -1965,7 +1965,7 @@ def test_089_dockerfile_community_worker_uses_digest_pinned_base_image_and_non_r
     """89. Dockerfile.community-worker uses a digest-pinned base image and non-root user."""
     dockerfile_text = (REPO_ROOT / "Dockerfile.community-worker").read_text(encoding="utf-8")
     assert (
-        "FROM python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+        "FROM python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535"
         in dockerfile_text
     )
     assert "USER 10001:65534" in dockerfile_text

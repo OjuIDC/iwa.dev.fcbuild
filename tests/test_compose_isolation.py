@@ -252,7 +252,7 @@ def test_settings_read_secret_fails_closed(tmp_path, monkeypatch):
 
 
 APPROVED_PYTHON_311_BASE = (
-    "python:3.11.18-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545"
+    "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535"
 )
 OPERATIONAL_PYTHON_DOCKERFILES = (
     "Dockerfile.graph",
