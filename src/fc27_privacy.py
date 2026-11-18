@@ -1139,6 +1139,14 @@ def validate_safe_display_alias(alias: str | None) -> str | None:
     return cleaned
 
 
+def normalize_public_player_alias_key(raw_value: str) -> str:
+    """Normalize a player alias key via Unicode NFKC, whitespace collapse, trim, and casefold."""
+    if not isinstance(raw_value, str):
+        raise FC27ValidationError("Public player alias must be a string")
+    nfkc = unicodedata.normalize("NFKC", raw_value)
+    return re.sub(r"\s+", " ", nfkc).strip().casefold()
+
+
 def validate_public_player_alias_text(raw_value: Any) -> tuple[str, str]:
     """Validate and normalize a public Pro Clubs player tag into `(display_value, normalized_value)`.
 
@@ -1162,7 +1170,7 @@ def validate_public_player_alias_text(raw_value: Any) -> tuple[str, str]:
         raise FC27ValidationError(
             f"Public player alias exceeds maximum length of {MAX_PUBLIC_PLAYER_ALIAS_LENGTH} characters"
         )
-    lowered = display_value.casefold()
+    lowered = normalize_public_player_alias_key(display_value)
     if (
         lowered.startswith(("plr_ecf_", "mref_ecf_"))
         or "unnamed player" == lowered
@@ -1324,6 +1332,7 @@ __all__ = [
     "normalize_hmac_input",
     "normalize_identifier",
     "normalize_key_for_scanning",
+    "normalize_public_player_alias_key",
     "normalize_whitespace_and_casefold",
     "project_match_equivalence_v1",
     "pseudonymize_east_coasters_identifier",

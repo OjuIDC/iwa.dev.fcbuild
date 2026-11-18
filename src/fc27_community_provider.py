@@ -35,7 +35,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Callable, Dict, Final, List, Literal, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Final, Iterator, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
@@ -583,6 +583,94 @@ class PublicPlayerAlias(BaseModel):
         return repr(self)
 
 
+class PublicPlayerAliasSource(BaseModel):
+    """Authoritative resolved public alias source selected via deterministic precedence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    display_value: str = Field(min_length=1, max_length=32, repr=False)
+    normalized_value: str = Field(min_length=1, max_length=32, repr=False)
+    matched_field: Literal[
+        "player_name",
+        "playername",
+        "pro_name",
+        "proName",
+        "display_alias",
+        "name",
+    ]
+    source_scope: Literal["top_level", "raw"]
+
+    def __repr__(self) -> str:
+        return (
+            "PublicPlayerAliasSource("
+            f"matched_field={self.matched_field!r}, "
+            f"source_scope={self.source_scope!r})"
+        )
+
+    def __str__(self) -> str:
+        return repr(self)
+
+
+def _iter_alias_candidate_slots(
+    record: Mapping[str, Any],
+) -> Iterator[Tuple[Literal["top_level", "raw"], str, Any]]:
+    """Yield `(source_scope, field_name, raw_value)` in authoritative precedence order.
+
+    Evaluates all top-level alias fields first, then the immediate ``raw`` sub-mapping.
+    """
+    raw_sub = record.get("raw")
+    scopes: List[Tuple[Literal["top_level", "raw"], Mapping[str, Any]]] = [("top_level", record)]
+    if isinstance(raw_sub, Mapping):
+        scopes.append(("raw", raw_sub))
+    for scope_name, src_map in scopes:
+        for field_name in PUBLIC_PLAYER_ALIAS_FIELDS:
+            if field_name not in src_map:
+                continue
+            yield (scope_name, field_name, src_map.get(field_name))
+
+
+def _has_non_empty_alias_source_field(record: Mapping[str, Any]) -> bool:
+    """Return True if any top-level or ``raw`` alias field carries a non-empty value."""
+    for _, _, raw_val in _iter_alias_candidate_slots(record):
+        if raw_val is None:
+            continue
+        if isinstance(raw_val, str) and not raw_val.strip():
+            continue
+        return True
+    return False
+
+
+def resolve_public_player_alias_source(
+    record: Mapping[str, Any],
+) -> PublicPlayerAliasSource | None:
+    """Resolve and validate the single authoritative alias source for both candidates and HMACs.
+
+    Checks all top-level alias fields (`player_name`, `playername`, `pro_name`, `proName`,
+    `display_alias`, `name`) before the immediate ``raw`` sub-mapping. Empty/whitespace
+    values are skipped cleanly. Invalid non-empty values fall through consistently to the
+    next valid source in precedence order; if no valid source exists, returns ``None`` so
+    neither a candidate nor an alias-derived fingerprint is emitted.
+    """
+    if not isinstance(record, Mapping):
+        raise FC27SchemaValidationError("Player record for alias extraction must be a mapping")
+    for scope_name, field_name, raw_val in _iter_alias_candidate_slots(record):
+        if raw_val is None:
+            continue
+        if isinstance(raw_val, str) and not raw_val.strip():
+            continue
+        try:
+            display_val, norm_val = validate_public_player_alias_text(raw_val)
+        except FC27ProviderError:
+            continue
+        return PublicPlayerAliasSource(
+            display_value=display_val,
+            normalized_value=norm_val,
+            matched_field=field_name,  # type: ignore[arg-type]
+            source_scope=scope_name,
+        )
+    return None
+
+
 def extract_public_player_alias(
     record: Mapping[str, Any],
     *,
@@ -594,48 +682,27 @@ def extract_public_player_alias(
     ] = "AUTHORIZED_MATCH_PAYLOAD",
     club_id: str = TARGET_CLUB_ID,
 ) -> PublicPlayerAlias | None:
-    """Extract and validate a public player tag using deterministic field precedence.
-
-    Inspects only explicit alias fields on the player record (and its immediate ``raw``
-    sub-mapping if present). Empty/whitespace values are skipped cleanly; non-empty
-    unsafe values fail validation. Never falls back to raw player IDs and never scans
-    arbitrary nested objects recursively.
-    """
-    if not isinstance(record, Mapping):
-        raise FC27SchemaValidationError("Player record for alias extraction must be a mapping")
+    """Extract and validate a public player tag using `resolve_public_player_alias_source`."""
+    resolved = resolve_public_player_alias_source(record)
+    if resolved is None:
+        return None
     eff_key = (
         alias_hmac_key
         if alias_hmac_key is not None
         else settings.read_fc27_alias_hmac_key(required=False)
     )
-    raw_sub = record.get("raw")
-    candidate_sources: List[Mapping[str, Any]] = [record]
-    if isinstance(raw_sub, Mapping):
-        candidate_sources.append(raw_sub)
-
-    for field_name in PUBLIC_PLAYER_ALIAS_FIELDS:
-        for src_map in candidate_sources:
-            if field_name not in src_map:
-                continue
-            raw_val = src_map.get(field_name)
-            if raw_val is None:
-                continue
-            if isinstance(raw_val, str) and not raw_val.strip():
-                continue
-            display_val, norm_val = validate_public_player_alias_text(raw_val)
-            hmac_fp = (
-                compute_alias_hmac_fingerprint(display_val, eff_key, club_id=club_id)
-                if eff_key is not None
-                else None
-            )
-            return PublicPlayerAlias(
-                display_value=display_val,
-                normalized_value=norm_val,
-                hmac_fingerprint=hmac_fp,
-                matched_field=field_name,  # type: ignore[arg-type]
-                source_classification=source_classification,
-            )
-    return None
+    hmac_fp = (
+        compute_alias_hmac_fingerprint(resolved.display_value, eff_key, club_id=club_id)
+        if eff_key is not None
+        else None
+    )
+    return PublicPlayerAlias(
+        display_value=resolved.display_value,
+        normalized_value=resolved.normalized_value,
+        hmac_fingerprint=hmac_fp,
+        matched_field=resolved.matched_field,
+        source_classification=source_classification,
+    )
 
 
 class FC27CommunityProviderEnvelope(BaseModel):
@@ -1156,14 +1223,10 @@ def _convert_community_match_record_to_ea_envelope_dict(
     return ea_dict
 
 
-def _extract_raw_player_aliases_from_match_record(
+def _iter_east_coasters_player_mappings(
     record: Mapping[str, Any],
-) -> List[Tuple[str, str]]:
-    """Extracts `(raw_player_id, raw_alias_or_identifier)` pairs for East Coasters players
-    from an upstream match record before display names are stripped.
-    """
-    extracted: List[Tuple[str, str]] = []
-    alias_keys = PUBLIC_PLAYER_ALIAS_FIELDS
+) -> Iterator[Tuple[str, Mapping[str, Any]]]:
+    """Yield `(raw_player_id, player_mapping)` for East Coasters entries in an upstream match."""
     raw_players = record.get("players")
     if isinstance(raw_players, list):
         for idx, p_item in enumerate(raw_players):
@@ -1176,46 +1239,39 @@ def _extract_raw_player_aliases_from_match_record(
                 p_item.get("player_id", p_item.get("playerId", p_item.get("player_ref", f"idx_{idx}")))
                 or f"idx_{idx}"
             ).strip()
-            alias_candidate = ""
-            for k in alias_keys:
-                val = p_item.get(k)
-                if isinstance(val, str) and val.strip():
-                    alias_candidate = val.strip()
-                    break
-            if not alias_candidate and isinstance(p_item.get("raw"), Mapping):
-                raw_sub = p_item["raw"]
-                for k in alias_keys:
-                    val = raw_sub.get(k)
-                    if isinstance(val, str) and val.strip():
-                        alias_candidate = val.strip()
-                        break
-            if not alias_candidate and not _PSEUDONYM_RE.fullmatch(raw_pid):
-                alias_candidate = raw_pid
-            if raw_pid and alias_candidate:
-                extracted.append((raw_pid, alias_candidate))
+            yield (raw_pid, p_item)
     elif isinstance(raw_players, Mapping):
         club_players = raw_players.get(TARGET_CLUB_ID)
         if isinstance(club_players, Mapping):
             for raw_pid_key, p_stats in club_players.items():
                 raw_pid = str(raw_pid_key).strip()
-                alias_candidate = ""
                 if isinstance(p_stats, Mapping):
-                    for k in alias_keys:
-                        val = p_stats.get(k)
-                        if isinstance(val, str) and val.strip():
-                            alias_candidate = val.strip()
-                            break
-                    if not alias_candidate and isinstance(p_stats.get("raw"), Mapping):
-                        raw_sub = p_stats["raw"]
-                        for k in alias_keys:
-                            val = raw_sub.get(k)
-                            if isinstance(val, str) and val.strip():
-                                alias_candidate = val.strip()
-                                break
-                if not alias_candidate and not _PSEUDONYM_RE.fullmatch(raw_pid):
-                    alias_candidate = raw_pid
-                if raw_pid and alias_candidate:
-                    extracted.append((raw_pid, alias_candidate))
+                    yield (raw_pid, p_stats)
+                elif raw_pid and not _PSEUDONYM_RE.fullmatch(raw_pid):
+                    yield (raw_pid, {})
+
+
+def _extract_raw_player_aliases_from_match_record(
+    record: Mapping[str, Any],
+) -> List[Tuple[str, str]]:
+    """Extract `(raw_player_id, alias_source_value)` for HMAC fingerprinting using the shared resolver.
+
+    Uses the exact same `resolve_public_player_alias_source` selection as plaintext candidate
+    extraction so candidates and HMAC fingerprints always derive from the identical source.
+    If populated alias fields all fail candidate validation, no fingerprint is emitted. Legacy
+    raw-ID fallback applies only when no alias field is populated.
+    """
+    extracted: List[Tuple[str, str]] = []
+    for raw_pid, p_map in _iter_east_coasters_player_mappings(record):
+        resolved = resolve_public_player_alias_source(p_map)
+        if resolved is not None:
+            alias_val = resolved.display_value
+        elif not _has_non_empty_alias_source_field(p_map) and not _PSEUDONYM_RE.fullmatch(raw_pid):
+            alias_val = raw_pid
+        else:
+            continue
+        if raw_pid and alias_val:
+            extracted.append((raw_pid, alias_val))
     return extracted
 
 
@@ -1226,41 +1282,17 @@ def _extract_public_player_aliases_from_match_record(
 ) -> List[Tuple[str, PublicPlayerAlias]]:
     """Extract validated `PublicPlayerAlias` objects paired with raw player IDs for East Coasters."""
     extracted: List[Tuple[str, PublicPlayerAlias]] = []
-    raw_players = record.get("players")
-    if isinstance(raw_players, list):
-        for idx, p_item in enumerate(raw_players):
-            if not isinstance(p_item, Mapping):
-                continue
-            p_cid = str(p_item.get("club_id", TARGET_CLUB_ID) or TARGET_CLUB_ID).strip()
-            if p_cid != TARGET_CLUB_ID:
-                continue
-            raw_pid = str(
-                p_item.get("player_id", p_item.get("playerId", p_item.get("player_ref", f"idx_{idx}")))
-                or f"idx_{idx}"
-            ).strip()
-            parsed = extract_public_player_alias(
-                p_item,
-                alias_hmac_key=alias_hmac_key,
-                source_classification="AUTHORIZED_MATCH_PAYLOAD",
-                club_id=TARGET_CLUB_ID,
-            )
-            if raw_pid and parsed is not None:
-                extracted.append((raw_pid, parsed))
-    elif isinstance(raw_players, Mapping):
-        club_players = raw_players.get(TARGET_CLUB_ID)
-        if isinstance(club_players, Mapping):
-            for raw_pid_key, p_stats in club_players.items():
-                raw_pid = str(raw_pid_key).strip()
-                if not isinstance(p_stats, Mapping):
-                    continue
-                parsed = extract_public_player_alias(
-                    p_stats,
-                    alias_hmac_key=alias_hmac_key,
-                    source_classification="AUTHORIZED_MATCH_PAYLOAD",
-                    club_id=TARGET_CLUB_ID,
-                )
-                if raw_pid and parsed is not None:
-                    extracted.append((raw_pid, parsed))
+    for raw_pid, p_map in _iter_east_coasters_player_mappings(record):
+        if not p_map:
+            continue
+        parsed = extract_public_player_alias(
+            p_map,
+            alias_hmac_key=alias_hmac_key,
+            source_classification="AUTHORIZED_MATCH_PAYLOAD",
+            club_id=TARGET_CLUB_ID,
+        )
+        if raw_pid and parsed is not None:
+            extracted.append((raw_pid, parsed))
     return extracted
 
 
