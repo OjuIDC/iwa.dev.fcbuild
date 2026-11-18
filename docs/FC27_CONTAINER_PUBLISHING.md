@@ -32,6 +32,8 @@ This document specifies the container image build, vulnerability and secret scan
 | **Base Image Size** | `178.35 MB` (`187,017,053` bytes) | `178.43 MB` (`187,099,229` bytes) |
 | **Pre-Bundled Build Tool Hardening** | Base `setuptools 79.0.1` (vendored `jaraco.context 5.3.0`), `wheel 0.45.1` | Upgraded in `RUN` layer to `setuptools>=84.2.1` (resolved to `84.2.1`; vendored `jaraco.context 6.1.0` and `wheel 0.46.3`) and `wheel>=0.48.0` (resolved to top-level `wheel 0.48.0`) |
 
+The current Dockerfiles pin the refreshed `python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535` image. The scan and size measurements below document the original remediation candidate (`064f017…`) and are not validation results for the refreshed digest.
+
 ### 2.2 Candidate Base-Image Comparison Matrix
 
 Four official Docker Hub `python:3.11*-slim*` candidates were evaluated locally against Aqua Trivy (`--scanners vuln,secret --pkg-types os,library`):
