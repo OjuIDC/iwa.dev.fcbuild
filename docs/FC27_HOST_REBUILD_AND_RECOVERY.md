@@ -120,12 +120,12 @@ The tracked manifest [`ops/fc27-protected-state-manifest.json`](../ops/fc27-prot
     ```
 18. Verify PostgreSQL volume & `fc27_alias_hmac_key` continuity read-only:
     ```powershell
-    python -m src.fc27_protected_state verify-postgres-volume --db-uri (Get-Content secrets/fc27_discord_reader_uri -Raw).Trim()
+    python -m src.fc27_protected_state verify-postgres-volume --db-uri (Get-Content secrets/postgres_admin_uri -Raw).Trim()
     ```
 19. Verify read-only SQL counts across `schema_migrations`, `schema_policy_versions`, `fc27_roster`, `fc27_matches`, `fc27_player_alias_candidates`, `fc27_player_alias_promotion_audit`, `fc27_player_alias_review_exceptions`, and `fc27_discord_jobs`.
 20. Execute the 23-point sanitized pre-start readiness gate and require `"status": "READY"` (`overall_ready: true`):
     ```powershell
-    python -m src.fc27_protected_state readiness --db-uri (Get-Content secrets/fc27_migrator_uri -Raw).Trim()
+    python -m src.fc27_protected_state readiness --db-uri (Get-Content secrets/postgres_admin_uri -Raw).Trim()
     ```
 21. Verify Compose merged configuration resolution fails closed cleanly with zero credential leakage (`--quiet` validation):
     ```powershell
