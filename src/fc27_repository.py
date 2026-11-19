@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, LiteralString, cast
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -2263,7 +2263,7 @@ def fetch_quarantine_records(
 ) -> list[FC27QuarantineRecordResult]:
     """Read-only query returning sanitized quarantine metadata records for operator review."""
     norm_version = game_version.upper()
-    clauses = ["club_id = %s", "platform = %s", "game_version = %s"]
+    clauses: list[LiteralString] = ["club_id = %s", "platform = %s", "game_version = %s"]
     params: list[Any] = [club_id, platform, norm_version]
     if review_status is not None:
         clauses.append("review_status = %s")
@@ -2910,10 +2910,14 @@ def _normalize_candidate_observations(
                     public_alias=disp_val,
                     public_alias_normalized=norm_val,
                     alias_hmac_fingerprint=str(item.get("alias_hmac_fingerprint", "")),
-                    matched_field=str(item.get("matched_field") or "player_name"),  # type: ignore[arg-type]
-                    source_classification=str(
-                        item.get("source_classification") or "AUTHORIZED_MATCH_PAYLOAD"
-                    ),  # type: ignore[arg-type]
+                    matched_field=cast(
+                        "Any",
+                        str(item.get("matched_field") or "player_name"),
+                    ),
+                    source_classification=cast(
+                        "Any",
+                        str(item.get("source_classification") or "AUTHORIZED_MATCH_PAYLOAD"),
+                    ),
                     match_ref=str(item.get("match_ref", "")),
                 )
             )
@@ -4184,7 +4188,18 @@ def apply_export_plan(
                                 perf.shots_on_target,
                                 perf.saves,
                                 perf.possession_losses,
-                                Decimal(str(round(float(perf.provider_rating), 2))),
+                                Decimal(
+                                    str(
+                                        round(
+                                            float(
+                                                perf.provider_rating
+                                                if perf.provider_rating is not None
+                                                else 7.0
+                                            ),
+                                            2,
+                                        )
+                                    )
+                                ),
                                 perf.build_reference,
                                 now,
                             ),
