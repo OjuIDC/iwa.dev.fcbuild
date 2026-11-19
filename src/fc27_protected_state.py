@@ -493,17 +493,20 @@ def _validate_numeric_discord_env_map(
 
 def _validate_secret_payload_bytes(rel_path: str, data: bytes) -> None:
     """Validate that a protected secret file is non-empty and not a placeholder."""
-    text = data.decode("utf-8", errors="strict").strip()
-    if not text:
-        raise ProtectedStateError(f"Secret file '{rel_path}' must not be empty")
-    if text.startswith("replace_with_") or "replace_with_" in text:
-        raise ProtectedStateError(f"Secret file '{rel_path}' must not contain placeholder text")
     if rel_path == "secrets/fc27_alias_hmac_key":
         raw = data.strip(b" \t\r\n\x0b\x0c")
+        if b"replace_with_" in raw:
+            raise ProtectedStateError(f"Secret file '{rel_path}' must not contain placeholder text")
         if len(raw) < ALIAS_HMAC_KEY_MIN_BYTES:
             raise ProtectedStateError(
                 "secrets/fc27_alias_hmac_key must contain at least 32 non-whitespace bytes"
             )
+        return
+    text = data.decode("utf-8", errors="strict").strip()
+    if not text:
+        raise ProtectedStateError(f"Secret file '{rel_path}' must not be empty")
+    if "replace_with_" in text:
+        raise ProtectedStateError(f"Secret file '{rel_path}' must not contain placeholder text")
     if rel_path.endswith("_uri"):
         user = _extract_conninfo_user(text)
         if not user:
