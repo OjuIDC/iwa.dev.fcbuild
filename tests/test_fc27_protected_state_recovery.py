@@ -187,6 +187,14 @@ def _populate_synthetic_repo(root: Path, *, include_override: bool = True) -> Pa
     for fname, content in secret_values.items():
         (secrets_dir / fname).write_text(content + "\n", encoding="utf-8")
     (secrets_dir / "fc27_alias_hmac_key").write_bytes(SYNTHETIC_HMAC_KEY)
+    if os.name != "nt":
+        os.chmod(root / ".env", 0o600)
+        for dpath in (local_data, local_data / "compose", secrets_dir):
+            if dpath.is_dir():
+                os.chmod(dpath, 0o700)
+        for fpath in [*local_data.rglob("*"), *secrets_dir.rglob("*")]:
+            if fpath.is_file():
+                os.chmod(fpath, 0o600)
     return root
 
 
@@ -510,24 +518,31 @@ class TestProtectedStateRecoveryScenarios:
         assert (fresh_repo / "secrets" / "fc27_alias_hmac_key").read_bytes() == SYNTHETIC_HMAC_KEY
         assert (fresh_repo / ".local-data" / "compose" / "ghcr-promotion.yml").is_file()
 
-    def test_60_windows_and_posix_permission_enforcement_and_verification(self, tmp_path: Path) -> None:
+    def test_60_windows_and_posix_permission_enforcement_and_verification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """60. Permission enforcement locks down ACEs and rejects inherited or broad Users/Everyone permissions."""
         secret = tmp_path / "secret_token"
         secret.write_text("secret-value", encoding="utf-8")
 
-        res_ok = apply_restrictive_permissions(secret, acl_runner=_fake_acl_runner_factory())
-        assert res_ok.passed is True
+        with monkeypatch.context() as mp:
+            mp.setattr("src.fc27_protected_state.os.name", "nt")
+            res_ok = apply_restrictive_permissions(secret, acl_runner=_fake_acl_runner_factory())
+            assert res_ok.passed is True
 
-        res_bad = verify_restrictive_permissions(
-            secret, acl_runner=_fake_acl_runner_factory(inject_bad_ace=True)
-        )
-        assert res_bad.passed is False
+            res_bad = verify_restrictive_permissions(
+                secret, acl_runner=_fake_acl_runner_factory(inject_bad_ace=True)
+            )
+            assert res_bad.passed is False
 
         # Also exercise the host OS's real icacls/chmod directly on an isolated tmp_path file.
         real_file = tmp_path / "host_acl_test.txt"
         real_file.write_text("isolated", encoding="utf-8")
         real_res = apply_restrictive_permissions(real_file)
         assert real_res.passed is True
+        if os.name != "nt":
+            os.chmod(real_file, 0o644)
+            assert verify_restrictive_permissions(real_file).passed is False
 
     def test_61_verify_postgres_volume_passes_with_mock_or_real_db(self, pg_db_migrated: Any, tmp_path: Path) -> None:
         """61. verify-postgres-volume confirms volume mount, HMAC key continuity, Migration 0020, and Grants 21."""
