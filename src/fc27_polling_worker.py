@@ -91,12 +91,14 @@ from src.fc27_privacy import (
     pseudonymize_match_ref,
 )
 from src.fc27_repository import (
+    FC27AliasAutoPromotionSummary,
     FC27JobIdempotencyConflictError,
     FC27ReplayConflictError,
     FC27SuppliedMatch,
     FC27SuppliedPlayerPerformance,
     _insert_quarantine_row_in_tx,
     apply_export_plan,
+    evaluate_and_auto_promote_alias_candidates,
     load_import_state,
     plan_fc27_user_export_import,
 )
@@ -277,6 +279,10 @@ ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
         "fc27_player_alias_fingerprints",
         "fc27_player_alias_candidates",
         "fc27_player_alias_candidate_observations",
+        "fc27_player_alias_promotion_audit",
+        "fc27_player_alias_review_exceptions",
+        "fc27_auto_promote_stable_alias_candidate",
+        "fc27_evaluate_alias_candidates_for_promotion",
         "fc27_discord_jobs",
     }
 )
@@ -308,6 +314,16 @@ _FORBIDDEN_FINGERPRINT_IMMUTABLE_UPDATE_REGEX = re.compile(
 
 _FORBIDDEN_CANDIDATE_DELETE_REGEX = re.compile(
     r"\bDELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_candidate(?:s|_observations)\b",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_PROMOTION_AUDIT_MUTATION_REGEX = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_promotion_audit\b",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_EXCEPTION_DELETE_REGEX = re.compile(
+    r"\bDELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?fc27_player_alias_review_exceptions\b",
     re.IGNORECASE,
 )
 
@@ -611,6 +627,12 @@ class FC27PollResult(BaseModel):
     discord_jobs_inserted: int = Field(default=0, ge=0)
     discord_jobs_existing: int = Field(default=0, ge=0)
     discord_job_conflicts: int = Field(default=0, ge=0)
+    auto_promotion_mode: Literal["DISABLED", "SHADOW", "ACTIVE"] = "DISABLED"
+    candidates_would_promote: int = Field(default=0, ge=0)
+    candidates_auto_promoted: int = Field(default=0, ge=0)
+    auto_promotion_refresh_jobs_enqueued: int = Field(default=0, ge=0)
+    auto_promotion_reason_counts: dict[str, int] = Field(default_factory=dict)
+    open_review_exceptions: int = Field(default=0, ge=0)
 
     @property
     def fingerprints_inserted_count(self) -> int:
@@ -730,6 +752,11 @@ class FC27PollingHealth(BaseModel):
     total_discord_jobs_inserted: int = Field(default=0, ge=0)
     total_discord_jobs_existing: int = Field(default=0, ge=0)
     total_discord_job_conflicts: int = Field(default=0, ge=0)
+    last_auto_promotion_mode: str = "DISABLED"
+    last_candidates_would_promote: int = Field(default=0, ge=0)
+    last_candidates_auto_promoted: int = Field(default=0, ge=0)
+    total_candidates_auto_promoted: int = Field(default=0, ge=0)
+    last_open_review_exceptions: int = Field(default=0, ge=0)
     circuit_state: str = "CLOSED"
     next_eligible_at: datetime | None = None
     schedule_lag_seconds: int = Field(default=0, ge=0)
@@ -840,6 +867,14 @@ def assert_polling_sql_allowed(sql: Any) -> None:
     if _FORBIDDEN_CANDIDATE_DELETE_REGEX.search(sql_text):
         raise FC27PollingTableAccessDeniedError(
             "FC27 polling worker role cannot DELETE from player alias candidate or observation tables"
+        )
+    if _FORBIDDEN_PROMOTION_AUDIT_MUTATION_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role cannot directly mutate fc27_player_alias_promotion_audit"
+        )
+    if _FORBIDDEN_EXCEPTION_DELETE_REGEX.search(sql_text):
+        raise FC27PollingTableAccessDeniedError(
+            "FC27 polling worker role cannot DELETE from fc27_player_alias_review_exceptions"
         )
     for tbl_match in _PUBLIC_TABLE_CLAUSE_REGEX.finditer(sql_text):
         candidate = tbl_match.group(1).lower()
@@ -1407,6 +1442,44 @@ def _touch_persisted_polling_timestamps(
                 )
 
 
+def _evaluate_post_commit_auto_promotion(
+    conn_or_uri: Any,
+    *,
+    generated_at: datetime,
+    enforce_posture: bool,
+) -> FC27AliasAutoPromotionSummary:
+    """Evaluate shadow/active alias auto-promotion safely after match ingestion commits."""
+    if not hasattr(conn_or_uri, "cursor") or not callable(conn_or_uri.cursor):
+        return FC27AliasAutoPromotionSummary()
+    try:
+        return evaluate_and_auto_promote_alias_candidates(
+            conn_or_uri,
+            enforce_posture=enforce_posture,
+            now=generated_at,
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            if hasattr(conn_or_uri, "rollback") and callable(conn_or_uri.rollback):
+                conn_or_uri.rollback()
+        return FC27AliasAutoPromotionSummary()
+
+
+def _attach_auto_promotion_summary(
+    summary: FC27CommunityPersistenceApplySummary,
+    promo_summary: FC27AliasAutoPromotionSummary,
+) -> FC27CommunityPersistenceApplySummary:
+    return summary.model_copy(
+        update={
+            "auto_promotion_mode": promo_summary.mode,
+            "candidates_would_promote": promo_summary.would_promote_count,
+            "candidates_auto_promoted": promo_summary.promoted_count,
+            "auto_promotion_refresh_jobs_enqueued": promo_summary.refresh_jobs_enqueued,
+            "auto_promotion_reason_counts": dict(promo_summary.reason_counts),
+            "open_review_exceptions": promo_summary.open_exception_count,
+        }
+    )
+
+
 def persist_polled_match_envelope(
     postgres_conn_or_uri: Any,
     *,
@@ -1497,22 +1570,30 @@ def persist_polled_match_envelope(
                     )
                 if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                     postgres_conn_or_uri.commit()
-                return FC27CommunityPersistenceApplySummary(
-                    live_data_persisted="YES",
-                    match_rows_inserted=0,
-                    team_stat_rows_inserted=0,
-                    player_stat_rows_inserted=0,
-                    duplicates_ignored=0,
-                    replay_conflicts=0,
-                    idempotent_duplicate=False,
-                    export_id=f"comm_poll_cursor_{eff_match_type}",
-                    fingerprints_inserted=0,
-                    fingerprints_refreshed=0,
-                    fingerprint_duplicate_observations=0,
-                    fingerprint_collisions=0,
-                    discord_jobs_inserted=0,
-                    discord_jobs_existing=0,
-                    discord_job_conflicts=0,
+                promo_summary = _evaluate_post_commit_auto_promotion(
+                    postgres_conn_or_uri,
+                    generated_at=poll_ts_utc,
+                    enforce_posture=enforce_posture,
+                )
+                return _attach_auto_promotion_summary(
+                    FC27CommunityPersistenceApplySummary(
+                        live_data_persisted="YES",
+                        match_rows_inserted=0,
+                        team_stat_rows_inserted=0,
+                        player_stat_rows_inserted=0,
+                        duplicates_ignored=0,
+                        replay_conflicts=0,
+                        idempotent_duplicate=False,
+                        export_id=f"comm_poll_cursor_{eff_match_type}",
+                        fingerprints_inserted=0,
+                        fingerprints_refreshed=0,
+                        fingerprint_duplicate_observations=0,
+                        fingerprint_collisions=0,
+                        discord_jobs_inserted=0,
+                        discord_jobs_existing=0,
+                        discord_job_conflicts=0,
+                    ),
+                    promo_summary,
                 )
 
             if match_envelopes:
@@ -1549,7 +1630,12 @@ def persist_polled_match_envelope(
                     )
                 if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                     postgres_conn_or_uri.commit()
-                return summary
+                promo_summary = _evaluate_post_commit_auto_promotion(
+                    postgres_conn_or_uri,
+                    generated_at=poll_ts_utc,
+                    enforce_posture=enforce_posture,
+                )
+                return _attach_auto_promotion_summary(summary, promo_summary)
 
             from src.fc27_repository import _build_export_envelope_for_persistence
 
@@ -1610,26 +1696,35 @@ def persist_polled_match_envelope(
             if hasattr(postgres_conn_or_uri, "commit") and callable(postgres_conn_or_uri.commit):
                 postgres_conn_or_uri.commit()
 
-            return FC27CommunityPersistenceApplySummary(
-                live_data_persisted="YES",
-                match_rows_inserted=apply_res.accepted_records,
-                team_stat_rows_inserted=apply_res.accepted_records,
-                player_stat_rows_inserted=apply_res.player_stat_records,
-                duplicates_ignored=apply_res.duplicate_records,
-                replay_conflicts=apply_res.replay_conflict_records if apply_res.replay_conflict else 0,
-                idempotent_duplicate=apply_res.idempotent_duplicate,
-                export_id=eff_export_id,
-                fingerprints_inserted=apply_res.fingerprints_inserted,
-                fingerprints_refreshed=apply_res.fingerprints_refreshed,
-                fingerprint_duplicate_observations=apply_res.fingerprint_duplicate_observations,
-                fingerprint_collisions=apply_res.fingerprint_collisions,
-                candidates_inserted=apply_res.candidates_inserted,
-                candidates_updated=apply_res.candidates_updated,
-                candidate_stable_count=apply_res.candidate_stable_count,
-                candidate_conflicted_count=apply_res.candidate_conflicted_count,
-                discord_jobs_inserted=apply_res.discord_jobs_inserted,
-                discord_jobs_existing=apply_res.discord_jobs_existing,
-                discord_job_conflicts=apply_res.discord_job_conflicts,
+            promo_summary = _evaluate_post_commit_auto_promotion(
+                postgres_conn_or_uri,
+                generated_at=poll_ts_utc,
+                enforce_posture=enforce_posture,
+            )
+
+            return _attach_auto_promotion_summary(
+                FC27CommunityPersistenceApplySummary(
+                    live_data_persisted="YES",
+                    match_rows_inserted=apply_res.accepted_records,
+                    team_stat_rows_inserted=apply_res.accepted_records,
+                    player_stat_rows_inserted=apply_res.player_stat_records,
+                    duplicates_ignored=apply_res.duplicate_records,
+                    replay_conflicts=apply_res.replay_conflict_records if apply_res.replay_conflict else 0,
+                    idempotent_duplicate=apply_res.idempotent_duplicate,
+                    export_id=eff_export_id,
+                    fingerprints_inserted=apply_res.fingerprints_inserted,
+                    fingerprints_refreshed=apply_res.fingerprints_refreshed,
+                    fingerprint_duplicate_observations=apply_res.fingerprint_duplicate_observations,
+                    fingerprint_collisions=apply_res.fingerprint_collisions,
+                    candidates_inserted=apply_res.candidates_inserted,
+                    candidates_updated=apply_res.candidates_updated,
+                    candidate_stable_count=apply_res.candidate_stable_count,
+                    candidate_conflicted_count=apply_res.candidate_conflicted_count,
+                    discord_jobs_inserted=apply_res.discord_jobs_inserted,
+                    discord_jobs_existing=apply_res.discord_jobs_existing,
+                    discord_job_conflicts=apply_res.discord_job_conflicts,
+                ),
+                promo_summary,
             )
         except FC27ReplayConflictError as conflict_exc:
             if hasattr(postgres_conn_or_uri, "rollback") and callable(postgres_conn_or_uri.rollback):
@@ -2087,6 +2182,11 @@ class FC27PollingRuntime:
     last_discord_jobs_inserted: int = 0
     last_discord_jobs_existing: int = 0
     last_discord_job_conflicts: int = 0
+    last_auto_promotion_mode: str = "DISABLED"
+    last_candidates_would_promote: int = 0
+    last_candidates_auto_promoted: int = 0
+    total_candidates_auto_promoted: int = 0
+    last_open_review_exceptions: int = 0
     next_eligible_at: datetime | None = None
     schedule_lag_seconds: int = 0
     missed_intervals: int = 0
@@ -2194,6 +2294,11 @@ class FC27PollingRuntime:
                 last_discord_jobs_inserted=self.last_discord_jobs_inserted,
                 last_discord_jobs_existing=self.last_discord_jobs_existing,
                 last_discord_job_conflicts=self.last_discord_job_conflicts,
+                last_auto_promotion_mode=self.last_auto_promotion_mode,
+                last_candidates_would_promote=self.last_candidates_would_promote,
+                last_candidates_auto_promoted=self.last_candidates_auto_promoted,
+                total_candidates_auto_promoted=self.total_candidates_auto_promoted,
+                last_open_review_exceptions=self.last_open_review_exceptions,
                 circuit_state=c_state,
                 next_eligible_at=self.next_eligible_at,
                 schedule_lag_seconds=self.schedule_lag_seconds,
@@ -2479,6 +2584,12 @@ def run_fc27_poll_cycle(
         discord_jobs_inserted_count: int = 0,
         discord_jobs_existing_count: int = 0,
         discord_job_conflict_count: int = 0,
+        auto_promotion_mode: Literal["DISABLED", "SHADOW", "ACTIVE"] = "DISABLED",
+        candidates_would_promote: int = 0,
+        candidates_auto_promoted: int = 0,
+        auto_promotion_refresh_jobs_enqueued: int = 0,
+        auto_promotion_reason_counts: dict[str, int] | None = None,
+        open_review_exceptions: int = 0,
         analytics_executed: bool = False,
         confidence_tier: str = "INSUFFICIENT_DATA",
         error_category: str | None = None,
@@ -2535,6 +2646,12 @@ def run_fc27_poll_cycle(
             rt.total_discord_jobs_inserted += discord_jobs_inserted_count
             rt.total_discord_jobs_existing += discord_jobs_existing_count
             rt.total_discord_job_conflicts += discord_job_conflict_count
+            if not is_skipped_without_attempt:
+                rt.last_auto_promotion_mode = auto_promotion_mode
+                rt.last_candidates_would_promote = max(0, candidates_would_promote)
+                rt.last_candidates_auto_promoted = max(0, candidates_auto_promoted)
+                rt.total_candidates_auto_promoted += max(0, candidates_auto_promoted)
+                rt.last_open_review_exceptions = max(0, open_review_exceptions)
             rt.schedule_lag_seconds = max(0, schedule_lag_seconds)
             rt.missed_intervals = max(0, missed_intervals)
             rt.catch_up_cycles_suppressed = True
@@ -2642,6 +2759,12 @@ def run_fc27_poll_cycle(
                 discord_jobs_inserted=max(0, discord_jobs_inserted_count),
                 discord_jobs_existing=max(0, discord_jobs_existing_count),
                 discord_job_conflicts=max(0, discord_job_conflict_count),
+                auto_promotion_mode=auto_promotion_mode,
+                candidates_would_promote=max(0, candidates_would_promote),
+                candidates_auto_promoted=max(0, candidates_auto_promoted),
+                auto_promotion_refresh_jobs_enqueued=max(0, auto_promotion_refresh_jobs_enqueued),
+                auto_promotion_reason_counts=dict(auto_promotion_reason_counts or {}),
+                open_review_exceptions=max(0, open_review_exceptions),
                 analytics_executed=analytics_executed,
                 persistence_before_analytics=True,
                 confidence_tier=confidence_tier,
@@ -3193,6 +3316,12 @@ def run_fc27_poll_cycle(
         jobs_inserted = getattr(persistence_summary, "discord_jobs_inserted", 0)
         jobs_existing = getattr(persistence_summary, "discord_jobs_existing", 0)
         job_conflicts = getattr(persistence_summary, "discord_job_conflicts", 0)
+        promo_mode = getattr(persistence_summary, "auto_promotion_mode", "DISABLED")
+        promo_would_promote = getattr(persistence_summary, "candidates_would_promote", 0)
+        promo_promoted = getattr(persistence_summary, "candidates_auto_promoted", 0)
+        promo_refresh_jobs = getattr(persistence_summary, "auto_promotion_refresh_jobs_enqueued", 0)
+        promo_reasons = dict(getattr(persistence_summary, "auto_promotion_reason_counts", {}) or {})
+        open_exceptions = getattr(persistence_summary, "open_review_exceptions", 0)
 
         # Evaluate 10-match provider window continuity and possible history gaps
         effective_prior_known = set(prior_known_ids)
@@ -3269,6 +3398,12 @@ def run_fc27_poll_cycle(
                 discord_jobs_inserted_count=jobs_inserted,
                 discord_jobs_existing_count=jobs_existing,
                 discord_job_conflict_count=job_conflicts,
+                auto_promotion_mode=promo_mode,
+                candidates_would_promote=promo_would_promote,
+                candidates_auto_promoted=promo_promoted,
+                auto_promotion_refresh_jobs_enqueued=promo_refresh_jobs,
+                auto_promotion_reason_counts=promo_reasons,
+                open_review_exceptions=open_exceptions,
                 analytics_executed=False,
                 confidence_tier="UNCHANGED_NO_NEW_MATCHES",
                 is_success=True,
@@ -3392,6 +3527,12 @@ def run_fc27_poll_cycle(
             discord_jobs_inserted_count=jobs_inserted,
             discord_jobs_existing_count=jobs_existing,
             discord_job_conflict_count=job_conflicts,
+            auto_promotion_mode=promo_mode,
+            candidates_would_promote=promo_would_promote,
+            candidates_auto_promoted=promo_promoted,
+            auto_promotion_refresh_jobs_enqueued=promo_refresh_jobs,
+            auto_promotion_reason_counts=promo_reasons,
+            open_review_exceptions=open_exceptions,
             analytics_executed=True,
             confidence_tier=confidence_tier,
             is_success=True,

@@ -2592,6 +2592,108 @@ def enqueue_roster_refresh_job_in_tx(
     return int(job_row[0]) if job_row and job_row[0] is not None else None
 
 
+def _resolve_player_alias_exceptions_in_tx(
+    cur: Any,
+    *,
+    player_id: str,
+    resolved_at: datetime,
+    target_state: str = "RESOLVED",
+    candidate_id: int | None = None,
+) -> None:
+    """Resolve open/acknowledged/deferred exception-review rows after manual operator action."""
+    exc_chk = cur.execute(
+        """
+        SELECT pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL
+           AND pg_catalog.has_column_privilege(
+               current_user,
+               'public.fc27_player_alias_review_exceptions',
+               'exception_state',
+               'UPDATE'
+           )
+        """
+    ).fetchone()
+    if not (exc_chk and bool(exc_chk[0])):
+        return
+    if candidate_id is not None:
+        cur.execute(
+            """
+            UPDATE public.fc27_player_alias_review_exceptions
+            SET exception_state = %s,
+                resolved_at = %s,
+                updated_at = GREATEST(%s, updated_at)
+            WHERE candidate_id = %s
+              AND exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+            """,
+            (target_state, resolved_at, resolved_at, int(candidate_id)),
+        )
+        return
+    cur.execute(
+        """
+        UPDATE public.fc27_player_alias_review_exceptions
+        SET exception_state = %s,
+            resolved_at = %s,
+            updated_at = GREATEST(%s, updated_at)
+        WHERE player_id = %s
+          AND exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+        """,
+        (target_state, resolved_at, resolved_at, player_id),
+    )
+
+
+def _record_manual_promotion_audit_in_tx(
+    cur: Any,
+    *,
+    candidate_id: int | None,
+    player_id: str,
+    promotion_mode: Literal["MANUAL_OPERATOR_CONFIRMATION", "MANUAL_CORRECTION"],
+    distinct_match_count: int,
+    prior_verification_status: str,
+    prior_conflict_status: str,
+    roster_revision: str,
+    refresh_job_id: int | None,
+    promoted_at: datetime,
+) -> int | None:
+    """Record a durable manual promotion or correction audit row via SECURITY DEFINER helper."""
+    sig = (
+        "public.fc27_record_manual_alias_promotion_audit("
+        "bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz)"
+    )
+    fn_row = cur.execute(
+        """
+        SELECT pg_catalog.to_regprocedure(%s) IS NOT NULL
+           AND (
+               pg_catalog.to_regprocedure(%s) IS NOT NULL
+               AND pg_catalog.has_function_privilege(current_user, %s, 'EXECUTE')
+           )
+        """,
+        (sig, sig, sig),
+    ).fetchone()
+    if not (fn_row and bool(fn_row[0])):
+        return None
+    cur.execute(
+        """
+        SELECT public.fc27_record_manual_alias_promotion_audit(
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """,
+        (
+            candidate_id,
+            player_id,
+            promotion_mode,
+            "manual-v1",
+            2,
+            max(1, int(distinct_match_count)),
+            prior_verification_status,
+            prior_conflict_status,
+            roster_revision,
+            refresh_job_id,
+            promoted_at,
+        ),
+    )
+    aud_row = cur.fetchone()
+    return int(aud_row[0]) if aud_row and aud_row[0] is not None else None
+
+
 def upsert_roster_player(
     conn_or_uri: Any,
     *,
@@ -2772,6 +2874,10 @@ def upsert_roster_player(
                     norm_new=norm_name,
                     position=safe_pos,
                 )
+                matched_cand_id: int | None = None
+                matched_distinct_cnt = 1
+                matched_prior_ver = "NONE"
+                matched_prior_conf = "NONE"
                 if effective_active and norm_name != unresolved_norm:
                     cand_chk = cur.execute(
                         """
@@ -2786,6 +2892,23 @@ def upsert_roster_player(
                     ).fetchone()
                     if cand_chk and bool(cand_chk[0]):
                         candidate_lookup_norm = normalize_public_player_alias_key(display_name)
+                        prior_cand_row = cur.execute(
+                            """
+                            SELECT candidate_id, distinct_match_count, verification_status, conflict_status
+                            FROM public.fc27_player_alias_candidates
+                            WHERE player_id = %s
+                              AND public_alias_normalized = %s
+                              AND verification_status <> 'REJECTED'
+                            ORDER BY distinct_match_count DESC, candidate_id DESC
+                            LIMIT 1
+                            """,
+                            (safe_pid, candidate_lookup_norm),
+                        ).fetchone()
+                        if prior_cand_row is not None:
+                            matched_cand_id = int(prior_cand_row[0])
+                            matched_distinct_cnt = max(1, int(prior_cand_row[1]))
+                            matched_prior_ver = str(prior_cand_row[2])
+                            matched_prior_conf = str(prior_cand_row[3])
                         cur.execute(
                             """
                             UPDATE public.fc27_player_alias_candidates
@@ -2807,6 +2930,12 @@ def upsert_roster_player(
                             seed_normalized_aliases=seed_aliases,
                             updated_at=row[7],
                         )
+                    _resolve_player_alias_exceptions_in_tx(
+                        cur,
+                        player_id=safe_pid,
+                        resolved_at=row[7],
+                        target_state="RESOLVED",
+                    )
                 if (
                     (actor_discord_user_id is not None and actor_discord_user_id.strip())
                     or has_token
@@ -2833,13 +2962,30 @@ def upsert_roster_player(
                 if public_changed:
                     roster_revision = compute_roster_revision_from_updated_at(row[7])
                     reason_code = "TOKEN_REDEEM" if resolved_via_token else "ROSTER_UPSERT"
-                    enqueue_roster_refresh_job_in_tx(
+                    refresh_job_id = enqueue_roster_refresh_job_in_tx(
                         cur,
                         player_id=safe_pid,
                         roster_revision=roster_revision,
                         reason_code=reason_code,
                         requested_at=row[7],
                     )
+                    if effective_active and norm_name != unresolved_norm:
+                        _record_manual_promotion_audit_in_tx(
+                            cur,
+                            candidate_id=matched_cand_id,
+                            player_id=safe_pid,
+                            promotion_mode=(
+                                "MANUAL_CORRECTION"
+                                if prev_row is not None
+                                else "MANUAL_OPERATOR_CONFIRMATION"
+                            ),
+                            distinct_match_count=matched_distinct_cnt,
+                            prior_verification_status=matched_prior_ver,
+                            prior_conflict_status=matched_prior_conf,
+                            roster_revision=roster_revision,
+                            refresh_job_id=refresh_job_id,
+                            promoted_at=row[7],
+                        )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),
@@ -2975,6 +3121,13 @@ def reject_player_alias_candidate(
                     seed_player_ids=(target_pid,),
                     seed_normalized_aliases=(target_norm,),
                 )
+                _resolve_player_alias_exceptions_in_tx(
+                    cur,
+                    player_id=target_pid,
+                    resolved_at=datetime.now(UTC),
+                    target_state="REJECTED",
+                    candidate_id=int(candidate_id),
+                )
                 return "REJECTED"
 
 
@@ -3065,6 +3218,10 @@ def rename_roster_player(
                     norm_new=norm_new,
                 )
                 unresolved_norm = UNRESOLVED_PLAYER_DISPLAY_NAME.lower()
+                rename_cand_id: int | None = None
+                rename_distinct_cnt = 1
+                rename_prior_ver = "NONE"
+                rename_prior_conf = "NONE"
                 if norm_new != unresolved_norm:
                     cand_chk = cur.execute(
                         """
@@ -3079,6 +3236,23 @@ def rename_roster_player(
                     ).fetchone()
                     if cand_chk and bool(cand_chk[0]):
                         candidate_lookup_norm = normalize_public_player_alias_key(new_name)
+                        prior_rename_row = cur.execute(
+                            """
+                            SELECT candidate_id, distinct_match_count, verification_status, conflict_status
+                            FROM public.fc27_player_alias_candidates
+                            WHERE player_id = %s
+                              AND public_alias_normalized = %s
+                              AND verification_status <> 'REJECTED'
+                            ORDER BY distinct_match_count DESC, candidate_id DESC
+                            LIMIT 1
+                            """,
+                            (resolved_pid, candidate_lookup_norm),
+                        ).fetchone()
+                        if prior_rename_row is not None:
+                            rename_cand_id = int(prior_rename_row[0])
+                            rename_distinct_cnt = max(1, int(prior_rename_row[1]))
+                            rename_prior_ver = str(prior_rename_row[2])
+                            rename_prior_conf = str(prior_rename_row[3])
                         cur.execute(
                             """
                             UPDATE public.fc27_player_alias_candidates
@@ -3100,15 +3274,34 @@ def rename_roster_player(
                             ),
                             updated_at=row[7],
                         )
+                    _resolve_player_alias_exceptions_in_tx(
+                        cur,
+                        player_id=resolved_pid,
+                        resolved_at=row[7],
+                        target_state="RESOLVED",
+                    )
                 if not (old_norm_name == unresolved_norm and norm_new == unresolved_norm):
                     roster_revision = compute_roster_revision_from_updated_at(row[7])
-                    enqueue_roster_refresh_job_in_tx(
+                    rename_job_id = enqueue_roster_refresh_job_in_tx(
                         cur,
                         player_id=resolved_pid,
                         roster_revision=roster_revision,
                         reason_code="ROSTER_RENAME",
                         requested_at=row[7],
                     )
+                    if norm_new != unresolved_norm:
+                        _record_manual_promotion_audit_in_tx(
+                            cur,
+                            candidate_id=rename_cand_id,
+                            player_id=resolved_pid,
+                            promotion_mode="MANUAL_CORRECTION",
+                            distinct_match_count=rename_distinct_cnt,
+                            prior_verification_status=rename_prior_ver,
+                            prior_conflict_status=rename_prior_conf,
+                            roster_revision=roster_revision,
+                            refresh_job_id=rename_job_id,
+                            promoted_at=row[7],
+                        )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),

@@ -25,7 +25,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from src.fc27_provider import FC27ProviderError, FC27TransportError
 
@@ -42,8 +42,8 @@ PRIVACY_POLICY_VERSION: Final[str] = "fc27-privacy-v1"
 MATCH_EQUIVALENCE_CONTRACT_VERSION: Final[str] = "fc27-match-equivalence-v1"
 EAST_COASTERS_CLUB_ID: Final[str] = "330323"
 EAST_COASTERS_CLUB_NAME: Final[str] = "East Coasters"
-EAST_COASTERS_PLATFORM: Final[str] = "common-gen5"
-EAST_COASTERS_GAME_VERSION: Final[str] = "FC27"
+EAST_COASTERS_PLATFORM: Final[Literal["common-gen5"]] = "common-gen5"
+EAST_COASTERS_GAME_VERSION: Final[Literal["FC27"]] = "FC27"
 
 MAX_IDENTIFIER_LENGTH: Final[int] = 128
 MAX_SAFE_TEXT_LENGTH: Final[int] = 256

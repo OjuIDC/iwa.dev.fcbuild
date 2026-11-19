@@ -48,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0019"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0020"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -68,6 +68,8 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
     "fc27_player_alias_fingerprints",
     "fc27_player_alias_candidates",
     "fc27_player_alias_candidate_observations",
+    "fc27_player_alias_promotion_audit",
+    "fc27_player_alias_review_exceptions",
     "fc27_player_links",
     "fc27_build_catalog",
     "fc27_build_catalog_audit",
@@ -218,6 +220,8 @@ class FC27BackupTableCounts(BaseModel):
     fc27_player_alias_fingerprints: int = Field(default=0, ge=0)
     fc27_player_alias_candidates: int = Field(default=0, ge=0)
     fc27_player_alias_candidate_observations: int = Field(default=0, ge=0)
+    fc27_player_alias_promotion_audit: int = Field(default=0, ge=0)
+    fc27_player_alias_review_exceptions: int = Field(default=0, ge=0)
     fc27_player_links: int = Field(default=0, ge=0)
     fc27_build_catalog: int = Field(default=0, ge=0)
     fc27_build_catalog_audit: int = Field(default=0, ge=0)
@@ -545,6 +549,8 @@ def inspect_database_state_for_manifest(
                 "fc27_player_alias_fingerprints",
                 "fc27_player_alias_candidates",
                 "fc27_player_alias_candidate_observations",
+                "fc27_player_alias_promotion_audit",
+                "fc27_player_alias_review_exceptions",
                 "fc27_player_links",
                 "fc27_build_catalog",
                 "fc27_build_catalog_audit",
@@ -757,6 +763,12 @@ def inspect_database_state_for_manifest(
         fc27_player_alias_candidate_observations=player_dev_counts[
             "fc27_player_alias_candidate_observations"
         ],
+        fc27_player_alias_promotion_audit=player_dev_counts[
+            "fc27_player_alias_promotion_audit"
+        ],
+        fc27_player_alias_review_exceptions=player_dev_counts[
+            "fc27_player_alias_review_exceptions"
+        ],
         fc27_player_links=player_dev_counts["fc27_player_links"],
         fc27_build_catalog=player_dev_counts["fc27_build_catalog"],
         fc27_build_catalog_audit=player_dev_counts["fc27_build_catalog_audit"],
@@ -839,11 +851,15 @@ def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
         probe_row = probe_conn.execute(
             "SELECT to_regclass('public.fc27_roster') IS NOT NULL, "
             "to_regclass('public.fc27_player_alias_candidates') IS NOT NULL, "
-            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL"
+            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL"
         ).fetchone()
         has_roster_table = bool(probe_row and probe_row[0])
         has_candidates_table = bool(probe_row and probe_row[1])
         has_candidate_obs_table = bool(probe_row and probe_row[2])
+        has_promotion_audit_table = bool(probe_row and probe_row[3])
+        has_review_exceptions_table = bool(probe_row and probe_row[4])
 
     table_args: list[str] = []
     for tbl in FC27_DOMAIN_TABLES:
@@ -852,6 +868,10 @@ def _run_pg_dump_custom(db_uri: str, output_path: Path) -> None:
         if tbl == "fc27_player_alias_candidates" and not has_candidates_table:
             continue
         if tbl == "fc27_player_alias_candidate_observations" and not has_candidate_obs_table:
+            continue
+        if tbl == "fc27_player_alias_promotion_audit" and not has_promotion_audit_table:
+            continue
+        if tbl == "fc27_player_alias_review_exceptions" and not has_review_exceptions_table:
             continue
         table_args.extend(["-t", f"public.{tbl}"])
 
@@ -937,11 +957,15 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
         roster_row = conn.execute(
             "SELECT to_regclass('public.fc27_roster') IS NOT NULL, "
             "to_regclass('public.fc27_player_alias_candidates') IS NOT NULL, "
-            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL"
+            "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL, "
+            "to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL"
         ).fetchone()
         has_target_roster = bool(roster_row and roster_row[0])
         has_target_candidates = bool(roster_row and roster_row[1])
         has_target_candidate_obs = bool(roster_row and roster_row[2])
+        has_target_promotion_audit = bool(roster_row and roster_row[3])
+        has_target_review_exceptions = bool(roster_row and roster_row[4])
         truncate_targets = [
             "public.schema_migrations",
             "public.schema_policy_versions",
@@ -964,6 +988,10 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
         ]
         if has_target_roster:
             truncate_targets.append("public.fc27_roster")
+        if has_target_review_exceptions:
+            truncate_targets.append("public.fc27_player_alias_review_exceptions")
+        if has_target_promotion_audit:
+            truncate_targets.append("public.fc27_player_alias_promotion_audit")
         if has_target_candidate_obs:
             truncate_targets.append("public.fc27_player_alias_candidate_observations")
         if has_target_candidates:
@@ -1057,6 +1085,16 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 continue
             if tbl == "fc27_player_alias_candidate_observations" and (
                 not has_target_candidate_obs
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
+            if tbl == "fc27_player_alias_promotion_audit" and (
+                not has_target_promotion_audit
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
+            if tbl == "fc27_player_alias_review_exceptions" and (
+                not has_target_review_exceptions
                 or (archive_tables is not None and tbl not in archive_tables)
             ):
                 continue
@@ -1362,7 +1400,7 @@ def verify_fc27_backup_restore(
                 restored_mig_cnt >= 13
                 and any(
                     v in restored_mig
-                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019")
+                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020")
                 )
                 and manifest.migration_version
                 in (
@@ -1372,6 +1410,7 @@ def verify_fc27_backup_restore(
                     "0001_THROUGH_0016",
                     "0001_THROUGH_0017",
                     "0001_THROUGH_0018",
+                    "0001_THROUGH_0019",
                     EXPECTED_MIGRATION_VERSION,
                 )
             )

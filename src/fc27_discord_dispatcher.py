@@ -691,6 +691,10 @@ class FC27DiscordDispatchConfig:
     refresh_max_team_chat_edits_per_job: int = DEFAULT_REFRESH_MAX_TEAM_CHAT_EDITS_PER_JOB
     refresh_max_history_scans_per_job: int = DEFAULT_REFRESH_MAX_HISTORY_SCANS_PER_JOB
     refresh_max_continuation_depth: int = DEFAULT_REFRESH_MAX_CONTINUATION_DEPTH
+    review_notification_enabled: bool = False
+    review_notification_min_open_items: int = 1
+    review_notification_cooldown_seconds: int = 21600
+    review_notification_channel_id: str | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_jobs_per_cycle <= 25:
@@ -758,6 +762,28 @@ class FC27DiscordDispatchConfig:
                         "team_chat_channel_id must be included in allowed_channel_ids"
                     )
                 object.__setattr__(self, "team_chat_channel_id", clean_tc)
+        if not 1 <= self.review_notification_min_open_items <= 100:
+            raise FC27DiscordDispatchValidationError(
+                "review_notification_min_open_items must be between 1 and 100"
+            )
+        if not 60 <= self.review_notification_cooldown_seconds <= 604800:
+            raise FC27DiscordDispatchValidationError(
+                "review_notification_cooldown_seconds must be between 60 and 604800"
+            )
+        if self.review_notification_channel_id is not None:
+            clean_rn = self.review_notification_channel_id.strip()
+            if not clean_rn:
+                object.__setattr__(self, "review_notification_channel_id", None)
+            elif not _SNOWFLAKE_RE.fullmatch(clean_rn):
+                raise FC27DiscordDispatchValidationError(
+                    "review_notification_channel_id must be a positive numeric Discord snowflake ID"
+                )
+            else:
+                if self.allowed_channel_ids and clean_rn not in self.allowed_channel_ids:
+                    raise FC27DiscordDispatchValidationError(
+                        "review_notification_channel_id must be included in allowed_channel_ids"
+                    )
+                object.__setattr__(self, "review_notification_channel_id", clean_rn)
         if self.enabled and not self.results_channel_id:
             raise FC27DiscordDispatchValidationError(
                 "FC27_DISCORD_RESULTS_CHANNEL_ID must be configured when FC27_DISCORD_DISPATCH_ENABLED=true"
@@ -779,6 +805,9 @@ class FC27DiscordDispatchConfig:
             max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
             lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
             single_flight = settings.is_fc27_discord_single_flight_enabled(strict=strict)
+            rev_enabled = settings.is_fc27_alias_review_notification_enabled(strict=strict)
+            rev_min_items = settings.get_fc27_alias_review_notification_min_open_items(strict=strict)
+            rev_cooldown = settings.get_fc27_alias_review_notification_cooldown_seconds(strict=strict)
         except settings.ConfigError as exc:
             raise FC27DiscordDispatchValidationError(str(exc)) from exc
         if enabled and require_results_channel_when_enabled and not results_chan:
@@ -796,6 +825,9 @@ class FC27DiscordDispatchConfig:
             max_jobs_per_cycle=max_jobs,
             lease_minutes=lease_mins,
             single_flight=single_flight,
+            review_notification_enabled=rev_enabled,
+            review_notification_min_open_items=rev_min_items,
+            review_notification_cooldown_seconds=rev_cooldown,
         )
 
 
@@ -947,6 +979,9 @@ class FC27DiscordDispatchCycleResult:
     messages_unchanged: int = 0
     continuations_enqueued: int = 0
     ambiguous_recoveries_skipped: int = 0
+    review_notifications_sent: int = 0
+    review_notifications_edited: int = 0
+    review_notification_skipped_reason: str | None = None
     provider_requests_executed: int = DISPATCH_PROVIDER_REQUESTS
     audit_entries: tuple[FC27DiscordDispatchAuditEntry, ...] = ()
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -1098,10 +1133,13 @@ class SyntheticDiscordNotificationTransport:
     def __init__(self) -> None:
         self.sent_messages: list[FC27PostNewResultsMessage] = []
         self.sent_team_chat_messages: list[FC27TeamChatMessage] = []
+        self.sent_text_messages: list[tuple[str, str, str]] = []
         self.edited_messages: list[tuple[str, str, FC27PostNewResultsMessage]] = []
         self.edited_team_chat_messages: list[tuple[str, str, FC27TeamChatMessage]] = []
+        self.edited_text_messages: list[tuple[str, str, str]] = []
         self._channel_history: dict[str, list[tuple[str, FC27PostNewResultsMessage]]] = {}
         self._team_chat_history: dict[str, list[tuple[str, FC27TeamChatMessage]]] = {}
+        self._text_history: dict[str, list[tuple[str, str]]] = {}
         self._linkages: dict[str, FC27MatchMessageLinkage] = {}
         self.deleted_message_ids: set[str] = set()
         self.non_bot_message_ids: set[str] = set()
@@ -1389,6 +1427,24 @@ class SyntheticDiscordNotificationTransport:
     def delete_message(self, channel_id: str, message_id: str) -> None:
         del channel_id
         self.deleted_message_ids.add(message_id)
+
+    def post_text(self, channel_id: str, content: str) -> tuple[str, str]:
+        self._seq += 1
+        msg_id = str(910000000000000000 + self._seq)
+        self.sent_text_messages.append((channel_id, msg_id, content))
+        self._text_history.setdefault(channel_id, []).append((msg_id, content))
+        return (msg_id, channel_id)
+
+    def edit_text(self, channel_id: str, message_id: str, content: str) -> bool:
+        if message_id in self.deleted_message_ids:
+            return False
+        hist = self._text_history.get(channel_id, [])
+        for idx, (mid, _) in enumerate(hist):
+            if mid == message_id:
+                hist[idx] = (mid, content)
+                self.edited_text_messages.append((channel_id, message_id, content))
+                return True
+        return False
 
 
 class DiscordGatewayChannelTransport:
@@ -3991,6 +4047,135 @@ def _resolve_dispatch_uri_sources(
     return eff_queue, eff_readonly
 
 
+@dataclass
+class FC27OperatorReviewNotificationState:
+    """In-memory cooldown and single-message update-in-place state for review alerts."""
+
+    last_notified_at: datetime | None = None
+    last_channel_id: str | None = None
+    last_message_id: str | None = None
+    last_content: str | None = None
+
+
+def build_alias_review_operator_notification(
+    reason_counts: Mapping[str, int],
+    *,
+    extra_forbidden_tokens: Sequence[str] = (),
+) -> str | None:
+    """Build a bounded, sanitized operator summary message for open review exceptions."""
+    total_open = sum(max(0, int(v)) for v in reason_counts.values())
+    if total_open <= 0:
+        return None
+    conflicted = (
+        max(0, int(reason_counts.get("SAME_PLAYER_MULTIPLE_ALIASES", 0)))
+        + max(0, int(reason_counts.get("CROSS_PLAYER_SAME_ALIAS", 0)))
+        + max(0, int(reason_counts.get("PROVIDER_ALIAS_CHANGED", 0)))
+    )
+    roster_blocked = max(0, int(reason_counts.get("EXISTING_ROSTER_CONFLICT", 0)))
+    other_review = max(
+        0,
+        int(reason_counts.get("INVALID_ALIAS", 0))
+        + int(reason_counts.get("NO_PROVIDER_ALIAS", 0))
+        + int(reason_counts.get("MANUAL_REVIEW_REQUIRED", 0)),
+    )
+    lines = ["Player identity review needed"]
+    if conflicted > 0:
+        noun = "candidate" if conflicted == 1 else "candidates"
+        lines.append(f"{conflicted} conflicted {noun}")
+    if roster_blocked > 0:
+        noun = "candidate" if roster_blocked == 1 else "candidates"
+        lines.append(f"{roster_blocked} stable {noun} blocked by an existing roster mapping")
+    if other_review > 0:
+        noun = "item" if other_review == 1 else "items"
+        lines.append(f"{other_review} additional identity review {noun}")
+    lines.append("Use /unresolvedplayers to review.")
+    text = suppress_discord_mentions("\n".join(lines))[:MAX_DISCORD_CONTENT_LENGTH]
+    assert_discord_output_sanitized(text, forbidden_tokens=extra_forbidden_tokens)
+    return text
+
+
+def maybe_dispatch_alias_review_notification(
+    *,
+    config: FC27DiscordDispatchConfig,
+    transport: Any,
+    readonly_conn: GuardedDiscordReadOnlyConnection | None,
+    state: FC27OperatorReviewNotificationState,
+    now: datetime | None = None,
+    extra_forbidden_tokens: Sequence[str] = (),
+) -> tuple[int, int, str | None]:
+    """Send or update one sanitized operator review notification when enabled and past cooldown."""
+    if not config.review_notification_enabled:
+        return (0, 0, "DISABLED")
+    if readonly_conn is None:
+        return (0, 0, "NO_READONLY_CONN")
+
+    target_channel = config.review_notification_channel_id or config.results_channel_id
+    if not target_channel:
+        return (0, 0, "NO_CHANNEL")
+    if config.allowed_channel_ids and target_channel not in config.allowed_channel_ids:
+        return (0, 0, "CHANNEL_NOT_ALLOWLISTED")
+
+    current_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if state.last_notified_at is not None:
+        elapsed = (current_now - state.last_notified_at).total_seconds()
+        if elapsed < float(config.review_notification_cooldown_seconds):
+            return (0, 0, "COOLDOWN")
+
+    with readonly_conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL"
+        )
+        tbl_row = cur.fetchone()
+        if not (tbl_row and bool(tbl_row[0])):
+            readonly_conn._conn.commit()  # noqa: SLF001
+            return (0, 0, "NO_TABLE")
+        cur.execute(
+            """
+            SELECT exception_reason, COUNT(*)::integer
+            FROM public.fc27_player_alias_review_exceptions
+            WHERE exception_state = 'OPEN'
+            GROUP BY exception_reason
+            """
+        )
+        rows = cur.fetchall()
+        readonly_conn._conn.commit()  # noqa: SLF001
+
+    counts: dict[str, int] = {str(r[0]): int(r[1]) for r in rows if r and r[0] is not None}
+    total_open = sum(counts.values())
+    if total_open < config.review_notification_min_open_items:
+        return (0, 0, "BELOW_THRESHOLD")
+
+    message_text = build_alias_review_operator_notification(
+        counts, extra_forbidden_tokens=extra_forbidden_tokens
+    )
+    if not message_text:
+        return (0, 0, "NO_OPEN_ITEMS")
+
+    edit_fn = getattr(transport, "edit_text", None)
+    post_fn = getattr(transport, "post_text", None)
+    if (
+        state.last_message_id is not None
+        and state.last_channel_id == target_channel
+        and callable(edit_fn)
+    ):
+        edited_ok = bool(edit_fn(target_channel, state.last_message_id, message_text))
+        if edited_ok:
+            state.last_notified_at = current_now
+            state.last_content = message_text
+            return (0, 1, None)
+
+    if callable(post_fn):
+        post_result = post_fn(target_channel, message_text)
+        msg_id = str(post_result[0]) if isinstance(post_result, tuple) else str(post_result)
+        state.last_notified_at = current_now
+        state.last_channel_id = target_channel
+        state.last_message_id = msg_id
+        state.last_content = message_text
+        return (1, 0, None)
+
+    return (0, 0, "UNSUPPORTED_TRANSPORT")
+
+
 def run_discord_dispatch_cycle(
     *,
     config: FC27DiscordDispatchConfig,
@@ -4002,6 +4187,8 @@ def run_discord_dispatch_cycle(
     verify_posture: bool = True,
     sent_idempotency_cache: set[str] | None = None,
     secret_tokens_to_scrub: Sequence[str] = (),
+    review_notification_state: FC27OperatorReviewNotificationState | None = None,
+    now: datetime | None = None,
 ) -> FC27DiscordDispatchCycleResult:
     """Execute one fail-closed Discord notification dispatcher cycle.
 
@@ -4705,7 +4892,12 @@ def run_discord_dispatch_cycle(
                                         else:
                                             queue_conn.commit()
                                             tc_edited_ok = False
-                                            if target_kind == "manual" and callable(getattr(transport, "edit_text", None)):
+                                            if (
+                                                target_kind == "manual"
+                                                and getattr(type(transport), "edit_text", None)
+                                                is not SyntheticDiscordNotificationTransport.edit_text
+                                                and callable(getattr(transport, "edit_text", None))
+                                            ):
                                                 tc_edited_ok = bool(
                                                     transport.edit_text(tc_chan, tc_msg_id, tc_msg.content)  # type: ignore[attr-defined]
                                                 )
@@ -5277,6 +5469,35 @@ def run_discord_dispatch_cycle(
                     )
                 )
 
+        review_sent = 0
+        review_edited = 0
+        review_skipped_reason: str | None = None
+        if config.review_notification_enabled:
+            eff_review_state = review_notification_state or FC27OperatorReviewNotificationState()
+            try:
+                review_sent, review_edited, review_skipped_reason = (
+                    maybe_dispatch_alias_review_notification(
+                        config=config,
+                        transport=transport,
+                        readonly_conn=readonly_conn,
+                        state=eff_review_state,
+                        now=now or started_at,
+                        extra_forbidden_tokens=secret_tokens_to_scrub,
+                    )
+                )
+            except Exception as exc:
+                review_skipped_reason = "NOTIFICATION_ERROR"
+                with suppress(Exception):
+                    if readonly_conn is not None:
+                        readonly_conn._conn.rollback()  # noqa: SLF001
+                safe_diag = redact_sensitive_text(
+                    str(exc), extra_secrets=secret_tokens_to_scrub
+                )
+                LOGGER.warning(
+                    "Operator alias review notification skipped cleanly after error (%s)",
+                    safe_diag,
+                )
+
         return FC27DiscordDispatchCycleResult(
             enabled=True,
             single_flight_acquired=True,
@@ -5295,6 +5516,9 @@ def run_discord_dispatch_cycle(
             messages_unchanged=messages_unchanged,
             continuations_enqueued=continuations_enqueued,
             ambiguous_recoveries_skipped=ambiguous_recoveries_skipped,
+            review_notifications_sent=review_sent,
+            review_notifications_edited=review_edited,
+            review_notification_skipped_reason=review_skipped_reason,
             audit_entries=tuple(audit_entries),
             started_at=started_at,
             finished_at=datetime.now(timezone.utc),
@@ -5575,6 +5799,7 @@ async def run_discord_dispatcher_loop(
 
     eff_stop = stop_event or asyncio.Event()
     sent_cache: set[str] = set()
+    review_state = FC27OperatorReviewNotificationState()
     claim_owner = _default_claim_owner(config.claim_owner_prefix)
 
     while not eff_stop.is_set():
@@ -5590,6 +5815,7 @@ async def run_discord_dispatcher_loop(
                 verify_posture=verify_posture,
                 sent_idempotency_cache=sent_cache,
                 secret_tokens_to_scrub=secret_tokens_to_scrub,
+                review_notification_state=review_state,
             )
             if on_cycle_complete is not None:
                 on_cycle_complete(result)
@@ -5661,12 +5887,14 @@ __all__ = [
     "FC27DiscordDispatchTransportError",
     "FC27DiscordDispatchValidationError",
     "FC27MatchMessageLinkage",
+    "FC27OperatorReviewNotificationState",
     "FC27PostNewResultsMessage",
     "FC27TeamChatMessage",
     "GuardedDiscordJobQueueConnection",
     "SyntheticDiscordNotificationTransport",
     "assert_sql_is_discord_job_queue_allowed",
     "audit_pending_non_permitted_jobs",
+    "build_alias_review_operator_notification",
     "build_post_new_results_notification",
     "build_post_new_results_team_chat_message",
     "claim_discord_jobs_batch",
@@ -5674,6 +5902,7 @@ __all__ = [
     "complete_discord_job",
     "load_authoritative_match_by_ref",
     "load_authoritative_match_for_job",
+    "maybe_dispatch_alias_review_notification",
     "refresh_dispatched_match_message",
     "refresh_dispatched_match_messages_for_player",
     "release_dispatch_advisory_lock",

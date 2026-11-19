@@ -1,0 +1,141 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_id": "fc27-protected-state-manifest",
+  "compose_project": "fc27-full-stack",
+  "compose_files": {
+    "required": [
+      "docker-compose.yml",
+      "docker-compose.community-worker.yml",
+      "docker-compose.discord.yml"
+    ],
+    "optional_tracked": [
+      "docker-compose.ghcr.yml"
+    ],
+    "optional_local_overrides": [
+      "docker-compose.override.yml",
+      "docker-compose.local.yml",
+      ".local-data/compose/ghcr-promotion.yml"
+    ]
+  },
+  "compose_profiles": [
+    "fc27-polling",
+    "fc27-discord"
+  ],
+  "docker_volumes": {
+    "postgres_data": {
+      "full_volume_name": "fc27-full-stack_postgres_data",
+      "mountpoint": "/var/lib/postgresql/data",
+      "service": "postgres",
+      "required": true,
+      "migration_version": "0020_fc27_alias_auto_promotion_and_exceptions.sql",
+      "grants_policy_version": 21
+    },
+    "redis_data": {
+      "full_volume_name": "fc27-full-stack_redis_data",
+      "mountpoint": "/data",
+      "service": "redis",
+      "required": true
+    }
+  },
+  "protected_env_files": {
+    "required": [
+      ".env",
+      ".local-data/discord.env",
+      ".local-data/polling.env"
+    ],
+    "optional": [
+      ".local-data/worker.env"
+    ]
+  },
+  "protected_secret_files": {
+    "required": [
+      "secrets/postgres_password",
+      "secrets/postgres_admin_uri",
+      "secrets/redis_password",
+      "secrets/fc27_migrator_password",
+      "secrets/fc27_migrator_uri",
+      "secrets/fc27_app_password",
+      "secrets/fc27_app_uri",
+      "secrets/fc27_dispatch_password",
+      "secrets/fc27_relay_password",
+      "secrets/fc27_match_results_writer_password",
+      "secrets/fc27_poll_writer_password",
+      "secrets/fc27_poll_writer_uri",
+      "secrets/fc27_player_dev_writer_password",
+      "secrets/fc27_player_dev_writer_uri",
+      "secrets/fc27_discord_reader_password",
+      "secrets/fc27_discord_reader_uri",
+      "secrets/fc27_alias_hmac_key",
+      "secrets/discord_bot_token"
+    ],
+    "optional": []
+  },
+  "protected_metadata_files": {
+    "optional": [
+      ".local-data/runtime-deployment.json"
+    ]
+  },
+  "database_backup_directory": ".local-data/backups",
+  "required_numeric_discord_env_vars": [
+    "DISCORD_APPLICATION_ID",
+    "FC27_DISCORD_ALLOWED_GUILD_IDS",
+    "FC27_DISCORD_ALLOWED_CHANNEL_IDS",
+    "FC27_DISCORD_RESULTS_CHANNEL_ID",
+    "FC27_DISCORD_TEAM_CHAT_CHANNEL_ID",
+    "FC27_DISCORD_IDENTITY_OPERATOR_ROLE_IDS"
+  ],
+  "numeric_discord_env_fallbacks": {
+    "FC27_DISCORD_ALLOWED_GUILD_IDS": "DISCORD_GUILD_IDS",
+    "FC27_DISCORD_ALLOWED_CHANNEL_IDS": "DISCORD_CHANNEL_IDS",
+    "FC27_DISCORD_IDENTITY_OPERATOR_ROLE_IDS": "DISCORD_IDENTITY_OPERATOR_ROLE_IDS"
+  },
+  "auto_promotion_policy_defaults": {
+    "FC27_ALIAS_AUTO_PROMOTION_ENABLED": false,
+    "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE": true,
+    "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES": 2,
+    "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL": 10,
+    "FC27_ALIAS_AUTO_PROMOTION_REFRESH_MESSAGES": true,
+    "FC27_ALIAS_AUTO_PROMOTION_POLICY_VERSION": "stable-v1",
+    "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED": false,
+    "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS": 1,
+    "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS": 21600,
+    "FC27_ALIAS_MAINTENANCE_ENABLED": false,
+    "FC27_ALIAS_REVIEW_EXCEPTION_RETENTION_DAYS": 90,
+    "FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS": 0,
+    "FC27_RECONCILIATION_TOKEN_CLEANUP_ENABLED": true,
+    "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": 24
+  },
+  "database_expected_state": {
+    "minimum_migration": "0020_fc27_alias_auto_promotion_and_exceptions.sql",
+    "expected_migration_version": "0001_THROUGH_0020",
+    "grants_policy_version": 21,
+    "alias_hmac_key_continuity_required": true
+  },
+  "acl_policy": {
+    "windows_icacls_disable_inheritance": true,
+    "windows_allowed_principals": [
+      "CURRENT_USER",
+      "BUILTIN\\Administrators (*S-1-5-32-544)",
+      "NT AUTHORITY\\SYSTEM (*S-1-5-18)"
+    ],
+    "posix_mode_octal": "0600",
+    "reject_world_or_users_aces": true
+  },
+  "integrity_policy": {
+    "hash_algorithm": "sha256",
+    "sidecar_extension": ".sha256",
+    "reject_tracked_output_paths": true,
+    "reject_symlinks_and_junctions": true,
+    "reject_archive_traversal": true,
+    "allowlisted_only": true
+  },
+  "recovery_order": [
+    "1. Restore PostgreSQL data (pg_restore custom dump or verified Docker volume) and preserve secrets/fc27_alias_hmac_key.",
+    "2. Import protected env files, secret files, local Compose overrides, and runtime metadata via python -m src.fc27_protected_state import.",
+    "3. Enforce and verify restrictive ACLs/permissions and numeric Discord Identity Operator / guild / channel IDs.",
+    "4. Start postgres and redis and run verify-postgres-volume.",
+    "5. Verify db-bootstrap dry-run posture and apply db-migrate (Migration 0020 + Grants Policy 21).",
+    "6. Run python -m src.fc27_protected_state readiness before starting fc27-discord-bot or fc27-community-worker.",
+    "7. Start fc27-discord-bot and fc27-community-worker and verify post-start health with verify-post-start."
+  ]
+}

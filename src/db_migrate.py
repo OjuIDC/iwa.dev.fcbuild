@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 20
+GRANTS_POLICY_VERSION = 21
 
 
 def _compute_grants_sha256() -> str:
@@ -842,6 +842,170 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_player_alias_candidate_observations")
                     elif priv not in allowed_privs and has_priv:
                         violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_player_alias_candidate_observations")
+
+        # check Migration 0020 alias auto-promotion audit, review exceptions, and narrow SECURITY DEFINER boundaries
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0020%'")
+            has_0020 = cur.fetchone() is not None
+        else:
+            has_0020 = False
+
+        if has_0020:
+            for promo_tbl in (
+                "fc27_player_alias_promotion_audit",
+                "fc27_player_alias_review_exceptions",
+            ):
+                cur.execute(
+                    "SELECT c.relowner::regrole::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = %s",
+                    (promo_tbl,),
+                )
+                own_row = cur.fetchone()
+                if not own_row:
+                    violations.append(f"missing_table_{promo_tbl}")
+                elif own_row[0] != "fc27_owner":
+                    violations.append(f"wrong_owner_{promo_tbl}_{own_row[0]}")
+
+            audit_matrix = {
+                "public": (),
+                "fc27_app": (),
+                "fc27_dispatch": (),
+                "fc27_relay": (),
+                "fc27_player_dev_writer": (),
+                "fc27_poll_writer": ("SELECT",),
+                "fc27_discord_reader": ("SELECT",),
+                "fc27_match_results_writer": ("SELECT",),
+            }
+            for role_name, allowed_privs in audit_matrix.items():
+                if role_name != "public":
+                    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                    if not cur.fetchone():
+                        continue
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_player_alias_promotion_audit', %s)",
+                        (role_name, priv),
+                    )
+                    p_row = cur.fetchone()
+                    has_priv = bool(p_row and p_row[0])
+                    if priv in allowed_privs and not has_priv:
+                        violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_player_alias_promotion_audit")
+                    elif priv not in allowed_privs and has_priv:
+                        violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_player_alias_promotion_audit")
+
+            exc_matrix = {
+                "public": (),
+                "fc27_app": (),
+                "fc27_dispatch": (),
+                "fc27_relay": (),
+                "fc27_player_dev_writer": (),
+                "fc27_poll_writer": ("SELECT", "INSERT", "UPDATE"),
+                "fc27_discord_reader": ("SELECT",),
+                "fc27_match_results_writer": ("SELECT", "UPDATE"),
+            }
+            for role_name, allowed_privs in exc_matrix.items():
+                if role_name != "public":
+                    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                    if not cur.fetchone():
+                        continue
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    if priv == "UPDATE":
+                        cur.execute(
+                            "SELECT has_any_column_privilege(%s, 'public.fc27_player_alias_review_exceptions', %s)",
+                            (role_name, priv),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, 'public.fc27_player_alias_review_exceptions', %s)",
+                            (role_name, priv),
+                        )
+                    p_row = cur.fetchone()
+                    has_priv = bool(p_row and p_row[0])
+                    if priv in allowed_privs and not has_priv:
+                        violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_player_alias_review_exceptions")
+                    elif priv not in allowed_privs and has_priv:
+                        violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_player_alias_review_exceptions")
+
+            for restricted_role in ("fc27_poll_writer", "fc27_match_results_writer"):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (restricted_role,))
+                if cur.fetchone():
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_player_alias_review_exceptions', 'UPDATE')",
+                        (restricted_role,),
+                    )
+                    tbl_row = cur.fetchone()
+                    if tbl_row and tbl_row[0]:
+                        violations.append(
+                            f"overbroad_table_{restricted_role}_update_on_fc27_player_alias_review_exceptions"
+                        )
+
+            fn_specs = (
+                ("fc27_auto_promote_stable_alias_candidate", ("fc27_poll_writer",)),
+                ("fc27_evaluate_alias_candidates_for_promotion", ("fc27_poll_writer",)),
+                ("fc27_record_manual_alias_promotion_audit", ("fc27_match_results_writer",)),
+                ("fc27_purge_resolved_alias_review_exceptions", ("fc27_match_results_writer",)),
+            )
+            all_check_roles = (
+                "public",
+                "fc27_app",
+                "fc27_dispatch",
+                "fc27_relay",
+                "fc27_poll_writer",
+                "fc27_player_dev_writer",
+                "fc27_discord_reader",
+                "fc27_match_results_writer",
+            )
+            for fn_name, allowed_exec_roles in fn_specs:
+                cur.execute(
+                    """
+                    SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public'
+                      AND p.proname = %s
+                    """,
+                    (fn_name,),
+                )
+                fn_row = cur.fetchone()
+                if not fn_row:
+                    violations.append(f"missing_function_{fn_name}")
+                    continue
+                f_oid, f_secdef, f_owner, f_config = fn_row
+                if not f_secdef:
+                    violations.append(f"{fn_name}_not_secdef")
+                if f_owner != "fc27_owner":
+                    violations.append(f"{fn_name}_not_owner")
+                f_cfg = " ".join(f_config) if f_config else ""
+                if "search_path=pg_catalog, pg_temp" not in f_cfg:
+                    violations.append(f"{fn_name}_search_path")
+                for check_role in all_check_roles:
+                    if check_role != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
+                        if not cur.fetchone():
+                            continue
+                    cur.execute(
+                        "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                        (check_role, f_oid),
+                    )
+                    e_row = cur.fetchone()
+                    has_exec = bool(e_row and e_row[0])
+                    if check_role in allowed_exec_roles and not has_exec:
+                        violations.append(f"missing_{check_role}_exec_{fn_name}")
+                    elif check_role not in allowed_exec_roles and has_exec:
+                        violations.append(f"forbidden_{check_role}_exec_{fn_name}")
+
+            # Confirm fc27_poll_writer still has zero direct privileges on fc27_roster and fc27_discord_jobs_job_id_seq UPDATE/DELETE
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer'")
+            if cur.fetchone():
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege('fc27_poll_writer', 'public.fc27_roster', %s)",
+                        (priv,),
+                    )
+                    r_row = cur.fetchone()
+                    if r_row and r_row[0]:
+                        violations.append(f"forbidden_fc27_poll_writer_{priv.lower()}_on_fc27_roster")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:
