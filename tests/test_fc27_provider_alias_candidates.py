@@ -980,7 +980,9 @@ class TestProviderAliasCandidatePipeline:
         )
         ephem = format_unresolved_players_ephemeral(summaries)
         embed = render_unresolved_players_embed(summaries)
-        combined = ephem + "\n" + (embed.description or "") + "".join(f.value for f in embed.fields)
+        combined = ephem + "\n" + (embed.description or "") + "".join(
+            f.value or "" for f in embed.fields
+        )
         assert "Candidate stable — confirmation required" in combined
         assert "Candidate unverified" in combined
         assert "Conflicting candidate tags — operator review required" in combined
@@ -1082,20 +1084,23 @@ class TestProviderAliasCandidatePipeline:
             display_name="ExistingPlayer",
             position="ST",
         )
-        # Upgrade 0018 -> 0019
+        # Upgrade 0018 -> latest
         applied_0019 = migrate(pg_db.migrator)
-        assert applied_0019 == ["0019_fc27_player_alias_candidates.sql"]
+        assert applied_0019 == [
+            "0019_fc27_player_alias_candidates.sql",
+            "0020_fc27_alias_auto_promotion_and_exceptions.sql",
+        ]
         # Idempotent rerun
         assert migrate(pg_db.migrator) == []
-        assert GRANTS_POLICY_VERSION == 20
-        assert GRANTS_POLICY.version == 20
+        assert GRANTS_POLICY_VERSION == 21
+        assert GRANTS_POLICY.version == 21
 
         with psycopg.connect(pg_db.admin) as aconn:
             assert verify_postconditions(aconn) == []
-            assert aconn.execute("SELECT MAX(version) FROM public.schema_migrations").fetchone()[0].startswith("0019")
+            assert aconn.execute("SELECT MAX(version) FROM public.schema_migrations").fetchone()[0].startswith("0020")
             assert aconn.execute(
                 "SELECT version FROM public.schema_policy_versions WHERE policy = 'grants' ORDER BY version DESC LIMIT 1"
-            ).fetchone() == (20,)
+            ).fetchone() == (21,)
             # Preserved 0018 data
             assert aconn.execute(
                 "SELECT display_name FROM public.fc27_roster WHERE player_id = 'plr_ecf_112233445566'"
@@ -1341,7 +1346,7 @@ class TestBackupRestoreWithAliasCandidates:
             backup_dir=backup_dir,
         )
         assert manifest.migration_version == EXPECTED_MIGRATION_VERSION
-        assert manifest.table_counts.schema_migrations == 19
+        assert manifest.table_counts.schema_migrations == 20
         assert manifest.table_counts.fc27_roster == 1
         assert manifest.table_counts.fc27_player_alias_candidates >= 4
         assert manifest.table_counts.fc27_player_alias_candidate_observations >= 5

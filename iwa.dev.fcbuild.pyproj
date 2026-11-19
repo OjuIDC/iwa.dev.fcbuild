@@ -45,6 +45,7 @@
     <Folder Include="docs\" />
     <Folder Include="migrations\" />
     <Folder Include="migrations\post\" />
+    <Folder Include="ops\" />
     <Folder Include="scripts\" />
     <Folder Include="src\" />
     <Folder Include="tests\" />
@@ -82,6 +83,7 @@
     <Compile Include="src\fc27_performance.py" />
     <Compile Include="src\fc27_polling_worker.py" />
     <Compile Include="src\fc27_privacy.py" />
+    <Compile Include="src\fc27_protected_state.py" />
     <Compile Include="src\fc27_provider.py" />
     <Compile Include="src\fc27_repository.py" />
     <Compile Include="src\fc27_search_scout.py" />
@@ -103,6 +105,7 @@
     <Compile Include="tests\test_fc27_analyst_graph.py" />
     <Compile Include="tests\test_fc27_api_cache.py" />
     <Compile Include="tests\test_fc27_api_rate_limit.py" />
+    <Compile Include="tests\test_fc27_auto_promotion.py" />
     <Compile Include="tests\test_fc27_backup_restore.py" />
     <Compile Include="tests\test_fc27_clubs_api_contracts.py" />
     <Compile Include="tests\test_fc27_coach.py" />
@@ -117,6 +120,7 @@
     <Compile Include="tests\test_fc27_platform.py" />
     <Compile Include="tests\test_fc27_polling_worker.py" />
     <Compile Include="tests\test_fc27_privacy.py" />
+    <Compile Include="tests\test_fc27_protected_state_recovery.py" />
     <Compile Include="tests\test_fc27_scout.py" />
     <Compile Include="tests\test_fc27_search.py" />
     <Compile Include="tests\test_fc27_search_scout_graph.py" />
@@ -171,6 +175,7 @@
     <Content Include="docs\FC27_DIRECTOR_RECONCILIATION.md" />
     <Content Include="docs\FC27_DISCORD_BOT.md" />
     <Content Include="docs\FC27_GHCR_RUNTIME_PROMOTION.md" />
+    <Content Include="docs\FC27_HOST_REBUILD_AND_RECOVERY.md" />
     <Content Include="docs\FC27_LANGUAGE_DECISION_MATRIX.md" />
     <Content Include="docs\FC27_LOCAL_INFERENCE_BOUNDARY.md" />
     <Content Include="docs\FC27_PERFORMANCE_BASELINE.md" />
@@ -200,7 +205,9 @@
     <Content Include="migrations\0013_fc27_manual_match_results.sql" />
     <Content Include="migrations\0014_fc27_player_development.sql" />
     <Content Include="migrations\0015_fc27_player_development_fixups.sql" />
+    <Content Include="migrations\0020_fc27_alias_auto_promotion_and_exceptions.sql" />
     <Content Include="migrations\post\grants.sql" />
+    <Content Include="ops\fc27-protected-state-manifest.json" />
     <Content Include="pyproject.toml" />
     <Content Include="requirements-dev.txt" />
     <Content Include="requirements.txt" />

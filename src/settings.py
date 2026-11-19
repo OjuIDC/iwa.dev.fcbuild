@@ -6,6 +6,7 @@ mounted secret file, e.g. a Docker/Compose secret). Values are never logged.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal, overload
 
@@ -703,6 +704,227 @@ def is_fc27_performance_telemetry_enabled(*, strict: bool = False) -> bool:
             f"FC27_PERFORMANCE_TELEMETRY_ENABLED must be a valid boolean, got '{raw}'"
         )
     return False
+
+
+_ALIAS_POLICY_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+
+
+def _parse_bool_env(env_name: str, *, default: bool, strict: bool = False) -> bool:
+    """Parse a boolean environment variable, failing closed to `default` unless `strict=True`."""
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        return default
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(f"{env_name} must be a valid boolean")
+    return False
+
+
+def _parse_bounded_int_env(
+    env_name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+    strict: bool = False,
+) -> int:
+    """Parse an integer environment variable within `[minimum, maximum]`, failing closed."""
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        return default
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"{env_name} must be an integer between {minimum} and {maximum}"
+            )
+        return default
+    num = int(token)
+    if num < minimum or num > maximum:
+        if strict:
+            raise ConfigError(
+                f"{env_name} must be between {minimum} and {maximum}"
+            )
+        return default
+    return num
+
+
+def is_fc27_alias_auto_promotion_enabled(*, strict: bool = False) -> bool:
+    """Check if automatic promotion of STABLE provider-alias candidates is enabled (default: False)."""
+    if not _parse_bool_env("FC27_ALIAS_AUTO_PROMOTION_ENABLED", default=False, strict=strict):
+        return False
+    # Fail closed if companion auto-promotion parameters are malformed.
+    try:
+        get_fc27_alias_auto_promotion_min_distinct_matches(strict=True)
+        get_fc27_alias_auto_promotion_max_per_poll(strict=True)
+        get_fc27_alias_auto_promotion_policy_version(strict=True)
+    except ConfigError:
+        if strict:
+            raise
+        return False
+    return True
+
+
+def is_fc27_alias_auto_promotion_shadow_mode(*, strict: bool = False) -> bool:
+    """Check if shadow-mode auto-promotion evaluation is enabled (default: True)."""
+    raw = os.getenv("FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE")
+    if raw is None or not raw.strip():
+        return True
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError("FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE must be a valid boolean")
+    return False
+
+
+def get_fc27_alias_auto_promotion_min_distinct_matches(*, strict: bool = False) -> int:
+    """Return minimum distinct matches required for auto-promotion (default: 2, range 2..10)."""
+    return _parse_bounded_int_env(
+        "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES",
+        default=2,
+        minimum=2,
+        maximum=10,
+        strict=strict,
+    )
+
+
+def get_fc27_alias_auto_promotion_max_per_poll(*, strict: bool = False) -> int:
+    """Return maximum candidates auto-promoted per poll cycle (default: 10, range 1..25)."""
+    return _parse_bounded_int_env(
+        "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL",
+        default=10,
+        minimum=1,
+        maximum=25,
+        strict=strict,
+    )
+
+
+def is_fc27_alias_auto_promotion_refresh_messages(*, strict: bool = False) -> bool:
+    """Check if roster-refresh job enqueueing on auto-promotion is enabled (default: True)."""
+    raw = os.getenv("FC27_ALIAS_AUTO_PROMOTION_REFRESH_MESSAGES")
+    if raw is None or not raw.strip():
+        return True
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError("FC27_ALIAS_AUTO_PROMOTION_REFRESH_MESSAGES must be a valid boolean")
+    return True
+
+
+def get_fc27_alias_auto_promotion_policy_version(*, strict: bool = False) -> str:
+    """Return validated auto-promotion policy version identifier (default: 'stable-v1')."""
+    raw = os.getenv("FC27_ALIAS_AUTO_PROMOTION_POLICY_VERSION")
+    if raw is None or not raw.strip():
+        return "stable-v1"
+    token = raw.strip()
+    if not _ALIAS_POLICY_VERSION_RE.fullmatch(token):
+        if strict:
+            raise ConfigError(
+                "FC27_ALIAS_AUTO_PROMOTION_POLICY_VERSION must match ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$"
+            )
+        return "stable-v1"
+    return token
+
+
+def is_fc27_alias_review_notification_enabled(*, strict: bool = False) -> bool:
+    """Check if operator review-exception Discord notifications are enabled (default: False)."""
+    return _parse_bool_env(
+        "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED",
+        default=False,
+        strict=strict,
+    )
+
+
+def get_fc27_alias_review_notification_min_open_items(*, strict: bool = False) -> int:
+    """Return minimum open exception count before notifying operators (default: 1, range 1..100)."""
+    return _parse_bounded_int_env(
+        "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS",
+        default=1,
+        minimum=1,
+        maximum=100,
+        strict=strict,
+    )
+
+
+def get_fc27_alias_review_notification_cooldown_seconds(*, strict: bool = False) -> int:
+    """Return operator review-exception notification cooldown in seconds (default: 21600)."""
+    return _parse_bounded_int_env(
+        "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS",
+        default=21600,
+        minimum=60,
+        maximum=604800,
+        strict=strict,
+    )
+
+
+def is_fc27_alias_maintenance_enabled(*, strict: bool = False) -> bool:
+    """Check if optional alias/token maintenance cleanup is enabled (default: False)."""
+    return _parse_bool_env("FC27_ALIAS_MAINTENANCE_ENABLED", default=False, strict=strict)
+
+
+def get_fc27_alias_review_exception_retention_days(*, strict: bool = False) -> int:
+    """Return retention days for resolved/rejected exception records (default: 90, range 1..3650)."""
+    return _parse_bounded_int_env(
+        "FC27_ALIAS_REVIEW_EXCEPTION_RETENTION_DAYS",
+        default=90,
+        minimum=1,
+        maximum=3650,
+        strict=strict,
+    )
+
+
+def get_fc27_alias_promotion_audit_retention_days(*, strict: bool = False) -> int:
+    """Return promotion-audit retention days (default: 0 = indefinite retention)."""
+    raw = os.getenv("FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS")
+    if raw is None or not raw.strip():
+        return 0
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError("FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS must be 0 or >= 365")
+        return 0
+    num = int(token)
+    if num != 0 and (num < 365 or num > 36500):
+        if strict:
+            raise ConfigError("FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS must be 0 or between 365 and 36500")
+        return 0
+    return num
+
+
+def is_fc27_reconciliation_token_cleanup_enabled(*, strict: bool = False) -> bool:
+    """Check if expired reconciliation-token cleanup is enabled during maintenance (default: True)."""
+    raw = os.getenv("FC27_RECONCILIATION_TOKEN_CLEANUP_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError("FC27_RECONCILIATION_TOKEN_CLEANUP_ENABLED must be a valid boolean")
+    return True
+
+
+def get_fc27_reconciliation_token_retention_hours(*, strict: bool = False) -> int:
+    """Return hours after expiry before expired reconciliation tokens are cleaned (default: 24, range 1..720)."""
+    return _parse_bounded_int_env(
+        "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS",
+        default=24,
+        minimum=1,
+        maximum=720,
+        strict=strict,
+    )
 
 
 _BOOTSTRAP_PASSWORD_ENV_VARS: tuple[str, ...] = (

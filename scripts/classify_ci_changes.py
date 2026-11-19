@@ -87,6 +87,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
     if (
         norm.startswith("Dockerfile")
         or norm.startswith("docker-compose")
+        or norm.startswith("ops/")
         or norm in {".dockerignore", "tests/test_compose_isolation.py"}
     ):
         cats.add("compose")
@@ -100,6 +101,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "src/fc27_repository.py",
             "src/fc27_match_results.py",
             "src/fc27_backup_restore.py",
+            "src/fc27_protected_state.py",
             "src/approval_store.py",
             "src/events.py",
             "scripts/fc27_backup.py",
@@ -111,6 +113,8 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "tests/test_fc27_match_results.py",
             "tests/test_fc27_roster_reconciliation_and_team_chat.py",
             "tests/test_fc27_discord_roster_refresh_queue.py",
+            "tests/test_fc27_auto_promotion.py",
+            "tests/test_fc27_protected_state_recovery.py",
             "tests/test_fc27_backup_restore.py",
             "tests/test_migration_0003.py",
             "tests/test_events_outbox.py",
@@ -155,6 +159,7 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
         norm.startswith("src/identity/")
         or norm.startswith("tests/identity/")
         or norm.startswith("tests/adversarial/")
+        or norm.startswith("ops/")
         or "adversarial" in norm
         or norm in {
             "src/security.py",
@@ -162,9 +167,12 @@ def classify_single_path(rel_path: str) -> tuple[set[str], bool]:
             "src/fc27_clubs_api_contracts.py",
             "src/fc27_community_provider.py",
             "src/fc27_privacy.py",
+            "src/fc27_protected_state.py",
             "scripts/check_matchpulse_boundary.py",
             "tests/test_approval_security.py",
             "tests/test_fc27_privacy.py",
+            "tests/test_fc27_auto_promotion.py",
+            "tests/test_fc27_protected_state_recovery.py",
         }
     ):
         cats.add("security")

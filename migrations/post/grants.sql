@@ -1,4 +1,4 @@
--- grants-policy-version: 20
+-- grants-policy-version: 21
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -882,6 +882,170 @@ BEGIN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
             EXECUTE 'REVOKE ALL ON public.fc27_player_alias_candidate_observations FROM fc27_poll_writer';
             EXECUTE 'GRANT SELECT, INSERT ON public.fc27_player_alias_candidate_observations TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    -- Alias auto-promotion audit & review exceptions (0020)
+    IF to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM fc27_poll_writer';
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_promotion_audit TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM fc27_discord_reader';
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_promotion_audit TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_promotion_audit FROM fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_promotion_audit TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_alias_promotion_audit_audit_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_promotion_audit_audit_id_seq FROM fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL THEN
+        REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_poll_writer';
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE (exception_state, observation_count, distinct_match_count, last_detected_at, resolved_at, updated_at) ON public.fc27_player_alias_review_exceptions TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT, UPDATE (exception_state, resolved_at, updated_at) ON public.fc27_player_alias_review_exceptions TO fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_discord_reader';
+            EXECUTE 'GRANT SELECT ON public.fc27_player_alias_review_exceptions TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_player_alias_review_exceptions_exception_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq FROM fc27_poll_writer';
+            EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.fc27_player_alias_review_exceptions_exception_id_seq TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_evaluate_alias_candidates_for_promotion(integer, integer)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer) FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(integer, integer) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean) FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz) FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_manual_alias_promotion_audit(bigint, text, text, text, integer, integer, text, text, text, bigint, timestamptz) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

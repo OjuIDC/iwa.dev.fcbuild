@@ -74,6 +74,41 @@ ROSTER_REFRESH_PRODUCER_REASON_CODES: Final[frozenset[str]] = frozenset(
 ROSTER_REFRESH_REASON_CODES: Final[frozenset[str]] = frozenset(
     {"ROSTER_UPSERT", "ROSTER_RENAME", "TOKEN_REDEEM", "CONTINUATION"}
 )
+AUTO_PROMOTION_REASON_CATEGORIES: Final[tuple[str, ...]] = (
+    "ELIGIBLE",
+    "BELOW_MATCH_THRESHOLD",
+    "OBSERVED_ONLY",
+    "CONFLICTED",
+    "MULTIPLE_ACTIVE_ALIASES",
+    "CROSS_PLAYER_ALIAS_COLLISION",
+    "ROSTER_ALREADY_EXISTS",
+    "ALREADY_PROMOTED",
+    "REJECTED",
+    "INVALID_ALIAS",
+    "STALE_RECHECK",
+    "PROMOTION_CAP_REACHED",
+)
+AUTO_PROMOTION_MODES: Final[tuple[str, ...]] = (
+    "AUTO_STABLE_PROVIDER_ALIAS",
+    "MANUAL_OPERATOR_CONFIRMATION",
+    "MANUAL_CORRECTION",
+)
+ALIAS_REVIEW_EXCEPTION_REASONS: Final[tuple[str, ...]] = (
+    "SAME_PLAYER_MULTIPLE_ALIASES",
+    "CROSS_PLAYER_SAME_ALIAS",
+    "EXISTING_ROSTER_CONFLICT",
+    "PROVIDER_ALIAS_CHANGED",
+    "INVALID_ALIAS",
+    "NO_PROVIDER_ALIAS",
+    "MANUAL_REVIEW_REQUIRED",
+)
+ALIAS_REVIEW_EXCEPTION_STATES: Final[tuple[str, ...]] = (
+    "OPEN",
+    "ACKNOWLEDGED",
+    "RESOLVED",
+    "REJECTED",
+    "DEFERRED",
+)
 _ROSTER_PLAYER_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[^\x00-\x20\x7F:]{1,64}$")
 _ROSTER_REVISION_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 _ROSTER_CONTINUATION_CURSOR_RE: Final[re.Pattern[str]] = re.compile(
@@ -1304,6 +1339,88 @@ class FC27CandidatePersistenceResult(BaseModel):
     observation_links_inserted: int = Field(default=0, ge=0)
     stable_count: int = Field(default=0, ge=0)
     conflicted_count: int = Field(default=0, ge=0)
+
+
+class FC27AliasAutoPromotionPolicy(BaseModel):
+    """Fail-closed policy governing post-ingestion STABLE alias auto-promotion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    shadow_mode: bool = True
+    minimum_distinct_matches: int = Field(default=2, ge=2, le=10)
+    max_per_poll: int = Field(default=10, ge=1, le=25)
+    refresh_messages: bool = True
+    policy_version: str = Field(
+        default="stable-v1",
+        min_length=1,
+        max_length=32,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    )
+
+    @property
+    def effective_mode(self) -> Literal["DISABLED", "SHADOW", "ACTIVE"]:
+        """Return effective execution mode without permitting unconfigured activation."""
+        if self.enabled:
+            return "ACTIVE"
+        if self.shadow_mode:
+            return "SHADOW"
+        return "DISABLED"
+
+
+class FC27AliasAutoPromotionSummary(BaseModel):
+    """Privacy-safe aggregate summary of post-ingestion candidate promotion evaluation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode: Literal["DISABLED", "SHADOW", "ACTIVE"] = "DISABLED"
+    policy_version: str = "stable-v1"
+    minimum_distinct_matches: int = Field(default=2, ge=2, le=10)
+    max_per_poll: int = Field(default=10, ge=1, le=25)
+    evaluated_count: int = Field(default=0, ge=0)
+    would_promote_count: int = Field(default=0, ge=0)
+    promoted_count: int = Field(default=0, ge=0)
+    noop_already_promoted_count: int = Field(default=0, ge=0)
+    ineligible_count: int = Field(default=0, ge=0)
+    refresh_jobs_enqueued: int = Field(default=0, ge=0)
+    reason_counts: dict[str, int] = Field(default_factory=dict)
+    exceptions_opened_or_updated: int = Field(default=0, ge=0)
+    open_exception_count: int = Field(default=0, ge=0)
+
+
+class FC27AliasMaintenanceSummary(BaseModel):
+    """Privacy-safe summary of bounded alias/token maintenance execution."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    executed: bool = False
+    expired_tokens_deleted: int = Field(default=0, ge=0)
+    resolved_exceptions_deleted: int = Field(default=0, ge=0)
+    audit_rows_deleted: int = Field(default=0, ge=0)
+    open_exceptions_preserved: int = Field(default=0, ge=0)
+
+
+def build_fc27_alias_auto_promotion_policy_from_env(
+    *, strict: bool = False
+) -> FC27AliasAutoPromotionPolicy:
+    """Load and validate auto-promotion policy from environment variables, failing closed."""
+    from src import settings
+
+    enabled = settings.is_fc27_alias_auto_promotion_enabled(strict=strict)
+    shadow_mode = settings.is_fc27_alias_auto_promotion_shadow_mode(strict=strict)
+    min_matches = settings.get_fc27_alias_auto_promotion_min_distinct_matches(strict=strict)
+    max_per_poll = settings.get_fc27_alias_auto_promotion_max_per_poll(strict=strict)
+    refresh_msgs = settings.is_fc27_alias_auto_promotion_refresh_messages(strict=strict)
+    policy_ver = settings.get_fc27_alias_auto_promotion_policy_version(strict=strict)
+    return FC27AliasAutoPromotionPolicy(
+        enabled=enabled,
+        shadow_mode=shadow_mode,
+        minimum_distinct_matches=min_matches,
+        max_per_poll=max_per_poll,
+        refresh_messages=refresh_msgs,
+        policy_version=policy_ver,
+    )
 
 
 class FC27DiscordJobEnqueueResult(BaseModel):
@@ -4167,3 +4284,450 @@ def apply_export_plan(
                 correlation_id=str(corr_id),
                 detail=f"Applied {len(accepted_matches)} match(es) and {player_stats_count} player performance row(s).",
             )
+
+
+def _upsert_review_exception_in_tx(
+    cur: Any,
+    *,
+    candidate_id: int | None,
+    player_id: str,
+    exception_reason: str,
+    observation_count: int,
+    distinct_match_count: int,
+    detected_at: datetime,
+) -> bool:
+    """Insert or refresh one open/acknowledged/deferred exception record without duplicating open rows."""
+    if exception_reason not in ALIAS_REVIEW_EXCEPTION_REASONS:
+        raise FC27ValidationError(f"Unsupported alias review exception reason '{exception_reason}'")
+    clean_pid = str(player_id or "").strip()
+    if not clean_pid:
+        return False
+    norm_cand_id = int(candidate_id) if candidate_id is not None else 0
+    cur.execute(
+        """
+        SELECT exception_id, exception_state, observation_count, distinct_match_count, last_detected_at, updated_at
+        FROM public.fc27_player_alias_review_exceptions
+        WHERE player_id = %s
+          AND COALESCE(candidate_id, 0) = %s
+          AND exception_reason = %s
+          AND exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+        FOR UPDATE
+        """,
+        (clean_pid, norm_cand_id, exception_reason),
+    )
+    existing = cur.fetchone()
+    eff_obs = max(0, int(observation_count))
+    eff_distinct = max(0, int(distinct_match_count))
+    if existing is not None:
+        exc_id = int(existing[0])
+        prev_obs = int(existing[2])
+        prev_distinct = int(existing[3])
+        prev_last = existing[4]
+        prev_upd = existing[5]
+        new_last = max(prev_last, detected_at) if prev_last is not None else detected_at
+        new_upd = max(prev_upd, detected_at) if prev_upd is not None else detected_at
+        cur.execute(
+            """
+            UPDATE public.fc27_player_alias_review_exceptions
+            SET observation_count = %s,
+                distinct_match_count = %s,
+                last_detected_at = %s,
+                updated_at = %s
+            WHERE exception_id = %s
+            """,
+            (max(prev_obs, eff_obs), max(prev_distinct, eff_distinct), new_last, new_upd, exc_id),
+        )
+        return True
+
+    cur.execute(
+        """
+        INSERT INTO public.fc27_player_alias_review_exceptions (
+            candidate_id,
+            player_id,
+            exception_reason,
+            exception_state,
+            observation_count,
+            distinct_match_count,
+            first_detected_at,
+            last_detected_at,
+            resolved_at,
+            created_at,
+            updated_at
+        ) VALUES (
+            %s, %s, %s, 'OPEN', %s, %s, %s, %s, NULL, %s, %s
+        )
+        """,
+        (
+            candidate_id,
+            clean_pid,
+            exception_reason,
+            eff_obs,
+            eff_distinct,
+            detected_at,
+            detected_at,
+            detected_at,
+            detected_at,
+        ),
+    )
+    return True
+
+
+def _map_outcome_to_exception_reason(outcome_category: str) -> str | None:
+    mapping = {
+        "CONFLICTED": "MANUAL_REVIEW_REQUIRED",
+        "MULTIPLE_ACTIVE_ALIASES": "SAME_PLAYER_MULTIPLE_ALIASES",
+        "CROSS_PLAYER_ALIAS_COLLISION": "CROSS_PLAYER_SAME_ALIAS",
+        "ROSTER_ALREADY_EXISTS": "EXISTING_ROSTER_CONFLICT",
+        "INVALID_ALIAS": "INVALID_ALIAS",
+    }
+    return mapping.get(outcome_category)
+
+
+def evaluate_and_auto_promote_alias_candidates(
+    conn_or_uri: psycopg.Connection | str | Any,
+    *,
+    policy: FC27AliasAutoPromotionPolicy | None = None,
+    enforce_posture: bool = True,
+    sync_exceptions: bool = True,
+    no_alias_min_appearances: int = 3,
+    now: datetime | None = None,
+) -> FC27AliasAutoPromotionSummary:
+    """Evaluate and optionally promote unambiguous STABLE candidates after ingestion commits.
+
+    Operates safely across three modes:
+    - ``DISABLED``: performs zero promotions or shadow counting.
+    - ``SHADOW``: classifies all candidates deterministically, respects ``max_per_poll``,
+      and writes zero roster, candidate, audit, or refresh-job mutations.
+    - ``ACTIVE``: invokes ``public.fc27_auto_promote_stable_alias_candidate`` once per
+      eligible candidate in its own transaction up to ``max_per_poll`` so one stale or
+      ineligible candidate cannot roll back accepted match data or other promotions.
+    """
+    pol = policy or build_fc27_alias_auto_promotion_policy_from_env(strict=False)
+    eval_now = (now or datetime.now(UTC)).astimezone(UTC)
+    eff_mode = pol.effective_mode
+
+    with _managed_connection(conn_or_uri) as conn:
+        if enforce_posture:
+            _enforce_runtime_posture(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL,
+                    pg_catalog.to_regprocedure('public.fc27_evaluate_alias_candidates_for_promotion(integer, integer)') IS NOT NULL,
+                    pg_catalog.to_regprocedure('public.fc27_auto_promote_stable_alias_candidate(bigint, text, integer, boolean)') IS NOT NULL
+                """
+            )
+            chk = cur.fetchone()
+        if hasattr(conn, "commit") and callable(conn.commit):
+            conn.commit()
+
+        if not chk or not all(bool(x) for x in chk):
+            return FC27AliasAutoPromotionSummary(
+                mode=eff_mode,
+                policy_version=pol.policy_version,
+                minimum_distinct_matches=pol.minimum_distinct_matches,
+                max_per_poll=pol.max_per_poll,
+            )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    entry_kind,
+                    candidate_id,
+                    player_id,
+                    distinct_match_count,
+                    observation_count,
+                    first_seen_at,
+                    reason_category,
+                    exception_reason
+                FROM public.fc27_evaluate_alias_candidates_for_promotion(%s, %s)
+                """,
+                (pol.minimum_distinct_matches, max(1, int(no_alias_min_appearances))),
+            )
+            raw_rows = cur.fetchall()
+        if hasattr(conn, "commit") and callable(conn.commit):
+            conn.commit()
+
+        candidate_items: list[dict[str, Any]] = []
+        pending_exceptions: list[dict[str, Any]] = []
+        for r in raw_rows:
+            entry_kind = str(r[0])
+            cand_id = int(r[1]) if r[1] is not None else None
+            pid = str(r[2])
+            distinct_cnt = int(r[3])
+            obs_cnt = int(r[4])
+            first_seen = r[5]
+            reason_cat = str(r[6])
+            exc_reason = str(r[7]) if r[7] is not None else None
+            if entry_kind == "CANDIDATE":
+                candidate_items.append(
+                    {
+                        "candidate_id": cand_id,
+                        "player_id": pid,
+                        "distinct_match_count": distinct_cnt,
+                        "observation_count": obs_cnt,
+                        "first_seen_at": first_seen,
+                        "reason_category": reason_cat,
+                        "exception_reason": exc_reason,
+                    }
+                )
+            if exc_reason is not None:
+                pending_exceptions.append(
+                    {
+                        "candidate_id": cand_id,
+                        "player_id": pid,
+                        "exception_reason": exc_reason,
+                        "observation_count": obs_cnt,
+                        "distinct_match_count": distinct_cnt,
+                    }
+                )
+
+        reason_counts: dict[str, int] = {}
+        would_promote_count = 0
+        promoted_count = 0
+        noop_count = 0
+        refresh_jobs_enqueued = 0
+        evaluated_count = 0
+
+        if eff_mode == "SHADOW":
+            evaluated_count = len(candidate_items)
+            for item in candidate_items:
+                rc = item["reason_category"]
+                if rc == "ELIGIBLE":
+                    if would_promote_count < pol.max_per_poll:
+                        would_promote_count += 1
+                        reason_counts["ELIGIBLE"] = reason_counts.get("ELIGIBLE", 0) + 1
+                    else:
+                        reason_counts["PROMOTION_CAP_REACHED"] = (
+                            reason_counts.get("PROMOTION_CAP_REACHED", 0) + 1
+                        )
+                else:
+                    reason_counts[rc] = reason_counts.get(rc, 0) + 1
+        elif eff_mode == "ACTIVE":
+            evaluated_count = len(candidate_items)
+            for item in candidate_items:
+                rc = item["reason_category"]
+                if rc != "ELIGIBLE":
+                    reason_counts[rc] = reason_counts.get(rc, 0) + 1
+                    continue
+
+                if promoted_count >= pol.max_per_poll:
+                    reason_counts["PROMOTION_CAP_REACHED"] = (
+                        reason_counts.get("PROMOTION_CAP_REACHED", 0) + 1
+                    )
+                    continue
+
+                cand_id = item["candidate_id"]
+                assert cand_id is not None
+                try:
+                    with conn.transaction():
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT
+                                    promoted,
+                                    outcome_category,
+                                    player_id,
+                                    roster_revision,
+                                    refresh_job_id,
+                                    audit_id
+                                FROM public.fc27_auto_promote_stable_alias_candidate(%s, %s, %s, %s)
+                                """,
+                                (
+                                    cand_id,
+                                    pol.policy_version,
+                                    pol.minimum_distinct_matches,
+                                    pol.refresh_messages,
+                                ),
+                            )
+                            p_row = cur.fetchone()
+                except Exception:
+                    if hasattr(conn, "rollback") and callable(conn.rollback):
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                    reason_counts["STALE_RECHECK"] = reason_counts.get("STALE_RECHECK", 0) + 1
+                    continue
+
+                if p_row is None:
+                    reason_counts["STALE_RECHECK"] = reason_counts.get("STALE_RECHECK", 0) + 1
+                    continue
+
+                did_promote = bool(p_row[0])
+                outcome_cat = str(p_row[1])
+                job_id = int(p_row[4]) if p_row[4] is not None else None
+                if did_promote:
+                    promoted_count += 1
+                    reason_counts["ELIGIBLE"] = reason_counts.get("ELIGIBLE", 0) + 1
+                    if job_id is not None:
+                        refresh_jobs_enqueued += 1
+                else:
+                    if outcome_cat == "ALREADY_PROMOTED":
+                        noop_count += 1
+                    reason_counts[outcome_cat] = reason_counts.get(outcome_cat, 0) + 1
+                    mapped_exc = _map_outcome_to_exception_reason(outcome_cat)
+                    if mapped_exc is not None:
+                        pending_exceptions.append(
+                            {
+                                "candidate_id": cand_id,
+                                "player_id": item["player_id"],
+                                "exception_reason": mapped_exc,
+                                "observation_count": item["observation_count"],
+                                "distinct_match_count": item["distinct_match_count"],
+                            }
+                        )
+
+        exceptions_touched = 0
+        if sync_exceptions and pending_exceptions:
+            deduped_exc: dict[tuple[str, int, str], dict[str, Any]] = {}
+            for exc_item in pending_exceptions:
+                pid_val = str(exc_item["player_id"])
+                cid_val = int(exc_item["candidate_id"]) if exc_item["candidate_id"] is not None else 0
+                r_val = str(exc_item["exception_reason"])
+                deduped_exc[(pid_val, cid_val, r_val)] = exc_item
+
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    for exc_item in deduped_exc.values():
+                        if _upsert_review_exception_in_tx(
+                            cur,
+                            candidate_id=exc_item["candidate_id"],
+                            player_id=exc_item["player_id"],
+                            exception_reason=exc_item["exception_reason"],
+                            observation_count=exc_item["observation_count"],
+                            distinct_match_count=exc_item["distinct_match_count"],
+                            detected_at=eval_now,
+                        ):
+                            exceptions_touched += 1
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)::integer
+                FROM public.fc27_player_alias_review_exceptions
+                WHERE exception_state = 'OPEN'
+                """
+            )
+            open_row = cur.fetchone()
+            open_exception_count = int(open_row[0]) if open_row else 0
+        if hasattr(conn, "commit") and callable(conn.commit):
+            conn.commit()
+
+        ineligible_count = max(
+            0, evaluated_count - (would_promote_count if eff_mode == "SHADOW" else promoted_count)
+        )
+        return FC27AliasAutoPromotionSummary(
+            mode=eff_mode,
+            policy_version=pol.policy_version,
+            minimum_distinct_matches=pol.minimum_distinct_matches,
+            max_per_poll=pol.max_per_poll,
+            evaluated_count=evaluated_count,
+            would_promote_count=would_promote_count,
+            promoted_count=promoted_count,
+            noop_already_promoted_count=noop_count,
+            ineligible_count=ineligible_count,
+            refresh_jobs_enqueued=refresh_jobs_enqueued,
+            reason_counts=reason_counts,
+            exceptions_opened_or_updated=exceptions_touched,
+            open_exception_count=open_exception_count,
+        )
+
+
+def run_fc27_alias_maintenance(
+    conn_or_uri: psycopg.Connection | str | Any,
+    *,
+    now: datetime | None = None,
+    enforce_posture: bool = True,
+) -> FC27AliasMaintenanceSummary:
+    """Execute disabled-by-default bounded maintenance for expired tokens and resolved exceptions."""
+    from src import settings
+
+    if not settings.is_fc27_alias_maintenance_enabled(strict=False):
+        return FC27AliasMaintenanceSummary(enabled=False, executed=False)
+
+    eval_now = (now or datetime.now(UTC)).astimezone(UTC)
+    exc_retention_days = settings.get_fc27_alias_review_exception_retention_days(strict=True)
+    _audit_retention = settings.get_fc27_alias_promotion_audit_retention_days(strict=True)
+    token_cleanup = settings.is_fc27_reconciliation_token_cleanup_enabled(strict=True)
+    token_retention_hours = settings.get_fc27_reconciliation_token_retention_hours(strict=True)
+
+    tokens_deleted = 0
+    resolved_deleted = 0
+    open_preserved = 0
+
+    with _managed_connection(conn_or_uri) as conn:
+        if enforce_posture:
+            _enforce_runtime_posture(conn)
+        with conn.transaction():
+            with conn.cursor() as cur:
+                if token_cleanup:
+                    token_cutoff = eval_now - timedelta(hours=token_retention_hours)
+                    cur.execute(
+                        """
+                        SELECT pg_catalog.to_regclass('public.fc27_roster_reconciliation_tokens') IS NOT NULL
+                           AND pg_catalog.has_table_privilege(
+                               current_user,
+                               'public.fc27_roster_reconciliation_tokens',
+                               'DELETE'
+                           )
+                        """
+                    )
+                    tok_chk = cur.fetchone()
+                    if tok_chk and bool(tok_chk[0]):
+                        cur.execute(
+                            """
+                            DELETE FROM public.fc27_roster_reconciliation_tokens
+                            WHERE expires_at <= %s
+                            """,
+                            (token_cutoff,),
+                        )
+                        tokens_deleted = max(0, int(cur.rowcount or 0))
+
+                cur.execute(
+                    """
+                    SELECT pg_catalog.to_regprocedure('public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz)') IS NOT NULL
+                       AND pg_catalog.has_function_privilege(
+                           current_user,
+                           'public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz)',
+                           'EXECUTE'
+                       )
+                    """
+                )
+                purge_chk = cur.fetchone()
+                if purge_chk and bool(purge_chk[0]):
+                    cur.execute(
+                        "SELECT public.fc27_purge_resolved_alias_review_exceptions(%s, %s)",
+                        (exc_retention_days, eval_now),
+                    )
+                    del_row = cur.fetchone()
+                    resolved_deleted = int(del_row[0]) if del_row and del_row[0] is not None else 0
+
+                cur.execute(
+                    """
+                    SELECT pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL
+                    """
+                )
+                exc_exists = cur.fetchone()
+                if exc_exists and bool(exc_exists[0]):
+                    cur.execute(
+                        """
+                        SELECT COUNT(*)::integer
+                        FROM public.fc27_player_alias_review_exceptions
+                        WHERE exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+                        """
+                    )
+                    open_row = cur.fetchone()
+                    open_preserved = int(open_row[0]) if open_row else 0
+
+    return FC27AliasMaintenanceSummary(
+        enabled=True,
+        executed=True,
+        expired_tokens_deleted=tokens_deleted,
+        resolved_exceptions_deleted=resolved_deleted,
+        audit_rows_deleted=0,
+        open_exceptions_preserved=open_preserved,
+    )

@@ -2214,6 +2214,12 @@ class FC27CommunityPersistenceApplySummary(BaseModel):
     discord_jobs_inserted: int = Field(default=0, ge=0)
     discord_jobs_existing: int = Field(default=0, ge=0)
     discord_job_conflicts: int = Field(default=0, ge=0)
+    auto_promotion_mode: Literal["DISABLED", "SHADOW", "ACTIVE"] = "DISABLED"
+    candidates_would_promote: int = Field(default=0, ge=0)
+    candidates_auto_promoted: int = Field(default=0, ge=0)
+    auto_promotion_refresh_jobs_enqueued: int = Field(default=0, ge=0)
+    auto_promotion_reason_counts: Dict[str, int] = Field(default_factory=dict)
+    open_review_exceptions: int = Field(default=0, ge=0)
 
 
 class FC27CommunityPipelineResult(BaseModel):
