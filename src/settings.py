@@ -239,13 +239,11 @@ def get_fc27_community_poll_interval_seconds(*, strict: bool = False) -> int:
             )
         return 43200
     num = int(val)
-    if num != 43200:
+    if num not in (14400, 43200):
         if strict:
-            raise ConfigError(
-                f"FC27_COMMUNITY_POLL_INTERVAL_SECONDS must be 43200 (12 hours), got {num}"
-            )
+            raise ConfigError("FC27_COMMUNITY_POLL_INTERVAL_SECONDS must be 14400 or 43200")
         return 43200
-    return 43200
+    return num
 
 
 def get_fc27_community_poll_min_seconds(*, strict: bool = False) -> int:
@@ -268,11 +266,9 @@ def get_fc27_community_poll_min_seconds(*, strict: bool = False) -> int:
             )
         return 43200
     num = int(val)
-    if num != 43200:
+    if num not in (14400, 43200):
         if strict:
-            raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MIN_SECONDS must be 43200 (12 hours), got {num}"
-            )
+            raise ConfigError("FC27_COMMUNITY_POLL_MIN_SECONDS must be 14400 or 43200")
         return 43200
     return num
 
@@ -298,28 +294,91 @@ def get_fc27_community_poll_max_seconds(*, strict: bool = False) -> int:
             )
         return 43200
     num = int(val)
-    if num < min_sec or num != 43200:
+    if num < min_sec or num not in (14400, 43200):
         if strict:
-            raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MAX_SECONDS must be {min_sec} (43200 seconds), got {num}"
-            )
+            raise ConfigError("FC27_COMMUNITY_POLL_MAX_SECONDS must be 14400 or 43200 and at least the minimum")
         return 43200
     return num
 
 
 def get_fc27_community_poll_max_requests(*, strict: bool = False) -> int:
-    """Return configured FC 27 community polling max requests per cycle (default: 1, only 1 permitted)."""
+    """Return the bounded maximum provider requests per cycle (default 1, maximum 3)."""
     raw = os.getenv("FC27_COMMUNITY_POLL_MAX_REQUESTS")
     if raw is None or not raw.strip():
         return 1
     val = raw.strip()
-    if not val.lstrip("-").isdecimal() or int(val) != 1:
+    if not val.lstrip("-").isdecimal() or not 1 <= int(val) <= 3:
         if strict:
-            raise ConfigError(
-                f"FC27_COMMUNITY_POLL_MAX_REQUESTS must be 1, got '{raw}'"
-            )
+            raise ConfigError("FC27_COMMUNITY_POLL_MAX_REQUESTS must be between 1 and 3")
         return 1
-    return 1
+    return int(val)
+
+
+def is_fc27_community_poll_all_match_types(*, strict: bool = False) -> bool:
+    """Read the opt-in all-match-types polling gate; it is disabled by default."""
+    raw = os.getenv("FC27_COMMUNITY_POLL_ALL_MATCH_TYPES")
+    if raw is None or not raw.strip():
+        return False
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    if strict:
+        raise ConfigError("FC27_COMMUNITY_POLL_ALL_MATCH_TYPES must be a valid boolean")
+    return False
+
+
+def get_fc27_community_poll_match_types(*, strict: bool = True) -> tuple[str, ...]:
+    """Parse supported poll types, removing duplicates while preserving configured order."""
+    supported = APPROVED_COMMUNITY_MATCH_TYPES
+    raw = os.getenv("FC27_COMMUNITY_POLL_MATCH_TYPES")
+    if raw is None:
+        return supported
+    values = [token.strip() for token in raw.split(",")]
+    if not values or any(not token for token in values):
+        if strict:
+            raise ConfigError("FC27_COMMUNITY_POLL_MATCH_TYPES must not contain empty entries")
+        return supported
+    ordered: list[str] = []
+    for token in values:
+        if token not in supported:
+            if strict:
+                raise ConfigError("FC27_COMMUNITY_POLL_MATCH_TYPES contains an unsupported type")
+            return supported
+        if token not in ordered:
+            ordered.append(token)
+    if not ordered:
+        if strict:
+            raise ConfigError("FC27_COMMUNITY_POLL_MATCH_TYPES must not be empty")
+        return supported
+    return tuple(ordered)
+
+
+def get_fc27_community_poll_inter_request_delay_seconds(*, strict: bool = False) -> int:
+    """Return the inter-request delay, bounded to 10..60 seconds (default 12)."""
+    raw = os.getenv("FC27_COMMUNITY_POLL_INTER_REQUEST_DELAY_SECONDS")
+    if raw is None or not raw.strip():
+        return 12
+    value = raw.strip()
+    if not value.isdecimal() or not 10 <= int(value) <= 60:
+        if strict:
+            raise ConfigError("FC27_COMMUNITY_POLL_INTER_REQUEST_DELAY_SECONDS must be 10..60")
+        return 12
+    return int(value)
+
+
+def get_fc27_community_poll_max_requests_per_24_hours(*, strict: bool = False) -> int:
+    """Return the rolling 24-hour request ceiling (default 2, bounded to 1..18)."""
+    raw = os.getenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_24_HOURS")
+    if raw is None or not raw.strip():
+        return 2
+    value = raw.strip()
+    if not value.isdecimal() or not 1 <= int(value) <= 18:
+        if strict:
+            raise ConfigError("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_24_HOURS must be 1..18")
+        return 2
+    return int(value)
 
 
 def get_fc27_community_poll_max_retries(*, strict: bool = False) -> int:

@@ -110,8 +110,12 @@ from src.settings import (
     get_fc27_community_poll_interval_seconds,
     get_fc27_community_poll_max_requests,
     get_fc27_community_poll_max_retries,
+    get_fc27_community_poll_max_requests_per_24_hours,
+    get_fc27_community_poll_match_types,
+    get_fc27_community_poll_inter_request_delay_seconds,
     get_fc27_community_poll_max_seconds,
     get_fc27_community_poll_min_seconds,
+    is_fc27_community_poll_all_match_types,
     is_dispatch_enabled,
     is_fc27_alias_hmac_key_configured,
     is_fc27_community_poll_analytics_on_new_only,
@@ -136,7 +140,9 @@ FIXED_MATCH_COUNT = 10
 COMMUNITY_SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT
 
 POLL_INTERVAL_SECONDS = 43200
+POLL_INTERVAL_FOUR_HOURS_SECONDS = 14400
 POLL_FREQUENCY_LITERAL: Literal["ONCE_EVERY_12_HOURS"] = "ONCE_EVERY_12_HOURS"
+POLL_FREQUENCY_FOUR_HOURS_LITERAL = "ONCE_EVERY_4_HOURS"
 MAX_PROVIDER_REQUESTS_PER_24_HOURS = 2
 PROVIDER_WINDOW_MAX_MATCHES = 10
 
@@ -436,30 +442,19 @@ class FC27PollingPolicy(BaseModel):
     match_type: str = FIXED_MATCH_TYPE
     approved_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
     maximum_results: int = FIXED_MATCH_COUNT
-    poll_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    minimum_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    maximum_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    polling_frequency: Literal["ONCE_EVERY_12_HOURS"] = POLL_FREQUENCY_LITERAL
+    poll_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    minimum_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    maximum_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    polling_frequency: Literal["ONCE_EVERY_12_HOURS", "ONCE_EVERY_4_HOURS"] = POLL_FREQUENCY_LITERAL
     max_provider_requests_per_24_hours: int = Field(
-        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS, ge=1, le=18
     )
+    poll_all_match_types: bool = False
+    poll_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
+    inter_request_delay_seconds: int = Field(default=12, ge=10, le=60)
     catch_up_bursts_allowed: bool = False
     cache_ttl_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=300, le=86400)
-    maximum_requests_per_cycle: int = Field(default=1, ge=1, le=1)
+    maximum_requests_per_cycle: int = Field(default=1, ge=1, le=3)
     maximum_retries: int = Field(default=0, ge=0, le=0)
     request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=15.0)
     circuit_breaker_failure_threshold: int = Field(default=3, ge=1, le=10)
@@ -497,26 +492,43 @@ class FC27PollingPolicy(BaseModel):
             )
         if self.maximum_results != FIXED_MATCH_COUNT:
             raise ValueError(f"maximum_results is fixed to {FIXED_MATCH_COUNT}")
-        if (
-            self.poll_interval_seconds != POLL_INTERVAL_SECONDS
-            or self.minimum_interval_seconds != POLL_INTERVAL_SECONDS
-            or self.maximum_interval_seconds != POLL_INTERVAL_SECONDS
+        interval_values = {
+            self.poll_interval_seconds,
+            self.minimum_interval_seconds,
+            self.maximum_interval_seconds,
+        }
+        if len(interval_values) != 1 or self.poll_interval_seconds not in (
+            POLL_INTERVAL_FOUR_HOURS_SECONDS,
+            POLL_INTERVAL_SECONDS,
         ):
-            raise ValueError(
-                f"polling interval is fixed to {POLL_INTERVAL_SECONDS} seconds (12 hours)"
-            )
-        if self.polling_frequency != POLL_FREQUENCY_LITERAL:
-            raise ValueError(
-                f"polling_frequency must be '{POLL_FREQUENCY_LITERAL}'"
-            )
-        if self.max_provider_requests_per_24_hours != MAX_PROVIDER_REQUESTS_PER_24_HOURS:
-            raise ValueError(
-                f"max_provider_requests_per_24_hours must be {MAX_PROVIDER_REQUESTS_PER_24_HOURS}"
-            )
+            raise ValueError("poll interval, minimum, and maximum must match 14400 or 43200 seconds")
+        expected_frequency = (
+            POLL_FREQUENCY_FOUR_HOURS_LITERAL
+            if self.poll_interval_seconds == POLL_INTERVAL_FOUR_HOURS_SECONDS
+            else POLL_FREQUENCY_LITERAL
+        )
+        if self.polling_frequency != expected_frequency:
+            raise ValueError(f"polling_frequency must be '{expected_frequency}'")
         if self.catch_up_bursts_allowed:
             raise ValueError("catch_up_bursts_allowed must be False")
-        if self.maximum_requests_per_cycle != 1:
-            raise ValueError("maximum_requests_per_cycle must be 1")
+        if self.poll_all_match_types:
+            if self.poll_interval_seconds != POLL_INTERVAL_FOUR_HOURS_SECONDS:
+                raise ValueError("all-match-types mode requires the 14400-second interval")
+            if self.maximum_requests_per_cycle != 3:
+                raise ValueError("all-match-types mode requires exactly 3 requests per cycle")
+            if self.max_provider_requests_per_24_hours < 3:
+                raise ValueError("all-match-types mode requires a daily budget of at least 3")
+            if set(self.poll_match_types) != set(APPROVED_MATCH_TYPES):
+                raise ValueError("all-match-types mode requires all supported match types")
+        else:
+            if self.poll_interval_seconds != POLL_INTERVAL_SECONDS:
+                raise ValueError("14400 seconds requires all-match-types mode")
+            if self.maximum_requests_per_cycle != 1:
+                raise ValueError("rotation mode requires maximum_requests_per_cycle=1")
+        if len(set(self.poll_match_types)) != len(self.poll_match_types) or any(
+            match_type not in APPROVED_MATCH_TYPES for match_type in self.poll_match_types
+        ):
+            raise ValueError("poll_match_types must contain distinct supported values")
         if self.maximum_retries != 0:
             raise ValueError("maximum_retries must be 0")
         if not self.single_flight_enabled:
@@ -599,7 +611,7 @@ class FC27PollResult(BaseModel):
     last_successful_match_type: str | None = None
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_FOUR_HOURS_SECONDS,
         le=POLL_INTERVAL_SECONDS,
     )
     polling_frequency: str = Field(
@@ -607,13 +619,13 @@ class FC27PollResult(BaseModel):
     )
     max_provider_requests_per_24_hours: int = Field(
         default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=1,
+        le=18,
     )
     poll_status: FC27PollStatusLiteral
     single_flight_acquired: bool
     cache_status: str = Field(..., min_length=1, max_length=64)
-    provider_requests: int = Field(..., ge=0, le=1)
+    provider_requests: int = Field(..., ge=0, le=3)
     retries_attempted: int = Field(..., ge=0, le=0)
     source_match_count: int = Field(..., ge=0, le=10)
     accepted_match_count: int = Field(..., ge=0, le=10)
@@ -699,6 +711,44 @@ class FC27PollResult(BaseModel):
         return self
 
 
+class FC27PollBatchResult(BaseModel):
+    """Sanitized summary for one all-match-types cycle."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cycle_id: str = Field(..., min_length=1, max_length=128)
+    started_at: datetime
+    finished_at: datetime
+    duration_ms: int = Field(..., ge=0)
+    poll_status: Literal[
+        "COMPLETE_SUCCESS",
+        "PARTIAL_SUCCESS",
+        "PROVIDER_BLOCKED",
+        "SKIPPED_SINGLE_FLIGHT_BUSY",
+        "SKIPPED_MIN_INTERVAL",
+        "BLOCKED_FEATURE_GATE",
+    ]
+    match_types: tuple[str, ...]
+    per_type_results: tuple[FC27PollResult, ...] = ()
+    requests_attempted: int = Field(..., ge=0, le=3)
+    requests_succeeded: int = Field(..., ge=0, le=3)
+    requests_failed: int = Field(..., ge=0, le=3)
+    source_match_count: int = Field(default=0, ge=0)
+    accepted_match_count: int = Field(default=0, ge=0)
+    inserted_match_count: int = Field(default=0, ge=0)
+    duplicate_ignored_count: int = Field(default=0, ge=0)
+    replay_conflict_count: int = Field(default=0, ge=0)
+    discord_jobs_created: int = Field(default=0, ge=0)
+    error_categories: tuple[str, ...] = ()
+    retries_attempted: Literal[0] = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_forbidden_fields(cls, data: Any) -> Any:
+        _assert_no_forbidden_keys(data)
+        return data
+
+
 class FC27PollingHealth(BaseModel):
     """Metadata-only health snapshot for the FC27 community polling worker."""
 
@@ -716,7 +766,7 @@ class FC27PollingHealth(BaseModel):
     alias_hmac_key_configured: bool = False
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_FOUR_HOURS_SECONDS,
         le=POLL_INTERVAL_SECONDS,
     )
     polling_frequency: str = Field(
@@ -724,8 +774,8 @@ class FC27PollingHealth(BaseModel):
     )
     max_provider_requests_per_24_hours: int = Field(
         default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=1,
+        le=18,
     )
     catch_up_bursts_allowed: bool = False
     last_attempt_at: datetime | None = None
@@ -801,6 +851,10 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     max_sec = get_fc27_community_poll_max_seconds(strict=strict)
     max_req = get_fc27_community_poll_max_requests(strict=strict)
     max_ret = get_fc27_community_poll_max_retries(strict=strict)
+    all_types = is_fc27_community_poll_all_match_types(strict=strict)
+    match_types = get_fc27_community_poll_match_types(strict=strict)
+    daily_max = get_fc27_community_poll_max_requests_per_24_hours(strict=strict)
+    inter_request_delay = get_fc27_community_poll_inter_request_delay_seconds(strict=strict)
     analytics_new_only = is_fc27_community_poll_analytics_on_new_only(strict=strict)
     single_flight = is_fc27_community_poll_single_flight(strict=strict)
 
@@ -827,6 +881,15 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
         poll_interval_seconds=interval_sec,
         minimum_interval_seconds=min_sec,
         maximum_interval_seconds=max_sec,
+        polling_frequency=(
+            POLL_FREQUENCY_FOUR_HOURS_LITERAL
+            if interval_sec == POLL_INTERVAL_FOUR_HOURS_SECONDS
+            else POLL_FREQUENCY_LITERAL
+        ),
+        max_provider_requests_per_24_hours=daily_max,
+        poll_all_match_types=all_types,
+        poll_match_types=match_types,
+        inter_request_delay_seconds=inter_request_delay,
         cache_ttl_seconds=interval_sec,
         maximum_requests_per_cycle=max_req,
         maximum_retries=max_ret,
@@ -2508,7 +2571,7 @@ def _classify_provider_exception(
     return ("TRANSIENT_FAILURE", "PROVIDER_ERROR")
 
 
-def run_fc27_poll_cycle(
+def _run_fc27_poll_single_type_cycle(
     *,
     policy: FC27PollingPolicy | None = None,
     runtime: FC27PollingRuntime | None = None,
@@ -2532,8 +2595,11 @@ def run_fc27_poll_cycle(
     enforce_db_posture: bool = False,
     recover_state_from_db: bool = False,
     match_type_override: str | None = None,
+    single_flight_context: FC27SingleFlightLeaseContext | None = None,
+    within_batch: bool = False,
+    count_cycle: bool = True,
 ) -> FC27PollResult:
-    """Execute at most one bounded East Coasters FC27 poll cycle."""
+    """Execute one bounded single-type East Coasters poll transaction."""
     rt = runtime or get_default_polling_runtime()
     pol = policy or rt.policy
     clock_utc = now_utc_fn or (lambda: datetime.now(timezone.utc))
@@ -2902,7 +2968,7 @@ def run_fc27_poll_cycle(
             )
 
     # 5. Check minimum interval window (43200s / 12 hours)
-    if rt.next_eligible_at is not None:
+    if not within_batch and rt.next_eligible_at is not None:
         norm_next_eligible = _normalize_utc(rt.next_eligible_at)
         rt.next_eligible_at = norm_next_eligible
         if started_at < norm_next_eligible:
@@ -2933,7 +2999,7 @@ def run_fc27_poll_cycle(
 
     # 6. Check bounded normalized cache (complete key)
     _, cache_key_spec = build_poll_cache_key(pol, match_type=active_match_type)
-    if use_cache:
+    if use_cache and not within_batch:
         cached_val = rt.cache.get(cache_key_spec)
         if (
             cached_val is None
