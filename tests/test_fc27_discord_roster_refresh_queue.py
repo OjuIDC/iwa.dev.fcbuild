@@ -370,8 +370,8 @@ def test_03_failed_transaction_and_dry_run_enqueue_zero_jobs(pg_db_migrated) -> 
             with conn.transaction():
                 conn.execute(
                     """
-                    INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position, active)
-                    VALUES (%s, 'RolledBack', 'rolledback', 'CB', TRUE)
+                    INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, display_name_comparison_key, position, active)
+                    VALUES (%s, 'RolledBack', 'rolledback', 'rolledback', 'CB', TRUE)
                     """,
                     (PLAYER_A,),
                 )
@@ -464,8 +464,8 @@ def test_06_duplicate_same_revision_is_idempotent_and_new_revision_creates_new_j
     with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as wconn:
         wconn.execute(
             """
-            INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, active)
-            VALUES (%s, 'Rico', 'rico', TRUE)
+            INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, display_name_comparison_key, active)
+            VALUES (%s, 'Rico', 'rico', 'rico', TRUE)
             """,
             (PLAYER_A,),
         )
@@ -540,7 +540,7 @@ def test_07_security_definer_producer_boundary_and_role_matrix(pg_db_migrated) -
 
         # Rejects invalid job_type-like reason_code, unknown player, bad revision, colon injection, and formula prefix
         wconn.execute(
-            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, active) VALUES (%s, 'T', 't', TRUE)",
+            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, display_name_comparison_key, active) VALUES (%s, 'T', 't', 't', TRUE)",
             (PLAYER_A,),
         )
         for bad_args, err_cls in (

@@ -1,6 +1,7 @@
 """Static checks on the resolved Compose model: secret isolation, network
 exposure, image pinning and fail-closed configuration. Requires the docker CLI
 (only `docker compose config` is used; no containers are started)."""
+
 from __future__ import annotations
 
 import json
@@ -13,14 +14,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-pytestmark = pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
-
-APPROVAL_SECRETS = {
-    "GRAPH_COMMISSIONER_TOKEN_SHA256",
-    "APPROVAL_SIGNING_SECRET",
-    "GRAPH_COMMISSIONER_TOKEN",
-    "GRAPH_API_TOKEN",
-}
+pytestmark = pytest.mark.skipif(
+    shutil.which("docker") is None, reason="docker CLI not available"
+)
 
 ALL_DB_SECRETS = {
     "postgres_admin_uri",
@@ -46,7 +42,7 @@ ALL_DB_SECRETS = {
 
 @pytest.fixture(autouse=True, scope="session")
 def dummy_secrets():
-    """Ensure declared top-level Compose secret files exist so `docker compose config` resolves."""
+    """Ensure declared Compose secret files exist for config resolution."""
     secrets_dir = ROOT / "secrets"
     created = []
     created_dir = False
@@ -56,7 +52,9 @@ def dummy_secrets():
     for name in ALL_DB_SECRETS:
         f = secrets_dir / name
         if not f.exists():
-            f.write_text("placeholder_secret_for_validation\n", encoding="utf-8")
+            f.write_text(
+                "placeholder_secret_for_validation\n", encoding="utf-8"
+            )
             created.append(f)
     yield
     for f in created:
@@ -73,16 +71,31 @@ def dummy_secrets():
 
 def _env_file(tmp_path, drop=()):
     text = (ROOT / "config.example.env").read_text(encoding="utf-8")
-    text = re.sub(r"=replace_with_[a-z0-9_]+", "=placeholder_validation_only_0123456789abcdef0123456789abcdef", text)
-    lines = [l for l in text.splitlines() if l.split("=", 1)[0] not in drop]
+    text = re.sub(
+        r"=replace_with_[a-z0-9_]+",
+        "=placeholder_validation_only_0123456789abcdef0123456789abcdef",
+        text,
+    )
+    lines = [
+        line for line in text.splitlines() if line.split("=", 1)[0] not in drop
+    ]
     path = tmp_path / "validation.env"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 
 def _config(env, *args):
-    cmd = ["docker", "compose", "--env-file", str(env), *args, "config", "--format", "json"]
-    # Isolate from the caller's environment: shell variables override --env-file.
+    cmd = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env),
+        *args,
+        "config",
+        "--format",
+        "json",
+    ]
+    # Isolate caller environment; shell variables override --env-file.
     allowed_host_vars = {
         "PATH",
         "HOME",
@@ -98,8 +111,15 @@ def _config(env, *args):
         "TEMP",
         "TMP",
     }
-    clean = {k: v for k, v in os.environ.items() if k.upper() in allowed_host_vars or k.upper().startswith("DOCKER_")}
-    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=clean)
+    clean = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in allowed_host_vars
+        or key.upper().startswith("DOCKER_")
+    }
+    return subprocess.run(
+        cmd, cwd=ROOT, capture_output=True, text=True, env=clean, check=False
+    )
 
 
 def _service_secrets(svc: dict) -> set[str]:
@@ -124,12 +144,23 @@ def model(tmp_path_factory):
 
 
 def test_no_legacy_control_plane_secrets_or_services_in_base_compose(model):
-    assert set(model["services"].keys()) == {"db-bootstrap", "db-migrate", "postgres", "redis"}
+    assert set(model["services"].keys()) == {
+        "db-bootstrap",
+        "db-migrate",
+        "postgres",
+        "redis",
+    }
     for name, svc in model["services"].items():
         env = svc.get("environment") or {}
-        assert "POSTGRES_URI" not in env, f"{name} has literal POSTGRES_URI in env"
-        assert "APPROVAL_SIGNING_SECRET" not in env, f"{name} receives APPROVAL_SIGNING_SECRET"
-        assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env, f"{name} receives GRAPH_COMMISSIONER_TOKEN_SHA256"
+        assert "POSTGRES_URI" not in env, (
+            f"{name} has literal POSTGRES_URI in env"
+        )
+        assert "APPROVAL_SIGNING_SECRET" not in env, (
+            f"{name} receives APPROVAL_SIGNING_SECRET"
+        )
+        assert "GRAPH_COMMISSIONER_TOKEN_SHA256" not in env, (
+            f"{name} receives GRAPH_COMMISSIONER_TOKEN_SHA256"
+        )
         assert "GRAPH_COMMISSIONER_TOKEN" not in env
         assert "GRAPH_API_TOKEN" not in env
 
@@ -156,51 +187,73 @@ def test_db_secret_mounts_per_service(model):
         elif name == "redis":
             assert mounted == {"redis_password"}
         else:
-            assert not (mounted & ALL_DB_SECRETS), f"{name} must not mount any DB secrets, got {mounted & ALL_DB_SECRETS}"
+            assert not (mounted & ALL_DB_SECRETS), (
+                f"{name} must not mount DB secrets: {mounted & ALL_DB_SECRETS}"
+            )
 
 
 def test_no_db_password_in_environment(model):
     uri_pattern = re.compile(r"postgres(?:ql)?://[^:]+:[^@]+@", re.IGNORECASE)
     for name, svc in model["services"].items():
         env = svc.get("environment") or {}
-        for k in env.keys():
-            assert k not in ("POSTGRES_URI", "POSTGRES_ADMIN_URI"), f"{name} has {k} in environment keys"
-            if k.startswith("FC27_") and k.endswith("_PASSWORD"):
-                pytest.fail(f"{name} has {k} password in environment keys")
+        for key in env:
+            assert key not in ("POSTGRES_URI", "POSTGRES_ADMIN_URI"), (
+                f"{name} has {key} in environment keys"
+            )
+            if key.startswith("FC27_") and key.endswith("_PASSWORD"):
+                pytest.fail(f"{name} has {key} password in environment keys")
             if name != "postgres":
-                assert k != "POSTGRES_PASSWORD", f"{name} has POSTGRES_PASSWORD in environment keys"
+                assert key != "POSTGRES_PASSWORD", (
+                    f"{name} has POSTGRES_PASSWORD in environment keys"
+                )
 
         for k, v in env.items():
             if isinstance(v, str):
-                assert not uri_pattern.search(v), f"{name} has credentials embedded in env var {k}: {v}"
+                assert not uri_pattern.search(v), (
+                    f"{name} has credentials embedded in env var {k}: {v}"
+                )
 
 
 def test_secrets_dir_is_gitignored():
     gitignore_path = ROOT / ".gitignore"
     assert gitignore_path.is_file()
-    lines = [line.strip() for line in gitignore_path.read_text(encoding="utf-8").splitlines()]
-    assert any(line in ("secrets/", "secrets", "/secrets/", "/secrets") for line in lines), (
-        ".gitignore must ignore secrets/ directory"
-    )
+    lines = [
+        line.strip()
+        for line in gitignore_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        line in ("secrets/", "secrets", "/secrets/", "/secrets")
+        for line in lines
+    ), ".gitignore must ignore secrets/ directory"
     if shutil.which("git"):
         res = subprocess.run(
             ["git", "check-ignore", "secrets/test_secret"],
             cwd=ROOT,
             capture_output=True,
             text=True,
+            check=False,
         )
-        assert res.returncode == 0, "git check-ignore secrets/test_secret must exit with 0"
+        assert res.returncode == 0, (
+            "git check-ignore secrets/test_secret must exit with 0"
+        )
 
 
 def test_db_migrate_has_no_other_secrets(model):
     env = model["services"]["db-migrate"]["environment"]
     allowed = {"POSTGRES_URI_FILE", "PYTHONUNBUFFERED"}
-    assert set(env.keys()).issubset(allowed), f"db-migrate environment keys {set(env.keys())} not subset of {allowed}"
+    assert set(env.keys()).issubset(allowed), (
+        f"db-migrate environment keys {set(env.keys())} "
+        f"not subset of {allowed}"
+    )
     assert env.get("POSTGRES_URI_FILE") == "/run/secrets/fc27_migrator_uri"
 
 
 def test_only_db_services_can_reach_postgres_in_base_compose(model):
-    on_data = sorted(n for n, s in model["services"].items() if "fc27_data" in (s.get("networks") or {}))
+    on_data = sorted(
+        n
+        for n, s in model["services"].items()
+        if "fc27_data" in (s.get("networks") or {})
+    )
     assert on_data == ["db-bootstrap", "db-migrate", "postgres"]
     assert model["networks"]["fc27_data"].get("internal") is True
 
@@ -208,28 +261,39 @@ def test_only_db_services_can_reach_postgres_in_base_compose(model):
 def test_host_ports_bind_loopback_only(model):
     for name, svc in model["services"].items():
         for port in svc.get("ports") or []:
-            assert port.get("host_ip") == "127.0.0.1", f"{name} publishes {port}"
+            assert port.get("host_ip") == "127.0.0.1", (
+                f"{name} publishes {port}"
+            )
 
 
 def test_images_are_pinned(model):
     for name, svc in model["services"].items():
         image = svc.get("image")
         if image and "fc27" not in image:
-            assert "@sha256:" in image and not image.split("@")[0].endswith(":latest"), f"{name}: {image}"
+            assert "@sha256:" in image
+            assert not image.split("@")[0].endswith(":latest"), (
+                f"{name}: {image}"
+            )
 
 
 def test_postgres_and_redis_runtime_controls(model):
     postgres = model["services"]["postgres"]
     redis = model["services"]["redis"]
 
-    assert postgres["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+    assert (
+        postgres["environment"]["POSTGRES_PASSWORD_FILE"]
+        == "/run/secrets/postgres_password"
+    )
     assert int(postgres["mem_limit"]) == 1_073_741_824
     assert float(postgres["cpus"]) == pytest.approx(1.5)
     assert postgres["pids_limit"] == 128
     assert postgres["stop_grace_period"] == "1m30s"
     assert postgres["logging"]["driver"] == "json-file"
 
-    assert "--requirepass \"$$(cat /run/secrets/redis_password)\"" in redis["command"][2]
+    assert (
+        '--requirepass "$$(cat /run/secrets/redis_password)"'
+        in redis["command"][2]
+    )
     assert int(redis["mem_limit"]) == 536_870_912
     assert float(redis["cpus"]) == pytest.approx(1.0)
     assert redis["pids_limit"] == 128
@@ -240,19 +304,24 @@ def test_postgres_and_redis_runtime_controls(model):
 @pytest.mark.parametrize("missing", ["REDIS_PASSWORD"])
 def test_missing_secret_fails_closed(tmp_path, missing):
     out = _config(_env_file(tmp_path, drop=(missing,)))
-    assert out.returncode != 0 and missing in out.stderr
+    assert out.returncode != 0
+    assert missing in out.stderr
 
 
 def test_settings_read_secret_fails_closed(tmp_path, monkeypatch):
     from src import settings
+
     monkeypatch.delenv("POSTGRES_URI", raising=False)
-    monkeypatch.setenv("POSTGRES_URI_FILE", str(tmp_path / "nonexistent_secret_file"))
+    monkeypatch.setenv(
+        "POSTGRES_URI_FILE", str(tmp_path / "nonexistent_secret_file")
+    )
     with pytest.raises(settings.ConfigError):
         settings.read_secret("POSTGRES_URI")
 
 
 APPROVED_PYTHON_311_BASE = (
-    "python:3.11.18-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535"
+    "python:3.11.18-slim@sha256:"
+    "07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535"
 )
 OPERATIONAL_PYTHON_DOCKERFILES = (
     "Dockerfile.graph",
@@ -266,7 +335,9 @@ def test_dockerfiles_pin_base_images(model):
     assert discovered == sorted(OPERATIONAL_PYTHON_DOCKERFILES)
     for path in ROOT.glob("Dockerfile.*"):
         text = path.read_text(encoding="utf-8")
-        first = next(l for l in text.splitlines() if l.startswith("FROM"))
+        first = next(
+            line for line in text.splitlines() if line.startswith("FROM")
+        )
         assert "@sha256:" in first, path.name
         assert first == f"FROM {APPROVED_PYTHON_311_BASE}", (
             f"{path.name} must pin {APPROVED_PYTHON_311_BASE}, got {first!r}"
@@ -275,18 +346,23 @@ def test_dockerfiles_pin_base_images(model):
             f"{path.name} must not use Python 3.12 or newer"
         )
         for forbidden_compiler in ("gcc", "g++", "build-essential"):
-            assert not re.search(rf"(?<![\w-]){re.escape(forbidden_compiler)}(?![\w-])", text), (
-                f"{path.name} must not add compiler toolchain {forbidden_compiler!r}"
+            assert not re.search(
+                rf"(?<![\w-]){re.escape(forbidden_compiler)}(?![\w-])", text
+            ), (
+                f"{path.name} must not add compiler toolchain "
+                f"{forbidden_compiler!r}"
             )
         user_lines = [
-            l.strip()
-            for l in text.splitlines()
-            if l.strip().startswith("USER ")
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().startswith("USER ")
         ]
         assert user_lines, f"{path.name} must specify non-root USER"
         for uline in user_lines:
             user_val = uline.split(None, 1)[1].strip()
-            assert user_val not in ("root", "0", "0:0"), f"{path.name} must not run as root ({uline})"
+            assert user_val not in ("root", "0", "0:0"), (
+                f"{path.name} must not run as root ({uline})"
+            )
 
     compose_raw = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert not re.search(r"python:3\.(?:1[2-9]|[2-9]\d)", compose_raw)
@@ -300,14 +376,18 @@ def test_dockerfiles_pin_base_images(model):
         assert svc["init"] is True
 
 
-def test_match_results_writer_secret_wired_only_to_db_bootstrap(model, tmp_path, monkeypatch):
+def test_match_results_writer_secret_wired_only_to_db_bootstrap(
+    model, tmp_path, monkeypatch
+):
     from src import settings
 
     secrets_cfg = model.get("secrets") or {}
     assert "fc27_match_results_writer_password" in secrets_cfg
     writer_sec = secrets_cfg["fc27_match_results_writer_password"]
-    assert str(writer_sec.get("file", "")).replace("\\", "/").endswith(
-        "secrets/fc27_match_results_writer_password"
+    assert (
+        str(writer_sec.get("file", ""))
+        .replace("\\", "/")
+        .endswith("secrets/fc27_match_results_writer_password")
     )
 
     bootstrap = model["services"]["db-bootstrap"]
@@ -328,9 +408,9 @@ def test_match_results_writer_secret_wired_only_to_db_bootstrap(model, tmp_path,
         assert "FC27_MATCH_RESULTS_WRITER_PASSWORD" not in env, (
             f"{name} must not receive FC27_MATCH_RESULTS_WRITER_PASSWORD"
         )
-        assert "fc27_match_results_writer_password" not in _service_secrets(svc), (
-            f"{name} must not mount fc27_match_results_writer_password"
-        )
+        assert "fc27_match_results_writer_password" not in _service_secrets(
+            svc
+        ), f"{name} must not mount fc27_match_results_writer_password"
 
     rendered = json.dumps(model)
     assert "placeholder_secret_for_validation" not in rendered
@@ -359,30 +439,54 @@ def test_ghcr_overlay_static_contract():
     assert overlay_path.is_file(), "docker-compose.ghcr.yml must exist"
     raw = overlay_path.read_text(encoding="utf-8")
 
-    for forbidden in ("ghp_", "gho_", "github_pat_", "PASSWORD", "SECRET", "TOKEN", ":latest", ":main"):
-        assert forbidden not in raw, f"Forbidden token {forbidden!r} found in docker-compose.ghcr.yml"
+    for forbidden in (
+        "ghp_",
+        "gho_",
+        "github_pat_",
+        "PASSWORD",
+        "SECRET",
+        "TOKEN",
+        ":latest",
+        ":main",
+    ):
+        assert forbidden not in raw, (
+            f"Forbidden token {forbidden!r} found in docker-compose.ghcr.yml"
+        )
 
     import yaml
 
     parsed = yaml.safe_load(raw)
     assert set(parsed.keys()) == {"services"}
     services = parsed["services"]
-    assert set(services.keys()) == {"fc27-community-worker", "fc27-discord-bot"}
-    assert services["fc27-community-worker"] == {"image": EXPECTED_GHCR_WORKER_IMAGE}
-    assert services["fc27-discord-bot"] == {"image": EXPECTED_GHCR_DISCORD_IMAGE}
+    assert set(services.keys()) == {
+        "fc27-community-worker",
+        "fc27-discord-bot",
+    }
+    assert services["fc27-community-worker"] == {
+        "image": EXPECTED_GHCR_WORKER_IMAGE
+    }
+    assert services["fc27-discord-bot"] == {
+        "image": EXPECTED_GHCR_DISCORD_IMAGE
+    }
 
     for svc_name, svc_cfg in services.items():
         img = svc_cfg["image"]
         assert img.startswith("ghcr.io/iwa-ojuidc/iwa.dev.fcbuild/"), svc_name
         repo_part, digest_part = img.split("@", 1)
-        assert ":" not in repo_part, f"{svc_name} must not include a mutable tag before @sha256: {img}"
-        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest_part), f"{svc_name} invalid digest: {img}"
+        assert ":" not in repo_part, (
+            f"{svc_name} must not include a mutable tag before @sha256: {img}"
+        )
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest_part), (
+            f"{svc_name} invalid digest: {img}"
+        )
 
 
-def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(tmp_path):
+def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(
+    tmp_path,
+):
     env = _env_file(tmp_path)
 
-    # 1. Local-build mode remains supported when docker-compose.ghcr.yml is omitted
+    # 1. Local-build mode works without docker-compose.ghcr.yml.
     local_out = _config(
         env,
         "-f",
@@ -398,10 +502,16 @@ def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(t
     )
     assert local_out.returncode == 0, local_out.stderr
     local_model = json.loads(local_out.stdout)
-    assert local_model["services"]["fc27-community-worker"]["build"]["dockerfile"] == "Dockerfile.community-worker"
-    assert local_model["services"]["fc27-discord-bot"]["build"]["dockerfile"] == "Dockerfile.discord"
+    assert (
+        local_model["services"]["fc27-community-worker"]["build"]["dockerfile"]
+        == "Dockerfile.community-worker"
+    )
+    assert (
+        local_model["services"]["fc27-discord-bot"]["build"]["dockerfile"]
+        == "Dockerfile.discord"
+    )
 
-    # 2. GHCR overlay pins exact digests while preserving worker interval, Discord command, healthchecks, and hardening
+    # 2. GHCR pins digests and preserves runtime settings.
     ghcr_out = _config(
         env,
         "-f",
@@ -426,19 +536,32 @@ def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(t
     assert worker["image"] == EXPECTED_GHCR_WORKER_IMAGE
     assert discord["image"] == EXPECTED_GHCR_DISCORD_IMAGE
 
-    assert worker["environment"]["FC27_COMMUNITY_POLL_INTERVAL_SECONDS"] == "43200"
+    assert (
+        worker["environment"]["FC27_COMMUNITY_POLL_INTERVAL_SECONDS"]
+        == "43200"
+    )
     assert worker["environment"]["FC27_COMMUNITY_POLL_MIN_SECONDS"] == "43200"
     assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_SECONDS"] == "43200"
     assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_REQUESTS"] == "1"
     assert worker["environment"]["FC27_COMMUNITY_POLL_MAX_RETRIES"] == "0"
     assert worker["command"] == ["--worker", "--confirm-live-polling"]
-    assert worker["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_polling_worker.py", "--status"]
+    assert worker["healthcheck"]["test"] == [
+        "CMD",
+        "python",
+        "scripts/fc27_polling_worker.py",
+        "--status",
+    ]
     assert worker["user"] == "10001:65534"
     assert worker["read_only"] is True
     assert worker["cap_drop"] == ["ALL"]
 
     assert discord["command"] == ["--run"]
-    assert discord["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
+    assert discord["healthcheck"]["test"] == [
+        "CMD",
+        "python",
+        "scripts/fc27_discord_bot.py",
+        "--status",
+    ]
     assert discord["user"] == "10001:65534"
     assert discord["read_only"] is True
     assert discord["cap_drop"] == ["ALL"]
@@ -458,8 +581,10 @@ def test_ghcr_runtime_promotion_documentation():
     assert "Local-Build Mode" in text
 
 
-def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_path):
-    """Verify current Discord and community-worker overlay network and DB role posture."""
+def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(
+    tmp_path,
+):
+    """Verify overlay networking and DB role posture."""
     env = _env_file(tmp_path)
     out = _config(
         env,
@@ -480,7 +605,9 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
     merged = json.loads(out.stdout)
 
     on_data = sorted(
-        name for name, svc in merged["services"].items() if "fc27_data" in (svc.get("networks") or {})
+        name
+        for name, svc in merged["services"].items()
+        if "fc27_data" in (svc.get("networks") or {})
     )
     assert on_data == [
         "db-bootstrap",
@@ -492,15 +619,33 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
 
     discord = merged["services"]["fc27-discord-bot"]
     worker = merged["services"]["fc27-community-worker"]
-    assert discord["environment"]["POSTGRES_URI_FILE"] == "/run/secrets/fc27_app_uri"
-    assert discord["environment"]["FC27_DISCORD_READER_URI_FILE"] == "/run/secrets/fc27_discord_reader_uri"
-    assert discord["environment"]["FC27_PLAYER_DEV_WRITER_URI_FILE"] == "/run/secrets/fc27_player_dev_writer_uri"
+    assert (
+        discord["environment"]["POSTGRES_URI_FILE"]
+        == "/run/secrets/fc27_app_uri"
+    )
+    assert (
+        discord["environment"]["FC27_DISCORD_READER_URI_FILE"]
+        == "/run/secrets/fc27_discord_reader_uri"
+    )
+    assert (
+        discord["environment"]["FC27_PLAYER_DEV_WRITER_URI_FILE"]
+        == "/run/secrets/fc27_player_dev_writer_uri"
+    )
     assert "FC27_POLL_WRITER_URI_FILE" not in discord["environment"]
     assert "FC27_ALIAS_HMAC_KEY_FILE" not in discord["environment"]
     assert "POSTGRES_URI_FILE" not in worker["environment"]
-    assert worker["environment"]["FC27_POLL_WRITER_URI_FILE"] == "/run/secrets/fc27_poll_writer_uri"
-    assert worker["environment"]["FC27_ALIAS_HMAC_KEY_FILE"] == "/run/secrets/fc27_alias_hmac_key"
-    assert worker["environment"]["FC27_APPROVED_MATCH_TYPES"] == "leagueMatch,playoffMatch,friendlyMatch"
+    assert (
+        worker["environment"]["FC27_POLL_WRITER_URI_FILE"]
+        == "/run/secrets/fc27_poll_writer_uri"
+    )
+    assert (
+        worker["environment"]["FC27_ALIAS_HMAC_KEY_FILE"]
+        == "/run/secrets/fc27_alias_hmac_key"
+    )
+    assert (
+        worker["environment"]["FC27_APPROVED_MATCH_TYPES"]
+        == "leagueMatch,playoffMatch,friendlyMatch"
+    )
     assert "FC27_PLAYER_DEV_WRITER_URI_FILE" not in worker["environment"]
     assert "FC27_DISCORD_READER_URI_FILE" not in worker["environment"]
     assert "DISCORD_BOT_TOKEN_FILE" not in worker["environment"]
@@ -510,17 +655,25 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(tmp_
         "fc27_discord_reader_uri",
         "fc27_player_dev_writer_uri",
     }
-    assert _service_secrets(worker) == {"fc27_poll_writer_uri", "fc27_alias_hmac_key"}
+    assert _service_secrets(worker) == {
+        "fc27_poll_writer_uri",
+        "fc27_alias_hmac_key",
+    }
 
-    grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(encoding="utf-8")
-    assert "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;" in grants_sql
+    grants_sql = (ROOT / "migrations" / "post" / "grants.sql").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "GRANT SELECT, INSERT ON public.fc27_matches TO fc27_app;"
+        in grants_sql
+    )
     assert "fc27_discord_reader" in grants_sql
     assert "fc27_poll_writer" in grants_sql
     assert "fc27_player_dev_writer" in grants_sql
 
 
 def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
-    """Verify Stage C password/URI secret isolation and settings fail-closed separation."""
+    """Verify Stage C secret isolation and fail-closed settings behavior."""
     from src import settings
 
     env = _env_file(tmp_path)
@@ -553,14 +706,19 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
         "fc27_alias_hmac_key",
     ):
         assert sec_name in secrets_cfg
-        assert str(secrets_cfg[sec_name].get("file", "")).replace("\\", "/").endswith(
-            f"secrets/{sec_name}"
+        assert (
+            str(secrets_cfg[sec_name].get("file", ""))
+            .replace("\\", "/")
+            .endswith(f"secrets/{sec_name}")
         )
 
     bootstrap = merged["services"]["db-bootstrap"]
     for pw_var, pw_sec in (
         ("FC27_POLL_WRITER_PASSWORD_FILE", "fc27_poll_writer_password"),
-        ("FC27_PLAYER_DEV_WRITER_PASSWORD_FILE", "fc27_player_dev_writer_password"),
+        (
+            "FC27_PLAYER_DEV_WRITER_PASSWORD_FILE",
+            "fc27_player_dev_writer_password",
+        ),
         ("FC27_DISCORD_READER_PASSWORD_FILE", "fc27_discord_reader_password"),
     ):
         assert bootstrap["environment"].get(pw_var) == f"/run/secrets/{pw_sec}"
@@ -580,41 +738,64 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
     monkeypatch.delenv("FC27_POLL_WRITER_PASSWORD_FILE", raising=False)
 
     # Missing secret file fails closed
-    monkeypatch.setenv("FC27_POLL_WRITER_URI_FILE", str(tmp_path / "missing_poll_uri"))
+    monkeypatch.setenv(
+        "FC27_POLL_WRITER_URI_FILE", str(tmp_path / "missing_poll_uri")
+    )
     with pytest.raises(settings.ConfigError):
         settings.read_fc27_poll_writer_uri(required=True)
     monkeypatch.delenv("FC27_POLL_WRITER_URI_FILE", raising=False)
 
     # Role mismatch in URI fails closed
     wrong_role_file = tmp_path / "wrong_role_uri"
-    wrong_role_file.write_text("postgresql://fc27_app:pw@postgres:5432/fc27\n", encoding="utf-8")
+    wrong_role_file.write_text(
+        "postgresql://fc27_app:pw@postgres:5432/fc27\n", encoding="utf-8"
+    )
     monkeypatch.setenv("FC27_DISCORD_READER_URI_FILE", str(wrong_role_file))
     with pytest.raises(settings.ConfigError, match="fc27_discord_reader"):
         settings.read_fc27_discord_reader_uri(required=True)
     monkeypatch.delenv("FC27_DISCORD_READER_URI_FILE", raising=False)
 
     # Cross-service URI/secret contamination fails closed
-    monkeypatch.setenv("FC27_PLAYER_DEV_WRITER_URI_FILE", "/run/secrets/fc27_player_dev_writer_uri")
-    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+    monkeypatch.setenv(
+        "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        "/run/secrets/fc27_player_dev_writer_uri",
+    )
+    with pytest.raises(
+        settings.ConfigError, match="polling worker must not receive"
+    ):
         settings.read_fc27_poll_writer_uri(required=False)
     monkeypatch.delenv("FC27_PLAYER_DEV_WRITER_URI_FILE", raising=False)
 
-    monkeypatch.setenv("DISCORD_BOT_TOKEN_FILE", "/run/secrets/discord_bot_token")
-    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+    monkeypatch.setenv(
+        "DISCORD_BOT_TOKEN_FILE", "/run/secrets/discord_bot_token"
+    )
+    with pytest.raises(
+        settings.ConfigError, match="polling worker must not receive"
+    ):
         settings.read_fc27_poll_writer_uri(required=False)
-    with pytest.raises(settings.ConfigError, match="polling worker must not receive"):
+    with pytest.raises(
+        settings.ConfigError, match="polling worker must not receive"
+    ):
         settings.read_fc27_alias_hmac_key(required=False)
     monkeypatch.delenv("DISCORD_BOT_TOKEN_FILE", raising=False)
 
-    monkeypatch.setenv("FC27_POLL_WRITER_URI_FILE", "/run/secrets/fc27_poll_writer_uri")
-    with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
+    monkeypatch.setenv(
+        "FC27_POLL_WRITER_URI_FILE", "/run/secrets/fc27_poll_writer_uri"
+    )
+    with pytest.raises(
+        settings.ConfigError, match="Discord bot must not receive"
+    ):
         settings.read_fc27_player_dev_writer_uri(required=False)
-    with pytest.raises(settings.ConfigError, match="Discord bot must not receive"):
+    with pytest.raises(
+        settings.ConfigError, match="Discord bot must not receive"
+    ):
         settings.read_fc27_discord_reader_uri(required=False)
     monkeypatch.delenv("FC27_POLL_WRITER_URI_FILE", raising=False)
 
     # Alias HMAC key validation fails closed on missing, empty, or <32-byte key
-    monkeypatch.setenv("FC27_ALIAS_HMAC_KEY_FILE", str(tmp_path / "missing_hmac_key"))
+    monkeypatch.setenv(
+        "FC27_ALIAS_HMAC_KEY_FILE", str(tmp_path / "missing_hmac_key")
+    )
     with pytest.raises(settings.ConfigError):
         settings.read_fc27_alias_hmac_key(required=True)
 
@@ -637,7 +818,9 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
             "postgresql://fc27_discord_reader:pw@postgres:5432/fc27",
             "postgresql://fc27_discord_reader:pw@postgres:5432/fc27",
         )
-    with pytest.raises(settings.ConfigError, match="separate PostgreSQL roles"):
+    with pytest.raises(
+        settings.ConfigError, match="separate PostgreSQL roles"
+    ):
         settings.validate_fc27_role_uri_separation(
             "postgresql://fc27_player_dev_writer:pw1@postgres:5432/fc27",
             "postgresql://fc27_player_dev_writer:pw2@postgres:5432/fc27",
@@ -649,9 +832,13 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
 
 
 def test_deployment_and_security_documentation_reconciliation():
-    """Verify docs/DEPLOYMENT_AND_SECURITY.md and docs/FC27_BACKUP_AND_RECOVERY.md reflect live boundaries."""
-    dep_doc = (ROOT / "docs" / "DEPLOYMENT_AND_SECURITY.md").read_text(encoding="utf-8")
-    backup_doc = (ROOT / "docs" / "FC27_BACKUP_AND_RECOVERY.md").read_text(encoding="utf-8")
+    """Verify deployment and backup docs reflect live boundaries."""
+    dep_doc = (ROOT / "docs" / "DEPLOYMENT_AND_SECURITY.md").read_text(
+        encoding="utf-8"
+    )
+    backup_doc = (ROOT / "docs" / "FC27_BACKUP_AND_RECOVERY.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "only graph-api joins" not in dep_doc.lower()
     assert "MIGRATE_SETUP_CHECKPOINTS" not in dep_doc
@@ -671,7 +858,9 @@ def test_deployment_and_security_documentation_reconciliation():
         "fc27_match_team_stats",
         "HISTORICAL_RECOVERY_VERIFIED=NO",
     ):
-        assert required_token in dep_doc, f"Missing {required_token!r} in docs/DEPLOYMENT_AND_SECURITY.md"
+        assert required_token in dep_doc, (
+            f"Missing {required_token!r} in docs/DEPLOYMENT_AND_SECURITY.md"
+        )
 
     for required_backup_token in (
         "PARTIAL_FC27_DOMAIN_TABLES_ONLY",
@@ -681,5 +870,132 @@ def test_deployment_and_security_documentation_reconciliation():
         "Pending feature migration",
     ):
         assert required_backup_token in backup_doc, (
-            f"Missing {required_backup_token!r} in docs/FC27_BACKUP_AND_RECOVERY.md"
+            "Missing backup token "
+            f"{required_backup_token!r} in FC27_BACKUP_AND_RECOVERY.md"
         )
+
+
+def test_auto_promotion_and_notification_env_propagation_and_defaults(
+    tmp_path,
+):
+    """Verify Compose forwards defaults for promotion and notifications."""
+    env = _env_file(tmp_path)
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    merged = json.loads(out.stdout)
+
+    worker_env = merged["services"]["fc27-community-worker"]["environment"]
+    expected_worker_defaults = {
+        "FC27_ALIAS_AUTO_PROMOTION_ENABLED": "false",
+        "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE": "true",
+        "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES": "2",
+        "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL": "10",
+        "FC27_ALIAS_AUTO_PROMOTION_REFRESH_MESSAGES": "true",
+        "FC27_ALIAS_AUTO_PROMOTION_POLICY_VERSION": "stable-v1",
+        "FC27_ALIAS_MAINTENANCE_ENABLED": "false",
+        "FC27_ALIAS_REVIEW_EXCEPTION_RETENTION_DAYS": "90",
+        "FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS": "0",
+        "FC27_RECONCILIATION_TOKEN_CLEANUP_ENABLED": "true",
+        "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": "24",
+    }
+    for k, expected_v in expected_worker_defaults.items():
+        assert worker_env.get(k) == expected_v
+
+    discord_env = merged["services"]["fc27-discord-bot"]["environment"]
+    expected_discord_defaults = {
+        "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED": "false",
+        "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS": "1",
+        "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS": "21600",
+    }
+    for k, expected_v in expected_discord_defaults.items():
+        assert discord_env.get(k) == expected_v
+
+    # Enabling values via the protected env file propagates to containers.
+    custom_env = tmp_path / "custom_stage2.env"
+    custom_env.write_text(
+        env.read_text(encoding="utf-8")
+        + "\nFC27_ALIAS_AUTO_PROMOTION_ENABLED=true\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE=false\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES=3\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL=5\n"
+        + "FC27_ALIAS_MAINTENANCE_ENABLED=true\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED=true\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS=2\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS=3600\n",
+        encoding="utf-8",
+    )
+    out_custom = _config(
+        custom_env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out_custom.returncode == 0, out_custom.stderr
+    merged_custom = json.loads(out_custom.stdout)
+    assert (
+        merged_custom["services"]["fc27-community-worker"]["environment"][
+            "FC27_ALIAS_AUTO_PROMOTION_ENABLED"
+        ]
+        == "true"
+    )
+    assert (
+        merged_custom["services"]["fc27-community-worker"]["environment"][
+            "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE"
+        ]
+        == "false"
+    )
+    assert (
+        merged_custom["services"]["fc27-community-worker"]["environment"][
+            "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES"
+        ]
+        == "3"
+    )
+    assert (
+        merged_custom["services"]["fc27-community-worker"]["environment"][
+            "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL"
+        ]
+        == "5"
+    )
+    assert (
+        merged_custom["services"]["fc27-community-worker"]["environment"][
+            "FC27_ALIAS_MAINTENANCE_ENABLED"
+        ]
+        == "true"
+    )
+    assert (
+        merged_custom["services"]["fc27-discord-bot"]["environment"][
+            "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED"
+        ]
+        == "true"
+    )
+    assert (
+        merged_custom["services"]["fc27-discord-bot"]["environment"][
+            "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS"
+        ]
+        == "2"
+    )
+    assert (
+        merged_custom["services"]["fc27-discord-bot"]["environment"][
+            "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS"
+        ]
+        == "3600"
+    )

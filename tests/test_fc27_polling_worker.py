@@ -1851,15 +1851,62 @@ def test_082_health_state_never_contains_raw_payloads_player_names_headers_cooki
 
 
 def test_083_cli_status_makes_zero_network_and_zero_provider_calls(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """83. --status makes zero network calls and zero provider calls."""
+    for key in (
+        "FC27_COMMUNITY_POLLING_ENABLED",
+        "FC27_COMMUNITY_PROVIDER_ENABLED",
+        "FC27_PERSISTENCE_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    reset_default_polling_runtime()
     rc = polling_cli_main(["--status"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "PROVIDER_ID=fc-clubs-api-community-v1" in out
     assert "WORKER_ENABLED=NO" in out
     assert "PROVIDER_REQUESTS=0" in out
+    assert "WORKER_HEALTHY=YES" in out
+    assert "PROVIDER_ENABLED=NO" in out
+    assert "PERSISTENCE_ENABLED=NO" in out
+    assert "POLLING_ENABLED=NO" in out
+    assert "LAST_ERROR_CATEGORY=" in out
+
+
+def test_cli_status_reports_active_worker_companion_gates(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "FC27_COMMUNITY_POLLING_ENABLED",
+        "FC27_COMMUNITY_PROVIDER_ENABLED",
+        "FC27_PERSISTENCE_ENABLED",
+    ):
+        monkeypatch.setenv(key, "true")
+    reset_default_polling_runtime()
+    rc = polling_cli_main(["--status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "WORKER_HEALTHY=YES" in out
+    assert "PROVIDER_ENABLED=YES" in out
+    assert "PERSISTENCE_ENABLED=YES" in out
+    assert "POLLING_ENABLED=YES" in out
+    status_keys = [line.split("=", 1)[0] for line in out.splitlines() if "=" in line]
+    assert len(status_keys) == len(set(status_keys))
+    for key in (
+        "WORKER_HEALTHY",
+        "PROVIDER_ENABLED",
+        "PERSISTENCE_ENABLED",
+        "POLLING_ENABLED",
+        "MAX_REQUESTS_PER_CYCLE",
+        "MINIMUM_INTERVAL_SECONDS",
+        "MAXIMUM_RETRIES",
+        "MAX_PROVIDER_REQUESTS_PER_24_HOURS",
+        "SINGLE_FLIGHT",
+        "PROVIDER_REQUESTS_EXECUTED",
+        "LAST_ERROR_CATEGORY",
+    ):
+        assert key in status_keys
 
 
 def test_084_cli_once_with_polling_disabled_exits_cleanly_with_disabled(

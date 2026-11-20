@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 from typing import Any
+import uuid
 
 import psycopg
 import pytest
@@ -1545,21 +1546,25 @@ def test_thread7_player_stats_detailed_metrics_and_edit_preservation(
         position="LW",
         require_dedicated_writer_role=False,
     )
-    # Ambiguous name ("Alex") should NOT auto-bind when two active roster rows share it
+    # A second active player cannot duplicate the canonical comparison key.
+    display_tag = f"Thread7{uuid.uuid4().hex}"
+    first_player_id = f"plr_thread7_{uuid.uuid4().hex}"
+    second_player_id = f"plr_thread7_{uuid.uuid4().hex}"
     upsert_roster_player(
         pg_db_migrated.match_results_writer,
-        player_id="plr_alex_1",
-        display_name="Alex",
+        player_id=first_player_id,
+        display_name=display_tag,
         position="CM",
         require_dedicated_writer_role=False,
     )
-    upsert_roster_player(
-        pg_db_migrated.match_results_writer,
-        player_id="plr_alex_2",
-        display_name="Alex",
-        position="CB",
-        require_dedicated_writer_role=False,
-    )
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=second_player_id,
+            display_name=display_tag,
+            position="CB",
+            require_dedicated_writer_role=False,
+        )
 
     recorded = record_match_result(
         pg_db_migrated.match_results_writer,
@@ -1567,8 +1572,8 @@ def test_thread7_player_stats_detailed_metrics_and_edit_preservation(
         home_score=3,
         away_score=1,
         actor_discord_user_id=AUTHORIZED_USER_ID,
-        scorers="Lao x2, Alex x1",
-        player_stats="Lao: 2 goals, 18/20 passes; Alex: 1 goal, 3 tackles; Keeper: 5 saves",
+        scorers=f"Lao x2, {display_tag} x1",
+        player_stats=f"Lao: 2 goals, 18/20 passes; {display_tag}: 1 goal, 3 tackles; Keeper: 5 saves",
         require_dedicated_writer_role=False,
     )
     players_by_norm = {p.normalized_display_label: p for p in recorded.players}
@@ -1576,7 +1581,7 @@ def test_thread7_player_stats_detailed_metrics_and_edit_preservation(
     assert players_by_norm["lao"].position == "LW"
     assert players_by_norm["lao"].passes_completed == 18
     assert players_by_norm["lao"].passes_attempted == 20
-    assert players_by_norm["alex"].player_id is None
+    assert players_by_norm[display_tag.casefold()].player_id == first_player_id
     assert players_by_norm["keeper"].saves == 5
 
     # Seed two distinct unresolved "Unnamed Player" rows in the same match

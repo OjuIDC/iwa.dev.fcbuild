@@ -1251,6 +1251,242 @@ class TestAutoPromotionScenarios:
         # Normal post_new_results messages still delivered cleanly despite alert transport error.
         assert cycle.messages_sent >= 1
 
+    def test_41_unicode_nfkc_casefold_expansion_collision_blocks_auto_promotion(
+        self, pg_db_migrated: Any
+    ) -> None:
+        """41. Unicode NFKC/casefold expansions (Straße/STRASSE, ﬁeld/FIELD, fullwidth) block promotion."""
+        pid_manual = pseudonymize_east_coasters_identifier("1041", club_id=EAST_COASTERS_CLUB_ID)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid_manual,
+            display_name="Straße",
+            position="ST",
+        )
+        pid_cand = _ingest_stable_player(
+            pg_db_migrated.poll_writer,
+            raw_player_id="1042",
+            alias="STRASSE",
+            seed=41,
+        )
+        summary = evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=True, shadow_mode=False),
+        )
+        assert summary.promoted_count == 0
+        assert summary.reason_counts.get("ROSTER_ALREADY_EXISTS") == 1
+        cand_id = _candidate_id_for(pg_db_migrated.admin, pid_cand, "STRASSE")
+        with psycopg.connect(pg_db_migrated.poll_writer, autocommit=True) as pw_conn:
+            row = pw_conn.execute(
+                "SELECT promoted, outcome_category FROM public.fc27_auto_promote_stable_alias_candidate(%s, 'stable-v1', 2, true)",
+                (cand_id,),
+            ).fetchone()
+        assert row is not None and row[0] is False and row[1] == "ROSTER_ALREADY_EXISTS"
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            exc_row = aconn.execute(
+                "SELECT exception_reason FROM public.fc27_player_alias_review_exceptions WHERE player_id = %s AND exception_state = 'OPEN'",
+                (pid_cand,),
+            ).fetchone()
+            assert exc_row is not None and exc_row[0] == "EXISTING_ROSTER_CONFLICT"
+            roster_cnt_row = aconn.execute(
+                "SELECT COUNT(*) FROM public.fc27_roster WHERE player_id = %s", (pid_cand,)
+            ).fetchone()
+            assert roster_cnt_row is not None and roster_cnt_row[0] == 0
+
+        # Also cover NFKC ligature and reverse direction: manual fullwidth/space vs ASCII candidate
+        pid_lig_manual = pseudonymize_east_coasters_identifier("1043", club_id=EAST_COASTERS_CLUB_ID)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid_lig_manual,
+            display_name="ﬁeld",
+            position="CM",
+        )
+        pid_lig_cand = _ingest_stable_player(
+            pg_db_migrated.poll_writer,
+            raw_player_id="1044",
+            alias="FIELD",
+            seed=42,
+        )
+        summary_lig = evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=True, shadow_mode=False),
+        )
+        assert summary_lig.promoted_count == 0
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            lig_cnt_row = aconn.execute(
+                "SELECT COUNT(*) FROM public.fc27_roster WHERE player_id = %s", (pid_lig_cand,)
+            ).fetchone()
+            assert lig_cnt_row is not None and lig_cnt_row[0] == 0
+
+        # U+1E97 must compare equal to the decomposed key produced by Python NFKC+casefold.
+        pid_dia_manual = pseudonymize_east_coasters_identifier("1046", club_id=EAST_COASTERS_CLUB_ID)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid_dia_manual,
+            display_name="\u1e97ag",
+            position="LW",
+        )
+        pid_dia_cand = _ingest_stable_player(
+            pg_db_migrated.poll_writer,
+            raw_player_id="1047",
+            alias="t\u0308ag",
+            seed=43,
+        )
+        summary_dia = evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=True, shadow_mode=False),
+        )
+        assert summary_dia.promoted_count == 0
+        assert summary_dia.reason_counts.get("ROSTER_ALREADY_EXISTS", 0) >= 1
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT display_name_comparison_key FROM public.fc27_roster WHERE player_id = %s",
+                (pid_dia_manual,),
+            ).fetchone() == ("t\u0308ag",)
+            assert aconn.execute(
+                "SELECT count(*) FROM public.fc27_roster WHERE player_id = %s",
+                (pid_dia_cand,),
+            ).fetchone() == (0,)
+
+    def test_42_manual_setplayer_unchanged_name_after_polling_audits_once_idempotently(
+        self, pg_db_migrated: Any
+    ) -> None:
+        """42. Confirming an unchanged pre-registered roster name after polling records promotion audit once."""
+        pid = pseudonymize_east_coasters_identifier("1045", club_id=EAST_COASTERS_CLUB_ID)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid,
+            display_name="FixedName",
+            position="ST",
+        )
+        _ingest_match(
+            pg_db_migrated.poll_writer,
+            match_id="994201",
+            timestamp=1764000000,
+            players=[_player_payload("1045", alias_value="FixedName")],
+        )
+        cand_id = _candidate_id_for(pg_db_migrated.admin, pid, "FixedName")
+        evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=False, shadow_mode=True),
+        )
+
+        # Operator confirms the exact same existing name ("public_changed" is False on fc27_roster)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid,
+            display_name="FixedName",
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            cand_row = aconn.execute(
+                "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+                (cand_id,),
+            ).fetchone()
+            assert cand_row is not None and cand_row[0] == "PROMOTED"
+            audit_rows = aconn.execute(
+                "SELECT candidate_id, prior_verification_status, refresh_job_id FROM public.fc27_player_alias_promotion_audit WHERE player_id = %s AND candidate_id = %s",
+                (pid, cand_id),
+            ).fetchall()
+            assert len(audit_rows) == 1
+            assert audit_rows[0][0] == cand_id
+            assert audit_rows[0][1] == "OBSERVED"
+            assert audit_rows[0][2] is None
+
+        # Repeated unchanged confirmation remains idempotent (no duplicate audit row)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid,
+            display_name="FixedName",
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            dup_cnt_row = aconn.execute(
+                "SELECT COUNT(*) FROM public.fc27_player_alias_promotion_audit WHERE player_id = %s AND candidate_id = %s",
+                (pid, cand_id),
+            ).fetchone()
+            assert dup_cnt_row is not None and dup_cnt_row[0] == 1
+
+    def test_43_resolved_conflict_watermark_suppresses_unchanged_polls_and_reopens_on_new_evidence(
+        self, pg_db_migrated: Any
+    ) -> None:
+        """43. Confirming one conflicted alias preserves resolution until newer provider evidence arrives."""
+        pid = pseudonymize_east_coasters_identifier("1046", club_id=EAST_COASTERS_CLUB_ID)
+        _ingest_match(
+            pg_db_migrated.poll_writer,
+            match_id="994301",
+            timestamp=1764100000,
+            players=[_player_payload("1046", alias_value="ChosenAlias")],
+        )
+        _ingest_match(
+            pg_db_migrated.poll_writer,
+            match_id="994302",
+            timestamp=1764103600,
+            players=[_player_payload("1046", alias_value="HistoricalAlt")],
+        )
+        evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=False, shadow_mode=True),
+        )
+        alt_cid = _candidate_id_for(pg_db_migrated.admin, pid, "HistoricalAlt")
+
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid,
+            display_name="ChosenAlias",
+            position="CM",
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            wm_row = aconn.execute(
+                "SELECT exception_state, resolved_observation_count, resolved_distinct_match_count, resolved_last_seen_at IS NOT NULL, resolved_candidate_state_digest IS NOT NULL FROM public.fc27_player_alias_review_exceptions WHERE candidate_id = %s",
+                (alt_cid,),
+            ).fetchone()
+            assert wm_row is not None
+            assert wm_row[0] == "RESOLVED"
+            assert wm_row[1] == 1
+            assert wm_row[2] == 1
+            assert wm_row[3] is True
+            assert wm_row[4] is True
+
+        # Unchanged poll AND even new match under confirmed ChosenAlias keep HistoricalAlt suppressed
+        evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=False, shadow_mode=True),
+        )
+        _ingest_match(
+            pg_db_migrated.poll_writer,
+            match_id="994303",
+            timestamp=1764107200,
+            players=[_player_payload("1046", alias_value="ChosenAlias")],
+        )
+        evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=True, shadow_mode=False),
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            open_cnt_row = aconn.execute(
+                "SELECT COUNT(*) FROM public.fc27_player_alias_review_exceptions WHERE player_id = %s AND exception_state = 'OPEN'",
+                (pid,),
+            ).fetchone()
+            assert open_cnt_row is not None and open_cnt_row[0] == 0
+
+        # New provider observation using HistoricalAlt arrives -> reopens cleanly!
+        _ingest_match(
+            pg_db_migrated.poll_writer,
+            match_id="994304",
+            timestamp=1764110800,
+            players=[_player_payload("1046", alias_value="HistoricalAlt")],
+        )
+        evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=False, shadow_mode=True),
+        )
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            reopened = aconn.execute(
+                "SELECT exception_reason, observation_count, distinct_match_count FROM public.fc27_player_alias_review_exceptions WHERE candidate_id = %s AND exception_state = 'OPEN'",
+                (alt_cid,),
+            ).fetchone()
+            assert reopened is not None
+            assert reopened[0] == "PROVIDER_ALIAS_CHANGED"
+            assert reopened[1] == 2 and reopened[2] == 2
+
 
 def aconn_count(admin_uri: str, table: str) -> int:
     with psycopg.connect(admin_uri) as conn:

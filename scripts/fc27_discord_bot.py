@@ -102,6 +102,9 @@ def main(
         print(f"DISCORD_MAX_JOBS_PER_CYCLE={config.dispatch_max_jobs_per_cycle}")
         print(f"DISCORD_LEASE_MINUTES={config.dispatch_lease_minutes}")
         print(f"DISCORD_SINGLE_FLIGHT={'YES' if config.dispatch_single_flight else 'NO'}")
+        print("DISCORD_GLOBAL_COMMAND_COUNT=0")
+        print("DISCORD_GUILD_TOP_LEVEL_COMMAND_COUNT=14")
+        print("DISCORD_GROUP_SUBCOMMAND_COUNT=13")
         return 0
 
     if args.command:

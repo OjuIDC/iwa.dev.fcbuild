@@ -2600,19 +2600,161 @@ def _resolve_player_alias_exceptions_in_tx(
     target_state: str = "RESOLVED",
     candidate_id: int | None = None,
 ) -> None:
-    """Resolve open/acknowledged/deferred exception-review rows after manual operator action."""
+    """Resolve open/acknowledged/deferred exception-review rows and record evidence watermarks."""
     exc_chk = cur.execute(
         """
         SELECT pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL
-           AND pg_catalog.has_column_privilege(
+        """
+    ).fetchone()
+    if not (exc_chk and bool(exc_chk[0])):
+        return
+    priv_chk = cur.execute(
+        """
+        SELECT
+           pg_catalog.has_column_privilege(
                current_user,
                'public.fc27_player_alias_review_exceptions',
                'exception_state',
                'UPDATE'
+           ),
+           pg_catalog.has_column_privilege(
+               current_user,
+               'public.fc27_player_alias_review_exceptions',
+               'resolved_observation_count',
+               'UPDATE'
+           ),
+           pg_catalog.has_column_privilege(
+               current_user,
+               'public.fc27_player_alias_review_exceptions',
+               'resolved_distinct_match_count',
+               'UPDATE'
+           ),
+           pg_catalog.has_column_privilege(
+               current_user,
+               'public.fc27_player_alias_review_exceptions',
+               'resolved_last_seen_at',
+               'UPDATE'
+           ),
+           pg_catalog.has_column_privilege(
+               current_user,
+               'public.fc27_player_alias_review_exceptions',
+               'resolved_candidate_state_digest',
+               'UPDATE'
            )
         """
     ).fetchone()
-    if not (exc_chk and bool(exc_chk[0])):
+    if not (priv_chk and bool(priv_chk[0])):
+        return
+    has_watermark_cols = all(bool(x) for x in priv_chk[1:5])
+    if has_watermark_cols:
+        if candidate_id is not None:
+            cur.execute(
+                """
+                UPDATE public.fc27_player_alias_review_exceptions AS e
+                SET exception_state = %s,
+                    resolved_at = %s,
+                    resolved_observation_count = COALESCE(src.cand_obs, e.observation_count),
+                    resolved_distinct_match_count = COALESCE(src.cand_distinct, e.distinct_match_count),
+                    resolved_last_seen_at = COALESCE(src.cand_last_seen, e.last_detected_at),
+                    resolved_candidate_state_digest = src.state_digest,
+                    updated_at = GREATEST(%s, e.updated_at)
+                FROM (
+                    SELECT
+                        e2.exception_id,
+                        c.observation_count AS cand_obs,
+                        c.distinct_match_count AS cand_distinct,
+                        c.last_seen_at AS cand_last_seen,
+                        CASE
+                            WHEN c.candidate_id IS NOT NULL THEN
+                                pg_catalog.encode(
+                                    pg_catalog.sha256(
+                                        pg_catalog.convert_to(
+                                            'cand:'
+                                            || c.candidate_id::text
+                                            || ':'
+                                            || c.verification_status
+                                            || ':'
+                                            || c.conflict_status,
+                                            'UTF8'
+                                        )
+                                    ),
+                                    'hex'
+                                )
+                            ELSE
+                                pg_catalog.encode(
+                                    pg_catalog.sha256(
+                                        pg_catalog.convert_to(
+                                            'no_cand:' || e2.exception_reason,
+                                            'UTF8'
+                                        )
+                                    ),
+                                    'hex'
+                                )
+                        END AS state_digest
+                    FROM public.fc27_player_alias_review_exceptions AS e2
+                    LEFT JOIN public.fc27_player_alias_candidates AS c
+                        ON c.candidate_id = e2.candidate_id
+                    WHERE e2.candidate_id = %s
+                      AND e2.exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+                ) AS src
+                WHERE e.exception_id = src.exception_id
+                """,
+                (target_state, resolved_at, resolved_at, int(candidate_id)),
+            )
+            return
+        cur.execute(
+            """
+            UPDATE public.fc27_player_alias_review_exceptions AS e
+            SET exception_state = %s,
+                resolved_at = %s,
+                resolved_observation_count = COALESCE(src.cand_obs, e.observation_count),
+                resolved_distinct_match_count = COALESCE(src.cand_distinct, e.distinct_match_count),
+                resolved_last_seen_at = COALESCE(src.cand_last_seen, e.last_detected_at),
+                resolved_candidate_state_digest = src.state_digest,
+                updated_at = GREATEST(%s, e.updated_at)
+            FROM (
+                SELECT
+                    e2.exception_id,
+                    c.observation_count AS cand_obs,
+                    c.distinct_match_count AS cand_distinct,
+                    c.last_seen_at AS cand_last_seen,
+                    CASE
+                        WHEN c.candidate_id IS NOT NULL THEN
+                            pg_catalog.encode(
+                                pg_catalog.sha256(
+                                    pg_catalog.convert_to(
+                                        'cand:'
+                                        || c.candidate_id::text
+                                        || ':'
+                                        || c.verification_status
+                                        || ':'
+                                        || c.conflict_status,
+                                        'UTF8'
+                                    )
+                                ),
+                                'hex'
+                            )
+                        ELSE
+                            pg_catalog.encode(
+                                pg_catalog.sha256(
+                                    pg_catalog.convert_to(
+                                        'no_cand:' || e2.exception_reason,
+                                        'UTF8'
+                                    )
+                                ),
+                                'hex'
+                            )
+                    END AS state_digest
+                FROM public.fc27_player_alias_review_exceptions AS e2
+                LEFT JOIN public.fc27_player_alias_candidates AS c
+                    ON c.candidate_id = e2.candidate_id
+                WHERE e2.player_id = %s
+                  AND e2.exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+            ) AS src
+            WHERE e.exception_id = src.exception_id
+            """,
+            (target_state, resolved_at, resolved_at, player_id),
+        )
         return
     if candidate_id is not None:
         cur.execute(
@@ -2818,37 +2960,86 @@ def upsert_roster_player(
                 )
                 old_active = bool(prev_row[3]) if prev_row is not None else None
 
-                cur.execute(
+                comp_name = normalize_public_player_alias_key(safe_name)
+                comp_col_chk = cur.execute(
                     """
-                    INSERT INTO public.fc27_roster (
-                        player_id,
-                        display_name,
-                        display_name_normalized,
-                        position,
-                        discord_user_id,
-                        active,
-                        updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, pg_catalog.clock_timestamp())
-                    ON CONFLICT (player_id) DO UPDATE SET
-                        display_name = EXCLUDED.display_name,
-                        display_name_normalized = EXCLUDED.display_name_normalized,
-                        position = COALESCE(EXCLUDED.position, public.fc27_roster.position),
-                        discord_user_id = COALESCE(EXCLUDED.discord_user_id, public.fc27_roster.discord_user_id),
-                        active = EXCLUDED.active,
-                        updated_at = CASE
-                            WHEN public.fc27_roster.display_name IS DISTINCT FROM EXCLUDED.display_name
-                              OR public.fc27_roster.position IS DISTINCT FROM COALESCE(EXCLUDED.position, public.fc27_roster.position)
-                              OR public.fc27_roster.active IS DISTINCT FROM EXCLUDED.active
-                            THEN GREATEST(
-                                pg_catalog.clock_timestamp(),
-                                public.fc27_roster.updated_at + interval '1 microsecond'
-                            )
-                            ELSE public.fc27_roster.updated_at
-                        END
-                    RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
-                    """,
-                    (safe_pid, safe_name, norm_name, safe_pos, safe_discord_id, active),
-                )
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_attribute
+                        WHERE attrelid = 'public.fc27_roster'::regclass
+                          AND attname = 'display_name_comparison_key'
+                          AND NOT attisdropped
+                    )
+                    """
+                ).fetchone()
+                has_comp_key_col = bool(comp_col_chk and comp_col_chk[0])
+
+                if has_comp_key_col:
+                    cur.execute(
+                        """
+                        INSERT INTO public.fc27_roster (
+                            player_id,
+                            display_name,
+                            display_name_normalized,
+                            display_name_comparison_key,
+                            position,
+                            discord_user_id,
+                            active,
+                            updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, pg_catalog.clock_timestamp())
+                        ON CONFLICT (player_id) DO UPDATE SET
+                            display_name = EXCLUDED.display_name,
+                            display_name_normalized = EXCLUDED.display_name_normalized,
+                            display_name_comparison_key = EXCLUDED.display_name_comparison_key,
+                            position = COALESCE(EXCLUDED.position, public.fc27_roster.position),
+                            discord_user_id = COALESCE(EXCLUDED.discord_user_id, public.fc27_roster.discord_user_id),
+                            active = EXCLUDED.active,
+                            updated_at = CASE
+                                WHEN public.fc27_roster.display_name IS DISTINCT FROM EXCLUDED.display_name
+                                  OR public.fc27_roster.position IS DISTINCT FROM COALESCE(EXCLUDED.position, public.fc27_roster.position)
+                                  OR public.fc27_roster.active IS DISTINCT FROM EXCLUDED.active
+                                THEN GREATEST(
+                                    pg_catalog.clock_timestamp(),
+                                    public.fc27_roster.updated_at + interval '1 microsecond'
+                                )
+                                ELSE public.fc27_roster.updated_at
+                            END
+                        RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
+                        """,
+                        (safe_pid, safe_name, norm_name, comp_name, safe_pos, safe_discord_id, active),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO public.fc27_roster (
+                            player_id,
+                            display_name,
+                            display_name_normalized,
+                            position,
+                            discord_user_id,
+                            active,
+                            updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, pg_catalog.clock_timestamp())
+                        ON CONFLICT (player_id) DO UPDATE SET
+                            display_name = EXCLUDED.display_name,
+                            display_name_normalized = EXCLUDED.display_name_normalized,
+                            position = COALESCE(EXCLUDED.position, public.fc27_roster.position),
+                            discord_user_id = COALESCE(EXCLUDED.discord_user_id, public.fc27_roster.discord_user_id),
+                            active = EXCLUDED.active,
+                            updated_at = CASE
+                                WHEN public.fc27_roster.display_name IS DISTINCT FROM EXCLUDED.display_name
+                                  OR public.fc27_roster.position IS DISTINCT FROM COALESCE(EXCLUDED.position, public.fc27_roster.position)
+                                  OR public.fc27_roster.active IS DISTINCT FROM EXCLUDED.active
+                                THEN GREATEST(
+                                    pg_catalog.clock_timestamp(),
+                                    public.fc27_roster.updated_at + interval '1 microsecond'
+                                )
+                                ELSE public.fc27_roster.updated_at
+                            END
+                        RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
+                        """,
+                        (safe_pid, safe_name, norm_name, safe_pos, safe_discord_id, active),
+                    )
                 row = cur.fetchone()
                 assert row is not None
                 effective_pos = str(row[3]) if row[3] is not None else None
@@ -2878,6 +3069,8 @@ def upsert_roster_player(
                 matched_distinct_cnt = 1
                 matched_prior_ver = "NONE"
                 matched_prior_conf = "NONE"
+                candidate_promoted_now = False
+                candidate_promoted_at: datetime | None = None
                 if effective_active and norm_name != unresolved_norm:
                     cand_chk = cur.execute(
                         """
@@ -2909,7 +3102,10 @@ def upsert_roster_player(
                             matched_distinct_cnt = max(1, int(prior_cand_row[1]))
                             matched_prior_ver = str(prior_cand_row[2])
                             matched_prior_conf = str(prior_cand_row[3])
-                        cur.execute(
+                        confirmation_at = cur.execute(
+                            "SELECT pg_catalog.clock_timestamp()"
+                        ).fetchone()[0]
+                        promoted_cand_rows = cur.execute(
                             """
                             UPDATE public.fc27_player_alias_candidates
                             SET verification_status = 'PROMOTED',
@@ -2917,10 +3113,14 @@ def upsert_roster_player(
                                 updated_at = GREATEST(%s, updated_at)
                             WHERE player_id = %s
                               AND public_alias_normalized = %s
-                              AND verification_status <> 'REJECTED'
+                              AND verification_status NOT IN ('REJECTED', 'PROMOTED')
+                            RETURNING candidate_id, promoted_at
                             """,
-                            (row[7], row[7], safe_pid, candidate_lookup_norm),
-                        )
+                            (confirmation_at, confirmation_at, safe_pid, candidate_lookup_norm),
+                        ).fetchall()
+                        candidate_promoted_now = bool(promoted_cand_rows)
+                        if promoted_cand_rows:
+                            candidate_promoted_at = promoted_cand_rows[0][1]
                         seed_aliases = [candidate_lookup_norm]
                         if prev_row is not None and old_display_name is not None:
                             seed_aliases.append(normalize_public_player_alias_key(old_display_name))
@@ -2933,7 +3133,7 @@ def upsert_roster_player(
                     _resolve_player_alias_exceptions_in_tx(
                         cur,
                         player_id=safe_pid,
-                        resolved_at=row[7],
+                        resolved_at=candidate_promoted_at or row[7],
                         target_state="RESOLVED",
                     )
                 if (
@@ -2959,8 +3159,9 @@ def upsert_roster_player(
                             "active": active,
                         },
                     )
+                roster_revision = compute_roster_revision_from_updated_at(row[7])
+                refresh_job_id: int | None = None
                 if public_changed:
-                    roster_revision = compute_roster_revision_from_updated_at(row[7])
                     reason_code = "TOKEN_REDEEM" if resolved_via_token else "ROSTER_UPSERT"
                     refresh_job_id = enqueue_roster_refresh_job_in_tx(
                         cur,
@@ -2969,23 +3170,25 @@ def upsert_roster_player(
                         reason_code=reason_code,
                         requested_at=row[7],
                     )
-                    if effective_active and norm_name != unresolved_norm:
-                        _record_manual_promotion_audit_in_tx(
-                            cur,
-                            candidate_id=matched_cand_id,
-                            player_id=safe_pid,
-                            promotion_mode=(
-                                "MANUAL_CORRECTION"
-                                if prev_row is not None
-                                else "MANUAL_OPERATOR_CONFIRMATION"
-                            ),
-                            distinct_match_count=matched_distinct_cnt,
-                            prior_verification_status=matched_prior_ver,
-                            prior_conflict_status=matched_prior_conf,
-                            roster_revision=roster_revision,
-                            refresh_job_id=refresh_job_id,
-                            promoted_at=row[7],
-                        )
+                if effective_active and norm_name != unresolved_norm and (
+                    public_changed or candidate_promoted_now
+                ):
+                    _record_manual_promotion_audit_in_tx(
+                        cur,
+                        candidate_id=matched_cand_id,
+                        player_id=safe_pid,
+                        promotion_mode=(
+                            "MANUAL_CORRECTION"
+                            if prev_row is not None
+                            else "MANUAL_OPERATOR_CONFIRMATION"
+                        ),
+                        distinct_match_count=matched_distinct_cnt,
+                        prior_verification_status=matched_prior_ver,
+                        prior_conflict_status=matched_prior_conf,
+                        roster_revision=roster_revision,
+                        refresh_job_id=refresh_job_id,
+                        promoted_at=candidate_promoted_at or row[7],
+                    )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),
                     display_name=str(row[1]),
@@ -3194,20 +3397,50 @@ def rename_roster_player(
                         created_at=existing_row[6],
                         updated_at=existing_row[7],
                     )
-                cur.execute(
+                comp_new = normalize_public_player_alias_key(safe_new)
+                comp_col_chk = cur.execute(
                     """
-                    UPDATE public.fc27_roster
-                    SET display_name = %s,
-                        display_name_normalized = %s,
-                        updated_at = GREATEST(
-                            pg_catalog.clock_timestamp(),
-                            updated_at + interval '1 microsecond'
-                        )
-                    WHERE player_id = %s
-                    RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
-                    """,
-                    (safe_new, norm_new, resolved_pid),
-                )
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_attribute
+                        WHERE attrelid = 'public.fc27_roster'::regclass
+                          AND attname = 'display_name_comparison_key'
+                          AND NOT attisdropped
+                    )
+                    """
+                ).fetchone()
+                has_comp_key_col = bool(comp_col_chk and comp_col_chk[0])
+                if has_comp_key_col:
+                    cur.execute(
+                        """
+                        UPDATE public.fc27_roster
+                        SET display_name = %s,
+                            display_name_normalized = %s,
+                            display_name_comparison_key = %s,
+                            updated_at = GREATEST(
+                                pg_catalog.clock_timestamp(),
+                                updated_at + interval '1 microsecond'
+                            )
+                        WHERE player_id = %s
+                        RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
+                        """,
+                        (safe_new, norm_new, comp_new, resolved_pid),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE public.fc27_roster
+                        SET display_name = %s,
+                            display_name_normalized = %s,
+                            updated_at = GREATEST(
+                                pg_catalog.clock_timestamp(),
+                                updated_at + interval '1 microsecond'
+                            )
+                        WHERE player_id = %s
+                        RETURNING player_id, display_name, display_name_normalized, position, discord_user_id, active, created_at, updated_at
+                        """,
+                        (safe_new, norm_new, resolved_pid),
+                    )
                 row = cur.fetchone()
                 assert row is not None
                 _propagate_roster_rename(

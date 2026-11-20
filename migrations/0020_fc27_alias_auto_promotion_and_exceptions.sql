@@ -119,7 +119,11 @@ CREATE TABLE IF NOT EXISTS public.fc27_player_alias_review_exceptions (
     distinct_match_count integer NOT NULL DEFAULT 1,
     first_detected_at    timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
     last_detected_at     timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
-    resolved_at          timestamptz NULL,
+    resolved_at                     timestamptz NULL,
+    resolved_observation_count      integer NULL,
+    resolved_distinct_match_count   integer NULL,
+    resolved_last_seen_at           timestamptz NULL,
+    resolved_candidate_state_digest text NULL,
     created_at           timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
     updated_at           timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
 
@@ -153,6 +157,16 @@ CREATE TABLE IF NOT EXISTS public.fc27_player_alias_review_exceptions (
         ),
     CONSTRAINT fc27_alias_review_exceptions_counts_chk
         CHECK (observation_count >= 0 AND distinct_match_count >= 0),
+    CONSTRAINT fc27_alias_review_exceptions_resolved_counts_chk
+        CHECK (
+            (resolved_observation_count IS NULL OR resolved_observation_count >= 0)
+            AND (resolved_distinct_match_count IS NULL OR resolved_distinct_match_count >= 0)
+        ),
+    CONSTRAINT fc27_alias_review_exceptions_resolved_digest_chk
+        CHECK (
+            resolved_candidate_state_digest IS NULL
+            OR resolved_candidate_state_digest ~ '^[0-9a-f]{64}$'
+        ),
     CONSTRAINT fc27_alias_review_exceptions_timestamps_chk
         CHECK (
             last_detected_at >= first_detected_at
@@ -163,6 +177,36 @@ CREATE TABLE IF NOT EXISTS public.fc27_player_alias_review_exceptions (
             )
         )
 );
+
+ALTER TABLE public.fc27_player_alias_review_exceptions
+    ADD COLUMN IF NOT EXISTS resolved_observation_count integer NULL,
+    ADD COLUMN IF NOT EXISTS resolved_distinct_match_count integer NULL,
+    ADD COLUMN IF NOT EXISTS resolved_last_seen_at timestamptz NULL,
+    ADD COLUMN IF NOT EXISTS resolved_candidate_state_digest text NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fc27_alias_review_exceptions_resolved_counts_chk'
+    ) THEN
+        ALTER TABLE public.fc27_player_alias_review_exceptions
+            ADD CONSTRAINT fc27_alias_review_exceptions_resolved_counts_chk
+                CHECK (
+                    (resolved_observation_count IS NULL OR resolved_observation_count >= 0)
+                    AND (resolved_distinct_match_count IS NULL OR resolved_distinct_match_count >= 0)
+                );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fc27_alias_review_exceptions_resolved_digest_chk'
+    ) THEN
+        ALTER TABLE public.fc27_player_alias_review_exceptions
+            ADD CONSTRAINT fc27_alias_review_exceptions_resolved_digest_chk
+                CHECK (
+                    resolved_candidate_state_digest IS NULL
+                    OR resolved_candidate_state_digest ~ '^[0-9a-f]{64}$'
+                );
+    END IF;
+END $$;
 
 ALTER TABLE public.fc27_player_alias_review_exceptions OWNER TO fc27_owner;
 REVOKE ALL ON TABLE public.fc27_player_alias_review_exceptions FROM PUBLIC;
@@ -181,6 +225,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fc27_alias_review_exceptions_open_target
 CREATE INDEX IF NOT EXISTS idx_fc27_alias_review_exceptions_state_detected
     ON public.fc27_player_alias_review_exceptions (exception_state, last_detected_at DESC, exception_id DESC);
 
+ALTER TABLE public.fc27_roster
+    ADD COLUMN IF NOT EXISTS display_name_comparison_key text;
+
+-- The db_migrate 0020 post-step computes comparison keys with Python's
+-- normalize_public_player_alias_key, rejects collisions, and then finalizes the
+-- NOT NULL/check/index constraints in this same migration transaction.
+
+CREATE INDEX IF NOT EXISTS idx_fc27_roster_active_comparison_key
+    ON public.fc27_roster (active, display_name_comparison_key);
+
+DROP TRIGGER IF EXISTS trg_fc27_roster_sync_comparison_key ON public.fc27_roster;
 
 CREATE OR REPLACE FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(
     p_minimum_distinct_matches integer DEFAULT 2,
@@ -232,7 +287,9 @@ BEGIN
             c.verification_status,
             c.conflict_status,
             COUNT(*) OVER (PARTITION BY c.player_id) AS player_active_count,
-            COUNT(*) OVER (PARTITION BY pg_catalog.lower(c.public_alias_normalized)) AS norm_alias_active_count
+            COUNT(*) OVER (
+                PARTITION BY c.public_alias_normalized
+            ) AS norm_alias_active_count
         FROM public.fc27_player_alias_candidates AS c
         WHERE c.verification_status <> 'REJECTED'
     ),
@@ -268,9 +325,9 @@ BEGIN
                     WHERE r.player_id = c.player_id
                        OR (
                            r.active = TRUE
-                           AND (
-                               r.display_name_normalized = pg_catalog.lower(pg_catalog.btrim(c.public_alias))
-                               OR pg_catalog.lower(r.display_name_normalized) = pg_catalog.lower(c.public_alias_normalized)
+                           AND r.display_name_comparison_key IN (
+                               c.public_alias_normalized,
+                               c.public_alias_normalized
                            )
                        )
                 ) THEN 'ROSTER_ALREADY_EXISTS'
@@ -290,8 +347,10 @@ BEGIN
                     FROM public.fc27_roster AS r
                     WHERE r.player_id = c.player_id
                       AND r.active = TRUE
-                      AND r.display_name_normalized <> pg_catalog.lower(pg_catalog.btrim(c.public_alias))
-                      AND pg_catalog.lower(r.display_name_normalized) <> pg_catalog.lower(c.public_alias_normalized)
+                      AND r.display_name_comparison_key NOT IN (
+                          c.public_alias_normalized,
+                          c.public_alias_normalized
+                      )
                 ) AND EXISTS (
                     SELECT 1
                     FROM public.fc27_player_alias_candidates AS cp
@@ -309,9 +368,9 @@ BEGIN
                     WHERE r.player_id = c.player_id
                        OR (
                            r.active = TRUE
-                           AND (
-                               r.display_name_normalized = pg_catalog.lower(pg_catalog.btrim(c.public_alias))
-                               OR pg_catalog.lower(r.display_name_normalized) = pg_catalog.lower(c.public_alias_normalized)
+                           AND r.display_name_comparison_key IN (
+                               c.public_alias_normalized,
+                               c.public_alias_normalized
                            )
                        )
                 ) THEN 'EXISTING_ROSTER_CONFLICT'
@@ -408,6 +467,7 @@ DECLARE
     v_policy_version text;
     v_seed_player_id text;
     v_seed_norm_alias text;
+    v_seed_comp_key text;
     v_cand record;
     v_player_active_count integer;
     v_alias_active_count integer;
@@ -416,6 +476,8 @@ DECLARE
     v_existing_revision text;
     v_roster_display_name text;
     v_roster_norm_name text;
+    v_roster_comp_key text;
+    v_alias_comp_key text;
     v_now timestamptz;
     v_promoted_at timestamptz;
     v_epoch_us bigint;
@@ -457,7 +519,9 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Lock all non-REJECTED candidates touching this player or normalized alias in
+    v_seed_comp_key := v_seed_norm_alias;
+
+    -- Lock all non-REJECTED candidates touching this player or canonical comparison key in
     -- ascending candidate_id order to guarantee deadlock-free concurrent serialization.
     PERFORM c.candidate_id
     FROM public.fc27_player_alias_candidates AS c
@@ -466,7 +530,7 @@ BEGIN
            c.verification_status <> 'REJECTED'
            AND (
                c.player_id = v_seed_player_id
-               OR pg_catalog.lower(c.public_alias_normalized) = pg_catalog.lower(v_seed_norm_alias)
+               OR c.public_alias_normalized = v_seed_comp_key
            )
        )
     ORDER BY c.candidate_id ASC
@@ -538,6 +602,14 @@ BEGIN
 
     v_roster_display_name := pg_catalog.btrim(v_cand.public_alias);
     v_roster_norm_name := pg_catalog.lower(v_roster_display_name);
+    IF v_cand.public_alias_normalized IS NULL
+       OR pg_catalog.char_length(v_cand.public_alias_normalized) NOT BETWEEN 1 AND 128
+       OR v_cand.public_alias_normalized <> pg_catalog.btrim(v_cand.public_alias_normalized)
+       OR v_cand.public_alias_normalized ~ '[\x00-\x1F\x7F]' THEN
+        RAISE EXCEPTION 'invalid persisted candidate comparison key' USING ERRCODE = '22023';
+    END IF;
+    v_roster_comp_key := v_cand.public_alias_normalized;
+    v_alias_comp_key := v_cand.public_alias_normalized;
 
     IF NOT (
         pg_catalog.char_length(v_roster_display_name) BETWEEN 1 AND 32
@@ -577,9 +649,9 @@ BEGIN
       INTO v_alias_active_count
     FROM public.fc27_player_alias_candidates AS c
     WHERE c.verification_status <> 'REJECTED'
-      AND (
-          pg_catalog.lower(c.public_alias_normalized) = pg_catalog.lower(v_cand.public_alias_normalized)
-          OR c.public_alias_normalized = v_roster_norm_name
+      AND c.public_alias_normalized IN (
+          v_roster_comp_key,
+          v_alias_comp_key
       );
 
     IF v_alias_active_count > 1 THEN
@@ -643,10 +715,7 @@ BEGIN
     WHERE r.player_id = v_cand.player_id
        OR (
            r.active = TRUE
-           AND (
-               r.display_name_normalized = v_roster_norm_name
-               OR pg_catalog.lower(r.display_name_normalized) = pg_catalog.lower(v_cand.public_alias_normalized)
-           )
+           AND r.display_name_comparison_key IN (v_roster_comp_key, v_alias_comp_key)
        )
     ORDER BY r.player_id ASC
     FOR UPDATE;
@@ -657,10 +726,7 @@ BEGIN
     WHERE r.player_id = v_cand.player_id
        OR (
            r.active = TRUE
-           AND (
-               r.display_name_normalized = v_roster_norm_name
-               OR pg_catalog.lower(r.display_name_normalized) = pg_catalog.lower(v_cand.public_alias_normalized)
-           )
+           AND r.display_name_comparison_key IN (v_roster_comp_key, v_alias_comp_key)
        );
 
     IF v_roster_conflict_count > 0 THEN
@@ -681,6 +747,7 @@ BEGIN
         player_id,
         display_name,
         display_name_normalized,
+        display_name_comparison_key,
         position,
         discord_user_id,
         active,
@@ -690,6 +757,7 @@ BEGIN
         v_cand.player_id,
         v_roster_display_name,
         v_roster_norm_name,
+        v_alias_comp_key,
         NULL,
         NULL,
         TRUE,
@@ -762,9 +830,43 @@ BEGIN
     UPDATE public.fc27_player_alias_review_exceptions AS e
     SET exception_state = 'RESOLVED',
         resolved_at = v_promoted_at,
+        resolved_observation_count = COALESCE(src.cand_obs, e.observation_count),
+        resolved_distinct_match_count = COALESCE(src.cand_distinct, e.distinct_match_count),
+        resolved_last_seen_at = COALESCE(src.cand_last_seen, e.last_detected_at),
+        resolved_candidate_state_digest = src.state_digest,
         updated_at = GREATEST(v_promoted_at, e.updated_at)
-    WHERE e.player_id = v_cand.player_id
-      AND e.exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED');
+    FROM (
+        SELECT
+            e2.exception_id,
+            c.observation_count AS cand_obs,
+            c.distinct_match_count AS cand_distinct,
+            c.last_seen_at AS cand_last_seen,
+            CASE
+                WHEN c.candidate_id IS NOT NULL THEN
+                    pg_catalog.encode(
+                        pg_catalog.sha256(
+                            pg_catalog.convert_to(
+                                'cand:' || c.candidate_id::text || ':' || c.verification_status || ':' || c.conflict_status,
+                                'UTF8'
+                            )
+                        ),
+                        'hex'
+                    )
+                ELSE
+                    pg_catalog.encode(
+                        pg_catalog.sha256(
+                            pg_catalog.convert_to('no_cand:' || e2.exception_reason, 'UTF8')
+                        ),
+                        'hex'
+                    )
+            END AS state_digest
+        FROM public.fc27_player_alias_review_exceptions AS e2
+        LEFT JOIN public.fc27_player_alias_candidates AS c
+            ON c.candidate_id = e2.candidate_id
+        WHERE e2.player_id = v_cand.player_id
+          AND e2.exception_state IN ('OPEN', 'ACKNOWLEDGED', 'DEFERRED')
+    ) AS src
+    WHERE e.exception_id = src.exception_id;
 
     RETURN QUERY SELECT
         TRUE,

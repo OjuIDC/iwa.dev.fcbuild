@@ -941,7 +941,7 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_match_results_writer';
-            EXECUTE 'GRANT SELECT, UPDATE (exception_state, resolved_at, updated_at) ON public.fc27_player_alias_review_exceptions TO fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT, UPDATE (exception_state, resolved_at, resolved_observation_count, resolved_distinct_match_count, resolved_last_seen_at, resolved_candidate_state_digest, updated_at) ON public.fc27_player_alias_review_exceptions TO fc27_match_results_writer';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
             EXECUTE 'REVOKE ALL ON public.fc27_player_alias_review_exceptions FROM fc27_discord_reader';
@@ -1046,6 +1046,46 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_purge_resolved_alias_review_exceptions(integer, timestamptz) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_normalize_alias_comparison_key(text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_normalize_alias_comparison_key(text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_normalize_alias_comparison_key(text) FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_normalize_alias_comparison_key(text) FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_normalize_alias_comparison_key(text) FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_normalize_alias_comparison_key(text) TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_normalize_alias_comparison_key(text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_sync_roster_comparison_key()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key()
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

@@ -77,9 +77,16 @@ The tracked manifest [`ops/fc27-protected-state-manifest.json`](../ops/fc27-prot
    python -m src.fc27_protected_state import `
      --input E:\fc27-offline-vault\fc27-protected-state.zip
    ```
-7. Confirm restrictive Windows ACLs on `.env`, `.local-data/`, `.local-data/*.env`, and `secrets/*` (inheritance disabled, accessible only to the current user SID, `BUILTIN\Administrators`, and `NT AUTHORITY\SYSTEM`):
-   ```powershell
-   icacls .env .local-data secrets secrets\*
+7. Confirm restrictive file permissions on `.env`, `.local-data/`, `.local-data/*.env`, and `secrets/*`:
+   - **Windows**: inheritance disabled, accessible only to the current user SID, `BUILTIN\Administrators`, and `NT AUTHORITY\SYSTEM`:
+     ```powershell
+     icacls .env .local-data secrets secrets\*
+     ```
+   - **Linux / POSIX hosts**: shipped `fc27-discord-bot` and `fc27-community-worker` containers execute as non-root `10001:65534`. Keep offline recovery ZIP bundles/sidecars strictly `0600`, and ensure runtime secret/env files are readable by container UID `10001` (either owned by `10001:65534` with `0600`/`0700`, or readable by shared container GID `65534` with `0640`/`0750` and zero world permissions — unless using rootless Docker user-namespace UID mapping that maps the host operator UID to `10001`).
+   ```bash
+   sudo chown -R 10001:65534 secrets .local-data .env
+   chmod 0700 secrets .local-data .local-data/compose
+   chmod 0600 .env .local-data/*.env secrets/*
    ```
 8. Verify `git status --short` shows zero untracked secrets or staged local configuration leaks.
 9. Confirm auto-promotion defaults remain disabled unless separately authorized for Stage 2:
@@ -118,7 +125,7 @@ The tracked manifest [`ops/fc27-protected-state-manifest.json`](../ops/fc27-prot
     ```powershell
     docker compose -p fc27-full-stack --env-file .env run --rm db-migrate
     ```
-18. Verify PostgreSQL volume & `fc27_alias_hmac_key` continuity read-only:
+18. Verify PostgreSQL volume & `fc27_alias_hmac_key` continuity read-only (when running from the host against `secrets/postgres_admin_uri` whose hostname is `postgres` on the internal Compose network, `src.fc27_protected_state` automatically falls back cleanly to a host-mapped loopback port or an ephemeral stdin-authenticated read-only `psql` check inside the running Compose `postgres` container without exposing credentials in command arguments):
     ```powershell
     python -m src.fc27_protected_state verify-postgres-volume --db-uri (Get-Content secrets/postgres_admin_uri -Raw).Trim()
     ```
