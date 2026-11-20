@@ -940,11 +940,33 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                             f"overbroad_table_{restricted_role}_update_on_fc27_player_alias_review_exceptions"
                         )
 
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer'")
+            if cur.fetchone():
+                for wm_col in (
+                    "exception_state",
+                    "resolved_at",
+                    "resolved_observation_count",
+                    "resolved_distinct_match_count",
+                    "resolved_last_seen_at",
+                    "resolved_candidate_state_digest",
+                    "updated_at",
+                ):
+                    cur.execute(
+                        "SELECT has_column_privilege('fc27_match_results_writer', 'public.fc27_player_alias_review_exceptions', %s, 'UPDATE')",
+                        (wm_col,),
+                    )
+                    col_row = cur.fetchone()
+                    if not (col_row and col_row[0]):
+                        violations.append(
+                            f"missing_fc27_match_results_writer_update_{wm_col}_on_fc27_player_alias_review_exceptions"
+                        )
+
             fn_specs = (
                 ("fc27_auto_promote_stable_alias_candidate", ("fc27_poll_writer",)),
                 ("fc27_evaluate_alias_candidates_for_promotion", ("fc27_poll_writer",)),
                 ("fc27_record_manual_alias_promotion_audit", ("fc27_match_results_writer",)),
                 ("fc27_purge_resolved_alias_review_exceptions", ("fc27_match_results_writer",)),
+                ("fc27_sync_roster_comparison_key", ()),
             )
             all_check_roles = (
                 "public",
@@ -994,6 +1016,43 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         violations.append(f"missing_{check_role}_exec_{fn_name}")
                     elif check_role not in allowed_exec_roles and has_exec:
                         violations.append(f"forbidden_{check_role}_exec_{fn_name}")
+
+            # Verify immutable Unicode comparison helper ownership and strict role scope
+            cur.execute(
+                """
+                SELECT p.oid, p.proowner::regrole::text, p.proconfig
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname = 'fc27_normalize_alias_comparison_key'
+                """
+            )
+            norm_fn_row = cur.fetchone()
+            if not norm_fn_row:
+                violations.append("missing_function_fc27_normalize_alias_comparison_key")
+            else:
+                nf_oid, nf_owner, nf_config = norm_fn_row
+                if nf_owner != "fc27_owner":
+                    violations.append("fc27_normalize_alias_comparison_key_not_owner")
+                nf_cfg = " ".join(nf_config) if nf_config else ""
+                if "search_path=pg_catalog, pg_temp" not in nf_cfg:
+                    violations.append("fc27_normalize_alias_comparison_key_search_path")
+                norm_allowed = ("fc27_poll_writer", "fc27_match_results_writer")
+                for check_role in all_check_roles:
+                    if check_role != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
+                        if not cur.fetchone():
+                            continue
+                    cur.execute(
+                        "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                        (check_role, nf_oid),
+                    )
+                    ne_row = cur.fetchone()
+                    has_exec = bool(ne_row and ne_row[0])
+                    if check_role in norm_allowed and not has_exec:
+                        violations.append(f"missing_{check_role}_exec_fc27_normalize_alias_comparison_key")
+                    elif check_role not in norm_allowed and has_exec:
+                        violations.append(f"forbidden_{check_role}_exec_fc27_normalize_alias_comparison_key")
 
             # Confirm fc27_poll_writer still has zero direct privileges on fc27_roster and fc27_discord_jobs_job_id_seq UPDATE/DELETE
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer'")

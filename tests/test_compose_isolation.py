@@ -683,3 +683,87 @@ def test_deployment_and_security_documentation_reconciliation():
         assert required_backup_token in backup_doc, (
             f"Missing {required_backup_token!r} in docs/FC27_BACKUP_AND_RECOVERY.md"
         )
+
+
+def test_auto_promotion_and_notification_env_propagation_and_defaults(tmp_path):
+    """Verify Compose forwards auto-promotion, maintenance, token, and notification vars with fail-closed defaults."""
+    env = _env_file(tmp_path)
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    merged = json.loads(out.stdout)
+
+    worker_env = merged["services"]["fc27-community-worker"]["environment"]
+    expected_worker_defaults = {
+        "FC27_ALIAS_AUTO_PROMOTION_ENABLED": "false",
+        "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE": "true",
+        "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES": "2",
+        "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL": "10",
+        "FC27_ALIAS_AUTO_PROMOTION_REFRESH_MESSAGES": "true",
+        "FC27_ALIAS_AUTO_PROMOTION_POLICY_VERSION": "stable-v1",
+        "FC27_ALIAS_MAINTENANCE_ENABLED": "false",
+        "FC27_ALIAS_REVIEW_EXCEPTION_RETENTION_DAYS": "90",
+        "FC27_ALIAS_PROMOTION_AUDIT_RETENTION_DAYS": "0",
+        "FC27_RECONCILIATION_TOKEN_CLEANUP_ENABLED": "true",
+        "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": "24",
+    }
+    for k, expected_v in expected_worker_defaults.items():
+        assert worker_env.get(k) == expected_v
+
+    discord_env = merged["services"]["fc27-discord-bot"]["environment"]
+    expected_discord_defaults = {
+        "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED": "false",
+        "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS": "1",
+        "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS": "21600",
+    }
+    for k, expected_v in expected_discord_defaults.items():
+        assert discord_env.get(k) == expected_v
+
+    # Enabling via protected env file propagates cleanly into resolved containers
+    custom_env = tmp_path / "custom_stage2.env"
+    custom_env.write_text(
+        env.read_text(encoding="utf-8")
+        + "\nFC27_ALIAS_AUTO_PROMOTION_ENABLED=true\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE=false\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES=3\n"
+        + "FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL=5\n"
+        + "FC27_ALIAS_MAINTENANCE_ENABLED=true\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED=true\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS=2\n"
+        + "FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS=3600\n",
+        encoding="utf-8",
+    )
+    out_custom = _config(
+        custom_env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out_custom.returncode == 0, out_custom.stderr
+    merged_custom = json.loads(out_custom.stdout)
+    assert merged_custom["services"]["fc27-community-worker"]["environment"]["FC27_ALIAS_AUTO_PROMOTION_ENABLED"] == "true"
+    assert merged_custom["services"]["fc27-community-worker"]["environment"]["FC27_ALIAS_AUTO_PROMOTION_SHADOW_MODE"] == "false"
+    assert merged_custom["services"]["fc27-community-worker"]["environment"]["FC27_ALIAS_AUTO_PROMOTION_MIN_DISTINCT_MATCHES"] == "3"
+    assert merged_custom["services"]["fc27-community-worker"]["environment"]["FC27_ALIAS_AUTO_PROMOTION_MAX_PER_POLL"] == "5"
+    assert merged_custom["services"]["fc27-community-worker"]["environment"]["FC27_ALIAS_MAINTENANCE_ENABLED"] == "true"
+    assert merged_custom["services"]["fc27-discord-bot"]["environment"]["FC27_ALIAS_REVIEW_NOTIFICATION_ENABLED"] == "true"
+    assert merged_custom["services"]["fc27-discord-bot"]["environment"]["FC27_ALIAS_REVIEW_NOTIFICATION_MIN_OPEN_ITEMS"] == "2"
+    assert merged_custom["services"]["fc27-discord-bot"]["environment"]["FC27_ALIAS_REVIEW_NOTIFICATION_COOLDOWN_SECONDS"] == "3600"

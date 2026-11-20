@@ -13,10 +13,11 @@ Safety Invariants:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1238,7 +1239,7 @@ class FC27ReplayConflictError(FC27RepositoryError):
         conflict_match_refs: Sequence[str] = (),
     ) -> None:
         super().__init__(message)
-        self.conflict_count = max(1, int(conflict_count))
+        self.conflict_count = max(1, conflict_count)
         self.quarantine_ids = tuple(quarantine_ids)
         self.conflict_match_refs = tuple(conflict_match_refs)
 
@@ -1255,7 +1256,7 @@ class FC27JobIdempotencyConflictError(FC27RepositoryError):
         quarantine_ids: Sequence[str] = (),
     ) -> None:
         super().__init__(message)
-        self.conflict_count = max(1, int(conflict_count))
+        self.conflict_count = max(1, conflict_count)
         self.match_ref = match_ref
         self.quarantine_ids = tuple(quarantine_ids)
 
@@ -1531,7 +1532,7 @@ class FC27ExportApplyResult(BaseModel):
 @contextmanager
 def _managed_connection(
     conn_or_uri: psycopg.Connection | str | Any,
-) -> Iterator[psycopg.Connection]:
+) -> Generator[psycopg.Connection]:
     """Yields a psycopg.Connection from an existing Connection, a conninfo URI, or a ConnectionPool."""
     if isinstance(conn_or_uri, psycopg.Connection):
         yield conn_or_uri
@@ -1568,7 +1569,7 @@ def _sanitize_diagnostic_paths(paths: Sequence[str]) -> list[str]:
         raise ValueError("diagnostic_paths exceeds maximum length of 100 entries")
     cleaned: list[str] = []
     for raw_path in paths:
-        candidate = str(raw_path).strip()
+        candidate = raw_path.strip()
         if not candidate:
             continue
         if (
@@ -1604,15 +1605,15 @@ def _build_safe_event_reason(
     Never includes player aliases, raw match payloads, or individual player metrics.
     """
     payload = {
-        "accepted_count": int(accepted_count),
-        "club_id": str(club_id),
-        "duplicate_count": int(duplicate_count),
-        "export_id": str(export_id) if export_id is not None else None,
-        "game_version": str(game_version),
-        "platform": str(platform),
-        "quarantine_count": int(quarantine_count),
-        "reason_code": str(reason_code),
-        "source_classification": str(source_classification),
+        "accepted_count": accepted_count,
+        "club_id": club_id,
+        "duplicate_count": duplicate_count,
+        "export_id": export_id,
+        "game_version": game_version,
+        "platform": platform,
+        "quarantine_count": quarantine_count,
+        "reason_code": reason_code,
+        "source_classification": source_classification,
         "timestamp": recorded_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -1672,7 +1673,7 @@ def _extract_persisted_match_type_from_supplier_ref(
     against the persisted ``match_hash`` rather than assuming ``LEAGUE``.
     """
     if supplier_reference:
-        clean = str(supplier_reference).strip()
+        clean = supplier_reference.strip()
         if clean.startswith("fc27-community-") and ":" in clean:
             raw_suffix = clean.rsplit(":", 1)[1].strip()
             if not raw_suffix:
@@ -1840,7 +1841,7 @@ def _load_persisted_match_projections_in_cursor(
     """Load `fc27-match-equivalence-v1` projections from normalized PostgreSQL tables."""
     norm_version = game_version.upper()
     if external_match_ids is not None:
-        id_list = [str(x) for x in external_match_ids if str(x).strip()]
+        id_list = [x for x in external_match_ids if x.strip()]
         if not id_list:
             return {}
         cur.execute(
@@ -2459,7 +2460,7 @@ def review_quarantine_record(
                 conn,
                 event_type="fc27.quarantine.reviewed",
                 entity_type="fc27_quarantine",
-                entity_id=str(quarantine_id),
+                entity_id=quarantine_id,
                 actor=reviewed_by,
                 correlation_id=corr_id,
                 visibility="ops",
@@ -2646,9 +2647,9 @@ def build_roster_refresh_idempotency_key(
     if continuation_index is None:
         key = f"roster-refresh:{clean_pid}:{clean_rev}:v1"
     else:
-        if isinstance(continuation_index, bool) or not 1 <= int(continuation_index) <= 100:
+        if isinstance(continuation_index, bool) or not 1 <= continuation_index <= 100:
             raise ValueError("continuation_index must be between 1 and 100")
-        key = f"roster-refresh:{clean_pid}:{clean_rev}:cont:{int(continuation_index)}:v1"
+        key = f"roster-refresh:{clean_pid}:{clean_rev}:cont:{continuation_index}:v1"
     if len(key) > 128:
         raise ValueError("roster-refresh idempotency key exceeds 128 characters")
     return key
@@ -2791,8 +2792,8 @@ def persist_player_alias_fingerprints_in_tx(
         elif isinstance(item, Mapping):
             normalized_obs.append(
                 FC27AliasFingerprintObservation(
-                    pseudonym=str(item.get("pseudonym", "")),
-                    gamertag_hmac=str(item.get("gamertag_hmac", "")),
+                    pseudonym=item.get("pseudonym", ""),
+                    gamertag_hmac=item.get("gamertag_hmac", ""),
                 )
             )
         else:
@@ -2941,11 +2942,11 @@ def recompute_player_alias_candidate_conflicts_in_tx(
     from the seed sets until a fixed point is reached, excluding `REJECTED` rows while never
     reading restricted columns such as `alias_hmac_fingerprint`.
     """
-    known_pids: set[str] = {str(p).strip() for p in seed_player_ids if str(p or "").strip()}
+    known_pids: set[str] = {p.strip() for p in seed_player_ids if (p or "").strip()}
     known_aliases: set[str] = {
-        normalize_public_player_alias_key(str(a))
+        normalize_public_player_alias_key(a)
         for a in seed_normalized_aliases
-        if str(a or "").strip()
+        if (a or "").strip()
     }
     if not known_pids and not known_aliases:
         return (0, 0)
@@ -3322,14 +3323,14 @@ def _build_post_new_results_payload(
     The payload is intentionally minimal and versioned: a consumer must load authoritative
     match details from PostgreSQL by ``match_ref``.
     """
-    raw_mid = str(match.external_match_id).strip()
+    raw_mid = match.external_match_id.strip()
     match_ref = (
         raw_mid
         if PSEUDONYM_MATCH_REF_RE.fullmatch(raw_mid)
         else pseudonymize_match_ref(raw_mid, club_id=club_id)
     )
     idempotency_key = f"fc27:post_new_results:{match_ref}"
-    eff_match_type = str(
+    eff_match_type = (
         match_type_override or match.match_type or "leagueMatch"
     ).strip()
     payload = _validate_discord_job_payload(
@@ -4301,6 +4302,21 @@ def apply_export_plan(
             )
 
 
+def compute_candidate_exception_state_digest(
+    *,
+    candidate_id: int | None,
+    verification_status: str = "NONE",
+    conflict_status: str = "NONE",
+    exception_reason: str = "",
+) -> str:
+    """Compute a deterministic SHA-256 state digest matching Migration 0020 exception watermarks."""
+    if candidate_id is not None:
+        raw_state = f"cand:{int(candidate_id)}:{verification_status}:{conflict_status}"
+    else:
+        raw_state = f"no_cand:{exception_reason}"
+    return hashlib.sha256(raw_state.encode("utf-8")).hexdigest().lower()
+
+
 def _upsert_review_exception_in_tx(
     cur: Any,
     *,
@@ -4311,13 +4327,19 @@ def _upsert_review_exception_in_tx(
     distinct_match_count: int,
     detected_at: datetime,
 ) -> bool:
-    """Insert or refresh one open/acknowledged/deferred exception record without duplicating open rows."""
+    """Insert or refresh one open/acknowledged/deferred exception record without duplicating open rows.
+
+    When an operator or auto-promoter has previously marked a target ``RESOLVED`` or
+    ``REJECTED``, historical observations of that target stay suppressed until newer
+    provider evidence (higher observation/match counts, newer ``last_seen_at``, or a
+    changed candidate conflict/verification digest) arrives.
+    """
     if exception_reason not in ALIAS_REVIEW_EXCEPTION_REASONS:
         raise FC27ValidationError(f"Unsupported alias review exception reason '{exception_reason}'")
-    clean_pid = str(player_id or "").strip()
+    clean_pid = (player_id or "").strip()
     if not clean_pid:
         return False
-    norm_cand_id = int(candidate_id) if candidate_id is not None else 0
+    norm_cand_id = candidate_id if candidate_id is not None else 0
     cur.execute(
         """
         SELECT exception_id, exception_state, observation_count, distinct_match_count, last_detected_at, updated_at
@@ -4331,8 +4353,8 @@ def _upsert_review_exception_in_tx(
         (clean_pid, norm_cand_id, exception_reason),
     )
     existing = cur.fetchone()
-    eff_obs = max(0, int(observation_count))
-    eff_distinct = max(0, int(distinct_match_count))
+    eff_obs = max(0, observation_count)
+    eff_distinct = max(0, distinct_match_count)
     if existing is not None:
         exc_id = int(existing[0])
         prev_obs = int(existing[2])
@@ -4353,6 +4375,102 @@ def _upsert_review_exception_in_tx(
             (max(prev_obs, eff_obs), max(prev_distinct, eff_distinct), new_last, new_upd, exc_id),
         )
         return True
+
+    if candidate_id is not None:
+        cur.execute(
+            """
+            SELECT
+                resolved_observation_count,
+                resolved_distinct_match_count,
+                resolved_last_seen_at,
+                resolved_candidate_state_digest,
+                resolved_at
+            FROM public.fc27_player_alias_review_exceptions
+            WHERE player_id = %s
+              AND candidate_id = %s
+              AND exception_state IN ('RESOLVED', 'REJECTED')
+            ORDER BY resolved_at DESC NULLS LAST, exception_id DESC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (clean_pid, int(candidate_id)),
+        )
+        prior_resolved = cur.fetchone()
+        if prior_resolved is not None:
+            cur.execute(
+                """
+                SELECT
+                    observation_count,
+                    distinct_match_count,
+                    last_seen_at,
+                    verification_status,
+                    conflict_status
+                FROM public.fc27_player_alias_candidates
+                WHERE candidate_id = %s
+                """,
+                (int(candidate_id),),
+            )
+            cand_row = cur.fetchone()
+            cur_obs = max(eff_obs, int(cand_row[0])) if cand_row is not None else eff_obs
+            cur_distinct = max(eff_distinct, int(cand_row[1])) if cand_row is not None else eff_distinct
+            cur_last_seen = cand_row[2] if cand_row is not None else None
+            cur_digest = compute_candidate_exception_state_digest(
+                candidate_id=int(candidate_id),
+                verification_status=str(cand_row[3]) if cand_row is not None else "NONE",
+                conflict_status=str(cand_row[4]) if cand_row is not None else "NONE",
+            )
+            res_obs, res_distinct, res_last_seen, res_digest, res_at = prior_resolved
+            if res_obs is not None and res_distinct is not None and res_digest is not None:
+                has_newer_evidence = (
+                    cur_obs > int(res_obs)
+                    or cur_distinct > int(res_distinct)
+                    or (
+                        cur_last_seen is not None
+                        and (res_last_seen is None or cur_last_seen > res_last_seen)
+                    )
+                    or str(res_digest).lower() != cur_digest
+                )
+            else:
+                has_newer_evidence = (
+                    cur_last_seen is not None and res_at is not None and cur_last_seen > res_at
+                )
+            if not has_newer_evidence:
+                return False
+    else:
+        cur.execute(
+            """
+            SELECT
+                resolved_observation_count,
+                resolved_distinct_match_count,
+                resolved_candidate_state_digest
+            FROM public.fc27_player_alias_review_exceptions
+            WHERE player_id = %s
+              AND candidate_id IS NULL
+              AND exception_reason = %s
+              AND exception_state IN ('RESOLVED', 'REJECTED')
+            ORDER BY resolved_at DESC NULLS LAST, exception_id DESC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (clean_pid, exception_reason),
+        )
+        prior_resolved_no_cand = cur.fetchone()
+        if prior_resolved_no_cand is not None:
+            res_obs, res_distinct, res_digest = prior_resolved_no_cand
+            cur_digest = compute_candidate_exception_state_digest(
+                candidate_id=None,
+                exception_reason=exception_reason,
+            )
+            if res_obs is not None and res_distinct is not None and res_digest is not None:
+                has_newer_no_cand = (
+                    eff_obs > int(res_obs)
+                    or eff_distinct > int(res_distinct)
+                    or str(res_digest).lower() != cur_digest
+                )
+            else:
+                has_newer_no_cand = False
+            if not has_newer_no_cand:
+                return False
 
     cur.execute(
         """
@@ -4460,7 +4578,7 @@ def evaluate_and_auto_promote_alias_candidates(
                     exception_reason
                 FROM public.fc27_evaluate_alias_candidates_for_promotion(%s, %s)
                 """,
-                (pol.minimum_distinct_matches, max(1, int(no_alias_min_appearances))),
+                (pol.minimum_distinct_matches, max(1, no_alias_min_appearances)),
             )
             raw_rows = cur.fetchall()
         if hasattr(conn, "commit") and callable(conn.commit):
@@ -4700,7 +4818,7 @@ def run_fc27_alias_maintenance(
                             """,
                             (token_cutoff,),
                         )
-                        tokens_deleted = max(0, int(cur.rowcount or 0))
+                        tokens_deleted = max(0, cur.rowcount or 0)
 
                 cur.execute(
                     """

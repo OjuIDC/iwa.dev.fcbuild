@@ -13,6 +13,7 @@ agent_workspace/
 secrets/
 *.code-workspace
 debug_tests.py
+/kilo_*.py
 tests/test_*.pyc
 tests/test_*_secret*
 

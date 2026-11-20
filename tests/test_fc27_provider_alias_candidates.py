@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 import logging
 from pathlib import Path
@@ -278,7 +279,7 @@ class _FakeInteraction:
         self,
         *,
         user_id: int,
-        role_ids: list[tuple[int, str]] = (),
+        role_ids: Sequence[tuple[int, str]] = (),
         is_admin: bool = False,
         guild_id: int | None = int(APPROVED_GUILD_ID),
         channel_id: int = int(RESULTS_CHANNEL_ID),
@@ -509,13 +510,14 @@ class TestIdentityOperatorAuthorization:
         assert canonical_denied.content == PERMISSION_DENIED_MESSAGE
 
         # 8. Identity Operator DENIED /deletematch, /matchday, /result, /editresult, /renameplayer
-        for denied_cmd, extra_kwargs in (
+        denied_commands: tuple[tuple[str, dict[str, Any]], ...] = (
             ("deletematch", {"match_id": 1, "confirm_delete": True}),
             ("matchday", {"opponent": "Rival FC", "date_str": "2026-11-10"}),
             ("result", {"opponent": "Rival FC", "our_score": 2, "opponent_score": 1}),
             ("editresult", {"match_id": 1, "our_score": 3}),
             ("renameplayer", {"raw_argument": "Lao -> LaoRenamed"}),
-        ):
+        )
+        for denied_cmd, extra_kwargs in denied_commands:
             r = svc.handle_slash_command(
                 denied_cmd,
                 guild_id=APPROVED_GUILD_ID,
@@ -711,12 +713,12 @@ class TestProviderAliasCandidatePipeline:
                 (p8001,),
             ).fetchone()
             assert row1 == ("HiddenTag_Lao", "hiddentag_lao", "OBSERVED", 1, 1, True)
-            assert aconn.execute("SELECT COUNT(*) FROM public.fc27_roster").fetchone()[0] == 0
+            assert aconn.execute("SELECT COUNT(*) FROM public.fc27_roster").fetchone() == (0,)
             assert (
                 aconn.execute(
                     "SELECT COUNT(*) FROM public.fc27_discord_jobs WHERE job_type = 'refresh_roster_messages'"
-                ).fetchone()[0]
-                == 0
+                ).fetchone()
+                == (0,)
             )
             # Zero raw provider payload columns exist; stored matches table has zero raw alias leakage
             assert aconn.execute(
@@ -883,15 +885,15 @@ class TestProviderAliasCandidatePipeline:
             assert (
                 aconn.execute(
                     "SELECT COUNT(*) FROM public.fc27_player_alias_candidates WHERE public_alias_normalized = 'rollbacktag'"
-                ).fetchone()[0]
-                == 0
+                ).fetchone()
+                == (0,)
             )
             assert (
                 aconn.execute(
                     "SELECT COUNT(*) FROM public.fc27_player_alias_candidate_observations WHERE match_ref = %s",
                     (pseudonymize_match_ref("949999", club_id=EAST_COASTERS_CLUB_ID),),
-                ).fetchone()[0]
-                == 0
+                ).fetchone()
+                == (0,)
             )
 
         # Log leakage check: raw aliases MUST NEVER appear in logs
@@ -962,10 +964,12 @@ class TestProviderAliasCandidatePipeline:
 
         # Reject p9004's candidate via match_results_writer -> must be omitted from /unresolvedplayers evidence!
         with psycopg.connect(pg_db_migrated.admin) as aconn:
-            cid_9004 = aconn.execute(
+            cid_9004_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9004,),
-            ).fetchone()[0]
+            ).fetchone()
+            assert cid_9004_row is not None
+            cid_9004 = int(cid_9004_row[0])
         assert (
             reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_9004)
             == "REJECTED"
@@ -1039,8 +1043,8 @@ class TestProviderAliasCandidatePipeline:
             assert (
                 aconn.execute(
                     "SELECT COUNT(*) FROM public.fc27_discord_jobs WHERE job_type = 'refresh_roster_messages' AND state = 'pending'"
-                ).fetchone()[0]
-                == 1
+                ).fetchone()
+                == (1,)
             )
 
         # Dispatcher claims refresh job and edits BOTH linked formal & team-chat cards in place (no repost!)
@@ -1067,9 +1071,11 @@ class TestProviderAliasCandidatePipeline:
         # Also test verify_player_alias_candidate transition
         jay_summary = next(e for e in summaries if "JayNew" in e.candidate_aliases)
         with psycopg.connect(pg_db_migrated.admin) as aconn:
-            cid_9002 = aconn.execute(
+            cid_9002_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE public_alias = 'JayNew'"
-            ).fetchone()[0]
+            ).fetchone()
+            assert cid_9002_row is not None
+            cid_9002 = int(cid_9002_row[0])
         assert verify_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_9002) == "OPERATOR_VERIFIED"
         assert jay_summary.token
 
@@ -1097,7 +1103,8 @@ class TestProviderAliasCandidatePipeline:
 
         with psycopg.connect(pg_db.admin) as aconn:
             assert verify_postconditions(aconn) == []
-            assert aconn.execute("SELECT MAX(version) FROM public.schema_migrations").fetchone()[0].startswith("0020")
+            max_ver_row = aconn.execute("SELECT MAX(version) FROM public.schema_migrations").fetchone()
+            assert max_ver_row is not None and str(max_ver_row[0]).startswith("0020")
             assert aconn.execute(
                 "SELECT version FROM public.schema_policy_versions WHERE policy = 'grants' ORDER BY version DESC LIMIT 1"
             ).fetchone() == (21,)
@@ -1111,13 +1118,13 @@ class TestProviderAliasCandidatePipeline:
                 has_hmac_sel = aconn.execute(
                     "SELECT has_column_privilege(%s, 'public.fc27_player_alias_candidates', 'alias_hmac_fingerprint', 'SELECT')",
                     (role_name,),
-                ).fetchone()[0]
-                assert has_hmac_sel is False
+                ).fetchone()
+                assert has_hmac_sel == (False,)
                 has_disp_sel = aconn.execute(
                     "SELECT has_column_privilege(%s, 'public.fc27_player_alias_candidates', 'public_alias', 'SELECT')",
                     (role_name,),
-                ).fetchone()[0]
-                assert has_disp_sel is True
+                ).fetchone()
+                assert has_disp_sel == (True,)
 
             # Non-authorized roles have zero SELECT on any column of both 0019 tables
             for blocked_role in ("fc27_app", "fc27_dispatch", "fc27_relay", "fc27_player_dev_writer", "public"):
@@ -1125,8 +1132,8 @@ class TestProviderAliasCandidatePipeline:
                     priv = aconn.execute(
                         "SELECT has_any_column_privilege(%s, %s, 'SELECT')",
                         (blocked_role, tbl),
-                    ).fetchone()[0]
-                    assert priv is False, f"{blocked_role} must not have SELECT on {tbl}"
+                    ).fetchone()
+                    assert priv == (False,), f"{blocked_role} must not have SELECT on {tbl}"
 
         # Runtime check that discord_reader and match_results_writer fail when querying alias_hmac_fingerprint
         for r_uri in (pg_db.discord_reader, pg_db.match_results_writer):
@@ -1194,11 +1201,14 @@ class TestRealDiscordCommandTreeIdentityOperator:
             assert len(summary.group_subcommands) <= MAX_DISCORD_GROUP_CHILDREN == 25
             assert set(summary.top_level_guild_commands) == set(P0_TOP_LEVEL_SUBCOMMANDS)
 
+            raw_guild_cmds = tree.get_commands(guild=discord.Object(id=int(APPROVED_GUILD_ID)))
+            assert len(raw_guild_cmds) == 14
             guild_cmds = {
                 cmd.name: cmd
-                for cmd in tree.get_commands(guild=discord.Object(id=int(APPROVED_GUILD_ID)))
+                for cmd in raw_guild_cmds
+                if isinstance(cmd, app_commands.Command)
             }
-            assert len(guild_cmds) == 14
+            assert len(guild_cmds) == len(P0_TOP_LEVEL_SUBCOMMANDS)
 
             # Identity Operator -> /unresolvedplayers succeeds
             i_op_unres = _FakeInteraction(
@@ -1334,10 +1344,12 @@ class TestBackupRestoreWithAliasCandidates:
             enforce_posture=False,
         )
         with psycopg.connect(pg_db_migrated.admin) as aconn:
-            cid_9204 = aconn.execute(
+            cid_9204_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9204,),
-            ).fetchone()[0]
+            ).fetchone()
+            assert cid_9204_row is not None
+            cid_9204 = int(cid_9204_row[0])
         reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_9204)
 
         backup_dir = tmp_path / ".local-data" / "backups"
@@ -1684,10 +1696,12 @@ class TestCompleteConflictComponentRecomputation:
             enforce_posture=False,
         )
         with psycopg.connect(pg_db_migrated.admin) as aconn:
-            cid_bx = aconn.execute(
+            cid_bx_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s AND public_alias_normalized = 'aliasx'",
                 (pB,),
-            ).fetchone()[0]
+            ).fetchone()
+            assert cid_bx_row is not None
+            cid_bx = int(cid_bx_row[0])
 
         # Rejecting B/X still leaves A/X <-> A/Y active! A/X MUST stay CONFLICTED (never falsely STABLE)
         # and verification of A/X MUST continue to fail!
@@ -2057,9 +2071,9 @@ class TestDiscordEmbedAggregateLimit:
             "Every identity has a short-lived reconciliation token (`T1`, `T2`, ...) "
             "valid for 15 minutes. Never shares raw internal references."
         )
-        assert "Candidate unverified" in small_embed.fields[0].value
-        assert "Candidate stable — confirmation required" in small_embed.fields[1].value
-        assert "Conflicting candidate tags — operator review required" in small_embed.fields[2].value
+        assert "Candidate unverified" in (small_embed.fields[0].value or "")
+        assert "Candidate stable — confirmation required" in (small_embed.fields[1].value or "")
+        assert "Conflicting candidate tags — operator review required" in (small_embed.fields[2].value or "")
         assert _embed_aggregate_char_count(small_embed) <= DISCORD_EMBED_MAX_TOTAL_CHARS
 
         # 2 & 3 & 9. Exact 6,000-character boundary vs 6,001-character boundary (footer included in total)
@@ -2181,14 +2195,18 @@ class TestSharedUnicodeNormalization:
 
         # Reject p9703 before upsert: rejected candidates must NEVER be promoted
         with psycopg.connect(pg_db_migrated.admin) as aconn:
-            cid_9702 = aconn.execute(
+            cid_9702_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9702,),
-            ).fetchone()[0]
-            cid_9703 = aconn.execute(
+            ).fetchone()
+            assert cid_9702_row is not None
+            cid_9702 = int(cid_9702_row[0])
+            cid_9703_row = aconn.execute(
                 "SELECT candidate_id FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9703,),
-            ).fetchone()[0]
+            ).fetchone()
+            assert cid_9703_row is not None
+            cid_9703 = int(cid_9703_row[0])
         reject_player_alias_candidate(pg_db_migrated.match_results_writer, candidate_id=cid_9703)
 
         # Verify Café Tag using composed NFC string matches decomposed candidate

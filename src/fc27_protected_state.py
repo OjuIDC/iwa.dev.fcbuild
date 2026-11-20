@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 import re
+import socket
 import stat
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import psycopg
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.db_roles import redact_conninfo
 from src.settings import (
     ALIAS_HMAC_KEY_MIN_BYTES,
     _extract_conninfo_user,
@@ -39,6 +41,8 @@ BUNDLE_MANIFEST_FILENAME = "bundle-manifest.json"
 BUNDLE_SCHEMA_VERSION = "1.0.0"
 MAX_BUNDLE_MEMBER_BYTES = 16 * 1024 * 1024  # 16 MiB bound against zip bombs
 HMAC_FINGERPRINT_CONTEXT = b"fc27:alias-hmac-key-fingerprint:v1"
+CONTAINER_RUNTIME_UID = 10001
+CONTAINER_SHARED_SECRET_GID = 65534
 
 _REPARSE_ATTR = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400))
 _SHA256_SIDECAR_RE = re.compile(r"^([0-9a-fA-F]{64})(?:\s+\*?(.+))?$")
@@ -69,6 +73,10 @@ _WINDOWS_FORBIDDEN_PRINCIPALS: tuple[str, ...] = (
 
 class ProtectedStateError(RuntimeError):
     """Fail-closed error raised when protected state export, import, or verification fails."""
+
+
+class ProtectedStatePermissionError(ProtectedStateError):
+    """Fail-closed error raised when restrictive ACL/POSIX permissions cannot be enforced or verified."""
 
 
 class ProtectedBundleFileEntry(BaseModel):
@@ -587,21 +595,133 @@ def _current_windows_user_sid_and_names(
     return sid, frozenset(names)
 
 
+def detect_compose_runtime_uid_gid(repo_root: Path = REPO_ROOT) -> tuple[int, int]:
+    """Read the runtime non-root UID:GID declared in shipped Compose service overlays."""
+    for rel in ("docker-compose.discord.yml", "docker-compose.community-worker.yml"):
+        compose_path = repo_root / rel
+        if not compose_path.is_file():
+            continue
+        try:
+            doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        services = doc.get("services")
+        if not isinstance(services, dict):
+            continue
+        for svc_cfg in services.values():
+            if not isinstance(svc_cfg, dict):
+                continue
+            raw_user = str(svc_cfg.get("user") or "").strip()
+            if ":" in raw_user:
+                uid_part, gid_part = raw_user.split(":", 1)
+                if uid_part.isdecimal() and gid_part.isdecimal():
+                    return int(uid_part), int(gid_part)
+    return CONTAINER_RUNTIME_UID, CONTAINER_SHARED_SECRET_GID
+
+
+def _is_windows() -> bool:
+    """Indirection around OS check so POSIX permission logic can be tested safely on Windows."""
+    return os.name == "nt"
+
+
+def _sanitize_db_error_text(raw: str, *, password: str = "") -> str:
+    """Scrub URI credentials, conninfo passwords, and literal password tokens from DB error strings."""
+    cleaned = redact_conninfo(str(raw or ""))
+    cleaned = _INLINE_CREDENTIAL_URI_RE.sub(
+        lambda m: f"{m.group(0).split('://', 1)[0]}://<redacted>@",
+        cleaned,
+    )
+    if password:
+        cleaned = cleaned.replace(password, "<redacted>")
+    return cleaned
+
+
+def verify_container_secret_readability(
+    target: Path,
+    *,
+    runtime_uid: int = CONTAINER_RUNTIME_UID,
+    runtime_gid: int = CONTAINER_SHARED_SECRET_GID,
+    acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    stat_fn: Callable[[Path], os.stat_result] | None = None,
+) -> PermissionCheckResult:
+    """Verify target is readable by the shipped Compose runtime UID without world/group-write access."""
+    plat = "nt" if _is_windows() else "posix"
+    if not target.exists():
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=False,
+            detail="target does not exist",
+        )
+    if _is_windows():
+        res = verify_restrictive_permissions(target, acl_runner=acl_runner, stat_fn=stat_fn)
+        return PermissionCheckResult(
+            path=target.name,
+            platform="nt",
+            passed=res.passed,
+            detail=res.detail if not res.passed else "Windows ACLs valid for Docker bind mount",
+        )
+
+    st = (stat_fn or Path.lstat)(target)
+    perm = stat.S_IMODE(st.st_mode)
+    if perm & 0o007:
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=False,
+            detail=f"world-accessible POSIX mode {oct(perm)}",
+        )
+    if perm & 0o020:
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=False,
+            detail=f"group-writable POSIX mode {oct(perm)}",
+        )
+    is_dir = stat.S_ISDIR(st.st_mode)
+    need_owner = 0o500 if is_dir else 0o400
+    need_group = 0o050 if is_dir else 0o040
+    uid_ok = st.st_uid == runtime_uid and (perm & need_owner) == need_owner
+    gid_ok = st.st_gid in (runtime_uid, runtime_gid) and (perm & need_group) == need_group
+    if uid_ok or gid_ok:
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=True,
+            detail=f"container UID {runtime_uid}:{runtime_gid} read access verified ({oct(perm)})",
+        )
+    return PermissionCheckResult(
+        path=target.name,
+        platform=plat,
+        passed=False,
+        detail=(
+            f"container UID {runtime_uid}:{runtime_gid} cannot read host-owned target "
+            f"(uid={st.st_uid}, gid={st.st_gid}, mode={oct(perm)})"
+        ),
+    )
+
+
 def apply_restrictive_permissions(
     target: Path,
     *,
     acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    allow_runtime_group_read: bool = False,
+    runtime_uid: int = CONTAINER_RUNTIME_UID,
+    runtime_gid: int = CONTAINER_SHARED_SECRET_GID,
+    chown_fn: Callable[[Path, int, int], None] | None = None,
+    stat_fn: Callable[[Path], os.stat_result] | None = None,
+    euid_fn: Callable[[], int] | None = None,
 ) -> PermissionCheckResult:
-    """Restrict permissions on a file or directory to current user + Administrators + SYSTEM."""
+    """Restrict permissions on a file or directory to current/runtime principal without world/group-write access."""
     runner = acl_runner or subprocess.run
-    if os.name == "nt":
+    if _is_windows():
         user_sid, user_names = _current_windows_user_sid_and_names(runner=runner)
         if user_sid:
             user_principal = f"*{user_sid}"
         elif user_names:
             user_principal = next(iter(sorted(user_names, key=len, reverse=True)))
         else:
-            raise ProtectedStateError("Unable to determine current Windows principal for icacls")
+            raise ProtectedStatePermissionError("Unable to determine current Windows principal for icacls")
         perm_spec = "(OI)(CI)F" if target.is_dir() else "F"
         cmd = [
             "icacls",
@@ -614,31 +734,70 @@ def apply_restrictive_permissions(
         ]
         proc = runner(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
-            raise ProtectedStateError(
+            raise ProtectedStatePermissionError(
                 f"icacls failed for '{target.name}' with exit code {proc.returncode}"
             )
-        return verify_restrictive_permissions(target, acl_runner=runner)
+        return verify_restrictive_permissions(
+            target,
+            acl_runner=runner,
+            allow_runtime_group_read=allow_runtime_group_read,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+            stat_fn=stat_fn,
+        )
 
-    mode = 0o700 if target.is_dir() else 0o600
+    is_dir = target.is_dir()
+    mode = 0o700 if is_dir else 0o600
+    if allow_runtime_group_read:
+        pos_chown = chown_fn or getattr(os, "chown", None)
+        pos_geteuid = euid_fn or getattr(os, "geteuid", None)
+        euid = pos_geteuid() if pos_geteuid is not None else None
+        if pos_chown is not None and (chown_fn is not None or euid == 0):
+            try:
+                pos_chown(target, runtime_uid, runtime_gid)
+            except OSError:
+                pass
+        elif pos_chown is not None:
+            try:
+                pos_chown(target, -1, runtime_gid)
+                mode = 0o750 if is_dir else 0o640
+            except OSError:
+                pass
+        current_st = (stat_fn or Path.lstat)(target)
+        if current_st.st_uid != runtime_uid and current_st.st_gid in (runtime_uid, runtime_gid):
+            mode = 0o750 if is_dir else 0o640
+
     os.chmod(target, mode)
-    return verify_restrictive_permissions(target, acl_runner=runner)
+    return verify_restrictive_permissions(
+        target,
+        acl_runner=runner,
+        allow_runtime_group_read=allow_runtime_group_read,
+        runtime_uid=runtime_uid,
+        runtime_gid=runtime_gid,
+        stat_fn=stat_fn,
+    )
 
 
 def verify_restrictive_permissions(
     target: Path,
     *,
     acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    allow_runtime_group_read: bool = False,
+    runtime_uid: int = CONTAINER_RUNTIME_UID,
+    runtime_gid: int = CONTAINER_SHARED_SECRET_GID,
+    stat_fn: Callable[[Path], os.stat_result] | None = None,
 ) -> PermissionCheckResult:
     """Verify a protected file/directory has no broad or inherited ACEs."""
     runner = acl_runner or subprocess.run
+    plat = "nt" if _is_windows() else "posix"
     if not target.exists():
         return PermissionCheckResult(
             path=target.name,
-            platform=os.name,
+            platform=plat,
             passed=False,
             detail="target does not exist",
         )
-    if os.name == "nt":
+    if _is_windows():
         _, user_names = _current_windows_user_sid_and_names(runner=runner)
         allowed = _WINDOWS_ALLOWED_PRINCIPALS | user_names
         proc = runner(["icacls", str(target)], capture_output=True, text=True, check=False)
@@ -701,19 +860,50 @@ def verify_restrictive_permissions(
             detail=f"restricted ({len(ace_lines)} non-inherited ACEs)",
         )
 
-    mode = target.lstat().st_mode
-    if mode & 0o077:
+    st = (stat_fn or Path.lstat)(target)
+    mode = st.st_mode
+    perm = stat.S_IMODE(mode)
+    if perm & 0o007:
         return PermissionCheckResult(
             path=target.name,
-            platform=os.name,
+            platform=plat,
             passed=False,
-            detail=f"permissive POSIX mode {oct(stat.S_IMODE(mode))}",
+            detail=f"permissive POSIX world mode {oct(perm)}",
+        )
+    if perm & 0o020:
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=False,
+            detail=f"group-writable POSIX mode {oct(perm)}",
+        )
+    if not allow_runtime_group_read:
+        if perm & 0o077:
+            return PermissionCheckResult(
+                path=target.name,
+                platform=plat,
+                passed=False,
+                detail=f"permissive POSIX mode {oct(perm)}",
+            )
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=True,
+            detail=f"restricted mode {oct(perm)}",
+        )
+
+    if (perm & 0o070) != 0 and st.st_gid not in (runtime_uid, runtime_gid):
+        return PermissionCheckResult(
+            path=target.name,
+            platform=plat,
+            passed=False,
+            detail=f"unexpected group access for gid={st.st_gid} ({oct(perm)})",
         )
     return PermissionCheckResult(
         path=target.name,
-        platform=os.name,
+        platform=plat,
         passed=True,
-        detail=f"restricted mode {oct(stat.S_IMODE(mode))}",
+        detail=f"restricted runtime mode {oct(perm)}",
     )
 
 
@@ -875,7 +1065,17 @@ def export_protected_state_bundle(
     )
     os.close(fd)
     tmp_zip = Path(tmp_name)
+    tmp_sha: Path | None = None
     try:
+        tmp_zip_perm = apply_restrictive_permissions(
+            tmp_zip,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not tmp_zip_perm.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to enforce restrictive permissions on temporary archive: {tmp_zip_perm.detail}"
+            )
         with zipfile.ZipFile(tmp_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
             manifest_info = zipfile.ZipInfo(BUNDLE_MANIFEST_FILENAME)
             manifest_info.external_attr = (stat.S_IFREG | 0o600) << 16
@@ -884,17 +1084,71 @@ def export_protected_state_bundle(
                 zinfo = zipfile.ZipInfo(entry.path)
                 zinfo.external_attr = (stat.S_IFREG | 0o600) << 16
                 zf.writestr(zinfo, raw)
+        with zipfile.ZipFile(tmp_zip, mode="r") as zchk:
+            corrupt_member = zchk.testzip()
+            if corrupt_member is not None:
+                raise ProtectedStateError(
+                    f"Exported protected archive integrity check failed at '{corrupt_member}'"
+                )
+
+        tmp_zip_perm_post = apply_restrictive_permissions(
+            tmp_zip,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not tmp_zip_perm_post.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to verify restrictive permissions before publishing bundle: {tmp_zip_perm_post.detail}"
+            )
         os.replace(tmp_zip, safe_output)
+        perm_zip = apply_restrictive_permissions(
+            safe_output,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not perm_zip.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to enforce restrictive permissions on exported bundle '{safe_output.name}': {perm_zip.detail}"
+            )
+
+        bundle_sha = _sha256_file(safe_output)
+        sidecar_bytes = f"{bundle_sha} *{safe_output.name}\n".encode("utf-8")
+        sfd, stmp_name = tempfile.mkstemp(
+            prefix=f".{sidecar_path.name}.tmp-",
+            dir=str(sidecar_path.parent),
+        )
+        os.close(sfd)
+        tmp_sha = Path(stmp_name)
+        tmp_sha_perm = apply_restrictive_permissions(
+            tmp_sha,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not tmp_sha_perm.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to enforce restrictive permissions on temporary sidecar: {tmp_sha_perm.detail}"
+            )
+        with tmp_sha.open("wb") as sfh:
+            sfh.write(sidecar_bytes)
+            sfh.flush()
+            os.fsync(sfh.fileno())
+        os.replace(tmp_sha, sidecar_path)
+        perm_sha = apply_restrictive_permissions(
+            sidecar_path,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not perm_sha.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to enforce restrictive permissions on SHA-256 sidecar '{sidecar_path.name}': {perm_sha.detail}"
+            )
     except Exception:
         tmp_zip.unlink(missing_ok=True)
+        if tmp_sha is not None:
+            tmp_sha.unlink(missing_ok=True)
+        safe_output.unlink(missing_ok=True)
+        sidecar_path.unlink(missing_ok=True)
         raise
-
-    bundle_sha = _sha256_file(safe_output)
-    sidecar_bytes = f"{bundle_sha} *{safe_output.name}\n".encode("utf-8")
-    _atomic_write_bytes(sidecar_path, sidecar_bytes)
-
-    perm_zip = apply_restrictive_permissions(safe_output, acl_runner=acl_runner)
-    perm_sha = apply_restrictive_permissions(sidecar_path, acl_runner=acl_runner)
 
     return ProtectedBundleExportResult(
         bundle_path=str(safe_output),
@@ -950,7 +1204,11 @@ def import_protected_state_bundle(
     overwrite: bool = True,
     validate_values: bool = True,
     enforce_permissions: bool = True,
+    require_container_readability: bool = True,
     acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    chown_fn: Callable[[Path, int, int], None] | None = None,
+    stat_fn: Callable[[Path], os.stat_result] | None = None,
+    euid_fn: Callable[[], int] | None = None,
 ) -> ProtectedBundleImportResult:
     """Verify and import an allowlisted protected operational state bundle."""
     manifest = load_protected_state_manifest(manifest_path, repo_root=repo_root)
@@ -1064,6 +1322,10 @@ def import_protected_state_bundle(
 
     restored: list[str] = []
     all_restricted = True
+    effective_fp = extracted_hmac_fp or (str(expected_fp).lower() if expected_fp else None)
+    meta_rel_path = ".local-data/runtime-deployment.json"
+    meta_path = repo_root / meta_rel_path
+    existing_meta_obj: dict[str, Any] = {}
     if not dry_run:
         # Validate destination safety across all entries before any file write.
         for rel_path in declared_entries:
@@ -1077,6 +1339,29 @@ def import_protected_state_bundle(
                 raise ProtectedStateError(
                     f"Destination '{rel_path}' already exists and overwrite=False"
                 )
+        if meta_rel_path not in declared_entries:
+            assert_no_symlink_or_junction_chain(
+                meta_path,
+                stop_at=repo_root,
+                require_regular_if_exists=True,
+            )
+            if meta_path.is_file():
+                try:
+                    loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ProtectedStateError(
+                        "Existing .local-data/runtime-deployment.json is unreadable or invalid JSON"
+                    ) from exc
+                if not isinstance(loaded_meta, dict):
+                    raise ProtectedStateError("Existing .local-data/runtime-deployment.json must be a JSON object")
+                existing_meta_obj = dict(loaded_meta)
+                existing_meta_fp = str(existing_meta_obj.get("alias_hmac_key_fingerprint_sha256") or "").strip()
+                if effective_fp and existing_meta_fp and not hmac.compare_digest(
+                    existing_meta_fp.lower(), effective_fp.lower()
+                ):
+                    raise ProtectedStateError(
+                        "alias HMAC key fingerprint mismatch against existing runtime-deployment.json"
+                    )
 
         for rel_path in declared_entries:
             dest = repo_root / rel_path
@@ -1084,19 +1369,105 @@ def import_protected_state_bundle(
             _atomic_write_bytes(dest, member_bytes[rel_path])
             restored.append(rel_path)
 
+        if effective_fp:
+            if meta_rel_path in declared_entries:
+                try:
+                    loaded_restored_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ProtectedStateError(
+                        "Restored .local-data/runtime-deployment.json is invalid JSON"
+                    ) from exc
+                if not isinstance(loaded_restored_meta, dict):
+                    raise ProtectedStateError("Restored .local-data/runtime-deployment.json must be a JSON object")
+                restored_fp = str(loaded_restored_meta.get("alias_hmac_key_fingerprint_sha256") or "").strip()
+                if restored_fp:
+                    if not hmac.compare_digest(restored_fp.lower(), effective_fp.lower()):
+                        raise ProtectedStateError(
+                            "Restored runtime-deployment.json alias HMAC key fingerprint mismatch"
+                        )
+                else:
+                    updated_meta = dict(loaded_restored_meta)
+                    updated_meta["alias_hmac_key_fingerprint_sha256"] = effective_fp.lower()
+                    _atomic_write_bytes(
+                        meta_path,
+                        (json.dumps(updated_meta, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                    )
+            else:
+                persisted_meta = dict(existing_meta_obj)
+                persisted_meta.setdefault(
+                    "compose_project",
+                    str(manifest.get("compose_project") or "fc27-full-stack"),
+                )
+                persisted_meta["alias_hmac_key_fingerprint_sha256"] = effective_fp.lower()
+                _atomic_write_bytes(
+                    meta_path,
+                    (json.dumps(persisted_meta, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                )
+                restored.append(meta_rel_path)
+
         if enforce_permissions:
+            runtime_uid, runtime_gid = detect_compose_runtime_uid_gid(repo_root)
             protected_dirs = [repo_root / ".local-data", repo_root / ".local-data" / "compose", repo_root / "secrets"]
             for d in protected_dirs:
                 if d.exists() and d.is_dir():
-                    res = apply_restrictive_permissions(d, acl_runner=acl_runner)
+                    res = apply_restrictive_permissions(
+                        d,
+                        acl_runner=acl_runner,
+                        allow_runtime_group_read=True,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                        chown_fn=chown_fn,
+                        stat_fn=stat_fn,
+                        euid_fn=euid_fn,
+                    )
                     all_restricted = all_restricted and res.passed
+                    if not res.passed:
+                        raise ProtectedStatePermissionError(
+                            f"Failed to enforce restrictive permissions on directory '{d.name}': {res.detail}"
+                        )
+                    if require_container_readability:
+                        cread = verify_container_secret_readability(
+                            d,
+                            runtime_uid=runtime_uid,
+                            runtime_gid=runtime_gid,
+                            acl_runner=acl_runner,
+                            stat_fn=stat_fn,
+                        )
+                        if not cread.passed:
+                            raise ProtectedStatePermissionError(
+                                f"Imported directory '{d.name}' is not readable by runtime UID {runtime_uid}: {cread.detail}"
+                            )
             for rel_path in restored:
-                res = apply_restrictive_permissions(repo_root / rel_path, acl_runner=acl_runner)
+                target_path = repo_root / rel_path
+                res = apply_restrictive_permissions(
+                    target_path,
+                    acl_runner=acl_runner,
+                    allow_runtime_group_read=True,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                    chown_fn=chown_fn,
+                    stat_fn=stat_fn,
+                    euid_fn=euid_fn,
+                )
                 all_restricted = all_restricted and res.passed
                 if not res.passed:
-                    raise ProtectedStateError(
+                    raise ProtectedStatePermissionError(
                         f"Failed to enforce restrictive permissions on '{rel_path}': {res.detail}"
                     )
+                if require_container_readability and (
+                    rel_path.startswith("secrets/") or rel_path == ".env" or rel_path.startswith(".local-data/")
+                ):
+                    cread = verify_container_secret_readability(
+                        target_path,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                        acl_runner=acl_runner,
+                        stat_fn=stat_fn,
+                    )
+                    if not cread.passed:
+                        raise ProtectedStatePermissionError(
+                            f"Imported runtime file '{rel_path}' is not readable by container UID {runtime_uid}: {cread.detail}"
+                        )
 
     return ProtectedBundleImportResult(
         bundle_path=str(bundle_path),
@@ -1105,7 +1476,7 @@ def import_protected_state_bundle(
         verified_member_count=len(declared_entries),
         restored_files=tuple(restored),
         permissions_restricted=all_restricted if not dry_run else True,
-        alias_hmac_key_fingerprint_sha256=extracted_hmac_fp or expected_fp,
+        alias_hmac_key_fingerprint_sha256=effective_fp,
         validated_numeric_discord_keys=validated_discord_keys,
         existing_postgres_data_untouched=True,
     )
@@ -1168,8 +1539,40 @@ def _default_docker_container_ps(compose_project: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _default_db_probe(db_uri: str) -> dict[str, Any]:
-    """Read-only database posture probe checking migrations, grants policy, tables, and counts."""
+_INTERNAL_READONLY_PROBE_SQL = (
+    "SELECT "
+    "COALESCE(CASE WHEN pg_catalog.to_regclass('public.schema_migrations') IS NOT NULL "
+    "AND pg_catalog.has_table_privilege(current_user, 'public.schema_migrations', 'SELECT') "
+    "THEN (SELECT version FROM public.schema_migrations ORDER BY version DESC LIMIT 1) "
+    "ELSE NULL END, ''), "
+    "COALESCE(CASE WHEN pg_catalog.to_regclass('public.schema_policy_versions') IS NOT NULL "
+    "AND pg_catalog.has_table_privilege(current_user, 'public.schema_policy_versions', 'SELECT') "
+    "THEN (SELECT MAX(version)::text FROM public.schema_policy_versions) "
+    "ELSE NULL END, ''), "
+    "(pg_catalog.to_regclass('public.fc27_roster') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_matches') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_discord_jobs') IS NOT NULL)::text, "
+    "COALESCE(CASE WHEN pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL "
+    "AND pg_catalog.has_table_privilege(current_user, 'public.fc27_player_alias_candidates', 'SELECT') "
+    "THEN (SELECT COUNT(*)::text FROM public.fc27_player_alias_candidates) "
+    "ELSE NULL END, ''), "
+    "COALESCE(CASE WHEN pg_catalog.to_regclass('public.fc27_roster') IS NOT NULL "
+    "AND pg_catalog.has_table_privilege(current_user, 'public.fc27_roster', 'SELECT') "
+    "THEN (SELECT COUNT(*)::text FROM public.fc27_roster) "
+    "ELSE NULL END, '');"
+)
+_SAFE_DB_IDENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _run_psycopg_readonly_probe(
+    db_uri: str,
+    *,
+    connect_fn: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Execute read-only DB probe queries over a direct psycopg connection."""
 
     def _can_select(cur: Any, table_name: str) -> bool:
         cur.execute(
@@ -1180,7 +1583,8 @@ def _default_db_probe(db_uri: str) -> dict[str, Any]:
         row = cur.fetchone()
         return bool(row and row[0])
 
-    with psycopg.connect(db_uri, autocommit=True) as conn:
+    connector = connect_fn or psycopg.connect
+    with connector(db_uri, autocommit=True, connect_timeout=3) as conn:
         with conn.cursor() as cur:
             cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
             latest_mig: str | None = None
@@ -1234,6 +1638,170 @@ def _default_db_probe(db_uri: str) -> dict[str, Any]:
             }
 
 
+def _resolve_compose_postgres_container(
+    compose_project: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str:
+    """Resolve the running Compose postgres container name or deterministic fallback."""
+    try:
+        ps_proc = runner(
+            [
+                "docker",
+                "ps",
+                "--filter",
+                f"label=com.docker.compose.project={compose_project}",
+                "--filter",
+                "label=com.docker.compose.service=postgres",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ps_proc.returncode == 0 and ps_proc.stdout.strip():
+            first_name = ps_proc.stdout.strip().splitlines()[0].strip()
+            if first_name:
+                return first_name
+    except OSError:
+        pass
+    return f"{compose_project}-postgres-1"
+
+
+def _parse_psql_probe_output(stdout: str) -> dict[str, Any]:
+    """Parse pipe-delimited output from internal Compose read-only psql probe."""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    if not lines:
+        raise ProtectedStateError("Empty output from internal Compose database probe")
+    parts = lines[-1].split("|")
+    if len(parts) != 5:
+        raise ProtectedStateError("Malformed output from internal Compose database probe")
+    mig_raw, grants_raw, tables_raw, cand_raw, roster_raw = parts
+    latest_mig = mig_raw.strip() or None
+    grants_ver = int(grants_raw.strip()) if grants_raw.strip().isdecimal() else None
+    tables_ok = tables_raw.strip().lower() in ("t", "true", "1")
+    cand_count = int(cand_raw.strip()) if cand_raw.strip().isdecimal() else None
+    roster_count = int(roster_raw.strip()) if roster_raw.strip().isdecimal() else None
+    return {
+        "reachable": True,
+        "latest_migration": latest_mig,
+        "grants_policy_version": grants_ver,
+        "required_tables_present": tables_ok,
+        "candidate_row_count": cand_count,
+        "roster_row_count": roster_count,
+    }
+
+
+def _default_db_probe(
+    db_uri: str,
+    *,
+    compose_project: str = "fc27-full-stack",
+    subprocess_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    connect_fn: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Read-only database posture probe supporting direct hosts, mapped ports, and internal Compose networks."""
+    try:
+        return _run_psycopg_readonly_probe(db_uri, connect_fn=connect_fn)
+    except psycopg.OperationalError as direct_exc:
+        try:
+            info = psycopg.conninfo.conninfo_to_dict(db_uri)
+        except Exception as parse_exc:
+            raise ProtectedStateError(
+                redact_conninfo(f"Invalid database connection URI: {type(parse_exc).__name__}")
+            ) from direct_exc
+
+        host = str(info.get("host") or "").strip().lower()
+        port_raw = str(info.get("port") or "5432").strip()
+        db_pw = str(info.get("password") or "")
+        if host != "postgres":
+            raise ProtectedStateError(_sanitize_db_error_text(str(direct_exc), password=db_pw)) from direct_exc
+
+        runner = subprocess_runner or subprocess.run
+        pg_container = _resolve_compose_postgres_container(compose_project, runner)
+
+        # Fallback 1: check if postgres container exposes a published loopback host port.
+        try:
+            port_proc = runner(
+                ["docker", "port", pg_container, f"{port_raw}/tcp"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if port_proc.returncode == 0 and port_proc.stdout.strip():
+                for ln in port_proc.stdout.splitlines():
+                    tok = ln.strip()
+                    if ":" in tok:
+                        mapped_port = tok.rsplit(":", 1)[-1].strip()
+                        if mapped_port.isdecimal():
+                            mapped_info = dict(info)
+                            mapped_info["host"] = "127.0.0.1"
+                            mapped_info["port"] = mapped_port
+                            mapped_uri = psycopg.conninfo.make_conninfo(
+                                **{
+                                    str(k): str(v)
+                                    for k, v in mapped_info.items()
+                                    if v is not None
+                                }
+                            )
+                            return _run_psycopg_readonly_probe(mapped_uri, connect_fn=connect_fn)
+        except (OSError, psycopg.OperationalError):
+            pass
+
+        # Fallback 2: execute read-only psql inside the running Compose postgres container
+        # passing password strictly via stdin (never via command-line arguments).
+        db_user = str(info.get("user") or "postgres").strip()
+        db_name = str(info.get("dbname") or db_user or "fc27").strip()
+        if (
+            not _SAFE_DB_IDENT_RE.fullmatch(db_user)
+            or not _SAFE_DB_IDENT_RE.fullmatch(db_name)
+            or not port_raw.isdecimal()
+        ):
+            raise ProtectedStateError(
+                "Refusing internal Compose database probe with malformed connection identifiers"
+            ) from direct_exc
+
+        exec_cmd = [
+            "docker",
+            "exec",
+            "-i",
+            pg_container,
+            "sh",
+            "-c",
+            (
+                'IFS= read -r _pw && PGPASSWORD="$_pw" '
+                'PGOPTIONS="-c default_transaction_read_only=on" '
+                'exec psql --no-psqlrc -X -q -At -F "|" -h 127.0.0.1 -p "$1" -U "$2" -d "$3" -c "$4"'
+            ),
+            "_",
+            port_raw,
+            db_user,
+            db_name,
+            _INTERNAL_READONLY_PROBE_SQL,
+        ]
+        try:
+            proc = runner(
+                exec_cmd,
+                input=f"{db_pw}\n",
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise ProtectedStateError(
+                _sanitize_db_error_text(
+                    f"Internal Compose database probe unavailable: {type(exc).__name__}",
+                    password=db_pw,
+                )
+            ) from direct_exc
+        if proc.returncode != 0:
+            err_snippet = _sanitize_db_error_text((proc.stderr or "").strip(), password=db_pw)
+            raise ProtectedStateError(
+                f"Internal Compose database probe failed (exit {proc.returncode})"
+                + (f": {err_snippet[:160]}" if err_snippet else "")
+            )
+        return _parse_psql_probe_output(proc.stdout)
+
+
 def _migration_version_at_least(actual: str | None, expected: str) -> bool:
     """Compare PostgreSQL migration identifiers (handles both '0020' and '0020_...sql')."""
     if not actual:
@@ -1249,6 +1817,7 @@ def _check_alias_hmac_continuity(
     repo_root: Path,
     *,
     expected_fingerprint: str | None = None,
+    candidate_row_count: int | None = None,
 ) -> tuple[bool, str]:
     """Verify fc27_alias_hmac_key validity and continuity against saved deployment metadata."""
     key_path = repo_root / "secrets" / "fc27_alias_hmac_key"
@@ -1268,9 +1837,17 @@ def _check_alias_hmac_continuity(
         except (OSError, json.JSONDecodeError):
             return False, "runtime-deployment.json could not be parsed for HMAC key fingerprint"
 
-    if meta_fp and not hmac.compare_digest(actual_fp.lower(), meta_fp.lower()):
+    if not meta_fp:
+        if candidate_row_count is not None and candidate_row_count > 0:
+            return (
+                False,
+                "missing alias HMAC key fingerprint baseline in .local-data/runtime-deployment.json while alias candidates exist",
+            )
+        return True, "valid >= 32-byte key (no existing candidate baseline required)"
+
+    if not hmac.compare_digest(actual_fp.lower(), meta_fp.lower()):
         return False, "alias HMAC key fingerprint mismatch against preserved runtime metadata"
-    return True, "valid >= 32-byte key" + (" and fingerprint matched" if meta_fp else "")
+    return True, "valid >= 32-byte key and fingerprint matched"
 
 
 def verify_postgres_volume_readiness(
@@ -1279,6 +1856,7 @@ def verify_postgres_volume_readiness(
     manifest_path: Path | None = None,
     db_uri: str | None = None,
     expected_hmac_fingerprint: str | None = None,
+    compose_project: str | None = None,
     docker_volume_inspect_fn: Callable[[str], dict[str, Any] | None] | None = None,
     db_probe_fn: Callable[[str], dict[str, Any]] | None = None,
 ) -> PostgresVolumeVerifyResult:
@@ -1290,16 +1868,23 @@ def verify_postgres_volume_readiness(
     expected_mig = str(manifest["database_expected_state"]["minimum_migration"])
     expected_grants = int(manifest["database_expected_state"]["grants_policy_version"])
 
+    resolved_project = compose_project
+    if not resolved_project:
+        resolved_project = str(manifest.get("compose_project") or "fc27-full-stack")
+        meta_path = repo_root / ".local-data" / "runtime-deployment.json"
+        if meta_path.is_file():
+            try:
+                loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(loaded_meta, dict) and loaded_meta.get("compose_project"):
+                    resolved_project = str(loaded_meta["compose_project"])
+            except (OSError, json.JSONDecodeError):
+                pass
+
     inspect_fn = docker_volume_inspect_fn or _default_docker_volume_inspect
     pg_vol_info = inspect_fn(pg_vol_name)
     redis_vol_info = inspect_fn(redis_vol_name)
     pg_vol_ok = pg_vol_info is not None and bool(pg_vol_info.get("Mountpoint", ""))
     redis_vol_ok = redis_vol_info is not None and bool(redis_vol_info.get("Mountpoint", ""))
-
-    hmac_ok, hmac_detail = _check_alias_hmac_continuity(
-        repo_root,
-        expected_fingerprint=expected_hmac_fingerprint,
-    )
 
     latest_mig: str | None = None
     grants_ver: int | None = None
@@ -1311,10 +1896,12 @@ def verify_postgres_volume_readiness(
     details: list[str] = []
 
     if db_uri is not None or db_probe_fn is not None:
-        probe = db_probe_fn or _default_db_probe
         db_probed = True
         try:
-            probe_res = probe(db_uri or "")
+            if db_probe_fn is not None:
+                probe_res = db_probe_fn(db_uri or "")
+            else:
+                probe_res = _default_db_probe(db_uri or "", compose_project=resolved_project)
         except Exception as exc:
             db_ok = False
             details.append(f"database probe failed ({type(exc).__name__})")
@@ -1345,6 +1932,12 @@ def verify_postgres_volume_readiness(
                 db_ok = False
                 details.append("required FC27 tables missing")
 
+    hmac_ok, hmac_detail = _check_alias_hmac_continuity(
+        repo_root,
+        expected_fingerprint=expected_hmac_fingerprint,
+        candidate_row_count=cand_cnt,
+    )
+
     if not pg_vol_ok:
         details.append("postgres volume missing or has empty Mountpoint")
     if not redis_vol_ok:
@@ -1370,11 +1963,33 @@ def verify_postgres_volume_readiness(
     )
 
 
+def _extract_compose_service_secrets_and_env(svc_cfg: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Extract normalized secret names and environment variable names from one Compose service block."""
+    secret_names: set[str] = set()
+    for item in (svc_cfg.get("secrets") or []):
+        if isinstance(item, str) and item.strip():
+            secret_names.add(item.strip())
+        elif isinstance(item, dict):
+            src = item.get("source") or item.get("target")
+            if isinstance(src, str) and src.strip():
+                secret_names.add(src.strip())
+    env_keys: set[str] = set()
+    env_cfg = svc_cfg.get("environment")
+    if isinstance(env_cfg, dict):
+        for k in env_cfg:
+            env_keys.add(str(k).strip())
+    elif isinstance(env_cfg, list):
+        for entry in env_cfg:
+            if isinstance(entry, str) and entry.strip():
+                env_keys.add(entry.split("=", 1)[0].strip())
+    return secret_names, env_keys
+
+
 def _check_compose_isolation_and_overrides(
     repo_root: Path,
     manifest: dict[str, Any],
 ) -> tuple[bool, bool, bool, str, str]:
-    """Validate compose files presence, local overrides, and role/secret service isolation."""
+    """Validate compose files presence, local overrides, and effective merged role/secret service isolation."""
     req_compose = [str(p) for p in manifest["compose_files"].get("required", [])]
     missing_compose = [p for p in req_compose if not (repo_root / p).is_file()]
     compose_present = len(missing_compose) == 0
@@ -1398,42 +2013,102 @@ def _check_compose_isolation_and_overrides(
         override_detail = f"validated {len(checked_overrides)} override file(s)"
 
     isolation_ok = True
-    isolation_detail = "service secret mounts isolated"
-    discord_path = repo_root / "docker-compose.discord.yml"
-    worker_path = repo_root / "docker-compose.community-worker.yml"
+    isolation_detail = "service secret mounts isolated across merged compose configuration"
+    compose_layers: list[str] = [
+        "docker-compose.yml",
+        "docker-compose.discord.yml",
+        "docker-compose.community-worker.yml",
+        "docker-compose.ghcr.yml",
+    ]
+    for ovr_rel in manifest["compose_files"].get("optional_local_overrides", []):
+        ovr_str = str(ovr_rel)
+        if ovr_str not in compose_layers:
+            compose_layers.append(ovr_str)
+
+    merged_secrets_by_svc: dict[str, set[str]] = {}
+    merged_env_by_svc: dict[str, set[str]] = {}
     try:
-        if discord_path.is_file():
-            d_doc = yaml.safe_load(discord_path.read_text(encoding="utf-8")) or {}
-            d_svc = ((d_doc.get("services") or {}).get("fc27-discord-bot") or {})
-            d_secrets = {str(s) for s in (d_svc.get("secrets") or [])}
-            d_env = {str(k) for k in ((d_svc.get("environment") or {}).keys() if isinstance(d_svc.get("environment"), dict) else [])}
-            forbidden_discord = {
-                "fc27_poll_writer_uri",
-                "postgres_admin_uri",
-                "fc27_migrator_uri",
-                "fc27_alias_hmac_key",
-            }
-            if d_secrets & forbidden_discord or "FC27_POLL_WRITER_URI_FILE" in d_env or "FC27_ALIAS_HMAC_KEY_FILE" in d_env:
-                isolation_ok = False
-                isolation_detail = "fc27-discord-bot mounts forbidden polling/admin credential"
-        if isolation_ok and worker_path.is_file():
-            w_doc = yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
-            w_svc = ((w_doc.get("services") or {}).get("fc27-community-worker") or {})
-            w_secrets = {str(s) for s in (w_svc.get("secrets") or [])}
-            forbidden_worker = {
-                "discord_bot_token",
-                "postgres_admin_uri",
-                "fc27_migrator_uri",
-                "fc27_app_uri",
-                "fc27_player_dev_writer_uri",
-                "fc27_discord_reader_uri",
-            }
-            if w_secrets & forbidden_worker:
-                isolation_ok = False
-                isolation_detail = "fc27-community-worker mounts forbidden discord/admin/player-dev secret"
-    except (OSError, yaml.YAMLError):
+        for rel in compose_layers:
+            layer_path = repo_root / rel
+            if not layer_path.is_file():
+                continue
+            doc = yaml.safe_load(layer_path.read_text(encoding="utf-8"))
+            if doc is None:
+                continue
+            if not isinstance(doc, dict):
+                raise ProtectedStateError(f"Compose file '{rel}' root must be a YAML mapping")
+            services = doc.get("services")
+            if services is None:
+                continue
+            if not isinstance(services, dict):
+                raise ProtectedStateError(f"Compose file '{rel}' services block must be a mapping")
+            for svc_name, svc_cfg in services.items():
+                if not isinstance(svc_cfg, dict):
+                    continue
+                s_names, e_keys = _extract_compose_service_secrets_and_env(svc_cfg)
+                merged_secrets_by_svc.setdefault(str(svc_name), set()).update(s_names)
+                merged_env_by_svc.setdefault(str(svc_name), set()).update(e_keys)
+
+        d_secrets = merged_secrets_by_svc.get("fc27-discord-bot", set())
+        d_env = merged_env_by_svc.get("fc27-discord-bot", set())
+        forbidden_discord = {
+            "fc27_poll_writer_uri",
+            "postgres_admin_uri",
+            "fc27_migrator_uri",
+            "fc27_alias_hmac_key",
+            "postgres_password",
+            "fc27_migrator_password",
+            "fc27_poll_writer_password",
+            "fc27_match_results_writer_password",
+            "fc27_player_dev_writer_password",
+            "fc27_discord_reader_password",
+            "fc27_app_password",
+            "fc27_dispatch_password",
+            "fc27_relay_password",
+        }
+        forbidden_discord_env = {
+            "FC27_POLL_WRITER_URI_FILE",
+            "FC27_ALIAS_HMAC_KEY_FILE",
+            "FC27_MIGRATOR_URI_FILE",
+            "POSTGRES_ADMIN_URI_FILE",
+        }
+        if (d_secrets & forbidden_discord) or (d_env & forbidden_discord_env):
+            isolation_ok = False
+            isolation_detail = "fc27-discord-bot effective Compose config mounts forbidden polling/admin/migrator credential"
+
+        w_secrets = merged_secrets_by_svc.get("fc27-community-worker", set())
+        w_env = merged_env_by_svc.get("fc27-community-worker", set())
+        forbidden_worker = {
+            "discord_bot_token",
+            "postgres_admin_uri",
+            "fc27_migrator_uri",
+            "fc27_app_uri",
+            "fc27_player_dev_writer_uri",
+            "fc27_discord_reader_uri",
+            "postgres_password",
+            "fc27_migrator_password",
+            "fc27_poll_writer_password",
+            "fc27_match_results_writer_password",
+            "fc27_player_dev_writer_password",
+            "fc27_discord_reader_password",
+            "fc27_app_password",
+            "fc27_dispatch_password",
+            "fc27_relay_password",
+        }
+        forbidden_worker_env = {
+            "DISCORD_BOT_TOKEN_FILE",
+            "POSTGRES_URI_FILE",
+            "FC27_MIGRATOR_URI_FILE",
+            "POSTGRES_ADMIN_URI_FILE",
+            "FC27_DISCORD_READER_URI_FILE",
+            "FC27_PLAYER_DEV_WRITER_URI_FILE",
+        }
+        if isolation_ok and ((w_secrets & forbidden_worker) or (w_env & forbidden_worker_env)):
+            isolation_ok = False
+            isolation_detail = "fc27-community-worker effective Compose config mounts forbidden discord/admin/player-dev secret"
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ProtectedStateError):
         isolation_ok = False
-        isolation_detail = "compose YAML parse error during secret isolation check"
+        isolation_detail = "compose YAML parse error during merged secret isolation check"
 
     return compose_present, overrides_ok, isolation_ok, override_detail, isolation_detail
 
@@ -1478,9 +2153,11 @@ def run_recovery_readiness_checks(
     db_uri: str | None = None,
     expected_hmac_fingerprint: str | None = None,
     require_operator_role_ids: bool = True,
+    require_container_readability: bool = True,
     docker_volume_inspect_fn: Callable[[str], dict[str, Any] | None] | None = None,
     db_probe_fn: Callable[[str], dict[str, Any]] | None = None,
     acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    stat_fn: Callable[[Path], os.stat_result] | None = None,
     git_ls_files_fn: Callable[[Path], list[str]] | None = None,
 ) -> RecoveryReadinessReport:
     """Run all 23 sanitized fail-closed recovery readiness checks without mutating runtime state."""
@@ -1595,16 +2272,46 @@ def run_recovery_readiness_checks(
     )
     _add("local_overrides_valid", overrides_ok, ovr_det)
 
-    # 8. File permissions restricted
+    # 8. File permissions restricted + container UID readability
+    runtime_uid, runtime_gid = detect_compose_runtime_uid_gid(repo_root)
+    perm_targets: list[Path] = []
+    for dname in (
+        repo_root / "secrets",
+        repo_root / ".local-data",
+        repo_root / ".local-data" / "compose",
+    ):
+        if dname.exists() and dname.is_dir():
+            perm_targets.append(dname)
+    perm_targets.extend(secret_check_targets)
+
     perm_ok = bool(secret_check_targets)
-    perm_detail = "no protected files available to inspect" if not secret_check_targets else "all protected files restricted"
+    perm_detail = "no protected files available to inspect" if not secret_check_targets else f"all protected files restricted and readable by UID {runtime_uid}:{runtime_gid}"
     if secret_check_targets:
-        for p in secret_check_targets:
-            res = verify_restrictive_permissions(p, acl_runner=acl_runner)
+        for p in perm_targets:
+            res = verify_restrictive_permissions(
+                p,
+                acl_runner=acl_runner,
+                allow_runtime_group_read=True,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+                stat_fn=stat_fn,
+            )
             if not res.passed:
                 perm_ok = False
                 perm_detail = f"permissive ACL/mode on {res.path}: {res.detail}"
                 break
+            if require_container_readability:
+                cread = verify_container_secret_readability(
+                    p,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                    acl_runner=acl_runner,
+                    stat_fn=stat_fn,
+                )
+                if not cread.passed:
+                    perm_ok = False
+                    perm_detail = f"container readability check failed on {cread.path}: {cread.detail}"
+                    break
     _add("file_permissions_restricted", perm_ok, perm_detail)
 
     # 9, 10, 11, 12. Numeric Discord checks (never print IDs)
@@ -1793,6 +2500,74 @@ def run_recovery_readiness_checks(
     )
 
 
+_REQUIRED_TRUE_BOT_STATUS: tuple[tuple[str, str], ...] = (
+    ("DISCORD_BOT_ENABLED", "YES"),
+    ("DISCORD_APPLICATION_ID_CONFIGURED", "YES"),
+    ("DISCORD_TOKEN_CONFIGURED", "YES"),
+    ("DISCORD_ALLOWLISTS_CONFIGURED", "YES"),
+    ("DISCORD_PROVIDER_REQUESTS", "0"),
+    ("DISCORD_DATABASE_WRITE_ACCESS", "NO"),
+    ("DISCORD_GLOBAL_COMMAND_COUNT", "0"),
+)
+_REQUIRED_WORKER_STATUS_EXACT: tuple[tuple[str, str], ...] = (
+    ("WORKER_ENABLED", "YES"),
+    ("ALIAS_HMAC_KEY_CONFIGURED", "YES"),
+    ("PERSISTENCE_BEFORE_ANALYTICS", "YES"),
+    ("RAW_RESPONSE_RETENTION", "NO"),
+    ("RECOMMENDATIONS_ENABLED", "NO"),
+    ("APPROVAL_ENABLED", "NO"),
+    ("DISPATCH_ENABLED", "NO"),
+)
+
+
+def parse_and_validate_service_status_output(service_name: str, stdout: str) -> tuple[bool, str]:
+    """Validate structured `KEY=VALUE` `--status` readiness output for bot or polling worker."""
+    parsed: dict[str, str] = {}
+    for line in (stdout or "").splitlines():
+        clean = line.strip()
+        if not clean or "=" not in clean:
+            continue
+        k, v = clean.split("=", 1)
+        key = k.strip()
+        if key:
+            parsed[key] = v.strip()
+
+    if not parsed:
+        return False, f"{service_name} --status returned no KEY=VALUE fields"
+
+    if service_name == "fc27-discord-bot":
+        for req_k, req_v in _REQUIRED_TRUE_BOT_STATUS:
+            actual = parsed.get(req_k)
+            if actual != req_v:
+                return False, f"{req_k}={actual!r} (expected {req_v!r})"
+        for count_key in (
+            "DISCORD_ALLOWED_GUILD_COUNT",
+            "DISCORD_ALLOWED_CHANNEL_COUNT",
+            "DISCORD_ALLOWED_ROLE_COUNT",
+            "DISCORD_GUILD_TOP_LEVEL_COMMAND_COUNT",
+            "DISCORD_GROUP_SUBCOMMAND_COUNT",
+        ):
+            raw_cnt = parsed.get(count_key, "")
+            if not raw_cnt.isdecimal() or int(raw_cnt) < 1:
+                return False, f"{count_key}={raw_cnt!r} (must be >= 1)"
+        return True, "discord bot readiness fields verified"
+
+    if service_name == "fc27-community-worker":
+        for req_k, req_v in _REQUIRED_WORKER_STATUS_EXACT:
+            actual = parsed.get(req_k)
+            if actual != req_v:
+                return False, f"{req_k}={actual!r} (expected {req_v!r})"
+        circuit = parsed.get("CIRCUIT_STATE", "").strip().upper()
+        if not circuit or circuit == "OPEN":
+            return False, f"CIRCUIT_STATE={circuit!r} (must be active non-OPEN state)"
+        req_cnt = parsed.get("PROVIDER_REQUESTS", "")
+        if not req_cnt.isdecimal():
+            return False, f"PROVIDER_REQUESTS={req_cnt!r} (expected non-negative integer)"
+        return True, "community worker readiness fields verified"
+
+    return False, f"unsupported service '{service_name}'"
+
+
 def verify_post_start_health(
     *,
     compose_project: str = "fc27-full-stack",
@@ -1844,18 +2619,26 @@ def verify_post_start_health(
         return proc.returncode, proc.stdout
 
     exec_fn = container_status_fn or _run_container_cmd
-    bot_code, _ = exec_fn("fc27-discord-bot", ["python", "scripts/fc27_discord_bot.py", "--status"])
-    worker_code, _ = exec_fn("fc27-community-worker", ["python", "scripts/fc27_polling_worker.py", "--status"])
-    bot_ok = bot_code == 0
-    worker_ok = worker_code == 0
+    bot_code, bot_stdout = exec_fn("fc27-discord-bot", ["python", "scripts/fc27_discord_bot.py", "--status"])
+    worker_code, worker_stdout = exec_fn("fc27-community-worker", ["python", "scripts/fc27_polling_worker.py", "--status"])
+    if bot_code == 0:
+        bot_ok, bot_det = parse_and_validate_service_status_output("fc27-discord-bot", bot_stdout)
+    else:
+        bot_ok, bot_det = False, f"exit code {bot_code}"
+    if worker_code == 0:
+        worker_ok, worker_det = parse_and_validate_service_status_output("fc27-community-worker", worker_stdout)
+    else:
+        worker_ok, worker_det = False, f"exit code {worker_code}"
 
     db_reachable = False
     latest_mig: str | None = None
     grants_ver: int | None = None
     if db_uri is not None or db_probe_fn is not None:
-        probe = db_probe_fn or _default_db_probe
         try:
-            db_res = probe(db_uri or "")
+            if db_probe_fn is not None:
+                db_res = db_probe_fn(db_uri or "")
+            else:
+                db_res = _default_db_probe(db_uri or "", compose_project=compose_project)
             db_reachable = bool(db_res.get("reachable", True))
             latest_mig = (
                 str(db_res["latest_migration"])
@@ -1877,9 +2660,9 @@ def verify_post_start_health(
     if unhealthy:
         details.append(f"unhealthy/missing services: {', '.join(unhealthy)}")
     if not bot_ok:
-        details.append("fc27-discord-bot --status failed")
+        details.append(f"fc27-discord-bot --status invalid ({bot_det})")
     if not worker_ok:
-        details.append("fc27-community-worker --status failed")
+        details.append(f"fc27-community-worker --status invalid ({worker_det})")
     if (db_uri is not None or db_probe_fn is not None) and not db_reachable:
         details.append("database probe failed")
 
@@ -1999,6 +2782,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "CONTAINER_RUNTIME_UID",
+    "CONTAINER_SHARED_SECRET_GID",
     "DEFAULT_MANIFEST_PATH",
     "PermissionCheckResult",
     "PostStartVerifyResult",
@@ -2007,18 +2792,22 @@ __all__ = [
     "ProtectedBundleFileEntry",
     "ProtectedBundleImportResult",
     "ProtectedStateError",
+    "ProtectedStatePermissionError",
     "ReadinessCheckItem",
     "RecoveryReadinessReport",
     "apply_restrictive_permissions",
     "assert_no_symlink_or_junction_chain",
     "compute_alias_hmac_key_fingerprint",
+    "detect_compose_runtime_uid_gid",
     "export_protected_state_bundle",
     "get_manifest_allowlist",
     "import_protected_state_bundle",
     "load_protected_state_manifest",
     "main",
+    "parse_and_validate_service_status_output",
     "parse_env_mapping",
     "run_recovery_readiness_checks",
+    "verify_container_secret_readability",
     "verify_post_start_health",
     "verify_postgres_volume_readiness",
     "verify_restrictive_permissions",
