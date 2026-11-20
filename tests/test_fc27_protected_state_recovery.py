@@ -626,7 +626,7 @@ class TestProtectedStateRecoveryScenarios:
         secret.write_text("secret-value", encoding="utf-8")
 
         with monkeypatch.context() as mp:
-            mp.setattr("src.fc27_protected_state.os.name", "nt")
+            mp.setattr("src.fc27_protected_state._is_windows", lambda: True)
             res_ok = apply_restrictive_permissions(secret, acl_runner=_fake_acl_runner_factory())
             assert res_ok.passed is True
 
@@ -970,7 +970,7 @@ class TestProtectedStateRecoveryScenarios:
         repo = _populate_synthetic_repo(tmp_path / "repo")
         vault_dir = tmp_path / "vault"
         out_zip = vault_dir / "bundle.zip"
-        monkeypatch.setattr("src.fc27_protected_state.os.name", "nt")
+        monkeypatch.setattr("src.fc27_protected_state._is_windows", lambda: True)
 
         with pytest.raises(ProtectedStatePermissionError):
             export_protected_state_bundle(
