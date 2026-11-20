@@ -1326,6 +1326,20 @@ def import_protected_state_bundle(
     meta_rel_path = ".local-data/runtime-deployment.json"
     meta_path = repo_root / meta_rel_path
     existing_meta_obj: dict[str, Any] = {}
+    if effective_fp and meta_rel_path in declared_entries:
+        try:
+            bundled_meta = json.loads(member_bytes[meta_rel_path].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProtectedStateError(
+                "Bundled .local-data/runtime-deployment.json is invalid JSON"
+            ) from exc
+        if not isinstance(bundled_meta, dict):
+            raise ProtectedStateError("Bundled .local-data/runtime-deployment.json must be a JSON object")
+        bundled_fp = str(bundled_meta.get("alias_hmac_key_fingerprint_sha256") or "").strip()
+        if bundled_fp and not hmac.compare_digest(bundled_fp.lower(), effective_fp.lower()):
+            raise ProtectedStateError(
+                "Bundled runtime-deployment.json alias HMAC key fingerprint mismatch"
+            )
     if not dry_run:
         # Validate destination safety across all entries before any file write.
         for rel_path in declared_entries:
