@@ -682,7 +682,7 @@ def verify_container_secret_readability(
     need_owner = 0o500 if is_dir else 0o400
     need_group = 0o050 if is_dir else 0o040
     uid_ok = st.st_uid == runtime_uid and (perm & need_owner) == need_owner
-    gid_ok = st.st_gid in (runtime_uid, runtime_gid) and (perm & need_group) == need_group
+    gid_ok = st.st_gid == runtime_gid and (perm & need_group) == need_group
     if uid_ok or gid_ok:
         return PermissionCheckResult(
             path=target.name,
