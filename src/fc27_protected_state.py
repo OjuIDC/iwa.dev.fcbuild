@@ -1346,6 +1346,10 @@ def import_protected_state_bundle(
                 require_regular_if_exists=True,
             )
             if meta_path.is_file():
+                if effective_fp and not overwrite:
+                    raise ProtectedStateError(
+                        f"Destination '{meta_rel_path}' already exists and overwrite=False"
+                    )
                 try:
                     loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
