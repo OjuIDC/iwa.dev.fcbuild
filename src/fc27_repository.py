@@ -4422,12 +4422,7 @@ def _upsert_review_exception_in_tx(
             res_obs, res_distinct, res_last_seen, res_digest, res_at = prior_resolved
             if res_obs is not None and res_distinct is not None and res_digest is not None:
                 has_newer_evidence = (
-                    cur_obs > int(res_obs)
-                    or cur_distinct > int(res_distinct)
-                    or (
-                        cur_last_seen is not None
-                        and (res_last_seen is None or cur_last_seen > res_last_seen)
-                    )
+                    cur_distinct > int(res_distinct)
                     or str(res_digest).lower() != cur_digest
                 )
             else:
