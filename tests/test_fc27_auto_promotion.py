@@ -1317,6 +1317,36 @@ class TestAutoPromotionScenarios:
             ).fetchone()
             assert lig_cnt_row is not None and lig_cnt_row[0] == 0
 
+        # U+1E97 must compare equal to the decomposed key produced by Python NFKC+casefold.
+        pid_dia_manual = pseudonymize_east_coasters_identifier("1046", club_id=EAST_COASTERS_CLUB_ID)
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=pid_dia_manual,
+            display_name="\u1e97ag",
+            position="LW",
+        )
+        pid_dia_cand = _ingest_stable_player(
+            pg_db_migrated.poll_writer,
+            raw_player_id="1047",
+            alias="t\u0308ag",
+            seed=43,
+        )
+        summary_dia = evaluate_and_auto_promote_alias_candidates(
+            pg_db_migrated.poll_writer,
+            policy=FC27AliasAutoPromotionPolicy(enabled=True, shadow_mode=False),
+        )
+        assert summary_dia.promoted_count == 0
+        assert summary_dia.reason_counts.get("ROSTER_ALREADY_EXISTS", 0) >= 1
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            assert aconn.execute(
+                "SELECT display_name_comparison_key FROM public.fc27_roster WHERE player_id = %s",
+                (pid_dia_manual,),
+            ).fetchone() == ("t\u0308ag",)
+            assert aconn.execute(
+                "SELECT count(*) FROM public.fc27_roster WHERE player_id = %s",
+                (pid_dia_cand,),
+            ).fetchone() == (0,)
+
     def test_42_manual_setplayer_unchanged_name_after_polling_audits_once_idempotently(
         self, pg_db_migrated: Any
     ) -> None:

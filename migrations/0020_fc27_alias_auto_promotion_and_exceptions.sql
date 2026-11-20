@@ -225,120 +225,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fc27_alias_review_exceptions_open_target
 CREATE INDEX IF NOT EXISTS idx_fc27_alias_review_exceptions_state_detected
     ON public.fc27_player_alias_review_exceptions (exception_state, last_detected_at DESC, exception_id DESC);
 
-CREATE OR REPLACE FUNCTION public.fc27_normalize_alias_comparison_key(p_text text)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-STRICT
-SET search_path = pg_catalog, pg_temp
-AS $$
-    SELECT pg_catalog.btrim(
-        pg_catalog.regexp_replace(
-            pg_catalog.lower(
-                pg_catalog.replace(
-                    pg_catalog.replace(
-                        pg_catalog.replace(
-                            pg_catalog.replace(
-                                pg_catalog.replace(
-                                    pg_catalog.replace(
-                                        pg_catalog.replace(
-                                            pg_catalog.replace(
-                                                pg_catalog.replace(
-                                                    pg_catalog.replace(
-                                                        pg_catalog.normalize(p_text, 'NFKC'),
-                                                        U&'\1E9E', 'ss'
-                                                    ),
-                                                    U&'\00DF', 'ss'
-                                                ),
-                                                U&'\0130', 'i' || U&'\0307'
-                                            ),
-                                            U&'\03C2', U&'\03C3'
-                                        ),
-                                        U&'\0149', U&'\02BC' || 'n'
-                                    ),
-                                    U&'\01F0', 'j' || U&'\030C'
-                                ),
-                                U&'\1E96', 'h' || U&'\0331'
-                            ),
-                            U&'\0390', U&'\03B9\0308\0301'
-                        ),
-                        U&'\03B0', U&'\03C5\0308\0301'
-                    ),
-                    U&'\0587', U&'\0565\0582'
-                )
-            ),
-            U&'[[:space:]\0085\00A0\1680\2000-\200A\2028\2029\202F\205F\3000]+',
-            ' ',
-            'g'
-        ),
-        ' '
-    );
-$$;
-
-ALTER FUNCTION public.fc27_normalize_alias_comparison_key(text) OWNER TO fc27_owner;
-REVOKE ALL ON FUNCTION public.fc27_normalize_alias_comparison_key(text) FROM PUBLIC;
-
 ALTER TABLE public.fc27_roster
     ADD COLUMN IF NOT EXISTS display_name_comparison_key text;
 
-UPDATE public.fc27_roster
-SET display_name_comparison_key = public.fc27_normalize_alias_comparison_key(display_name)
-WHERE display_name_comparison_key IS NULL
-   OR pg_catalog.btrim(display_name_comparison_key) = ''
-   OR display_name_comparison_key IS DISTINCT FROM public.fc27_normalize_alias_comparison_key(display_name);
-
-ALTER TABLE public.fc27_roster
-    ALTER COLUMN display_name_comparison_key SET NOT NULL;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fc27_roster_comparison_key_chk'
-    ) THEN
-        ALTER TABLE public.fc27_roster
-            ADD CONSTRAINT fc27_roster_comparison_key_chk
-                CHECK (
-                    pg_catalog.char_length(display_name_comparison_key) BETWEEN 1 AND 128
-                    AND display_name_comparison_key = pg_catalog.btrim(display_name_comparison_key)
-                    AND display_name_comparison_key !~ '[\x00-\x1F\x7F]'
-                );
-    END IF;
-END $$;
+-- The db_migrate 0020 post-step computes comparison keys with Python's
+-- normalize_public_player_alias_key, rejects collisions, and then finalizes the
+-- NOT NULL/check/index constraints in this same migration transaction.
 
 CREATE INDEX IF NOT EXISTS idx_fc27_roster_active_comparison_key
     ON public.fc27_roster (active, display_name_comparison_key);
 
-CREATE OR REPLACE FUNCTION public.fc27_sync_roster_comparison_key()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    IF NEW.display_name IS NOT NULL THEN
-        IF NEW.display_name_comparison_key IS NULL
-           OR pg_catalog.btrim(NEW.display_name_comparison_key) = ''
-           OR (
-               TG_OP = 'UPDATE'
-               AND NEW.display_name IS DISTINCT FROM OLD.display_name
-               AND NEW.display_name_comparison_key IS NOT DISTINCT FROM OLD.display_name_comparison_key
-           ) THEN
-            NEW.display_name_comparison_key := public.fc27_normalize_alias_comparison_key(NEW.display_name);
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-ALTER FUNCTION public.fc27_sync_roster_comparison_key() OWNER TO fc27_owner;
-REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM PUBLIC;
-
 DROP TRIGGER IF EXISTS trg_fc27_roster_sync_comparison_key ON public.fc27_roster;
-CREATE TRIGGER trg_fc27_roster_sync_comparison_key
-    BEFORE INSERT OR UPDATE ON public.fc27_roster
-    FOR EACH ROW
-    EXECUTE FUNCTION public.fc27_sync_roster_comparison_key();
-
 
 CREATE OR REPLACE FUNCTION public.fc27_evaluate_alias_candidates_for_promotion(
     p_minimum_distinct_matches integer DEFAULT 2,
@@ -391,7 +288,7 @@ BEGIN
             c.conflict_status,
             COUNT(*) OVER (PARTITION BY c.player_id) AS player_active_count,
             COUNT(*) OVER (
-                PARTITION BY public.fc27_normalize_alias_comparison_key(c.public_alias_normalized)
+                PARTITION BY c.public_alias_normalized
             ) AS norm_alias_active_count
         FROM public.fc27_player_alias_candidates AS c
         WHERE c.verification_status <> 'REJECTED'
@@ -429,8 +326,8 @@ BEGIN
                        OR (
                            r.active = TRUE
                            AND r.display_name_comparison_key IN (
-                               public.fc27_normalize_alias_comparison_key(c.public_alias_normalized),
-                               public.fc27_normalize_alias_comparison_key(c.public_alias)
+                               c.public_alias_normalized,
+                               c.public_alias_normalized
                            )
                        )
                 ) THEN 'ROSTER_ALREADY_EXISTS'
@@ -451,8 +348,8 @@ BEGIN
                     WHERE r.player_id = c.player_id
                       AND r.active = TRUE
                       AND r.display_name_comparison_key NOT IN (
-                          public.fc27_normalize_alias_comparison_key(c.public_alias_normalized),
-                          public.fc27_normalize_alias_comparison_key(c.public_alias)
+                          c.public_alias_normalized,
+                          c.public_alias_normalized
                       )
                 ) AND EXISTS (
                     SELECT 1
@@ -472,8 +369,8 @@ BEGIN
                        OR (
                            r.active = TRUE
                            AND r.display_name_comparison_key IN (
-                               public.fc27_normalize_alias_comparison_key(c.public_alias_normalized),
-                               public.fc27_normalize_alias_comparison_key(c.public_alias)
+                               c.public_alias_normalized,
+                               c.public_alias_normalized
                            )
                        )
                 ) THEN 'EXISTING_ROSTER_CONFLICT'
@@ -622,7 +519,7 @@ BEGIN
         RETURN;
     END IF;
 
-    v_seed_comp_key := public.fc27_normalize_alias_comparison_key(v_seed_norm_alias);
+    v_seed_comp_key := v_seed_norm_alias;
 
     -- Lock all non-REJECTED candidates touching this player or canonical comparison key in
     -- ascending candidate_id order to guarantee deadlock-free concurrent serialization.
@@ -633,7 +530,7 @@ BEGIN
            c.verification_status <> 'REJECTED'
            AND (
                c.player_id = v_seed_player_id
-               OR public.fc27_normalize_alias_comparison_key(c.public_alias_normalized) = v_seed_comp_key
+               OR c.public_alias_normalized = v_seed_comp_key
            )
        )
     ORDER BY c.candidate_id ASC
@@ -705,8 +602,14 @@ BEGIN
 
     v_roster_display_name := pg_catalog.btrim(v_cand.public_alias);
     v_roster_norm_name := pg_catalog.lower(v_roster_display_name);
-    v_roster_comp_key := public.fc27_normalize_alias_comparison_key(v_cand.public_alias_normalized);
-    v_alias_comp_key := public.fc27_normalize_alias_comparison_key(v_cand.public_alias);
+    IF v_cand.public_alias_normalized IS NULL
+       OR pg_catalog.char_length(v_cand.public_alias_normalized) NOT BETWEEN 1 AND 128
+       OR v_cand.public_alias_normalized <> pg_catalog.btrim(v_cand.public_alias_normalized)
+       OR v_cand.public_alias_normalized ~ '[\x00-\x1F\x7F]' THEN
+        RAISE EXCEPTION 'invalid persisted candidate comparison key' USING ERRCODE = '22023';
+    END IF;
+    v_roster_comp_key := v_cand.public_alias_normalized;
+    v_alias_comp_key := v_cand.public_alias_normalized;
 
     IF NOT (
         pg_catalog.char_length(v_roster_display_name) BETWEEN 1 AND 32
@@ -746,7 +649,7 @@ BEGIN
       INTO v_alias_active_count
     FROM public.fc27_player_alias_candidates AS c
     WHERE c.verification_status <> 'REJECTED'
-      AND public.fc27_normalize_alias_comparison_key(c.public_alias_normalized) IN (
+      AND c.public_alias_normalized IN (
           v_roster_comp_key,
           v_alias_comp_key
       );

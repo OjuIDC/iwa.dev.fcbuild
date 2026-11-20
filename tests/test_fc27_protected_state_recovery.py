@@ -12,6 +12,8 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
+import threading
 from typing import Any
 import zipfile
 
@@ -129,6 +131,17 @@ _VALID_BOT_STATUS_STDOUT = "\n".join(
 
 _VALID_WORKER_STATUS_STDOUT = "\n".join(
     [
+        "WORKER_HEALTHY=YES",
+        "PROVIDER_ENABLED=YES",
+        "PERSISTENCE_ENABLED=YES",
+        "POLLING_ENABLED=YES",
+        "MAX_REQUESTS_PER_CYCLE=1",
+        "MINIMUM_INTERVAL_SECONDS=43200",
+        "MAXIMUM_RETRIES=0",
+        "MAX_PROVIDER_REQUESTS_PER_24_HOURS=2",
+        "SINGLE_FLIGHT=YES",
+        "PROVIDER_REQUESTS_EXECUTED=0",
+        "LAST_ERROR_CATEGORY=",
         "PROVIDER_ID=ea_fc27_community",
         "ALIAS_HMAC_KEY_CONFIGURED=YES",
         "PERSISTENCE_BEFORE_ANALYTICS=YES",
@@ -999,6 +1012,121 @@ class TestProtectedStateRecoveryScenarios:
         assert not out_zip.exists()
         assert not Path(f"{out_zip}.sha256").exists()
 
+    @pytest.mark.parametrize("failure", ["acl", "zip", "sidecar", "permission"])
+    def test_export_failure_preserves_preexisting_pair(
+        self,
+        failure: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        repo = _populate_synthetic_repo(tmp_path / "repo")
+        out_zip = tmp_path / "vault" / "bundle.zip"
+        out_zip.parent.mkdir(parents=True)
+        sidecar = Path(f"{out_zip}.sha256")
+        old_archive = b"previous valid archive bytes"
+        old_sidecar = b"previous valid sidecar bytes\n"
+        out_zip.write_bytes(old_archive)
+        sidecar.write_bytes(old_sidecar)
+
+        if failure == "zip":
+            monkeypatch.setattr(zipfile.ZipFile, "testzip", lambda _self: "bad-member")
+        elif failure == "sidecar":
+            original_open = Path.open
+
+            def fail_sidecar_open(path: Path, mode: str = "r", *args: Any, **kwargs: Any):
+                if ".sha256.tmp-" in path.name and "w" in mode:
+                    raise OSError("injected sidecar write failure")
+                return original_open(path, mode, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "open", fail_sidecar_open)
+        elif failure == "permission":
+            monkeypatch.setattr(
+                "src.fc27_protected_state.apply_restrictive_permissions",
+                lambda *_a, **_kw: (_ for _ in ()).throw(PermissionError("injected")),
+            )
+
+        acl = (
+            _fake_acl_runner_factory(inject_bad_ace=True)
+            if failure == "acl"
+            else _fake_acl_runner_factory()
+        )
+        with pytest.raises(Exception):
+            export_protected_state_bundle(
+                repo_root=repo,
+                output_path=out_zip,
+                acl_runner=acl,
+                overwrite=True,
+            )
+        assert out_zip.read_bytes() == old_archive
+        assert sidecar.read_bytes() == old_sidecar
+
+    def test_export_refuses_existing_pair_by_default_and_overwrites_explicitly(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _populate_synthetic_repo(tmp_path / "repo")
+        out_zip = tmp_path / "vault" / "bundle.zip"
+        out_zip.parent.mkdir(parents=True)
+        sidecar = Path(f"{out_zip}.sha256")
+        out_zip.write_bytes(b"old archive")
+        sidecar.write_bytes(b"old sidecar")
+        with pytest.raises(ProtectedStateError, match="already exists"):
+            export_protected_state_bundle(
+                repo_root=repo,
+                output_path=out_zip,
+                acl_runner=_fake_acl_runner_factory(),
+            )
+        result = export_protected_state_bundle(
+            repo_root=repo,
+            output_path=out_zip,
+            acl_runner=_fake_acl_runner_factory(),
+            overwrite=True,
+        )
+        assert Path(result.bundle_path).is_file()
+        assert Path(result.sha256_sidecar_path).read_text().startswith(
+            result.bundle_sha256
+        )
+
+    def test_concurrent_exports_use_distinct_temporary_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        repo = _populate_synthetic_repo(tmp_path / "repo")
+        out_zip = tmp_path / "vault" / "bundle.zip"
+        seen: list[str] = []
+        seen_lock = threading.Lock()
+        original_mkstemp = tempfile.mkstemp
+
+        def record_mkstemp(*args: Any, **kwargs: Any):
+            result = original_mkstemp(*args, **kwargs)
+            with seen_lock:
+                seen.append(result[1])
+            return result
+
+        monkeypatch.setattr(tempfile, "mkstemp", record_mkstemp)
+
+        def export(index: int) -> Any:
+            return export_protected_state_bundle(
+                repo_root=repo,
+                output_path=out_zip.with_name(f"bundle-{index}.zip"),
+                acl_runner=_fake_acl_runner_factory(),
+                overwrite=True,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [
+                future.result()
+                for future in (pool.submit(export, 1), pool.submit(export, 2))
+            ]
+
+        assert len(results) == 2
+        assert len(seen) >= 4
+        assert len(set(seen)) == len(seen)
+        for index in (1, 2):
+            concurrent_output = out_zip.with_name(f"bundle-{index}.zip")
+            assert concurrent_output.is_file()
+            assert Path(f"{concurrent_output}.sha256").is_file()
+
     def test_72_posix_container_uid_secret_readability_and_bundle_0600(
         self, pg_db_migrated: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1201,6 +1329,80 @@ class TestProtectedStateRecoveryScenarios:
         assert by_name_w["compose_secret_isolation_valid"].passed is False
         assert report_w.overall_ready is False
 
+    @pytest.mark.parametrize(
+        "logical,source",
+        [
+            ("fc27_app_uri", "./secrets/postgres_admin_uri"),
+            ("fc27_poll_writer_uri", "./secrets/fc27_migrator_uri"),
+            ("discord_bot_token", "./secrets/fc27_poll_writer_uri"),
+            ("fc27_alias_hmac_key", "./secrets/discord_bot_token"),
+            ("fc27_app_uri", "../outside/secret"),
+        ],
+    )
+    def test_compose_top_level_secret_remapping_is_rejected(
+        self, logical: str, source: str, tmp_path: Path
+    ) -> None:
+        import src.fc27_protected_state as ps_mod
+
+        repo = _populate_synthetic_repo(tmp_path / "repo")
+        override = repo / "docker-compose.override.yml"
+        override.write_text(
+            f"secrets:\n  {logical}:\n    file: {source}\n", encoding="utf-8"
+        )
+        manifest = ps_mod.load_protected_state_manifest(repo_root=repo)
+        layers = [
+            "docker-compose.yml", "docker-compose.discord.yml",
+            "docker-compose.community-worker.yml", "docker-compose.ghcr.yml",
+            "docker-compose.override.yml",
+        ]
+        ok, _detail = ps_mod._validate_compose_secret_sources(
+            repo, layers, manifest["compose_secret_sources"]
+        )
+        assert ok is False
+
+    def test_compose_top_level_sources_accept_valid_override_and_reject_missing_source(
+        self, tmp_path: Path
+    ) -> None:
+        import src.fc27_protected_state as ps_mod
+
+        repo = _populate_synthetic_repo(tmp_path / "repo")
+        manifest = ps_mod.load_protected_state_manifest(repo_root=repo)
+        layers = [
+            "docker-compose.yml", "docker-compose.discord.yml",
+            "docker-compose.community-worker.yml", "docker-compose.ghcr.yml",
+        ]
+        ok, _detail = ps_mod._validate_compose_secret_sources(
+            repo, layers, manifest["compose_secret_sources"]
+        )
+        assert ok is True, _detail
+        valid_override = repo / "docker-compose.override.yml"
+        valid_override.write_text(
+            "secrets:\n  fc27_app_uri:\n    file: ./secrets/fc27_app_uri\n",
+            encoding="utf-8",
+        )
+        ok_override, _detail = ps_mod._validate_compose_secret_sources(
+            repo, [*layers, "docker-compose.override.yml"],
+            manifest["compose_secret_sources"],
+        )
+        assert ok_override is True
+        valid_override.write_text(
+            "secrets:\n  fc27_app_uri:\n    file: ./secrets/fc27_app_uri\n"
+            "  fc27_app_uri:\n    file: ./secrets/fc27_app_uri\n",
+            encoding="utf-8",
+        )
+        duplicate_ok, _detail = ps_mod._validate_compose_secret_sources(
+            repo, [*layers, "docker-compose.override.yml"],
+            manifest["compose_secret_sources"],
+        )
+        assert duplicate_ok is False
+        valid_override.unlink()
+        (repo / "secrets" / "fc27_app_uri").unlink()
+        ok_missing, detail = ps_mod._validate_compose_secret_sources(
+            repo, layers, manifest["compose_secret_sources"]
+        )
+        assert ok_missing is False
+        assert "missing" in detail
+
     def test_75_verify_post_start_health_rejects_disabled_or_unconfigured_status_stdout(
         self, pg_db_migrated: Any
     ) -> None:
@@ -1267,6 +1469,49 @@ class TestProtectedStateRecoveryScenarios:
         assert "DISCORD_GROUP_SUBCOMMAND_COUNT=13" in out
         ok, detail = parse_and_validate_service_status_output("fc27-discord-bot", out)
         assert ok is True, detail
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            ("PROVIDER_ENABLED=YES", "PROVIDER_ENABLED=NO"),
+            ("PERSISTENCE_ENABLED=YES", "PERSISTENCE_ENABLED=NO"),
+            ("POLLING_ENABLED=YES", "POLLING_ENABLED=NO"),
+            ("SINGLE_FLIGHT=YES", "SINGLE_FLIGHT=NO"),
+            ("MAXIMUM_RETRIES=0", "MAXIMUM_RETRIES=1"),
+            ("PROVIDER_REQUESTS_EXECUTED=0", "PROVIDER_REQUESTS_EXECUTED=3"),
+            ("LAST_ERROR_CATEGORY=", "LAST_ERROR_CATEGORY=TIMEOUT"),
+        ],
+    )
+    def test_worker_status_rejects_companion_gate_and_budget_drift(
+        self, replacement: tuple[str, str]
+    ) -> None:
+        altered = _VALID_WORKER_STATUS_STDOUT.replace(*replacement)
+        ok, _detail = parse_and_validate_service_status_output(
+            "fc27-community-worker", altered
+        )
+        assert ok is False
+
+    def test_worker_status_rejects_missing_duplicate_malformed_and_oversized_fields(self) -> None:
+        for altered in (
+            _VALID_WORKER_STATUS_STDOUT.replace("PROVIDER_ENABLED=YES\n", ""),
+            _VALID_WORKER_STATUS_STDOUT + "\nPROVIDER_ENABLED=NO",
+            _VALID_WORKER_STATUS_STDOUT.replace("PERSISTENCE_ENABLED=YES", "PERSISTENCE_ENABLED=true"),
+            _VALID_WORKER_STATUS_STDOUT + "\n" + ("X" * 16_385),
+        ):
+            ok, _detail = parse_and_validate_service_status_output(
+                "fc27-community-worker", altered
+            )
+            assert ok is False
+
+    def test_worker_status_accepts_explicit_expected_disabled_mode(self) -> None:
+        disabled = _VALID_WORKER_STATUS_STDOUT
+        for key in ("PROVIDER_ENABLED", "PERSISTENCE_ENABLED", "POLLING_ENABLED"):
+            disabled = disabled.replace(f"{key}=YES", f"{key}=NO")
+        disabled = disabled.replace("WORKER_ENABLED=YES", "WORKER_ENABLED=NO")
+        ok, _detail = parse_and_validate_service_status_output(
+            "fc27-community-worker", disabled, expected_worker_mode="disabled"
+        )
+        assert ok is True
 
     def test_77_default_db_probe_falls_back_to_internal_compose_postgres_without_password_leak(
         self,

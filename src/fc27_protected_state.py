@@ -29,6 +29,30 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.db_roles import redact_conninfo
+
+
+def _reject_duplicate_yaml_mapping_keys(node: yaml.Node | None) -> None:
+    """Reject duplicate explicit keys while allowing normal YAML merge keys."""
+    if isinstance(node, yaml.MappingNode):
+        seen: set[str] = set()
+        for key_node, value_node in node.value:
+            if key_node.tag != "tag:yaml.org,2002:merge" and isinstance(
+                key_node, yaml.ScalarNode
+            ):
+                key = key_node.value
+                if key in seen:
+                    raise yaml.YAMLError("duplicate mapping key")
+                seen.add(key)
+            _reject_duplicate_yaml_mapping_keys(key_node)
+            _reject_duplicate_yaml_mapping_keys(value_node)
+    elif isinstance(node, yaml.SequenceNode):
+        for child in node.value:
+            _reject_duplicate_yaml_mapping_keys(child)
+
+
+def _load_compose_yaml(text: str) -> Any:
+    _reject_duplicate_yaml_mapping_keys(yaml.compose(text))
+    return yaml.safe_load(text)
 from src.settings import (
     ALIAS_HMAC_KEY_MIN_BYTES,
     _extract_conninfo_user,
@@ -966,6 +990,7 @@ def export_protected_state_bundle(
     strict: bool = True,
     validate_values: bool = True,
     allow_local_data_output: bool = False,
+    overwrite: bool = False,
     acl_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     now: datetime | None = None,
 ) -> ProtectedBundleExportResult:
@@ -979,6 +1004,10 @@ def export_protected_state_bundle(
     )
     sidecar_path = Path(f"{safe_output}.sha256")
     assert_no_symlink_or_junction_chain(sidecar_path, stop_at=None)
+    if not overwrite and (safe_output.exists() or sidecar_path.exists()):
+        raise ProtectedStateError(
+            "Protected export already exists; pass overwrite=True to replace it"
+        )
 
     missing_required: list[str] = []
     excluded_optional: list[str] = []
@@ -1059,13 +1088,43 @@ def export_protected_state_bundle(
     manifest_bytes = json.dumps(bundle_manifest, indent=2, sort_keys=True).encode("utf-8")
 
     safe_output.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{safe_output.name}.tmp-",
-        dir=str(safe_output.parent),
-    )
+    lock_path = safe_output.with_name(f".{safe_output.name}.export.lock")
+    try:
+        lock_fd = os.open(
+            lock_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise ProtectedStateError("Another protected export is already in progress") from exc
+    os.close(lock_fd)
+    if not overwrite and (safe_output.exists() or sidecar_path.exists()):
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ProtectedStateError(
+            "Protected export already exists; pass overwrite=True to replace it"
+        )
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{safe_output.name}.tmp-",
+            dir=str(safe_output.parent),
+        )
+    except Exception:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     os.close(fd)
     tmp_zip = Path(tmp_name)
     tmp_sha: Path | None = None
+    backup_zip: Path | None = None
+    backup_sha: Path | None = None
+    published_zip = False
+    published_sha = False
+    publication_complete = False
     try:
         tmp_zip_perm = apply_restrictive_permissions(
             tmp_zip,
@@ -1100,18 +1159,7 @@ def export_protected_state_bundle(
             raise ProtectedStatePermissionError(
                 f"Failed to verify restrictive permissions before publishing bundle: {tmp_zip_perm_post.detail}"
             )
-        os.replace(tmp_zip, safe_output)
-        perm_zip = apply_restrictive_permissions(
-            safe_output,
-            acl_runner=acl_runner,
-            allow_runtime_group_read=False,
-        )
-        if not perm_zip.passed:
-            raise ProtectedStatePermissionError(
-                f"Failed to enforce restrictive permissions on exported bundle '{safe_output.name}': {perm_zip.detail}"
-            )
-
-        bundle_sha = _sha256_file(safe_output)
+        bundle_sha = _sha256_file(tmp_zip)
         sidecar_bytes = f"{bundle_sha} *{safe_output.name}\n".encode("utf-8")
         sfd, stmp_name = tempfile.mkstemp(
             prefix=f".{sidecar_path.name}.tmp-",
@@ -1132,7 +1180,51 @@ def export_protected_state_bundle(
             sfh.write(sidecar_bytes)
             sfh.flush()
             os.fsync(sfh.fileno())
+
+        # Both artifacts are complete and verified before touching existing output.
+        if safe_output.exists():
+            fd, backup_name = tempfile.mkstemp(
+                prefix=f".{safe_output.name}.rollback-", dir=str(safe_output.parent)
+            )
+            os.close(fd)
+            backup_zip = Path(backup_name)
+            backup_zip.unlink()
+            os.replace(safe_output, backup_zip)
+        if sidecar_path.exists():
+            fd, backup_name = tempfile.mkstemp(
+                prefix=f".{sidecar_path.name}.rollback-", dir=str(sidecar_path.parent)
+            )
+            os.close(fd)
+            backup_sha = Path(backup_name)
+            backup_sha.unlink()
+            os.replace(sidecar_path, backup_sha)
+
+        for backup_artifact in (backup_zip, backup_sha):
+            if backup_artifact is None:
+                continue
+            backup_permissions = apply_restrictive_permissions(
+                backup_artifact,
+                acl_runner=acl_runner,
+                allow_runtime_group_read=False,
+            )
+            if not backup_permissions.passed:
+                raise ProtectedStatePermissionError(
+                    "Failed to protect rollback copy during export publication"
+                )
+
+        os.replace(tmp_zip, safe_output)
+        published_zip = True
         os.replace(tmp_sha, sidecar_path)
+        published_sha = True
+        perm_zip = apply_restrictive_permissions(
+            safe_output,
+            acl_runner=acl_runner,
+            allow_runtime_group_read=False,
+        )
+        if not perm_zip.passed:
+            raise ProtectedStatePermissionError(
+                f"Failed to enforce restrictive permissions on exported bundle '{safe_output.name}': {perm_zip.detail}"
+            )
         perm_sha = apply_restrictive_permissions(
             sidecar_path,
             acl_runner=acl_runner,
@@ -1142,12 +1234,32 @@ def export_protected_state_bundle(
             raise ProtectedStatePermissionError(
                 f"Failed to enforce restrictive permissions on SHA-256 sidecar '{sidecar_path.name}': {perm_sha.detail}"
             )
+        publication_complete = True
+        if backup_zip is not None:
+            try:
+                backup_zip.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if backup_sha is not None:
+            try:
+                backup_sha.unlink(missing_ok=True)
+            except OSError:
+                pass
+        lock_path.unlink(missing_ok=True)
     except Exception:
         tmp_zip.unlink(missing_ok=True)
         if tmp_sha is not None:
             tmp_sha.unlink(missing_ok=True)
-        safe_output.unlink(missing_ok=True)
-        sidecar_path.unlink(missing_ok=True)
+        if not publication_complete:
+            if published_zip:
+                safe_output.unlink(missing_ok=True)
+            if published_sha:
+                sidecar_path.unlink(missing_ok=True)
+            if backup_zip is not None and backup_zip.exists():
+                os.replace(backup_zip, safe_output)
+            if backup_sha is not None and backup_sha.exists():
+                os.replace(backup_sha, sidecar_path)
+        lock_path.unlink(missing_ok=True)
         raise
 
     return ProtectedBundleExportResult(
@@ -2003,6 +2115,71 @@ def _extract_compose_service_secrets_and_env(svc_cfg: dict[str, Any]) -> tuple[s
     return secret_names, env_keys
 
 
+def _validate_compose_secret_sources(
+    repo_root: Path,
+    compose_layers: Sequence[str],
+    expected_sources: dict[str, str],
+) -> tuple[bool, str]:
+    """Validate effective top-level file-backed Compose secret mappings."""
+    if not expected_sources:
+        return False, "top-level secret source mapping is not declared"
+    effective: dict[str, str] = {}
+    try:
+        for rel in compose_layers:
+            path = repo_root / rel
+            if not path.is_file():
+                continue
+            doc = _load_compose_yaml(path.read_text(encoding="utf-8")) or {}
+            if not isinstance(doc, dict):
+                return False, "Compose root is invalid"
+            definitions = doc.get("secrets", {})
+            if definitions is None:
+                continue
+            if not isinstance(definitions, dict):
+                return False, "top-level secrets definition is invalid"
+            for logical_name, definition in definitions.items():
+                name = str(logical_name)
+                if name not in expected_sources:
+                    return False, f"unexpected top-level secret {name}"
+                if not isinstance(definition, dict) or set(definition) != {"file"}:
+                    return False, f"top-level secret source invalid for {name}"
+                source = definition.get("file")
+                if not isinstance(source, str) or not source.strip():
+                    return False, f"top-level secret source invalid for {name}"
+                normalized = source.replace("\\", "/")
+                if normalized.startswith("./"):
+                    normalized = normalized[2:]
+                if normalized.startswith("/") or any(
+                    part in ("", ".", "..") for part in normalized.split("/")
+                ):
+                    return False, f"top-level secret source path invalid for {name}"
+                source_path = repo_root / Path(*normalized.split("/"))
+                try:
+                    assert_no_symlink_or_junction_chain(
+                        source_path,
+                        stop_at=repo_root,
+                        require_regular_if_exists=True,
+                    )
+                    resolved_root = repo_root.resolve(strict=True)
+                    resolved_source = source_path.resolve(strict=True)
+                    relative_source = resolved_source.relative_to(resolved_root).as_posix()
+                except (OSError, ValueError, ProtectedStateError):
+                    return False, f"top-level secret source is missing or escapes for {name}"
+                if relative_source != expected_sources[name].replace("\\", "/"):
+                    return False, f"top-level secret source remapped for {name}"
+                if not resolved_source.is_file():
+                    return False, f"top-level secret source is missing for {name}"
+                if name in effective and effective[name] != relative_source:
+                    return False, f"conflicting top-level secret definition for {name}"
+                effective[name] = relative_source
+        missing = sorted(set(expected_sources) - set(effective))
+        if missing:
+            return False, f"missing top-level secret definition for {missing[0]}"
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return False, "Compose secret source configuration is invalid"
+    return True, "top-level secret source mappings verified"
+
+
 def _check_compose_isolation_and_overrides(
     repo_root: Path,
     manifest: dict[str, Any],
@@ -2045,12 +2222,21 @@ def _check_compose_isolation_and_overrides(
 
     merged_secrets_by_svc: dict[str, set[str]] = {}
     merged_env_by_svc: dict[str, set[str]] = {}
+    expected_sources = {
+        str(name): str(path)
+        for name, path in (manifest.get("compose_secret_sources") or {}).items()
+    }
+    source_ok, source_detail = _validate_compose_secret_sources(
+        repo_root, compose_layers, expected_sources
+    )
+    isolation_ok = source_ok
+    isolation_detail = source_detail
     try:
         for rel in compose_layers:
             layer_path = repo_root / rel
             if not layer_path.is_file():
                 continue
-            doc = yaml.safe_load(layer_path.read_text(encoding="utf-8"))
+            doc = _load_compose_yaml(layer_path.read_text(encoding="utf-8"))
             if doc is None:
                 continue
             if not isinstance(doc, dict):
@@ -2090,7 +2276,11 @@ def _check_compose_isolation_and_overrides(
             "FC27_MIGRATOR_URI_FILE",
             "POSTGRES_ADMIN_URI_FILE",
         }
-        if (d_secrets & forbidden_discord) or (d_env & forbidden_discord_env):
+        if (
+            (d_secrets & forbidden_discord)
+            or (d_env & forbidden_discord_env)
+            or (d_secrets - set(expected_sources))
+        ):
             isolation_ok = False
             isolation_detail = "fc27-discord-bot effective Compose config mounts forbidden polling/admin/migrator credential"
 
@@ -2121,7 +2311,11 @@ def _check_compose_isolation_and_overrides(
             "FC27_DISCORD_READER_URI_FILE",
             "FC27_PLAYER_DEV_WRITER_URI_FILE",
         }
-        if isolation_ok and ((w_secrets & forbidden_worker) or (w_env & forbidden_worker_env)):
+        if isolation_ok and (
+            (w_secrets & forbidden_worker)
+            or (w_env & forbidden_worker_env)
+            or (w_secrets - set(expected_sources))
+        ):
             isolation_ok = False
             isolation_detail = "fc27-community-worker effective Compose config mounts forbidden discord/admin/player-dev secret"
     except (OSError, UnicodeDecodeError, yaml.YAMLError, ProtectedStateError):
@@ -2538,17 +2732,44 @@ _REQUIRED_WORKER_STATUS_EXACT: tuple[tuple[str, str], ...] = (
 )
 
 
-def parse_and_validate_service_status_output(service_name: str, stdout: str) -> tuple[bool, str]:
+_REQUIRED_WORKER_CONTRACT_KEYS = (
+    "WORKER_HEALTHY",
+    "PROVIDER_ENABLED",
+    "PERSISTENCE_ENABLED",
+    "POLLING_ENABLED",
+    "MAX_REQUESTS_PER_CYCLE",
+    "MINIMUM_INTERVAL_SECONDS",
+    "MAXIMUM_RETRIES",
+    "MAX_PROVIDER_REQUESTS_PER_24_HOURS",
+    "SINGLE_FLIGHT",
+    "PROVIDER_REQUESTS_EXECUTED",
+    "LAST_ERROR_CATEGORY",
+)
+
+
+def parse_and_validate_service_status_output(
+    service_name: str,
+    stdout: str,
+    *,
+    expected_worker_mode: str = "active",
+) -> tuple[bool, str]:
     """Validate structured `KEY=VALUE` `--status` readiness output for bot or polling worker."""
+    if len((stdout or "").encode("utf-8", errors="replace")) > 16_384:
+        return False, f"{service_name} --status output exceeds size limit"
     parsed: dict[str, str] = {}
     for line in (stdout or "").splitlines():
         clean = line.strip()
-        if not clean or "=" not in clean:
+        if not clean:
             continue
+        if "=" not in clean:
+            return False, f"{service_name} --status contains malformed line"
         k, v = clean.split("=", 1)
         key = k.strip()
-        if key:
-            parsed[key] = v.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key):
+            return False, f"{service_name} --status contains malformed key"
+        if key in parsed:
+            return False, f"{service_name} --status contains duplicate {key}"
+        parsed[key] = v.strip()
 
     if not parsed:
         return False, f"{service_name} --status returned no KEY=VALUE fields"
@@ -2557,7 +2778,7 @@ def parse_and_validate_service_status_output(service_name: str, stdout: str) -> 
         for req_k, req_v in _REQUIRED_TRUE_BOT_STATUS:
             actual = parsed.get(req_k)
             if actual != req_v:
-                return False, f"{req_k}={actual!r} (expected {req_v!r})"
+                return False, f"{req_k} does not match required status"
         for count_key in (
             "DISCORD_ALLOWED_GUILD_COUNT",
             "DISCORD_ALLOWED_CHANNEL_COUNT",
@@ -2567,20 +2788,69 @@ def parse_and_validate_service_status_output(service_name: str, stdout: str) -> 
         ):
             raw_cnt = parsed.get(count_key, "")
             if not raw_cnt.isdecimal() or int(raw_cnt) < 1:
-                return False, f"{count_key}={raw_cnt!r} (must be >= 1)"
+                return False, f"{count_key} must be a positive integer"
         return True, "discord bot readiness fields verified"
 
     if service_name == "fc27-community-worker":
+        if expected_worker_mode not in ("active", "disabled"):
+            return False, "worker expected mode is invalid"
         for req_k, req_v in _REQUIRED_WORKER_STATUS_EXACT:
+            if req_k == "WORKER_ENABLED":
+                req_v = "YES" if expected_worker_mode == "active" else "NO"
             actual = parsed.get(req_k)
             if actual != req_v:
-                return False, f"{req_k}={actual!r} (expected {req_v!r})"
+                return False, f"{req_k} does not match required status"
+        missing = [key for key in _REQUIRED_WORKER_CONTRACT_KEYS if key not in parsed]
+        if missing:
+            return False, f"worker status is missing {missing[0]}"
+        bool_keys = (
+            "WORKER_HEALTHY", "PROVIDER_ENABLED", "PERSISTENCE_ENABLED",
+            "POLLING_ENABLED", "SINGLE_FLIGHT",
+        )
+        if any(parsed[key] not in ("YES", "NO") for key in bool_keys):
+            return False, "worker status contains malformed Boolean"
+        expected_gates = (
+            {"WORKER_HEALTHY": "YES", "PROVIDER_ENABLED": "YES",
+             "PERSISTENCE_ENABLED": "YES", "POLLING_ENABLED": "YES"}
+            if expected_worker_mode == "active"
+            else {"WORKER_HEALTHY": "YES", "PROVIDER_ENABLED": "NO",
+                  "PERSISTENCE_ENABLED": "NO", "POLLING_ENABLED": "NO"}
+        )
+        for key, expected in expected_gates.items():
+            if parsed[key] != expected:
+                return False, f"{key} does not match expected {expected_worker_mode} mode"
+        if parsed["SINGLE_FLIGHT"] != "YES":
+            return False, "SINGLE_FLIGHT must be enabled"
+        from src.fc27_polling_worker import (
+            MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+            POLL_INTERVAL_SECONDS,
+        )
+        expected_budgets = {
+            "MAX_REQUESTS_PER_CYCLE": 1,
+            "MINIMUM_INTERVAL_SECONDS": POLL_INTERVAL_SECONDS,
+            "MAXIMUM_RETRIES": 0,
+            "MAX_PROVIDER_REQUESTS_PER_24_HOURS": MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        }
+        for key, expected in expected_budgets.items():
+            if not parsed[key].isdecimal() or int(parsed[key]) != expected:
+                return False, f"{key} does not match reviewed budget"
+        request_count = parsed["PROVIDER_REQUESTS_EXECUTED"]
+        if (
+            not request_count.isdecimal()
+            or int(request_count) > MAX_PROVIDER_REQUESTS_PER_24_HOURS
+        ):
+            return False, "PROVIDER_REQUESTS_EXECUTED exceeds the request bound"
+        if parsed["LAST_ERROR_CATEGORY"] not in ("", "NONE"):
+            return False, "LAST_ERROR_CATEGORY reports an unhealthy state"
         circuit = parsed.get("CIRCUIT_STATE", "").strip().upper()
         if not circuit or circuit == "OPEN":
-            return False, f"CIRCUIT_STATE={circuit!r} (must be active non-OPEN state)"
+            return False, "CIRCUIT_STATE must be active and non-open"
         req_cnt = parsed.get("PROVIDER_REQUESTS", "")
-        if not req_cnt.isdecimal():
-            return False, f"PROVIDER_REQUESTS={req_cnt!r} (expected non-negative integer)"
+        if (
+            not req_cnt.isdecimal()
+            or int(req_cnt) != int(parsed["PROVIDER_REQUESTS_EXECUTED"])
+        ):
+            return False, "PROVIDER_REQUESTS must be a non-negative integer"
         return True, "community worker readiness fields verified"
 
     return False, f"unsupported service '{service_name}'"
@@ -2593,6 +2863,7 @@ def verify_post_start_health(
     docker_ps_fn: Callable[[str], list[dict[str, Any]]] | None = None,
     container_status_fn: Callable[[str, Sequence[str]], tuple[int, str]] | None = None,
     db_probe_fn: Callable[[str], dict[str, Any]] | None = None,
+    expected_worker_mode: str = "active",
 ) -> PostStartVerifyResult:
     """Read-only verification of running FC27 containers, `--status` probes, and PostgreSQL state.
 
@@ -2644,7 +2915,11 @@ def verify_post_start_health(
     else:
         bot_ok, bot_det = False, f"exit code {bot_code}"
     if worker_code == 0:
-        worker_ok, worker_det = parse_and_validate_service_status_output("fc27-community-worker", worker_stdout)
+        worker_ok, worker_det = parse_and_validate_service_status_output(
+            "fc27-community-worker",
+            worker_stdout,
+            expected_worker_mode=expected_worker_mode,
+        )
     else:
         worker_ok, worker_det = False, f"exit code {worker_code}"
 
@@ -2712,6 +2987,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("--manifest", type=Path, default=None)
     p_exp.add_argument("--allow-partial", action="store_true", help="Allow missing optional/required files (non-strict).")
     p_exp.add_argument("--allow-local-data", action="store_true", help="Permit writing inside git-ignored .local-data/.")
+    p_exp.add_argument("--overwrite", action="store_true", help="Replace an existing export only after the new pair is verified.")
 
     p_imp = sub.add_parser("import", help="Verify SHA-256 and import protected operational state bundle.")
     p_imp.add_argument("--input", required=True, type=Path, help="Input .zip protected state bundle path.")
@@ -2735,6 +3011,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     p_post = sub.add_parser("verify-post-start", help="Read-only verification of running Compose stack health.")
     p_post.add_argument("--compose-project", default="fc27-full-stack")
     p_post.add_argument("--db-uri", default=None)
+    p_post.add_argument(
+        "--worker-mode",
+        choices=("active", "disabled"),
+        default="active",
+        help="Expected worker readiness mode; disabled must be explicitly requested.",
+    )
 
     return parser
 
@@ -2751,6 +3033,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest_path=args.manifest,
                 strict=not args.allow_partial,
                 allow_local_data_output=args.allow_local_data,
+                overwrite=args.overwrite,
             )
             print(json.dumps(res.model_dump(mode="json"), indent=2))
             return 0
@@ -2786,6 +3069,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             res_post = verify_post_start_health(
                 compose_project=args.compose_project,
                 db_uri=args.db_uri,
+                expected_worker_mode=args.worker_mode,
             )
             print(json.dumps(res_post.model_dump(mode="json"), indent=2))
             return 0 if res_post.passed else 1

@@ -910,6 +910,42 @@ def test_migration_0014_constraints_and_partial_unique_indexes(pg_db_migrated):
         )
 
 
+def test_migration_0020_python_comparison_key_backfill_and_collision_gate(
+    pg_db_migrated: Any,
+) -> None:
+    from src.db_migrate import _finalize_fc27_alias_comparison_keys
+
+    with psycopg.connect(pg_db_migrated.admin, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO public.fc27_roster
+            (player_id, display_name, display_name_normalized,
+             display_name_comparison_key, active)
+            VALUES ('plr_ecf_000000008801', 'ẗag', 'ẗag', 'stale-key', FALSE)"""
+        )
+        with conn.transaction():
+            with conn.cursor() as cur:
+                _finalize_fc27_alias_comparison_keys(cur)
+        assert conn.execute(
+            "SELECT display_name_comparison_key FROM public.fc27_roster WHERE player_id = 'plr_ecf_000000008801'"
+        ).fetchone() == ("t\u0308ag",)
+        conn.execute(
+            "DELETE FROM public.fc27_roster WHERE player_id = 'plr_ecf_000000008801'"
+        )
+
+        with pytest.raises(MigrationError, match="duplicate active roster comparison keys"):
+            with conn.transaction():
+                conn.execute(
+                    """INSERT INTO public.fc27_roster
+                    (player_id, display_name, display_name_normalized,
+                     display_name_comparison_key, active)
+                    VALUES
+                    ('plr_ecf_000000008802', 'Collision', 'collision', 'old-a', TRUE),
+                    ('plr_ecf_000000008803', 'collision', 'collision', 'old-b', TRUE)"""
+                )
+                with conn.cursor() as cur:
+                    _finalize_fc27_alias_comparison_keys(cur)
+
+
 def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
     """Verifies negative grants and read-only enforcement for fc27_discord_reader, fc27_poll_writer, and fc27_player_dev_writer."""
     legacy_tables = (
@@ -1035,8 +1071,8 @@ def test_grants_policy_16_positive_and_negative_role_matrix(pg_db_migrated):
     # 4. Least-privilege fc27_roster enforcement across match_results_writer, app, dispatch, and relay
     with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as mrw_conn:
         mrw_conn.execute(
-            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position) "
-            "VALUES ('p_lao_matrix', 'Lao', 'lao', 'ST')"
+            "INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, display_name_comparison_key, position) "
+            "VALUES ('p_lao_matrix', 'Lao', 'lao', 'lao', 'ST')"
         )
         mrw_conn.execute(
             "UPDATE public.fc27_roster SET position = 'CAM' WHERE player_id = 'p_lao_matrix'"

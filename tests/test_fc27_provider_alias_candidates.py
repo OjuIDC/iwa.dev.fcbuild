@@ -2169,6 +2169,8 @@ class TestSharedUnicodeNormalization:
         assert normalize_public_player_alias_key("Ｓｔｒａßｅ") == "strasse"  # NFKC + casefold
         assert normalize_public_player_alias_key("Cafe\u0301") == normalize_public_player_alias_key("Café")
         assert normalize_public_player_alias_key("  Lao   Jr \t ") == "lao jr"
+        assert normalize_public_player_alias_key("\u1e97ag") == normalize_public_player_alias_key("t\u0308ag")
+        assert normalize_public_player_alias_key("ＴＡＧ") == normalize_public_player_alias_key("tag")
         assert normalize_public_player_alias_key("Lao_Jr-1.0") != normalize_public_player_alias_key("Lao Jr 1 0")
         assert normalize_public_player_alias_key("Lao") == "lao"
 
@@ -2182,6 +2184,7 @@ class TestSharedUnicodeNormalization:
                         _player_payload("9701", alias_field="player_name", alias_value="Straße"),
                         _player_payload("9702", alias_field="player_name", alias_value="Cafe\u0301 Tag", position="CM", goals=0),
                         _player_payload("9703", alias_field="player_name", alias_value="Rejectedß", position="CB", goals=0),
+                        _player_payload("9705", alias_field="player_name", alias_value="\u1e97ag", position="LW", goals=0),
                     ],
                 )
             ],
@@ -2192,6 +2195,7 @@ class TestSharedUnicodeNormalization:
         p9701 = pseudonymize_east_coasters_identifier("9701", club_id=EAST_COASTERS_CLUB_ID)
         p9702 = pseudonymize_east_coasters_identifier("9702", club_id=EAST_COASTERS_CLUB_ID)
         p9703 = pseudonymize_east_coasters_identifier("9703", club_id=EAST_COASTERS_CLUB_ID)
+        p9705 = pseudonymize_east_coasters_identifier("9705", club_id=EAST_COASTERS_CLUB_ID)
 
         # Reject p9703 before upsert: rejected candidates must NEVER be promoted
         with psycopg.connect(pg_db_migrated.admin) as aconn:
@@ -2244,6 +2248,12 @@ class TestSharedUnicodeNormalization:
             display_name="Rejectedß",
             position="CB",
         )
+        upsert_roster_player(
+            pg_db_migrated.match_results_writer,
+            player_id=p9705,
+            display_name="\u1e97ag",
+            position="LW",
+        )
         # Manual roster name with non-provider punctuation (parentheses/apostrophe) still works cleanly
         p9704 = pseudonymize_east_coasters_identifier("9704", club_id=EAST_COASTERS_CLUB_ID)
         manual_rec = upsert_roster_player(
@@ -2276,6 +2286,22 @@ class TestSharedUnicodeNormalization:
                 "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9702,),
             ).fetchone() == ("PROMOTED",)
+            assert aconn.execute(
+                "SELECT display_name_comparison_key FROM public.fc27_roster WHERE player_id = %s",
+                (p9705,),
+            ).fetchone() == (normalize_public_player_alias_key("\u1e97ag"),)
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                with aconn.transaction():
+                    aconn.execute(
+                        """INSERT INTO public.fc27_roster
+                        (player_id, display_name, display_name_normalized,
+                         display_name_comparison_key, active)
+                        VALUES (%s, %s, %s, %s, TRUE)""",
+                        (
+                            "plr_ecf_000000009999", "t\u0308ag", "t\u0308ag",
+                            normalize_public_player_alias_key("t\u0308ag"),
+                        ),
+                    )
             assert aconn.execute(
                 "SELECT verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
                 (p9703,),
@@ -2351,3 +2377,90 @@ class TestDbMigratePrivilegePostconditionsRegression:
 
             # Confirm rollbacks left intended least-privilege posture clean
             assert verify_postconditions(aconn) == []
+
+
+def test_unchanged_roster_manual_candidate_confirmation_uses_confirmation_time(
+    pg_db_migrated: Any,
+) -> None:
+    raw_id = "9801"
+    player_id = pseudonymize_east_coasters_identifier(
+        raw_id, club_id=EAST_COASTERS_CLUB_ID
+    )
+    alias = "ConfirmedLater"
+    for match_id, timestamp in (("983101", 1763040100), ("983102", 1763040200)):
+        envelope, _ = normalize_community_match_records(
+            [
+                _raw_community_match(
+                    match_id=match_id,
+                    timestamp=timestamp,
+                    players=[_player_payload(raw_id, alias_field="player_name", alias_value=alias)],
+                )
+            ],
+            alias_hmac_key=TEST_ALIAS_HMAC_KEY,
+        )
+        persist_polled_match_envelope(pg_db_migrated.poll_writer, match_envelope=envelope)
+
+    historical = datetime(2020, 1, 1, tzinfo=UTC)
+    comparison_key = normalize_public_player_alias_key(alias)
+    with psycopg.connect(pg_db_migrated.admin) as admin:
+        candidate = admin.execute(
+            "SELECT candidate_id, verification_status FROM public.fc27_player_alias_candidates WHERE player_id = %s",
+            (player_id,),
+        ).fetchone()
+        assert candidate is not None and candidate[1] == "STABLE"
+        candidate_id = int(candidate[0])
+        admin.execute(
+            """INSERT INTO public.fc27_roster
+            (player_id, display_name, display_name_normalized,
+             display_name_comparison_key, position, active, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, 'ST', TRUE, %s, %s)""",
+            (player_id, alias, alias.lower(), comparison_key, historical, historical),
+        )
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=player_id,
+        display_name=alias,
+        position="ST",
+        actor_discord_user_id=IDENTITY_OP_USER_ID,
+    )
+    with psycopg.connect(pg_db_migrated.admin) as admin:
+        promoted_at_row = admin.execute(
+            "SELECT promoted_at FROM public.fc27_player_alias_candidates WHERE candidate_id = %s",
+            (candidate_id,),
+        ).fetchone()
+        audit_rows = admin.execute(
+            "SELECT promoted_at FROM public.fc27_player_alias_promotion_audit WHERE candidate_id = %s",
+            (candidate_id,),
+        ).fetchall()
+        roster_updated_at_row = admin.execute(
+            "SELECT updated_at FROM public.fc27_roster WHERE player_id = %s",
+            (player_id,),
+        ).fetchone()
+        refresh_count_row = admin.execute(
+            "SELECT count(*) FROM public.fc27_discord_jobs WHERE job_type = 'refresh_roster_messages' AND payload ->> 'player_id' = %s",
+            (player_id,),
+        ).fetchone()
+        assert promoted_at_row is not None
+        assert roster_updated_at_row is not None
+        assert refresh_count_row is not None
+        promoted_at = promoted_at_row[0]
+        roster_updated_at = roster_updated_at_row[0]
+        refresh_count = refresh_count_row[0]
+        assert promoted_at > historical
+        assert audit_rows == [(promoted_at,)]
+        assert roster_updated_at == historical
+        assert refresh_count == 0
+
+    upsert_roster_player(
+        pg_db_migrated.match_results_writer,
+        player_id=player_id,
+        display_name=alias,
+        position="ST",
+        actor_discord_user_id=IDENTITY_OP_USER_ID,
+    )
+    with psycopg.connect(pg_db_migrated.admin) as admin:
+        assert admin.execute(
+            "SELECT count(*) FROM public.fc27_player_alias_promotion_audit WHERE candidate_id = %s",
+            (candidate_id,),
+        ).fetchone() == (1,)

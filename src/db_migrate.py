@@ -33,6 +33,72 @@ GRANTS_POLICY = GrantsPolicy(version=GRANTS_POLICY_VERSION, sha256=_compute_gran
 class MigrationError(RuntimeError):
     pass
 
+
+def _finalize_fc27_alias_comparison_keys(cur: psycopg.Cursor) -> None:
+    """Backfill Migration 0020 keys with the same Python normalizer used by writes."""
+    import unicodedata
+
+    from src.fc27_privacy import normalize_public_player_alias_key
+
+    rows = cur.execute(
+        "SELECT player_id, display_name, active FROM public.fc27_roster ORDER BY player_id"
+    ).fetchall()
+    keys: list[tuple[str, str, bool]] = []
+    active_owners: dict[str, list[str]] = {}
+    for player_id, display_name, active in rows:
+        key = normalize_public_player_alias_key(str(display_name))
+        if (
+            not key
+            or len(key) > 128
+            or any(unicodedata.category(char) == "Cc" for char in key)
+        ):
+            raise MigrationError("Migration 0020 found an invalid roster comparison key")
+        keys.append((str(player_id), key, bool(active)))
+        if active:
+            active_owners.setdefault(key, []).append(str(player_id))
+
+    collisions = [owners for owners in active_owners.values() if len(owners) > 1]
+    if collisions:
+        raise MigrationError(
+            "Migration 0020 found duplicate active roster comparison keys; resolve collisions manually"
+        )
+
+    cur.executemany(
+        "UPDATE public.fc27_roster SET display_name_comparison_key = %s WHERE player_id = %s",
+        [(key, player_id) for player_id, key, _active in keys],
+    )
+    missing_row = cur.execute(
+        "SELECT count(*) FROM public.fc27_roster WHERE display_name_comparison_key IS NULL"
+    ).fetchone()
+    if missing_row is None:
+        raise MigrationError("Migration 0020 could not verify comparison-key backfill")
+    missing = missing_row[0]
+    if missing:
+        raise MigrationError("Migration 0020 comparison-key backfill left active roster rows missing")
+    cur.execute(
+        "ALTER TABLE public.fc27_roster ALTER COLUMN display_name_comparison_key SET NOT NULL"
+    )
+    cur.execute(
+        """DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'fc27_roster_comparison_key_chk'
+              AND conrelid = 'public.fc27_roster'::regclass
+        ) THEN
+            ALTER TABLE public.fc27_roster ADD CONSTRAINT fc27_roster_comparison_key_chk
+            CHECK (
+                pg_catalog.char_length(display_name_comparison_key) BETWEEN 1 AND 128
+                AND display_name_comparison_key = pg_catalog.btrim(display_name_comparison_key)
+                AND display_name_comparison_key !~ '[\\x00-\\x1F\\x7F]'
+            );
+        END IF;
+        END $$"""
+    )
+    cur.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_fc27_roster_active_comparison_key_unique
+        ON public.fc27_roster (display_name_comparison_key) WHERE active = TRUE"""
+    )
+
 def migration_files(directory: Path = MIGRATIONS_DIR) -> list[tuple[str, Path]]:
     files = []
     for path in sorted(directory.glob("*.sql")):
@@ -966,7 +1032,6 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 ("fc27_evaluate_alias_candidates_for_promotion", ("fc27_poll_writer",)),
                 ("fc27_record_manual_alias_promotion_audit", ("fc27_match_results_writer",)),
                 ("fc27_purge_resolved_alias_review_exceptions", ("fc27_match_results_writer",)),
-                ("fc27_sync_roster_comparison_key", ()),
             )
             all_check_roles = (
                 "public",
@@ -1017,42 +1082,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     elif check_role not in allowed_exec_roles and has_exec:
                         violations.append(f"forbidden_{check_role}_exec_{fn_name}")
 
-            # Verify immutable Unicode comparison helper ownership and strict role scope
-            cur.execute(
-                """
-                SELECT p.oid, p.proowner::regrole::text, p.proconfig
-                FROM pg_proc p
-                JOIN pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname = 'public'
-                  AND p.proname = 'fc27_normalize_alias_comparison_key'
-                """
-            )
-            norm_fn_row = cur.fetchone()
-            if not norm_fn_row:
-                violations.append("missing_function_fc27_normalize_alias_comparison_key")
-            else:
-                nf_oid, nf_owner, nf_config = norm_fn_row
-                if nf_owner != "fc27_owner":
-                    violations.append("fc27_normalize_alias_comparison_key_not_owner")
-                nf_cfg = " ".join(nf_config) if nf_config else ""
-                if "search_path=pg_catalog, pg_temp" not in nf_cfg:
-                    violations.append("fc27_normalize_alias_comparison_key_search_path")
-                norm_allowed = ("fc27_poll_writer", "fc27_match_results_writer")
-                for check_role in all_check_roles:
-                    if check_role != "public":
-                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
-                        if not cur.fetchone():
-                            continue
-                    cur.execute(
-                        "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
-                        (check_role, nf_oid),
-                    )
-                    ne_row = cur.fetchone()
-                    has_exec = bool(ne_row and ne_row[0])
-                    if check_role in norm_allowed and not has_exec:
-                        violations.append(f"missing_{check_role}_exec_fc27_normalize_alias_comparison_key")
-                    elif check_role not in norm_allowed and has_exec:
-                        violations.append(f"forbidden_{check_role}_exec_fc27_normalize_alias_comparison_key")
+            # Migration 0020 deliberately has no SQL Unicode normalization helper.
 
             # Confirm fc27_poll_writer still has zero direct privileges on fc27_roster and fc27_discord_jobs_job_id_seq UPDATE/DELETE
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer'")
@@ -1138,6 +1168,8 @@ def migrate(conninfo: str, directory: Path = MIGRATIONS_DIR, *, target: str | No
                         continue
                     with conn.transaction():
                         cur.execute(cast(LiteralString, migration_sql))
+                        if version == "0020":
+                            _finalize_fc27_alias_comparison_keys(cur)
                         cur.execute(
                             "INSERT INTO schema_migrations(version, name, sha256) VALUES (%s, %s, %s)",
                             (version, path.name, digest),

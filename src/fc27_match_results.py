@@ -3070,6 +3070,7 @@ def upsert_roster_player(
                 matched_prior_ver = "NONE"
                 matched_prior_conf = "NONE"
                 candidate_promoted_now = False
+                candidate_promoted_at: datetime | None = None
                 if effective_active and norm_name != unresolved_norm:
                     cand_chk = cur.execute(
                         """
@@ -3101,6 +3102,9 @@ def upsert_roster_player(
                             matched_distinct_cnt = max(1, int(prior_cand_row[1]))
                             matched_prior_ver = str(prior_cand_row[2])
                             matched_prior_conf = str(prior_cand_row[3])
+                        confirmation_at = cur.execute(
+                            "SELECT pg_catalog.clock_timestamp()"
+                        ).fetchone()[0]
                         promoted_cand_rows = cur.execute(
                             """
                             UPDATE public.fc27_player_alias_candidates
@@ -3110,11 +3114,13 @@ def upsert_roster_player(
                             WHERE player_id = %s
                               AND public_alias_normalized = %s
                               AND verification_status NOT IN ('REJECTED', 'PROMOTED')
-                            RETURNING candidate_id
+                            RETURNING candidate_id, promoted_at
                             """,
-                            (row[7], row[7], safe_pid, candidate_lookup_norm),
+                            (confirmation_at, confirmation_at, safe_pid, candidate_lookup_norm),
                         ).fetchall()
                         candidate_promoted_now = bool(promoted_cand_rows)
+                        if promoted_cand_rows:
+                            candidate_promoted_at = promoted_cand_rows[0][1]
                         seed_aliases = [candidate_lookup_norm]
                         if prev_row is not None and old_display_name is not None:
                             seed_aliases.append(normalize_public_player_alias_key(old_display_name))
@@ -3127,7 +3133,7 @@ def upsert_roster_player(
                     _resolve_player_alias_exceptions_in_tx(
                         cur,
                         player_id=safe_pid,
-                        resolved_at=row[7],
+                        resolved_at=candidate_promoted_at or row[7],
                         target_state="RESOLVED",
                     )
                 if (
@@ -3181,7 +3187,7 @@ def upsert_roster_player(
                         prior_conflict_status=matched_prior_conf,
                         roster_revision=roster_revision,
                         refresh_job_id=refresh_job_id,
-                        promoted_at=row[7],
+                        promoted_at=candidate_promoted_at or row[7],
                     )
                 return RosterPlayerRecord(
                     player_id=str(row[0]),

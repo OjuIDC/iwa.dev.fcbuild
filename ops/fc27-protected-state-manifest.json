@@ -137,5 +137,25 @@
     "5. Verify db-bootstrap dry-run posture and apply db-migrate (Migration 0020 + Grants Policy 21).",
     "6. Run python -m src.fc27_protected_state readiness before starting fc27-discord-bot or fc27-community-worker.",
     "7. Start fc27-discord-bot and fc27-community-worker and verify post-start health with verify-post-start."
-  ]
+  ],
+  "compose_secret_sources": {
+    "postgres_admin_uri": "secrets/postgres_admin_uri",
+    "fc27_migrator_password": "secrets/fc27_migrator_password",
+    "fc27_app_password": "secrets/fc27_app_password",
+    "fc27_dispatch_password": "secrets/fc27_dispatch_password",
+    "fc27_migrator_uri": "secrets/fc27_migrator_uri",
+    "fc27_relay_password": "secrets/fc27_relay_password",
+    "fc27_match_results_writer_password": "secrets/fc27_match_results_writer_password",
+    "fc27_poll_writer_password": "secrets/fc27_poll_writer_password",
+    "fc27_player_dev_writer_password": "secrets/fc27_player_dev_writer_password",
+    "fc27_discord_reader_password": "secrets/fc27_discord_reader_password",
+    "postgres_password": "secrets/postgres_password",
+    "redis_password": "secrets/redis_password",
+    "discord_bot_token": "secrets/discord_bot_token",
+    "fc27_app_uri": "secrets/fc27_app_uri",
+    "fc27_discord_reader_uri": "secrets/fc27_discord_reader_uri",
+    "fc27_player_dev_writer_uri": "secrets/fc27_player_dev_writer_uri",
+    "fc27_poll_writer_uri": "secrets/fc27_poll_writer_uri",
+    "fc27_alias_hmac_key": "secrets/fc27_alias_hmac_key"
+  }
 }

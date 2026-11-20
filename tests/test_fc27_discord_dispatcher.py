@@ -1576,11 +1576,12 @@ def test_26_dispatcher_batch_resolves_fc27_roster_and_renders_canonical_notifica
         conn.execute("UPDATE public.fc27_matches SET formation = 'UNKNOWN'")
         conn.execute(
             """
-            INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, position, active)
-            VALUES (%s, 'Lao', 'lao', 'CM', TRUE)
+            INSERT INTO public.fc27_roster (player_id, display_name, display_name_normalized, display_name_comparison_key, position, active)
+            VALUES (%s, 'Lao', 'lao', 'lao', 'CM', TRUE)
             ON CONFLICT (player_id) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
-                display_name_normalized = EXCLUDED.display_name_normalized
+                display_name_normalized = EXCLUDED.display_name_normalized,
+                display_name_comparison_key = EXCLUDED.display_name_comparison_key
             """,
             (registered_pref,),
         )

@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterator, Sequence
 import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -732,6 +732,7 @@ class FC27PollingHealth(BaseModel):
     last_success_at: datetime | None = None
     last_new_match_at: datetime | None = None
     last_status: FC27PollStatusLiteral = "DISABLED"
+    last_error_category: str | None = None
     consecutive_failures: int = Field(default=0, ge=0)
     total_cycles: int = Field(default=0, ge=0)
     total_provider_requests: int = Field(default=0, ge=0)
@@ -1285,7 +1286,10 @@ def _supplied_matches_from_normalized_records(
                 opponent_name=str(rec.get("opponent_name") or "Opponent Club"),
                 formation=formation_raw if formation_raw != "UNKNOWN" else "UNKNOWN",
                 player_performances=perfs,
-                match_type=str(rec.get("match_type") or "LEAGUE"),
+                match_type=cast(
+                    Literal["LEAGUE", "PLAYOFF", "FRIENDLY", "CUP", "PRACTICE", "UNKNOWN"],
+                    str(rec.get("match_type") or "LEAGUE"),
+                ),
                 match_status="COMPLETED",
                 data_quality_status="VERIFIED",
                 source_classification="COMMUNITY_RESEARCH_DERIVED",
@@ -2162,6 +2166,7 @@ class FC27PollingRuntime:
     last_success_at: datetime | None = None
     last_new_match_at: datetime | None = None
     last_status: FC27PollStatusLiteral = "DISABLED"
+    last_error_category: str | None = None
     consecutive_failures: int = 0
     total_cycles: int = 0
     total_provider_requests: int = 0
@@ -2274,6 +2279,7 @@ class FC27PollingRuntime:
                 last_success_at=self.last_success_at,
                 last_new_match_at=self.last_new_match_at,
                 last_status=self.last_status,
+                last_error_category=self.last_error_category,
                 consecutive_failures=self.consecutive_failures,
                 total_cycles=self.total_cycles,
                 total_provider_requests=self.total_provider_requests,
@@ -2627,6 +2633,7 @@ def run_fc27_poll_cycle(
             if not is_skipped_without_attempt:
                 rt.last_attempted_match_type = eff_match_type
             rt.last_status = poll_status
+            rt.last_error_category = error_category
             rt.total_cycles += 1
             rt.total_provider_requests += provider_requests
             rt.total_matches_inserted += inserted_match_count
@@ -2824,7 +2831,7 @@ def run_fc27_poll_cycle(
         or "FC27_ALIAS_HMAC_KEY" in os.environ
         or "FC27_ALIAS_HMAC_KEY_FILE" in os.environ
     )
-    alias_hmac_key: str | None = None
+    alias_hmac_key: bytes | None = None
     if require_hmac_key:
         try:
             alias_hmac_key = read_fc27_alias_hmac_key(required=True)
@@ -3316,7 +3323,10 @@ def run_fc27_poll_cycle(
         jobs_inserted = getattr(persistence_summary, "discord_jobs_inserted", 0)
         jobs_existing = getattr(persistence_summary, "discord_jobs_existing", 0)
         job_conflicts = getattr(persistence_summary, "discord_job_conflicts", 0)
-        promo_mode = getattr(persistence_summary, "auto_promotion_mode", "DISABLED")
+        promo_mode = cast(
+            Literal["DISABLED", "SHADOW", "ACTIVE"],
+            str(getattr(persistence_summary, "auto_promotion_mode", "DISABLED")),
+        )
         promo_would_promote = getattr(persistence_summary, "candidates_would_promote", 0)
         promo_promoted = getattr(persistence_summary, "candidates_auto_promoted", 0)
         promo_refresh_jobs = getattr(persistence_summary, "auto_promotion_refresh_jobs_enqueued", 0)
