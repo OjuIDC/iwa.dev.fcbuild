@@ -1,0 +1,5 @@
+iwadev
+nomic
+Nomic
+qwen
+Qwen
