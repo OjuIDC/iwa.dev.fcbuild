@@ -1044,6 +1044,8 @@ class TestProtectedStateRecoveryScenarios:
                 "src.fc27_protected_state.apply_restrictive_permissions",
                 lambda *_a, **_kw: (_ for _ in ()).throw(PermissionError("injected")),
             )
+        elif failure == "acl":
+            monkeypatch.setattr("src.fc27_protected_state._is_windows", lambda: True)
 
         acl = (
             _fake_acl_runner_factory(inject_bad_ace=True)

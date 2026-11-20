@@ -62,6 +62,8 @@ def _print_status_report(
         f"POLLING_ENABLED={_format_bool(polling_enabled)}",
         f"MINIMUM_INTERVAL_SECONDS={policy.minimum_interval_seconds}",
         f"MAXIMUM_RETRIES={policy.maximum_retries}",
+        ("MAX_PROVIDER_REQUESTS_PER_24_HOURS="
+         f"{policy.max_provider_requests_per_24_hours}"),
         f"SINGLE_FLIGHT={_format_bool(policy.single_flight_enabled)}",
         f"PROVIDER_REQUESTS_EXECUTED={health.total_provider_requests}",
         f"LAST_ERROR_CATEGORY={health.last_error_category or ''}",
