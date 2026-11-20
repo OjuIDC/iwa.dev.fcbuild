@@ -38,3 +38,5 @@ docker-compose.local.yml
 
 # MSBuild intermediate output
 /obj/
+
+.fake
