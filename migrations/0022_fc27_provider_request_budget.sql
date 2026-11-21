@@ -8,11 +8,14 @@ CREATE TABLE IF NOT EXISTS public.fc27_provider_request_attempts (
     club_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     match_type TEXT NOT NULL CHECK (match_type IN ('leagueMatch', 'playoffMatch', 'friendlyMatch')),
+    invocation_source TEXT NOT NULL DEFAULT 'SCHEDULED_POLL'
+        CHECK (invocation_source IN ('SCHEDULED_POLL', 'MANUAL_POLL', 'BACKFILL_CLI')),
     attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     outcome_category TEXT NOT NULL DEFAULT 'RESERVED'
         CHECK (outcome_category IN (
             'RESERVED', 'ATTEMPTED', 'SUCCEEDED', 'FAILED', 'ABANDONED',
-            'PROVIDER_BLOCKED', 'SCHEMA_DRIFT', 'TRANSIENT_FAILURE', 'PERSISTENCE_FAILURE'
+            'PROVIDER_BLOCKED', 'SCHEMA_DRIFT', 'TRANSIENT_FAILURE', 'PERSISTENCE_FAILURE',
+            'AUTHENTICATION_FAILED', 'AUTHORIZATION_FAILED', 'RATE_LIMITED', 'PRIVACY_REJECTED'
         )),
     finalized_at TIMESTAMPTZ
 );
@@ -35,7 +38,8 @@ CREATE OR REPLACE FUNCTION public.fc27_reserve_provider_request(
     p_platform TEXT,
     p_match_type TEXT,
     p_max_requests_per_cycle INT,
-    p_max_requests_per_24_hours INT
+    p_max_requests_per_24_hours INT,
+    p_invocation_source TEXT DEFAULT 'SCHEDULED_POLL'
 )
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -46,6 +50,7 @@ DECLARE
     v_recent_count INT;
     v_cycle_count INT;
     v_lock_key TEXT;
+    v_inv_source TEXT;
 BEGIN
     IF p_attempt_id IS NULL OR p_attempt_id = '' THEN
         RAISE EXCEPTION 'p_attempt_id must not be empty';
@@ -55,6 +60,10 @@ BEGIN
     END IF;
     IF p_match_type NOT IN ('leagueMatch', 'playoffMatch', 'friendlyMatch') THEN
         RAISE EXCEPTION 'Invalid match_type: %', p_match_type;
+    END IF;
+    v_inv_source := COALESCE(NULLIF(TRIM(p_invocation_source), ''), 'SCHEDULED_POLL');
+    IF v_inv_source NOT IN ('SCHEDULED_POLL', 'MANUAL_POLL', 'BACKFILL_CLI') THEN
+        RAISE EXCEPTION 'Invalid invocation_source: %', p_invocation_source;
     END IF;
 
     -- Concurrency-safe final-slot locking per provider/club/platform
@@ -81,6 +90,7 @@ BEGIN
         club_id,
         platform,
         match_type,
+        invocation_source,
         attempted_at,
         outcome_category
     ) VALUES (
@@ -90,6 +100,7 @@ BEGIN
         p_club_id,
         p_platform,
         p_match_type,
+        v_inv_source,
         now(),
         'RESERVED'
     );
@@ -98,8 +109,8 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.fc27_reserve_provider_request(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INT, INT) OWNER TO fc27_owner;
-REVOKE ALL ON FUNCTION public.fc27_reserve_provider_request(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INT, INT) FROM PUBLIC;
+ALTER FUNCTION public.fc27_reserve_provider_request(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INT, INT, TEXT) OWNER TO fc27_owner;
+REVOKE ALL ON FUNCTION public.fc27_reserve_provider_request(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INT, INT, TEXT) FROM PUBLIC;
 
 -- Narrow SECURITY DEFINER procedure to finalize attempt outcome.
 CREATE OR REPLACE FUNCTION public.fc27_finalize_provider_request(
@@ -111,15 +122,36 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
+DECLARE
+    v_current_outcome TEXT;
 BEGIN
     IF p_attempt_id IS NULL OR p_attempt_id = '' THEN
         RAISE EXCEPTION 'p_attempt_id must not be empty';
     END IF;
     IF p_outcome_category NOT IN (
         'RESERVED', 'ATTEMPTED', 'SUCCEEDED', 'FAILED', 'ABANDONED',
-        'PROVIDER_BLOCKED', 'SCHEMA_DRIFT', 'TRANSIENT_FAILURE', 'PERSISTENCE_FAILURE'
+        'PROVIDER_BLOCKED', 'SCHEMA_DRIFT', 'TRANSIENT_FAILURE', 'PERSISTENCE_FAILURE',
+        'AUTHENTICATION_FAILED', 'AUTHORIZATION_FAILED', 'RATE_LIMITED', 'PRIVACY_REJECTED'
     ) THEN
         RAISE EXCEPTION 'Invalid outcome_category: %', p_outcome_category;
+    END IF;
+
+    SELECT outcome_category INTO v_current_outcome
+      FROM public.fc27_provider_request_attempts
+     WHERE attempt_id = p_attempt_id;
+
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Finalization is idempotent: already in requested final state
+    IF v_current_outcome = p_outcome_category THEN
+        RETURN TRUE;
+    END IF;
+
+    -- Invalid transition: terminal outcome cannot be reverted to RESERVED
+    IF v_current_outcome != 'RESERVED' AND p_outcome_category = 'RESERVED' THEN
+        RAISE EXCEPTION 'Invalid state transition from % to RESERVED', v_current_outcome;
     END IF;
 
     UPDATE public.fc27_provider_request_attempts
@@ -127,7 +159,7 @@ BEGIN
            finalized_at = now()
      WHERE attempt_id = p_attempt_id;
 
-    RETURN FOUND;
+    RETURN TRUE;
 END;
 $$;
 

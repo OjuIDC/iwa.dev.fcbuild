@@ -1209,6 +1209,14 @@ BEGIN
         END IF;
     END IF;
 
+    IF to_regprocedure('public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer, text) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
     IF to_regprocedure('public.fc27_finalize_provider_request(text, text)') IS NOT NULL THEN
         REVOKE ALL ON FUNCTION public.fc27_finalize_provider_request(text, text)
             FROM PUBLIC, fc27_app, fc27_dispatch;

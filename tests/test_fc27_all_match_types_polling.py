@@ -41,6 +41,7 @@ from pydantic import ValidationError
 from src import settings
 from src.db_migrate import migrate
 from src.db_roles import GRANTS_POLICY_VERSION
+from src.fc27_api_rate_limit import FC27AdapterCircuitBreaker, FC27CircuitState
 from src.fc27_clubs_api_contracts import FC27SchemaValidationError
 from src.fc27_community_provider import (
     COMMUNITY_PROVIDER_ID,
@@ -71,8 +72,10 @@ from src.fc27_polling_worker import (
     _reserve_provider_request_budget,
     build_fc27_polling_policy_from_env,
     run_fc27_poll_cycle,
+    should_continue_polling_cycle_after_result,
 )
 from src.fc27_provider import FC27AuthenticationError, FC27LiveAccessBlockedError, FC27TransportError
+from src.settings import ConfigError, get_fc27_community_poll_max_requests
 from tests.test_fc27_pandas_view import _make_pandas_shim
 from tests.test_fc27_polling_worker import (
     _build_validated_envelope,
@@ -778,3 +781,343 @@ def test_018_migration_0022_and_grants_policy_23_idempotency_and_security(pg_db_
     # Idempotent re-run of migrator
     applied = migrate(pg_db_migrated.migrator)
     assert applied == []
+
+
+# ==============================================================================
+# 19. CENTRALIZED FAILURE DECISION MATRIX (TABLE-DRIVEN)
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    "poll_status,error_category,circuit_state,expected_continue",
+    [
+        ("NO_NEW_MATCHES", "", FC27CircuitState.CLOSED, True),
+        ("NEW_MATCHES_PERSISTED", "", FC27CircuitState.CLOSED, True),
+        ("PROVIDER_BLOCKED", "AUTHENTICATION_FAILED", FC27CircuitState.CLOSED, False),
+        ("PROVIDER_BLOCKED", "AUTHORIZATION_FAILED", FC27CircuitState.CLOSED, False),
+        ("PROVIDER_BLOCKED", "RATE_LIMITED", FC27CircuitState.CLOSED, False),
+        ("PROVIDER_BLOCKED", "DATABASE_POSTURE_ERROR", FC27CircuitState.CLOSED, False),
+        ("SCHEMA_DRIFT", "SCHEMA_DRIFT", FC27CircuitState.CLOSED, False),
+        ("IDENTITY_REJECTED", "IDENTITY_MISMATCH", FC27CircuitState.CLOSED, False),
+        ("PRIVACY_REJECTED", "PRIVACY_REJECTED", FC27CircuitState.CLOSED, False),
+        ("PRIVACY_REJECTED", "FINGERPRINT_COLLISION", FC27CircuitState.CLOSED, False),
+        ("REPLAY_CONFLICT", "REPLAY_CONFLICT", FC27CircuitState.CLOSED, False),
+        ("SKIPPED_SINGLE_FLIGHT_BUSY", "SINGLE_FLIGHT_BUSY", FC27CircuitState.CLOSED, False),
+        ("TRANSIENT_FAILURE", "TRANSIENT_TIMEOUT", FC27CircuitState.CLOSED, True),
+        ("TRANSIENT_FAILURE", "TRANSIENT_TRANSPORT_ERROR", FC27CircuitState.CLOSED, True),
+        ("TRANSIENT_FAILURE", "TYPE_LOCAL_TIMEOUT", FC27CircuitState.CLOSED, True),
+        ("TRANSIENT_FAILURE", "PERSISTENCE_FAILURE", FC27CircuitState.CLOSED, True),
+        ("TRANSIENT_FAILURE", "TRANSIENT_TIMEOUT", FC27CircuitState.OPEN, False),
+        ("TRANSIENT_FAILURE", "DATABASE_POSTURE_ERROR", FC27CircuitState.CLOSED, False),
+        ("TRANSIENT_FAILURE", "POSTGRESQL_OUTAGE", FC27CircuitState.CLOSED, False),
+    ],
+)
+def test_019_centralized_failure_decision_matrix_table_driven(
+    poll_status: str,
+    error_category: str,
+    circuit_state: FC27CircuitState,
+    expected_continue: bool,
+) -> None:
+    """Table-driven test for should_continue_polling_cycle_after_result across all error categories and circuit states."""
+    cb = FC27AdapterCircuitBreaker(approved_provider_selected=True)
+    if circuit_state == FC27CircuitState.OPEN:
+        cb.record_failure("HTTP_403")
+
+    now = datetime.now(timezone.utc)
+    dummy_res = FC27PollResult(
+        poll_attempt_id="dummy-att-1",
+        poll_status=poll_status,
+        single_flight_acquired=True,
+        cache_status="MISS",
+        started_at=now,
+        finished_at=now,
+        duration_ms=10,
+        poll_interval_seconds=14400,
+        polling_frequency="ONCE_EVERY_4_HOURS",
+        provider_requests=1,
+        retries_attempted=0,
+        source_match_count=0,
+        accepted_match_count=0,
+        inserted_match_count=0,
+        duplicate_ignored_count=0,
+        replay_conflict_count=0,
+        analytics_executed=False,
+        confidence_tier="COMMUNITY_DERIVED",
+        circuit_state=circuit_state.value,
+        match_type="leagueMatch",
+        next_rotation_match_type="playoffMatch",
+        error_category=error_category,
+    )
+
+    should_cont = should_continue_polling_cycle_after_result(
+        dummy_res,
+        circuit_breaker=cb,
+        single_flight_held=True,
+        budget_exhausted=False,
+    )
+    assert should_cont == expected_continue
+
+    # Lease lost must always stop
+    assert should_continue_polling_cycle_after_result(
+        dummy_res,
+        circuit_breaker=cb,
+        single_flight_held=False,
+        budget_exhausted=False,
+    ) is False
+
+    # Budget exhausted must always stop
+    assert should_continue_polling_cycle_after_result(
+        dummy_res,
+        circuit_breaker=cb,
+        single_flight_held=True,
+        budget_exhausted=True,
+    ) is False
+
+
+# ==============================================================================
+# 20. HTTP 401, 403, 429 STOP REMAINING TYPES AND FINALIZE OUTCOME
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    "exc_to_raise,expected_status,expected_err_cat",
+    [
+        (FC27AuthenticationError("401 Unauthorized"), "PROVIDER_BLOCKED", "AUTHENTICATION_FAILED"),
+        (FC27PollingProviderBlockedError("403 Forbidden"), "PROVIDER_BLOCKED", "AUTHORIZATION_FAILED"),
+        (FC27TransportError("429 Too Many Requests"), "PROVIDER_BLOCKED", "RATE_LIMITED"),
+    ],
+)
+def test_020_http_401_403_429_stops_remaining_types_and_finalizes_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    exc_to_raise: Exception,
+    expected_status: str,
+    expected_err_cat: str,
+) -> None:
+    """HTTP 401, 403, and 429 stops the batch immediately and classifies accurately."""
+    _enable_all_polling_gates(monkeypatch)
+    called: list[str] = []
+
+    def fetch(match_type: str) -> FC27CommunityProviderEnvelope:
+        called.append(match_type)
+        if match_type == "leagueMatch":
+            raise exc_to_raise
+        return _build_validated_envelope(1, start_id=983500, match_type=match_type)[0]
+
+    policy = _make_all_types_policy()
+    result = run_fc27_poll_cycle(
+        policy=policy,
+        runtime=FC27PollingRuntime(policy=policy),
+        confirm_live_polling=True,
+        fetch_matches_fn=fetch,
+        persist_fn=lambda _env: _fake_persist_summary(inserted=0),
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    assert called == ["leagueMatch"], "playoffMatch and friendlyMatch must NOT be called"
+    assert result.poll_status == expected_status
+    assert result.error_category == expected_err_cat
+    assert result.batch_requests_attempted == 1
+
+
+# ==============================================================================
+# 21. CIRCUIT BREAKER BEHAVIOR UNDER TIMEOUTS AND IMMEDIATE FAILURES
+# ==============================================================================
+
+
+def test_021_circuit_breaker_behavior_under_timeouts_and_immediate_failures() -> None:
+    """Type-local timeout does not latch breaker OPEN; repeated timeouts trip breaker; immediate reasons trip breaker."""
+    cb = FC27AdapterCircuitBreaker(approved_provider_selected=True, timeout_threshold=2)
+    assert cb.state == FC27CircuitState.CLOSED
+
+    # 1. Single timeout does NOT open the breaker
+    cb.record_failure("TRANSIENT_TIMEOUT")
+    assert cb.state == FC27CircuitState.CLOSED
+    cb.before_call()  # Succeeds without raising
+
+    # 2. Second timeout trips to OPEN
+    cb.record_failure("TRANSIENT_TIMEOUT")
+    assert cb.state == FC27CircuitState.OPEN
+    with pytest.raises(FC27TransportError, match="Circuit breaker is OPEN"):
+        cb.before_call()
+
+    # Reset breaker
+    cb.record_success()
+    assert cb.state == FC27CircuitState.CLOSED
+
+    # 3. Immediate open reasons trip immediately
+    cb.record_failure("AUTHENTICATION_FAILED")
+    assert cb.state == FC27CircuitState.OPEN
+
+    cb.record_success()
+    cb.record_failure("RATE_LIMITED")
+    assert cb.state == FC27CircuitState.OPEN
+
+
+# ==============================================================================
+# 22. CONFIGURATION KEYS RECONCILIATION CANONICAL AND ALIAS
+# ==============================================================================
+
+
+def test_022_configuration_keys_reconciliation_canonical_and_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FC27_COMMUNITY_POLL_MAX_REQUESTS is canonical; alias supported; conflicts fail closed."""
+    # 1. Canonical key works
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", "3")
+    monkeypatch.delenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE", raising=False)
+    assert get_fc27_community_poll_max_requests(strict=True) == 3
+
+    # 2. Alias key works when canonical unset
+    monkeypatch.delenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", raising=False)
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE", "3")
+    assert get_fc27_community_poll_max_requests(strict=True) == 3
+
+    # 3. Matching canonical and alias succeed
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", "3")
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE", "3")
+    assert get_fc27_community_poll_max_requests(strict=True) == 3
+
+    # 4. Conflicting values fail closed
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", "1")
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE", "3")
+    with pytest.raises(ConfigError, match="Conflicting values"):
+        get_fc27_community_poll_max_requests(strict=True)
+
+    # 5. Missing value defaults to 1
+    monkeypatch.delenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", raising=False)
+    monkeypatch.delenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE", raising=False)
+    assert get_fc27_community_poll_max_requests(strict=True) == 1
+
+    # 6. Malformed value fails closed
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", "not_a_number")
+    with pytest.raises(ConfigError, match="must be between 1 and 3"):
+        get_fc27_community_poll_max_requests(strict=True)
+
+    # 7. Rolling cap bounds (1..18)
+    monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_24_HOURS", "25")
+    with pytest.raises(ConfigError, match="must be 1..18"):
+        settings.get_fc27_community_poll_max_requests_per_24_hours(strict=True)
+
+
+# ==============================================================================
+# 23. LEDGER INVOCATION SOURCE AND INVALID STATE TRANSITIONS
+# ==============================================================================
+
+
+def test_023_ledger_invocation_source_and_invalid_state_transitions(pg_db_migrated) -> None:
+    """Ledger supports invocation_source, and fc27_finalize_provider_request rejects transition from terminal to RESERVED."""
+    db = pg_db_migrated.poll_writer
+    policy = _make_all_types_policy()
+
+    # Reserve with invocation_source 'MANUAL_POLL'
+    assert _reserve_provider_request_budget(
+        db_conn_or_uri=db,
+        policy=policy,
+        cycle_id="src-cycle",
+        attempt_id="src-att-1",
+        match_type="leagueMatch",
+        invocation_source="MANUAL_POLL",
+    ) is True
+
+    with psycopg.connect(db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT invocation_source, outcome_category FROM public.fc27_provider_request_attempts WHERE attempt_id = %s",
+                ("src-att-1",),
+            )
+            row = cur.fetchone()
+            assert row == ("MANUAL_POLL", "RESERVED")
+
+            # Finalize to SUCCEEDED
+            cur.execute("SELECT public.fc27_finalize_provider_request(%s::text, %s::text)", ("src-att-1", "SUCCEEDED"))
+            assert cur.fetchone()[0] is True
+
+            # Attempting to revert terminal state to RESERVED must raise exception
+            with pytest.raises(psycopg.errors.RaiseException, match="Invalid state transition from SUCCEEDED to RESERVED"):
+                cur.execute("SELECT public.fc27_finalize_provider_request(%s::text, %s::text)", ("src-att-1", "RESERVED"))
+
+
+# ==============================================================================
+# 24. SINGLE FLIGHT BUSY FAILS FAST WITHOUT POLLING
+# ==============================================================================
+
+
+def test_024_single_flight_busy_fails_fast_without_polling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When single-flight lease is already held by another worker, run_fc27_poll_cycle returns BUSY immediately."""
+    _enable_all_polling_gates(monkeypatch)
+    policy = _make_all_types_policy()
+
+    # Mock acquire() to return False
+    class MockLeaseCtx:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.lease = type("MockLease", (), {"acquired": False})()
+        def acquire(self) -> Any:
+            return self.lease
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr("src.fc27_polling_worker.FC27SingleFlightLeaseContext", MockLeaseCtx)
+
+    provider_called = False
+    def fetch() -> Any:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("Provider should not be called when lease busy")
+
+    result = run_fc27_poll_cycle(
+        policy=policy,
+        runtime=FC27PollingRuntime(policy=policy),
+        confirm_live_polling=True,
+        fetch_matches_fn=fetch,
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    assert provider_called is False
+    assert result.poll_status == "SKIPPED_SINGLE_FLIGHT_BUSY"
+    assert result.single_flight_acquired is False
+    assert result.provider_requests == 0
+
+
+# ==============================================================================
+# 25. EARLIER SUCCESS SURVIVES LATER PERSISTENCE FAILURE
+# ==============================================================================
+
+
+def test_025_earlier_success_survives_later_persistence_failure(
+    pg_db_migrated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistence failure on playoffMatch does not wipe out previously persisted leagueMatch."""
+    _enable_all_polling_gates(monkeypatch)
+    monkeypatch.setattr("src.fc27_polling_worker.time.sleep", lambda _sec: None)
+
+    policy = _make_all_types_policy()
+    env1, _ = _build_validated_envelope(1, start_id=987100, match_type="leagueMatch")
+    env2, _ = _build_validated_envelope(1, start_id=987200, match_type="playoffMatch")
+
+    def fetch(match_type: str) -> FC27CommunityProviderEnvelope:
+        if match_type == "leagueMatch":
+            return env1
+        if match_type == "playoffMatch":
+            return env2
+        return _build_validated_envelope(1, start_id=987300, match_type="friendlyMatch")[0]
+
+    def custom_persist(env: FC27CommunityProviderEnvelope) -> FC27CommunityPersistenceApplySummary:
+        m_type = env.provenance.get("match_type")
+        if m_type == "playoffMatch":
+            raise RuntimeError("Database constraint or disk full during playoffMatch persist")
+        return _fake_persist_summary(inserted=1)
+
+    result = run_fc27_poll_cycle(
+        policy=policy,
+        runtime=FC27PollingRuntime(policy=policy),
+        confirm_live_polling=True,
+        fetch_matches_fn=fetch,
+        persist_fn=custom_persist,
+        analytics_fn=lambda: {"analytics": "ok"},
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+
+    # leagueMatch was inserted (1), playoffMatch failed persistence (0), friendlyMatch was inserted (1)
+    assert result.batch_requests_attempted == 3
+    assert result.inserted_match_count == 2

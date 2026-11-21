@@ -302,8 +302,20 @@ def get_fc27_community_poll_max_seconds(*, strict: bool = False) -> int:
 
 
 def get_fc27_community_poll_max_requests(*, strict: bool = False) -> int:
-    """Return the bounded maximum provider requests per cycle (default 1, maximum 3)."""
-    raw = os.getenv("FC27_COMMUNITY_POLL_MAX_REQUESTS")
+    """Return the bounded maximum provider requests per cycle (default 1, maximum 3).
+
+    Canonical key: FC27_COMMUNITY_POLL_MAX_REQUESTS.
+    Optional backward-compatible alias: FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE.
+    If both are set with conflicting values, fails closed.
+    """
+    raw_canon = os.getenv("FC27_COMMUNITY_POLL_MAX_REQUESTS")
+    raw_alias = os.getenv("FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE")
+    if raw_canon is not None and raw_alias is not None:
+        if raw_canon.strip() != raw_alias.strip():
+            raise ConfigError(
+                "Conflicting values for FC27_COMMUNITY_POLL_MAX_REQUESTS and FC27_COMMUNITY_POLL_MAX_REQUESTS_PER_CYCLE"
+            )
+    raw = raw_canon if raw_canon is not None else raw_alias
     if raw is None or not raw.strip():
         return 1
     val = raw.strip()

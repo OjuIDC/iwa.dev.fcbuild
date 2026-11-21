@@ -2532,30 +2532,37 @@ def _classify_provider_exception(
         circuit_breaker.record_failure("SCHEMA_FAILURE")
         return ("SCHEMA_DRIFT", "SCHEMA_DRIFT")
 
+    # 1. HTTP 401
+    if isinstance(exc, FC27AuthenticationError) or "401" in msg_upper or "AUTHENTICATION" in msg_upper:
+        circuit_breaker.record_failure("AUTHENTICATION_FAILED")
+        return ("PROVIDER_BLOCKED", "AUTHENTICATION_FAILED")
+
+    # 3. HTTP 429
+    if "429" in msg_upper or "RATE_LIMIT" in msg_upper or "RATE LIMIT" in msg_upper:
+        circuit_breaker.record_failure("RATE_LIMITED")
+        return ("PROVIDER_BLOCKED", "RATE_LIMITED")
+
+    # 2. HTTP 403 / Access Blocked
     if isinstance(
         exc,
         (
             FC27PollingProviderBlockedError,
-            FC27AuthenticationError,
             FC27LiveAccessBlockedError,
         ),
+    ) or any(
+        token in msg_upper
+        for token in ("403", "AUTHORIZATION", "FORBIDDEN", "CHALLENGE", "CAPTCHA", "REDIRECT", "HTML")
     ):
-        circuit_breaker.record_failure("HTTP_403")
-        return ("PROVIDER_BLOCKED", "PROVIDER_BLOCKED")
+        circuit_breaker.record_failure("AUTHORIZATION_FAILED")
+        return ("PROVIDER_BLOCKED", "AUTHORIZATION_FAILED")
 
-    if isinstance(exc, FC27TransportError):
-        if any(
-            token in msg_upper
-            for token in ("401", "403", "429", "CHALLENGE", "CAPTCHA", "REDIRECT", "HTML")
-        ):
-            circuit_breaker.record_failure("HTTP_403")
-            return ("PROVIDER_BLOCKED", "PROVIDER_BLOCKED")
-        circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
-        return ("TRANSIENT_FAILURE", "TRANSIENT_TRANSPORT_ERROR")
+    if isinstance(exc, FC27PollingPostureError):
+        circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
+        return ("PROVIDER_BLOCKED", "DATABASE_POSTURE_ERROR")
 
-    if isinstance(exc, FC27PollingTransientFailureError):
+    if isinstance(exc, (FC27TransportError, FC27PollingTransientFailureError, TimeoutError)) or "TIMEOUT" in msg_upper:
         circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
-        return ("TRANSIENT_FAILURE", "TRANSIENT_TRANSPORT_ERROR")
+        return ("TRANSIENT_FAILURE", "TRANSIENT_TIMEOUT")
 
     circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
     return ("TRANSIENT_FAILURE", "PROVIDER_ERROR")
@@ -2568,11 +2575,43 @@ def _reserve_provider_request_budget(
     cycle_id: str,
     attempt_id: str,
     match_type: str,
+    invocation_source: str = "SCHEDULED_POLL",
 ) -> bool:
     """Atomically reserve one durable rolling-window and per-cycle request slot."""
     with open_guarded_polling_connection(db_conn_or_uri, enforce_posture=False) as conn:
         with conn.transaction():
             with conn.cursor() as cur:
+                # Check 9-arg signature first, then 8-arg signature
+                cur.execute(
+                    "SELECT to_regprocedure('public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer,text)')"
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    cur.execute(
+                        "SELECT has_function_privilege(current_user, 'public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer,text)', 'EXECUTE')"
+                    )
+                    priv_row = cur.fetchone()
+                    if not priv_row or not priv_row[0]:
+                        return True
+                    cur.execute(
+                        """SELECT public.fc27_reserve_provider_request(
+                            %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::integer, %s::integer, %s::text
+                        )""",
+                        (
+                            attempt_id,
+                            cycle_id,
+                            policy.provider_id,
+                            policy.club_id,
+                            policy.platform,
+                            match_type,
+                            policy.maximum_requests_per_cycle,
+                            policy.max_provider_requests_per_24_hours,
+                            invocation_source,
+                        ),
+                    )
+                    proc_res = cur.fetchone()
+                    return bool(proc_res and proc_res[0])
+
                 cur.execute(
                     "SELECT to_regprocedure('public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer)')"
                 )
@@ -2621,6 +2660,10 @@ def _record_provider_attempt_outcome(
         "SCHEMA_DRIFT",
         "TRANSIENT_FAILURE",
         "PERSISTENCE_FAILURE",
+        "AUTHENTICATION_FAILED",
+        "AUTHORIZATION_FAILED",
+        "RATE_LIMITED",
+        "PRIVACY_REJECTED",
     }
     category = outcome_category if outcome_category in allowed else "TRANSIENT_FAILURE"
     with open_guarded_polling_connection(db_conn_or_uri, enforce_posture=False) as conn:
@@ -2642,6 +2685,71 @@ def _record_provider_attempt_outcome(
                     "SELECT public.fc27_finalize_provider_request(%s::text, %s::text)",
                     (attempt_id, category),
                 )
+
+
+def should_continue_polling_cycle_after_result(
+    result: FC27PollResult,
+    *,
+    circuit_breaker: FC27AdapterCircuitBreaker | None = None,
+    single_flight_held: bool = True,
+    budget_exhausted: bool = False,
+) -> bool:
+    """Evaluate whether an all-match-types polling cycle may proceed to the next match type.
+
+    Explicit failure decision matrix:
+    1. HTTP 401 (AUTHENTICATION_FAILED): Stop remaining types.
+    2. HTTP 403 (AUTHORIZATION_FAILED): Stop remaining types.
+    3. HTTP 429 (RATE_LIMITED): Stop remaining types.
+    4. Shared schema/contract failure (SCHEMA_DRIFT): Stop remaining types.
+    5. Privacy/identity rejection (PRIVACY_REJECTED / IDENTITY_REJECTED): Stop remaining types.
+    6. Type-local network timeout: Count attempt, zero retries, continue if budget remains, lease held, breaker not OPEN.
+    7. Type-local empty result (NO_NEW_MATCHES): Continue.
+    8. Type-local persistence failure (PERSISTENCE_FAILURE): Rolled back, continue if not database outage.
+    9. Shared PostgreSQL outage: Stop remaining types.
+    """
+    if not single_flight_held:
+        return False
+    if budget_exhausted:
+        return False
+    if circuit_breaker is not None and circuit_breaker.state == FC27CircuitState.OPEN:
+        return False
+
+    status = result.poll_status
+    err = result.error_category or ""
+
+    if status in ("NO_NEW_MATCHES", "NEW_MATCHES_PERSISTED"):
+        return True
+
+    if status in (
+        "PROVIDER_BLOCKED",
+        "SCHEMA_DRIFT",
+        "IDENTITY_REJECTED",
+        "PRIVACY_REJECTED",
+        "SKIPPED_SINGLE_FLIGHT_BUSY",
+        "BUSY_CONCURRENT_POLL",
+        "RATE_LIMITED",
+    ):
+        return False
+
+    if status == "REPLAY_CONFLICT":
+        return False
+
+    if status == "TRANSIENT_FAILURE":
+        if err in ("DATABASE_POSTURE_ERROR", "POSTGRESQL_OUTAGE", "DATABASE_OUTAGE"):
+            return False
+        if err in (
+            "TRANSIENT_TIMEOUT",
+            "TRANSIENT_TRANSPORT_ERROR",
+            "TYPE_LOCAL_TIMEOUT",
+            "PERSISTENCE_FAILURE",
+            "PROVIDER_ERROR",
+        ):
+            if circuit_breaker is not None and circuit_breaker.state == FC27CircuitState.OPEN:
+                return False
+            return True
+        return False
+
+    return False
 
 
 def _run_fc27_poll_single_type_cycle(
@@ -3446,7 +3554,15 @@ def _run_fc27_poll_single_type_cycle(
                 polled_match_type=active_match_type,
             )
         except Exception:
-            rt.circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
+            if ledger_reserved and db_conn_or_uri is not None:
+                try:
+                    _record_provider_attempt_outcome(
+                        db_conn_or_uri=db_conn_or_uri,
+                        attempt_id=attempt_id,
+                        outcome_category="PERSISTENCE_FAILURE",
+                    )
+                except Exception:
+                    pass
             return _finalize(
                 poll_status="TRANSIENT_FAILURE",
                 single_flight_acquired=True,
@@ -3792,9 +3908,20 @@ def run_fc27_poll_cycle(
     lease = lease_ctx.acquire()
     if not lease.acquired:
         return _run_fc27_poll_single_type_cycle(
-            policy=pol, runtime=rt, confirm_live_polling=confirm_live_polling,
-            db_conn_or_uri=db_conn_or_uri, advisory_lock_db_source=advisory_lock_db_source,
-            shutdown_event=shutdown_event, now_utc_fn=now_utc_fn, now_epoch_fn=now_epoch_fn,
+            policy=pol,
+            runtime=rt,
+            confirm_live_polling=confirm_live_polling,
+            db_conn_or_uri=db_conn_or_uri,
+            advisory_lock_db_source=advisory_lock_db_source,
+            shutdown_event=shutdown_event,
+            now_utc_fn=now_utc_fn,
+            now_epoch_fn=now_epoch_fn,
+            fetch_matches_fn=fetch_matches_fn,
+            persist_fn=persist_fn,
+            analytics_fn=analytics_fn,
+            use_cache=use_cache,
+            use_rate_limiter=use_rate_limiter,
+            single_flight_context=lease_ctx,
         )
     results: list[FC27PollResult] = []
     batch_cycle_id = f"cycle-{uuid.uuid4().hex[:16]}"
@@ -3821,7 +3948,12 @@ def run_fc27_poll_cycle(
                 budget_cycle_id=batch_cycle_id,
             )
             results.append(result)
-            if result.poll_status in {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED"}:
+            if not should_continue_polling_cycle_after_result(
+                result,
+                circuit_breaker=rt.circuit_breaker,
+                single_flight_held=lease.acquired,
+                budget_exhausted=(result.error_category == "PROVIDER_BUDGET_EXHAUSTED"),
+            ):
                 break
         succeeded = sum(r.poll_status in {"NO_NEW_MATCHES", "NEW_MATCHES_PERSISTED"} for r in results)
         attempted = sum(r.provider_requests for r in results)
@@ -3832,9 +3964,10 @@ def run_fc27_poll_cycle(
         )
         total_inserted = min(10, sum(r.inserted_match_count for r in results))
         overall_status = last.poll_status
-        if any(r.poll_status in {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED"} for r in results):
+        fatal_statuses = {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED", "BUSY_CONCURRENT_POLL"}
+        if any(r.poll_status in fatal_statuses for r in results):
             for r in results:
-                if r.poll_status in {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED"}:
+                if r.poll_status in fatal_statuses:
                     overall_status = r.poll_status
                     break
         elif total_inserted > 0:
