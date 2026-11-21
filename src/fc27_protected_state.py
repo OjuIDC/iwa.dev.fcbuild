@@ -1684,7 +1684,8 @@ _INTERNAL_READONLY_PROBE_SQL = (
     "AND pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL "
     "AND pg_catalog.to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL "
     "AND pg_catalog.to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL "
-    "AND pg_catalog.to_regclass('public.fc27_discord_jobs') IS NOT NULL)::text, "
+    "AND pg_catalog.to_regclass('public.fc27_discord_jobs') IS NOT NULL "
+    "AND pg_catalog.to_regclass('public.fc27_provider_request_attempts') IS NOT NULL)::text, "
     "COALESCE(CASE WHEN pg_catalog.to_regclass('public.fc27_player_alias_candidates') IS NOT NULL "
     "AND pg_catalog.has_table_privilege(current_user, 'public.fc27_player_alias_candidates', 'SELECT') "
     "THEN (SELECT COUNT(*)::text FROM public.fc27_player_alias_candidates) "
@@ -1740,7 +1741,8 @@ def _run_psycopg_readonly_probe(
                     to_regclass('public.fc27_player_alias_candidates') IS NOT NULL,
                     to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL,
                     to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL,
-                    to_regclass('public.fc27_discord_jobs') IS NOT NULL
+                    to_regclass('public.fc27_discord_jobs') IS NOT NULL,
+                    to_regclass('public.fc27_provider_request_attempts') IS NOT NULL
                 """
             )
             tbl_row = cur.fetchone()
@@ -2054,10 +2056,10 @@ def verify_postgres_volume_readiness(
             grants_ok = grants_ver is not None and grants_ver >= expected_grants
             if not mig_num_ok:
                 db_ok = False
-                details.append("migration version behind expected 0020")
+                details.append("migration version behind expected 0021")
             if not grants_ok:
                 db_ok = False
-                details.append("grants policy version behind expected 21")
+                details.append("grants policy version behind expected 22")
             if not tables_ok:
                 db_ok = False
                 details.append("required FC27 tables missing")
@@ -2623,10 +2625,10 @@ def run_recovery_readiness_checks(
         "key valid and continuous" if hmac_ok else "alias HMAC key missing, invalid, or mismatched",
     )
 
-    # 15, 16, 17, 18. Database reachability, migration 0020, grants 21, required tables
+    # 15, 16, 17, 18. Database reachability, migration 0021, grants 22, required tables
     db_reachable = bool(pg_vol_res and pg_vol_res.db_probed and pg_vol_res.latest_migration is not None)
-    mig_expected = str(manifest["database_expected_state"]["minimum_migration"]) if manifest else "0020_fc27_alias_auto_promotion_and_exceptions.sql"
-    grants_expected = int(manifest["database_expected_state"]["grants_policy_version"]) if manifest else 21
+    mig_expected = str(manifest["database_expected_state"]["minimum_migration"]) if manifest else "0021_fc27_provider_request_budget.sql"
+    grants_expected = int(manifest["database_expected_state"]["grants_policy_version"]) if manifest else 22
     mig_current = bool(db_reachable and pg_vol_res and _migration_version_at_least(pg_vol_res.latest_migration, mig_expected))
     grants_current = bool(db_reachable and pg_vol_res and pg_vol_res.grants_policy_version is not None and pg_vol_res.grants_policy_version >= grants_expected)
     tables_present = bool(db_reachable and pg_vol_res and pg_vol_res.required_tables_present)
@@ -2639,12 +2641,12 @@ def run_recovery_readiness_checks(
     _add(
         "database_migration_current",
         mig_current,
-        f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0020 not verified",
+        f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0021 not verified",
     )
     _add(
         "database_grants_policy_current",
         grants_current,
-        f"grants policy v{pg_vol_res.grants_policy_version}" if (grants_current and pg_vol_res) else "Grants Policy 21 not verified",
+        f"grants policy v{pg_vol_res.grants_policy_version}" if (grants_current and pg_vol_res) else "Grants Policy 22 not verified",
     )
     _add(
         "database_tables_present",

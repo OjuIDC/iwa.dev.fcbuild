@@ -1098,7 +1098,7 @@ class TestProviderAliasCandidatePipeline:
         ]
         # Idempotent rerun
         assert migrate(pg_db.migrator) == []
-        assert GRANTS_POLICY_VERSION == 21
+        assert GRANTS_POLICY_VERSION == 22
         assert GRANTS_POLICY.version == 21
 
         with psycopg.connect(pg_db.admin) as aconn:

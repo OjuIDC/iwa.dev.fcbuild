@@ -1,4 +1,4 @@
--- grants-policy-version: 21
+-- grants-policy-version: 22
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1087,5 +1087,11 @@ BEGIN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_match_results_writer';
         END IF;
+    END IF;
+    IF to_regclass('public.fc27_provider_request_attempts') IS NOT NULL
+       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+        REVOKE ALL ON public.fc27_provider_request_attempts FROM fc27_poll_writer;
+        GRANT SELECT, INSERT ON public.fc27_provider_request_attempts TO fc27_poll_writer;
+        GRANT UPDATE (outcome_category) ON public.fc27_provider_request_attempts TO fc27_poll_writer;
     END IF;
 END $$;

@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 21
+GRANTS_POLICY_VERSION = 22
 
 
 def _compute_grants_sha256() -> str:

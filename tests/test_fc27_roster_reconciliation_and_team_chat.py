@@ -1267,7 +1267,7 @@ def test_25_dispatcher_lease_and_single_flight_intact(pg_db_migrated) -> None:
 
 def test_26_migration_0016_and_audit_linkage_compatibility(pg_db) -> None:
     """26. Fresh migration + idempotent re-run stay at current Grants Policy with nullable match_id RELINK linkage."""
-    assert GRANTS_POLICY_VERSION == 21
+    assert GRANTS_POLICY_VERSION == 22
     migrate(pg_db.migrator)
     migrate(pg_db.migrator)
 

@@ -310,8 +310,8 @@ class TestProtectedStateRecoveryScenarios:
     def test_41_tracked_manifest_valid_and_free_of_secrets(self) -> None:
         """41. ops/fc27-protected-state-manifest.json parses cleanly and contains zero secrets or live Discord IDs."""
         manifest = load_protected_state_manifest(DEFAULT_MANIFEST_PATH)
-        assert manifest["database_expected_state"]["expected_migration_version"] == "0001_THROUGH_0020"
-        assert manifest["database_expected_state"]["grants_policy_version"] == 21
+        assert manifest["database_expected_state"]["expected_migration_version"] == "0001_THROUGH_0021"
+        assert manifest["database_expected_state"]["grants_policy_version"] == 22
         assert len(manifest["recovery_order"]) >= 7
         raw_text = DEFAULT_MANIFEST_PATH.read_text(encoding="utf-8")
         assert re.search(r"\b\d{17,20}\b", raw_text) is None
@@ -668,8 +668,8 @@ class TestProtectedStateRecoveryScenarios:
         assert res.passed is True
         assert res.postgres_volume_present is True
         assert res.redis_volume_present is True
-        assert res.latest_migration == "0020"
-        assert res.grants_policy_version == 21
+        assert res.latest_migration == "0021"
+        assert res.grants_policy_version == 22
         assert res.required_tables_present is True
         assert res.alias_hmac_key_continuity_ok is True
 
@@ -815,7 +815,7 @@ class TestProtectedStateRecoveryScenarios:
         assert res_ok.provider_requests_executed == 0
         assert res_ok.worker_status_ok is True
         assert res_ok.bot_status_ok is True
-        assert res_ok.grants_policy_version == 21
+        assert res_ok.grants_policy_version == 22
 
         degraded_rows = [
             {"Service": "postgres", "State": "running", "Status": "Up 2 minutes (healthy)"},
@@ -835,7 +835,7 @@ class TestProtectedStateRecoveryScenarios:
         self, pg_db_migrated: Any, pg_admin_uri: str, tmp_path: Path
     ) -> None:
         """69. Backup & restore verification covers fc27_player_alias_promotion_audit & review_exceptions at 0020."""
-        assert EXPECTED_MIGRATION_VERSION == "0001_THROUGH_0020"
+        assert EXPECTED_MIGRATION_VERSION == "0001_THROUGH_0021"
         assert "fc27_player_alias_promotion_audit" in FC27_DOMAIN_TABLES
         assert "fc27_player_alias_review_exceptions" in FC27_DOMAIN_TABLES
 
@@ -869,7 +869,7 @@ class TestProtectedStateRecoveryScenarios:
         archive_path, manifest_path, manifest = create_fc27_backup(
             pg_db_migrated.admin, backup_dir=backup_dir
         )
-        assert manifest.migration_version == "0001_THROUGH_0020"
+        assert manifest.migration_version == "0001_THROUGH_0021"
         assert manifest.table_counts.fc27_player_alias_promotion_audit == 1
         report = verify_fc27_backup_restore(
             manifest_path=manifest_path,

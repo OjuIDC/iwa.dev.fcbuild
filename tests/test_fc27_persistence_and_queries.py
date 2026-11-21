@@ -427,7 +427,7 @@ def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
 
 def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
     """10. Current grants policy version is recorded in public.schema_policy_versions."""
-    assert GRANTS_POLICY_VERSION == 21
+    assert GRANTS_POLICY_VERSION == 22
     assert GRANTS_POLICY.version == 21
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:

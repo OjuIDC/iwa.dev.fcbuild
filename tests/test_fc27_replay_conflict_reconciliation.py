@@ -1482,7 +1482,7 @@ def test_22_23_24_worker_bot_provider_boundaries_request_budget_and_role_grants(
     pg_db_migrated,
 ) -> None:
     # 24. Migration max == 0020 and Grants Policy == 21
-    assert GRANTS_POLICY_VERSION == 21
+    assert GRANTS_POLICY_VERSION == 22
     with psycopg.connect(pg_db_migrated.admin) as conn:
         _max_mig_row = conn.execute(
             "SELECT MAX(version) FROM public.schema_migrations"
