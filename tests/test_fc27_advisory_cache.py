@@ -197,7 +197,7 @@ def test_02_cache_disabled_mode_bypasses_storage_cleanly() -> None:
     cands = _sample_candidates(10)
     key = build_advisory_cache_key_from_matches(cands, latest_export_batch_id="batch-disabled")
     entry1 = build_full_advisory_bundle_from_candidates(
-        cands, analysis_generated_at=FIXEDTS if "FIXEDTS" in globals() else FIXED_TS, cache=cache, cache_key=key
+        cands, analysis_generated_at=globals().get("FIXEDTS", FIXED_TS), cache=cache, cache_key=key
     )
     assert entry1.search_context.eligible_match_count == 10
     assert cache.get(key) is None
