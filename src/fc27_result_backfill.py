@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
@@ -135,9 +136,11 @@ def _discover_latest_persisted_matches(
               AND m.match_status = 'COMPLETED'
               AND NOT EXISTS (
                   SELECT 1 FROM public.fc27_quarantine_records AS q
-                  WHERE q.quarantined_record_id = m.external_match_id
-                    AND q.status = 'ACTIVE'
-                    AND (q.expires_at IS NULL OR q.expires_at > pg_catalog.clock_timestamp())
+                  WHERE q.external_match_id = m.external_match_id
+                    AND q.club_id = m.club_id
+                    AND q.platform = m.platform
+                    AND q.game_version = m.game_version
+                    AND q.review_status <> 'APPROVED_OVERRIDE'
               )
             ORDER BY m.played_at DESC, m.created_at DESC
             LIMIT %s
@@ -166,6 +169,11 @@ def run_result_backfill(
     if not destination_key or not destination_key.strip():
         raise FC27BackfillValidationError("Destination key is required.")
     clean_dest_key = destination_key.strip()
+
+    if re.fullmatch(r"^[0-9]{15,22}$", clean_dest_key):
+        raise FC27BackfillValidationError(
+            f"Raw numeric channel ID '{clean_dest_key}' cannot be used as destination. Require a preconfigured destination key."
+        )
 
     if latest < MIN_LATEST_COUNT or latest > MAX_LATEST_COUNT:
         raise FC27BackfillValidationError(
@@ -382,6 +390,10 @@ def run_result_backfill(
 
         finally:
             # 5. Release advisory lock
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             with conn.cursor() as cur:
                 cur.execute(
                     """

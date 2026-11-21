@@ -66,6 +66,27 @@ def _seed_test_matches(
             export_id = f"exp_match_{i:04d}"
             played_at = base_time + timedelta(hours=i)
             match_hash = hashlib.sha256(f"{club_id}:{ext_id}".encode()).hexdigest()
+
+            # Seed export batch before match
+            cur.execute(
+                """
+                INSERT INTO public.fc27_export_batches (
+                    export_id, club_id, platform, game_version,
+                    contract_version, schema_version, source_classification,
+                    supplier_role, supplier_reference, consent_version,
+                    consented_categories, payload_sha256,
+                    total_matches, accepted_matches, quarantined_matches
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    '1.0.0', '1.0.0', 'SYNTHETIC',
+                    'CLUB_MANAGER', 'steward-ref', '1.0.0',
+                    '["MATCH_RESULTS"]'::jsonb, repeat('a', 64),
+                    1, 1, 0
+                ) ON CONFLICT (export_id) DO NOTHING
+                """,
+                (export_id, club_id, EAST_COASTERS_PLATFORM, EAST_COASTERS_GAME_VERSION),
+            )
+
             cur.execute(
                 """
                 INSERT INTO public.fc27_matches (
@@ -151,7 +172,7 @@ def test_backfill_dry_run_writes_nothing(pg_db) -> None:
         transport = SyntheticDiscordNotificationTransport()
         summary = run_result_backfill(
             destination_key="east-coasters-formal",
-            db_conn_or_uri=conn,
+            db_conn_or_uri=pg_db.admin,
             transport=transport,
             latest=10,
             dry_run=True,
@@ -173,7 +194,7 @@ def test_backfill_dry_run_writes_nothing(pg_db) -> None:
             assert count == 0
 
         # Verify transport sent zero messages
-        assert len(transport.sent_notifications) == 0
+        assert len(transport.sent_messages) == 0
 
 
 @pytest.mark.postgres
@@ -196,7 +217,7 @@ def test_backfill_confirmed_execution_and_ordering(pg_db) -> None:
         transport = SyntheticDiscordNotificationTransport()
         summary = run_result_backfill(
             destination_key="east-coasters-formal",
-            db_conn_or_uri=conn,
+            db_conn_or_uri=pg_db.admin,
             transport=transport,
             latest=10,
             dry_run=False,
@@ -209,7 +230,7 @@ def test_backfill_confirmed_execution_and_ordering(pg_db) -> None:
         assert summary.failed_count == 0
 
         # Transport sent 10 messages
-        assert len(transport.sent_notifications) == 10
+        assert len(transport.sent_messages) == 10
 
         # Deliveries recorded in DB
         with conn.cursor() as cur:
@@ -222,7 +243,7 @@ def test_backfill_confirmed_execution_and_ordering(pg_db) -> None:
         # Second backfill run skips all 10
         summary_2 = run_result_backfill(
             destination_key="east-coasters-formal",
-            db_conn_or_uri=conn,
+            db_conn_or_uri=pg_db.admin,
             transport=transport,
             latest=10,
             dry_run=False,
@@ -230,7 +251,7 @@ def test_backfill_confirmed_execution_and_ordering(pg_db) -> None:
         assert summary_2.already_delivered_count == 10
         assert summary_2.planned_or_sent_count == 0
         # No extra messages sent
-        assert len(transport.sent_notifications) == 10
+        assert len(transport.sent_messages) == 10
 
 
 @pytest.mark.postgres
@@ -245,20 +266,28 @@ def test_backfill_quarantined_matches_excluded(pg_db) -> None:
             cur.execute(
                 """
                 INSERT INTO public.fc27_quarantine_records (
-                    quarantined_record_id,
                     club_id,
-                    status,
-                    reason,
+                    platform,
+                    game_version,
+                    external_match_id,
+                    export_id,
+                    anomaly_category,
+                    reason_code,
+                    payload_sha256,
+                    review_status,
                     quarantined_at
                 ) VALUES (
+                    %s, %s, %s,
                     'ext_match_0003',
-                    %s,
-                    'ACTIVE',
-                    'MANUAL_QUARANTINE_TEST',
+                    'exp_match_0003',
+                    'REPLAY_CONFLICT',
+                    'MANUAL_TEST',
+                    repeat('a', 64),
+                    'PENDING_REVIEW',
                     pg_catalog.clock_timestamp()
                 )
                 """,
-                (EAST_COASTERS_CLUB_ID,),
+                (EAST_COASTERS_CLUB_ID, EAST_COASTERS_PLATFORM, EAST_COASTERS_GAME_VERSION),
             )
         admin_conn.commit()
 
@@ -275,7 +304,7 @@ def test_backfill_quarantined_matches_excluded(pg_db) -> None:
         transport = SyntheticDiscordNotificationTransport()
         summary = run_result_backfill(
             destination_key="east-coasters-formal",
-            db_conn_or_uri=conn,
+            db_conn_or_uri=pg_db.admin,
             transport=transport,
             latest=10,
             dry_run=True,
@@ -337,7 +366,7 @@ def test_backfill_unauthorized_and_invalid_destination(pg_db) -> None:
             )
 
         # Direct numeric snowflake rejected as destination_key
-        with pytest.raises(FC27BackfillValidationError, match="Invalid destination key"):
+        with pytest.raises(FC27BackfillValidationError, match="Raw numeric channel ID"):
             run_result_backfill(
                 destination_key="987654321098765432",
                 db_conn_or_uri=conn,

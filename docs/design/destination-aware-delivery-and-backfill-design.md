@@ -29,7 +29,7 @@ The FC27 match results subsystem ingests competitive Pro Clubs match data and pu
 To resolve these blockers safely and without breaking existing behavior, we introduce:
 1. **Destination Registry (`public.fc27_discord_destinations`)**: An additive, operator-controlled table registering symbolic destinations with specific guild IDs, channel IDs, message kinds, and delivery permissions.
 2. **Per-Destination Delivery Linkage (`public.fc27_match_discord_deliveries`)**: A relational delivery table tracking every individual message delivery per match, destination, and message kind, with explicit delivery states and compound unique constraints.
-3. **Additive Migration 0022 and Grants Policy 22**: An idempotent, non-destructive migration that creates the new tables, imports existing audit linkage into legacy entries, and sets least-privilege role permissions.
+3. **Additive Migration 0021 and Grants Policy 22**: An idempotent, non-destructive migration that creates the new tables, imports existing audit linkage into legacy entries, and sets least-privilege role permissions.
 4. **Independent Delivery Fan-Out**: Dispatcher refactoring to deliver across all enabled destinations independently with per-destination idempotency keys and failure isolation.
 5. **Multi-Destination Roster Refresh**: In-place editing across all linked destinations for affected matches, handling 404 (Missing) and 403 (Revoked) states without deletion or replacement.
 6. **Bounded Result Backfill CLI (`src.fc27_result_backfill`)**: A single-flight CLI tool supporting dry-run by default, bounded batch sizes (default 10, max 25), oldest-to-newest ordering, and sanitized reporting.
@@ -130,14 +130,13 @@ post-result:<match_ref>:<destination_key>:<message_kind>:v1
 
 ---
 
-## 5. Migration Strategy & Legacy Import (Migration 0022)
+## 5. Migration Strategy & Legacy Import (Migration 0021)
 
 ### 5.1 Reconciling Version Numbers
-- The unmerged `feat/fc27-all-types-polling` branch uses Migration `0021` and Grants Policy `21`.
-- To avoid collision and maintain clean sequencing, this branch designates **Migration `0022`** (`0022_fc27_destination_aware_delivery_and_linkage.sql`) and advances **Grants Policy to Version `22`**.
+- Following Option B, this branch designates **Migration `0021`** (`0021_fc27_destination_aware_delivery_and_linkage.sql`) and advances **Grants Policy to Version `22`** to remain contiguous with main (where Migration 0020 is latest).
 
 ### 5.2 Legacy Linkage Import
-Migration 0022 safely imports all existing records from `public.fc27_manual_match_audit` where `action = 'RELINK_DISCORD_MESSAGE'` and `audit_metadata->>'kind' = 'discord_message_linkage'` into `fc27_match_discord_deliveries` under placeholder destinations:
+Migration 0021 safely imports all existing records from `public.fc27_manual_match_audit` where `action = 'RELINK_DISCORD_MESSAGE'` and `audit_metadata->>'kind' = 'discord_message_linkage'` into `fc27_match_discord_deliveries` under placeholder destinations:
 - `legacy-formal` (`guild_id = '0'`, `channel_id = '0'`, `enabled = FALSE`, `allow_backfill = FALSE`, `allow_roster_refresh = TRUE`)
 - `legacy-team-chat` (`guild_id = '0'`, `channel_id = '0'`, `enabled = FALSE`, `allow_backfill = FALSE`, `allow_roster_refresh = TRUE`)
 

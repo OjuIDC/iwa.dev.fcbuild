@@ -267,22 +267,22 @@ def test_legacy_linkage_import_preservation(pg_db) -> None:
             )
         conn.commit()
 
-    # 3. Apply migration 0022
+    # 3. Apply migration 0021
     applied = migrate(pg_db.migrator)
-    assert any("0022" in m for m in applied)
+    assert any("0021" in m for m in applied)
 
     # 4. Check that legacy deliveries were imported
     with psycopg.connect(pg_db.discord_reader) as conn:
         deliveries = get_deliveries_for_refresh(conn, "mref_legacy_001")
         assert len(deliveries) == 2
-        kinds = {d.message_kind: d for d in deliveries}
+        kinds = {d[2]: d for d in deliveries}
         assert MESSAGE_KIND_FORMAL in kinds
-        assert kinds[MESSAGE_KIND_FORMAL].message_id == "33333333333333333"
-        assert kinds[MESSAGE_KIND_FORMAL].destination_key == "legacy-formal"
+        assert kinds[MESSAGE_KIND_FORMAL][5] == "33333333333333333"
+        assert kinds[MESSAGE_KIND_FORMAL][1] == "legacy-formal"
 
         assert MESSAGE_KIND_TEAM_CHAT in kinds
-        assert kinds[MESSAGE_KIND_TEAM_CHAT].message_id == "55555555555555555"
-        assert kinds[MESSAGE_KIND_TEAM_CHAT].destination_key == "legacy-team-chat"
+        assert kinds[MESSAGE_KIND_TEAM_CHAT][5] == "55555555555555555"
+        assert kinds[MESSAGE_KIND_TEAM_CHAT][1] == "legacy-team-chat"
 
 
 @pytest.mark.postgres
@@ -311,10 +311,10 @@ def test_stale_delivery_reservation_handling(pg_db) -> None:
 
 
 @pytest.mark.postgres
-def test_migration_0022_fresh_and_upgrade_and_postconditions(pg_db) -> None:
+def test_migration_0021_fresh_and_upgrade_and_postconditions(pg_db) -> None:
     # Fresh migration of complete schema
     applied = migrate(pg_db.migrator)
-    assert any("0022" in m for m in applied)
+    assert any("0021" in m for m in applied)
 
     # Verify postconditions pass cleanly
     with psycopg.connect(pg_db.admin) as conn:

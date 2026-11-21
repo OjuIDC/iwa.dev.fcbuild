@@ -1,5 +1,5 @@
--- Migration 0022: Destination-Aware Discord Delivery Registry and Per-Destination Linkage
--- Additive, idempotent migration. Coordinates with all-types branch (which assigns Migration 0021).
+-- Migration 0021: Destination-Aware Discord Delivery Registry and Per-Destination Linkage
+-- Additive, idempotent migration. Contiguous after Migration 0020.
 --
 -- 1. Adds `public.fc27_discord_destinations` to register authorized symbolic delivery destinations
 --    with independent controls for normal ingestion fan-out, historical backfill, and roster refresh.

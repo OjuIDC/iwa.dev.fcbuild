@@ -1069,7 +1069,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- Migration 0022 additions (Policy 22)
+    -- Migration 0021 additions (Policy 22)
     IF to_regclass('public.fc27_discord_destinations') IS NOT NULL THEN
         REVOKE ALL ON TABLE public.fc27_discord_destinations FROM PUBLIC, fc27_app, fc27_dispatch;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN

@@ -214,7 +214,7 @@
     <Content Include="migrations\0014_fc27_player_development.sql" />
     <Content Include="migrations\0015_fc27_player_development_fixups.sql" />
     <Content Include="migrations\0020_fc27_alias_auto_promotion_and_exceptions.sql" />
-    <Content Include="migrations\0022_fc27_destination_aware_delivery_and_linkage.sql" />
+    <Content Include="migrations\0021_fc27_destination_aware_delivery_and_linkage.sql" />
     <Content Include="migrations\post\grants.sql" />
     <Content Include="ops\fc27-protected-state-manifest.json" />
     <Content Include="pyproject.toml" />
