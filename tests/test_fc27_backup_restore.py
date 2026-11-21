@@ -405,7 +405,7 @@ def test_backup_and_restore_includes_manual_match_results_and_discord_linkage(
         pg_db_migrated.admin,
         backup_dir=backup_dir,
     )
-    assert manifest.table_counts.schema_migrations == 20
+    assert manifest.table_counts.schema_migrations == 21
     assert manifest.table_counts.schema_policy_versions == 1
     assert manifest.table_counts.fc27_roster == 1
     assert manifest.table_counts.fc27_manual_matches == 1
