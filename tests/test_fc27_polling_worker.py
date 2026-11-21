@@ -65,6 +65,7 @@ from src.fc27_polling_worker import (
     FC27PollingTableAccessDeniedError,
     FC27PollingTransientFailureError,
     FC27SingleFlightLeaseContext,
+    _reserve_provider_request_budget,
     build_fc27_polling_policy_from_env,
     build_poll_cache_key,
     build_single_flight_lock_key,
@@ -367,8 +368,47 @@ def test_009_poll_max_requests_above_1_is_rejected(
     with pytest.raises(ValidationError):
         FC27PollingPolicy(maximum_requests_per_cycle=2)
     monkeypatch.setenv("FC27_COMMUNITY_POLL_MAX_REQUESTS", "2")
-    with pytest.raises(ConfigError):
-        settings.get_fc27_community_poll_max_requests(strict=True)
+    assert settings.get_fc27_community_poll_max_requests(strict=True) == 2
+    with pytest.raises(ValidationError):
+        FC27PollingPolicy(maximum_requests_per_cycle=2)
+
+
+def test_all_types_poll_cycle_runs_in_fixed_order_with_two_delays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opt-in all-types mode performs one attempt per type in fixed order."""
+    _enable_all_polling_gates(monkeypatch)
+    monkeypatch.setattr("src.fc27_polling_worker.time.sleep", lambda _seconds: None)
+    policy = FC27PollingPolicy(
+        poll_interval_seconds=14400,
+        minimum_interval_seconds=14400,
+        maximum_interval_seconds=14400,
+        polling_frequency="ONCE_EVERY_4_HOURS",
+        max_provider_requests_per_24_hours=18,
+        poll_all_match_types=True,
+        poll_match_types=("leagueMatch", "playoffMatch", "friendlyMatch"),
+        maximum_requests_per_cycle=3,
+    )
+    calls: list[str] = []
+
+    def fetch(match_type: str) -> FC27CommunityProviderEnvelope:
+        calls.append(match_type)
+        return _build_validated_envelope(
+            1, start_id=921000 + len(calls), match_type=match_type
+        )[0]
+
+    result = run_fc27_poll_cycle(
+        policy=policy,
+        runtime=FC27PollingRuntime(policy=policy),
+        confirm_live_polling=True,
+        fetch_matches_fn=fetch,
+        persist_fn=lambda _env: _fake_persist_summary(inserted=0),
+        use_cache=False,
+        use_rate_limiter=False,
+    )
+    assert calls == ["leagueMatch", "playoffMatch", "friendlyMatch"]
+    assert result.batch_requests_attempted == 3
+    assert result.retries_attempted == 0
 
 
 def test_010_default_maximum_retries_is_0() -> None:
@@ -3925,3 +3965,25 @@ def test_151_c1_matrix_41_42_status_surfaces_expose_c1_metadata_and_zero_externa
     assert fields["fingerprints_inserted"] == "0"
     assert fields["discord_jobs_inserted"] == "0"
     assert _EXTERNAL_NETWORK_CALLS == []
+
+
+def test_durable_request_budget_counts_failures_and_shares_cycle_cap(pg_db_migrated) -> None:
+    """Durable reservations enforce per-cycle and rolling 24-hour limits."""
+    policy = FC27PollingPolicy()
+    db = pg_db_migrated.poll_writer
+    assert _reserve_provider_request_budget(
+        db_conn_or_uri=db, policy=policy, cycle_id="budget-cycle-a",
+        attempt_id="budget-attempt-a1", match_type="leagueMatch",
+    ) is True
+    assert _reserve_provider_request_budget(
+        db_conn_or_uri=db, policy=policy, cycle_id="budget-cycle-a",
+        attempt_id="budget-attempt-a2", match_type="playoffMatch",
+    ) is False
+    assert _reserve_provider_request_budget(
+        db_conn_or_uri=db, policy=policy, cycle_id="budget-cycle-b",
+        attempt_id="budget-attempt-b1", match_type="playoffMatch",
+    ) is True
+    assert _reserve_provider_request_budget(
+        db_conn_or_uri=db, policy=policy, cycle_id="budget-cycle-c",
+        attempt_id="budget-attempt-c1", match_type="friendlyMatch",
+    ) is False
