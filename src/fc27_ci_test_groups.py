@@ -526,6 +526,21 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Disabled-by-default polling worker single-flight advisory lock, PG persistence, and compose contract tests using per-test DBs.",
         ),
         _entry(
+            "tests/test_fc27_all_match_types_polling.py",
+            "POSTGRES_PARALLEL_SAFE",
+            (
+                "postgres",
+                "domain",
+                "security",
+                "offline",
+                "network_forbidden",
+            ),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "All-match-types polling fixed order, independent persistence, and durable budget ledger tests.",
+        ),
+        _entry(
             "tests/test_fc27_community_provider.py",
             "POSTGRES_PARALLEL_SAFE",
             (

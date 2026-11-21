@@ -435,12 +435,12 @@ def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
                 """
                 SELECT version, sha256, applied_by
                 FROM public.schema_policy_versions
-                WHERE policy = 'grants' AND version = 22
+                WHERE policy = 'grants' AND version = 23
                 """
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 22
+            assert row[0] == 23
             assert row[1] == GRANTS_POLICY.sha256
             assert row[2] == "fc27_migrator"
 

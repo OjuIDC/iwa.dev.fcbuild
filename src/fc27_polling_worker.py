@@ -86,6 +86,7 @@ from src.fc27_privacy import (
     PSEUDONYM_MATCH_REF_RE,
     FC27FingerprintCollisionError,
     FC27PrivacyError,
+    FC27PrivacyViolationError as FC27PrivacyModuleViolationError,
     FC27SensitiveFieldDetectedError,
     MIN_ALIAS_HMAC_KEY_BYTES as ALIAS_HMAC_KEY_MIN_BYTES,
     pseudonymize_match_ref,
@@ -291,6 +292,8 @@ ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
         "fc27_evaluate_alias_candidates_for_promotion",
         "fc27_discord_jobs",
         "fc27_provider_request_attempts",
+        "fc27_reserve_provider_request",
+        "fc27_finalize_provider_request",
     }
 )
 
@@ -2510,6 +2513,7 @@ def _classify_provider_exception(
         (
             FC27PollingPrivacyRejectedError,
             FC27PrivacyViolationError,
+            FC27PrivacyModuleViolationError,
             FC27SensitiveFieldDetectedError,
             FC27PrivacyError,
         ),
@@ -2570,42 +2574,74 @@ def _reserve_provider_request_budget(
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext('fc27_provider_budget'), hashtext(%s))",
-                    (f"{policy.provider_id}:{policy.club_id}:{policy.platform}",),
+                    "SELECT to_regprocedure('public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer)')"
                 )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return True
                 cur.execute(
-                    """SELECT count(*) FILTER (WHERE attempted_at >= now() - interval '24 hours'),
-                              count(*) FILTER (WHERE cycle_id = %s)
-                         FROM public.fc27_provider_request_attempts
-                        WHERE provider_id = %s AND club_id = %s AND platform = %s""",
-                    (cycle_id, policy.provider_id, policy.club_id, policy.platform),
+                    "SELECT has_function_privilege(current_user, 'public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer)', 'EXECUTE')"
                 )
-                recent_count, cycle_count = cur.fetchone()
-                if recent_count >= policy.max_provider_requests_per_24_hours or cycle_count >= policy.maximum_requests_per_cycle:
-                    return False
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return True
                 cur.execute(
-                    """INSERT INTO public.fc27_provider_request_attempts
-                       (attempt_id, cycle_id, provider_id, club_id, platform, match_type)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (attempt_id, cycle_id, policy.provider_id, policy.club_id, policy.platform, match_type),
+                    """SELECT public.fc27_reserve_provider_request(
+                        %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::integer, %s::integer
+                    )""",
+                    (
+                        attempt_id,
+                        cycle_id,
+                        policy.provider_id,
+                        policy.club_id,
+                        policy.platform,
+                        match_type,
+                        policy.maximum_requests_per_cycle,
+                        policy.max_provider_requests_per_24_hours,
+                    ),
                 )
-    return True
+                row = cur.fetchone()
+                return bool(row and row[0])
 
 
 def _record_provider_attempt_outcome(
-    *, db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
-    attempt_id: str, outcome_category: str,
+    *,
+    db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
+    attempt_id: str,
+    outcome_category: str,
 ) -> None:
     """Store a bounded category for an already-counted request attempt."""
-    allowed = {"SUCCEEDED", "PROVIDER_BLOCKED", "SCHEMA_DRIFT", "TRANSIENT_FAILURE", "PERSISTENCE_FAILURE"}
+    allowed = {
+        "RESERVED",
+        "ATTEMPTED",
+        "SUCCEEDED",
+        "FAILED",
+        "ABANDONED",
+        "PROVIDER_BLOCKED",
+        "SCHEMA_DRIFT",
+        "TRANSIENT_FAILURE",
+        "PERSISTENCE_FAILURE",
+    }
     category = outcome_category if outcome_category in allowed else "TRANSIENT_FAILURE"
     with open_guarded_polling_connection(db_conn_or_uri, enforce_posture=False) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE public.fc27_provider_request_attempts SET outcome_category = %s WHERE attempt_id = %s",
-                (category, attempt_id),
-            )
-        conn.commit()
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT to_regprocedure('public.fc27_finalize_provider_request(text,text)')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return
+                cur.execute(
+                    "SELECT has_function_privilege(current_user, 'public.fc27_finalize_provider_request(text,text)', 'EXECUTE')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return
+                cur.execute(
+                    "SELECT public.fc27_finalize_provider_request(%s::text, %s::text)",
+                    (attempt_id, category),
+                )
 
 
 def _run_fc27_poll_single_type_cycle(
@@ -3794,12 +3830,38 @@ def run_fc27_poll_cycle(
             db_conn_or_uri=db_conn_or_uri, advisory_lock_db_source=advisory_lock_db_source,
             shutdown_event=shutdown_event, now_utc_fn=now_utc_fn, now_epoch_fn=now_epoch_fn,
         )
+        total_inserted = min(10, sum(r.inserted_match_count for r in results))
+        overall_status = last.poll_status
+        if any(r.poll_status in {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED"} for r in results):
+            for r in results:
+                if r.poll_status in {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED"}:
+                    overall_status = r.poll_status
+                    break
+        elif total_inserted > 0:
+            overall_status = "NEW_MATCHES_PERSISTED"
+
+        finished = (now_utc_fn or (lambda: datetime.now(timezone.utc)))()
+        duration = max(0, int((finished - started).total_seconds() * 1000))
+        any_analytics = any(r.analytics_executed for r in results)
+
         return last.model_copy(update={
+            "poll_status": overall_status,
+            "finished_at": finished,
+            "duration_ms": duration,
             "provider_requests": attempted,
             "source_match_count": min(10, sum(r.source_match_count for r in results)),
             "accepted_match_count": min(10, sum(r.accepted_match_count for r in results)),
-            "inserted_match_count": min(10, sum(r.inserted_match_count for r in results)),
+            "inserted_match_count": total_inserted,
+            "duplicate_ignored_count": min(10, sum(r.duplicate_ignored_count for r in results)),
+            "replay_conflict_count": min(10, sum(r.replay_conflict_count for r in results)),
             "discord_jobs_inserted": sum(r.discord_jobs_inserted for r in results),
+            "discord_jobs_existing": sum(r.discord_jobs_existing for r in results),
+            "discord_job_conflicts": sum(r.discord_job_conflicts for r in results),
+            "fingerprints_inserted": sum(r.fingerprints_inserted for r in results),
+            "fingerprints_refreshed": sum(r.fingerprints_refreshed for r in results),
+            "fingerprint_duplicate_observations": sum(r.fingerprint_duplicate_observations for r in results),
+            "fingerprint_collisions": sum(r.fingerprint_collisions for r in results),
+            "analytics_executed": any_analytics if total_inserted > 0 else False,
             "batch_type_results": tuple(FC27PollTypeSummary(
                 match_type=r.match_type, poll_status=r.poll_status,
                 provider_requests=r.provider_requests,

@@ -1,4 +1,4 @@
--- grants-policy-version: 22
+-- grants-policy-version: 23
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1180,10 +1180,40 @@ BEGIN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_upsert_discord_destination(text, text, text, text, boolean, boolean, boolean) TO fc27_match_results_writer';
         END IF;
     END IF;
-    IF to_regclass('public.fc27_provider_request_attempts') IS NOT NULL
-       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
-        REVOKE ALL ON public.fc27_provider_request_attempts FROM fc27_poll_writer;
-        GRANT SELECT, INSERT ON public.fc27_provider_request_attempts TO fc27_poll_writer;
-        GRANT UPDATE (outcome_category) ON public.fc27_provider_request_attempts TO fc27_poll_writer;
+    -- Migration 0022 additions (Policy 23)
+    IF to_regclass('public.fc27_provider_request_attempts') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_provider_request_attempts FROM fc27_poll_writer';
+            EXECUTE 'GRANT SELECT ON TABLE public.fc27_provider_request_attempts TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_reserve_provider_request(text, text, text, text, text, text, integer, integer) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_finalize_provider_request(text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_finalize_provider_request(text, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_finalize_provider_request(text, text) TO fc27_poll_writer';
+        END IF;
     END IF;
 END $$;

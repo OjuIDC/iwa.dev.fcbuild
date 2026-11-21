@@ -261,7 +261,7 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
     """Verifies Grants Policy Version 22 least-privilege separation for Migration 0012 through 0021 objects."""
-    assert GRANTS_POLICY.version == 22
+    assert GRANTS_POLICY.version == 23
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",

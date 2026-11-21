@@ -48,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0021"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0022"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -965,13 +965,15 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             "to_regclass('public.fc27_player_alias_candidates') IS NOT NULL, "
             "to_regclass('public.fc27_player_alias_candidate_observations') IS NOT NULL, "
             "to_regclass('public.fc27_player_alias_promotion_audit') IS NOT NULL, "
-            "to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL"
+            "to_regclass('public.fc27_player_alias_review_exceptions') IS NOT NULL, "
+            "to_regclass('public.fc27_provider_request_attempts') IS NOT NULL"
         ).fetchone()
         has_target_roster = bool(roster_row and roster_row[0])
         has_target_candidates = bool(roster_row and roster_row[1])
         has_target_candidate_obs = bool(roster_row and roster_row[2])
         has_target_promotion_audit = bool(roster_row and roster_row[3])
         has_target_review_exceptions = bool(roster_row and roster_row[4])
+        has_target_provider_request_attempts = bool(roster_row and roster_row[5])
         truncate_targets = [
             "public.schema_migrations",
             "public.schema_policy_versions",
@@ -1002,6 +1004,8 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
             truncate_targets.append("public.fc27_player_alias_candidate_observations")
         if has_target_candidates:
             truncate_targets.append("public.fc27_player_alias_candidates")
+        if has_target_provider_request_attempts:
+            truncate_targets.append("public.fc27_provider_request_attempts")
         conn.execute(
             cast(LiteralString, f"TRUNCATE {', '.join(truncate_targets)} CASCADE")
         )
@@ -1101,6 +1105,11 @@ def _run_pg_restore_custom(db_uri: str, archive_path: Path) -> None:
                 continue
             if tbl == "fc27_player_alias_review_exceptions" and (
                 not has_target_review_exceptions
+                or (archive_tables is not None and tbl not in archive_tables)
+            ):
+                continue
+            if tbl == "fc27_provider_request_attempts" and (
+                not has_target_provider_request_attempts
                 or (archive_tables is not None and tbl not in archive_tables)
             ):
                 continue
@@ -1406,7 +1415,7 @@ def verify_fc27_backup_restore(
                 restored_mig_cnt >= 13
                 and any(
                     v in restored_mig
-                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021")
+                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022")
                 )
                 and manifest.migration_version
                 in (
@@ -1418,6 +1427,7 @@ def verify_fc27_backup_restore(
                     "0001_THROUGH_0018",
                     "0001_THROUGH_0019",
                     "0001_THROUGH_0020",
+                    "0001_THROUGH_0021",
                     EXPECTED_MIGRATION_VERSION,
                 )
             )

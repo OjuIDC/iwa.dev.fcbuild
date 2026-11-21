@@ -1488,7 +1488,7 @@ def test_22_23_24_worker_bot_provider_boundaries_request_budget_and_role_grants(
             "SELECT MAX(version) FROM public.schema_migrations"
         ).fetchone()
         max_mig = _max_mig_row[0] if _max_mig_row else None
-        assert str(max_mig).startswith("0021")
+        assert str(max_mig).startswith("0022")
 
     # fc27_poll_writer cannot UPDATE/DELETE quarantine rows or write domain_events
     with psycopg.connect(pg_db_migrated.poll_writer) as pw_conn:
