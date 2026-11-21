@@ -27,8 +27,8 @@
       "mountpoint": "/var/lib/postgresql/data",
       "service": "postgres",
       "required": true,
-      "migration_version": "0020_fc27_alias_auto_promotion_and_exceptions.sql",
-      "grants_policy_version": 21
+      "migration_version": "0021_fc27_provider_request_budget.sql",
+      "grants_policy_version": 22
     },
     "redis_data": {
       "full_volume_name": "fc27-full-stack_redis_data",
@@ -106,9 +106,9 @@
     "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": 24
   },
   "database_expected_state": {
-    "minimum_migration": "0020_fc27_alias_auto_promotion_and_exceptions.sql",
-    "expected_migration_version": "0001_THROUGH_0020",
-    "grants_policy_version": 21,
+    "minimum_migration": "0022_fc27_provider_request_budget.sql",
+    "expected_migration_version": "0001_THROUGH_0022",
+    "grants_policy_version": 23,
     "alias_hmac_key_continuity_required": true
   },
   "acl_policy": {
@@ -134,7 +134,7 @@
     "2. Import protected env files, secret files, local Compose overrides, and runtime metadata via python -m src.fc27_protected_state import.",
     "3. Enforce and verify restrictive ACLs/permissions and numeric Discord Identity Operator / guild / channel IDs.",
     "4. Start postgres and redis and run verify-postgres-volume.",
-    "5. Verify db-bootstrap dry-run posture and apply db-migrate (Migration 0020 + Grants Policy 21).",
+    "5. Verify db-bootstrap dry-run posture and apply db-migrate (Migration 0021 + Grants Policy 22).",
     "6. Run python -m src.fc27_protected_state readiness before starting fc27-discord-bot or fc27-community-worker.",
     "7. Start fc27-discord-bot and fc27-community-worker and verify post-start health with verify-post-start."
   ],

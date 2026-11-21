@@ -124,6 +124,7 @@
     <Compile Include="tests\test_fc27_performance.py" />
     <Compile Include="tests\test_fc27_persistence_and_queries.py" />
     <Compile Include="tests\test_fc27_platform.py" />
+    <Compile Include="tests\test_fc27_all_match_types_polling.py" />
     <Compile Include="tests\test_fc27_polling_worker.py" />
     <Compile Include="tests\test_fc27_privacy.py" />
     <Compile Include="tests\test_fc27_protected_state_recovery.py" />
@@ -184,6 +185,7 @@
     <Content Include="docs\FC27_GHCR_RUNTIME_PROMOTION.md" />
     <Content Include="docs\FC27_HOST_REBUILD_AND_RECOVERY.md" />
     <Content Include="docs\FC27_LANGUAGE_DECISION_MATRIX.md" />
+    <Content Include="docs\FC27_ALL_TYPES_POLLING.md" />
     <Content Include="docs\design\destination-aware-delivery-and-backfill-design.md" />
     <Content Include="docs\FC27_LOCAL_INFERENCE_BOUNDARY.md" />
     <Content Include="docs\FC27_PERFORMANCE_BASELINE.md" />
@@ -215,6 +217,7 @@
     <Content Include="migrations\0015_fc27_player_development_fixups.sql" />
     <Content Include="migrations\0020_fc27_alias_auto_promotion_and_exceptions.sql" />
     <Content Include="migrations\0021_fc27_destination_aware_delivery_and_linkage.sql" />
+    <Content Include="migrations\0022_fc27_provider_request_budget.sql" />
     <Content Include="migrations\post\grants.sql" />
     <Content Include="ops\fc27-protected-state-manifest.json" />
     <Content Include="pyproject.toml" />

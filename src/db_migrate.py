@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 22
+GRANTS_POLICY_VERSION = 23
 
 
 def _compute_grants_sha256() -> str:
@@ -1081,6 +1081,103 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         violations.append(f"missing_{check_role}_exec_{fn_name}")
                     elif check_role not in allowed_exec_roles and has_exec:
                         violations.append(f"forbidden_{check_role}_exec_{fn_name}")
+
+            # Migration 0022 / Policy 23 checks
+            cur.execute("SELECT to_regclass('public.fc27_provider_request_attempts')")
+            reg_0022 = cur.fetchone()
+            has_0022_table = bool(reg_0022 and reg_0022[0])
+            if has_0022_table:
+                cur.execute(
+                    """
+                    SELECT c.relowner::regrole::text
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = 'fc27_provider_request_attempts'
+                    """
+                )
+                t_row = cur.fetchone()
+                if not t_row or t_row[0] != "fc27_owner":
+                    violations.append("fc27_provider_request_attempts_not_owner")
+
+                attempts_matrix = {
+                    "public": (),
+                    "fc27_app": (),
+                    "fc27_dispatch": (),
+                    "fc27_relay": (),
+                    "fc27_player_dev_writer": (),
+                    "fc27_discord_reader": (),
+                    "fc27_match_results_writer": (),
+                    "fc27_poll_writer": ("SELECT",),
+                }
+                for role_name, allowed_privs in attempts_matrix.items():
+                    if role_name != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                        if not cur.fetchone():
+                            continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, 'public.fc27_provider_request_attempts', %s)",
+                            (role_name, priv),
+                        )
+                        p_row = cur.fetchone()
+                        has_priv = bool(p_row and p_row[0])
+                        if priv in allowed_privs and not has_priv:
+                            violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_provider_request_attempts")
+                        elif priv not in allowed_privs and has_priv:
+                            violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_provider_request_attempts")
+
+                fn_0022_specs = (
+                    ("fc27_reserve_provider_request", ("fc27_poll_writer",)),
+                    ("fc27_finalize_provider_request", ("fc27_poll_writer",)),
+                )
+                all_check_roles_0022 = (
+                    "public",
+                    "fc27_app",
+                    "fc27_dispatch",
+                    "fc27_relay",
+                    "fc27_poll_writer",
+                    "fc27_player_dev_writer",
+                    "fc27_discord_reader",
+                    "fc27_match_results_writer",
+                )
+                for fn_name, allowed_exec_roles in fn_0022_specs:
+                    cur.execute(
+                        """
+                        SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+                        FROM pg_proc p
+                        JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.proname = %s
+                        """,
+                        (fn_name,),
+                    )
+                    fn_row = cur.fetchone()
+                    if not fn_row:
+                        violations.append(f"missing_function_{fn_name}")
+                        continue
+                    f_oid, f_secdef, f_owner, f_config = fn_row
+                    if not f_secdef:
+                        violations.append(f"{fn_name}_not_secdef")
+                    if f_owner != "fc27_owner":
+                        violations.append(f"{fn_name}_not_owner")
+                    f_cfg = " ".join(f_config) if f_config else ""
+                    if "search_path=pg_catalog, pg_temp" not in f_cfg:
+                        violations.append(f"{fn_name}_search_path")
+                    for check_role in all_check_roles_0022:
+                        if check_role != "public":
+                            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
+                            if not cur.fetchone():
+                                continue
+                        cur.execute(
+                            "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                            (check_role, f_oid),
+                        )
+                        e_row = cur.fetchone()
+                        has_exec = bool(e_row and e_row[0])
+                        if check_role in allowed_exec_roles and not has_exec:
+                            violations.append(f"missing_{check_role}_exec_{fn_name}")
+                        elif check_role not in allowed_exec_roles and has_exec:
+                            violations.append(f"forbidden_{check_role}_exec_{fn_name}")
 
             # Migration 0020 deliberately has no SQL Unicode normalization helper.
 

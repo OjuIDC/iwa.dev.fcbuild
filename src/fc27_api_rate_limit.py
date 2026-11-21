@@ -393,6 +393,9 @@ IMMEDIATE_OPEN_REASONS: frozenset[str] = frozenset(
         "IDENTITY_MISMATCH",
         "SENSITIVE_FIELD_VIOLATION",
         "SCHEMA_FAILURE",
+        "AUTHENTICATION_FAILED",
+        "AUTHORIZATION_FAILED",
+        "RATE_LIMITED",
     }
 )
 

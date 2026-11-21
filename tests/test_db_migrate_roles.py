@@ -261,7 +261,7 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
     """Verifies Grants Policy Version 22 least-privilege separation for Migration 0012 through 0021 objects."""
-    assert GRANTS_POLICY.version == 22
+    assert GRANTS_POLICY.version == 23
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",
@@ -317,7 +317,7 @@ STAGE_C_TABLES = (
 
 
 def test_migration_0014_fresh_and_idempotent(pg_db):
-    """Validates fresh migration 0001..0020, grants policy 21, postconditions, and second-run no-op."""
+    """Validates fresh migration 0001..0021, grants policy 22, postconditions, and second-run no-op."""
     applied_first = migrate(pg_db.migrator)
     assert "0014_fc27_player_development.sql" in applied_first
     assert "0015_fc27_player_development_fixups.sql" in applied_first
@@ -327,7 +327,8 @@ def test_migration_0014_fresh_and_idempotent(pg_db):
     assert "0019_fc27_player_alias_candidates.sql" in applied_first
     assert "0020_fc27_alias_auto_promotion_and_exceptions.sql" in applied_first
     assert "0021_fc27_destination_aware_delivery_and_linkage.sql" in applied_first
-    assert len(applied_first) == 21
+    assert "0022_fc27_provider_request_budget.sql" in applied_first
+    assert len(applied_first) == 22
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -493,6 +494,7 @@ def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, mo
         "0019_fc27_player_alias_candidates.sql",
         "0020_fc27_alias_auto_promotion_and_exceptions.sql",
         "0021_fc27_destination_aware_delivery_and_linkage.sql",
+        "0022_fc27_provider_request_budget.sql",
     ]
 
     with psycopg.connect(pg_db.admin) as conn:

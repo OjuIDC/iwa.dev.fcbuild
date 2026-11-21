@@ -86,6 +86,7 @@ from src.fc27_privacy import (
     PSEUDONYM_MATCH_REF_RE,
     FC27FingerprintCollisionError,
     FC27PrivacyError,
+    FC27PrivacyViolationError as FC27PrivacyModuleViolationError,
     FC27SensitiveFieldDetectedError,
     MIN_ALIAS_HMAC_KEY_BYTES as ALIAS_HMAC_KEY_MIN_BYTES,
     pseudonymize_match_ref,
@@ -110,8 +111,12 @@ from src.settings import (
     get_fc27_community_poll_interval_seconds,
     get_fc27_community_poll_max_requests,
     get_fc27_community_poll_max_retries,
+    get_fc27_community_poll_max_requests_per_24_hours,
+    get_fc27_community_poll_match_types,
+    get_fc27_community_poll_inter_request_delay_seconds,
     get_fc27_community_poll_max_seconds,
     get_fc27_community_poll_min_seconds,
+    is_fc27_community_poll_all_match_types,
     is_dispatch_enabled,
     is_fc27_alias_hmac_key_configured,
     is_fc27_community_poll_analytics_on_new_only,
@@ -136,7 +141,9 @@ FIXED_MATCH_COUNT = 10
 COMMUNITY_SOURCE_CLASSIFICATION = LIVE_EA_CLUBS_COMMUNITY_CLIENT
 
 POLL_INTERVAL_SECONDS = 43200
+POLL_INTERVAL_FOUR_HOURS_SECONDS = 14400
 POLL_FREQUENCY_LITERAL: Literal["ONCE_EVERY_12_HOURS"] = "ONCE_EVERY_12_HOURS"
+POLL_FREQUENCY_FOUR_HOURS_LITERAL = "ONCE_EVERY_4_HOURS"
 MAX_PROVIDER_REQUESTS_PER_24_HOURS = 2
 PROVIDER_WINDOW_MAX_MATCHES = 10
 
@@ -284,6 +291,9 @@ ALLOWED_WORKER_PUBLIC_TABLES: frozenset[str] = frozenset(
         "fc27_auto_promote_stable_alias_candidate",
         "fc27_evaluate_alias_candidates_for_promotion",
         "fc27_discord_jobs",
+        "fc27_provider_request_attempts",
+        "fc27_reserve_provider_request",
+        "fc27_finalize_provider_request",
     }
 )
 
@@ -436,30 +446,19 @@ class FC27PollingPolicy(BaseModel):
     match_type: str = FIXED_MATCH_TYPE
     approved_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
     maximum_results: int = FIXED_MATCH_COUNT
-    poll_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    minimum_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    maximum_interval_seconds: int = Field(
-        default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
-        le=POLL_INTERVAL_SECONDS,
-    )
-    polling_frequency: Literal["ONCE_EVERY_12_HOURS"] = POLL_FREQUENCY_LITERAL
+    poll_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    minimum_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    maximum_interval_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=POLL_INTERVAL_FOUR_HOURS_SECONDS, le=POLL_INTERVAL_SECONDS)
+    polling_frequency: Literal["ONCE_EVERY_12_HOURS", "ONCE_EVERY_4_HOURS"] = POLL_FREQUENCY_LITERAL
     max_provider_requests_per_24_hours: int = Field(
-        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        default=MAX_PROVIDER_REQUESTS_PER_24_HOURS, ge=1, le=18
     )
+    poll_all_match_types: bool = False
+    poll_match_types: tuple[str, ...] = APPROVED_MATCH_TYPES
+    inter_request_delay_seconds: int = Field(default=12, ge=10, le=60)
     catch_up_bursts_allowed: bool = False
     cache_ttl_seconds: int = Field(default=POLL_INTERVAL_SECONDS, ge=300, le=86400)
-    maximum_requests_per_cycle: int = Field(default=1, ge=1, le=1)
+    maximum_requests_per_cycle: int = Field(default=1, ge=1, le=3)
     maximum_retries: int = Field(default=0, ge=0, le=0)
     request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=15.0)
     circuit_breaker_failure_threshold: int = Field(default=3, ge=1, le=10)
@@ -497,26 +496,43 @@ class FC27PollingPolicy(BaseModel):
             )
         if self.maximum_results != FIXED_MATCH_COUNT:
             raise ValueError(f"maximum_results is fixed to {FIXED_MATCH_COUNT}")
-        if (
-            self.poll_interval_seconds != POLL_INTERVAL_SECONDS
-            or self.minimum_interval_seconds != POLL_INTERVAL_SECONDS
-            or self.maximum_interval_seconds != POLL_INTERVAL_SECONDS
+        interval_values = {
+            self.poll_interval_seconds,
+            self.minimum_interval_seconds,
+            self.maximum_interval_seconds,
+        }
+        if len(interval_values) != 1 or self.poll_interval_seconds not in (
+            POLL_INTERVAL_FOUR_HOURS_SECONDS,
+            POLL_INTERVAL_SECONDS,
         ):
-            raise ValueError(
-                f"polling interval is fixed to {POLL_INTERVAL_SECONDS} seconds (12 hours)"
-            )
-        if self.polling_frequency != POLL_FREQUENCY_LITERAL:
-            raise ValueError(
-                f"polling_frequency must be '{POLL_FREQUENCY_LITERAL}'"
-            )
-        if self.max_provider_requests_per_24_hours != MAX_PROVIDER_REQUESTS_PER_24_HOURS:
-            raise ValueError(
-                f"max_provider_requests_per_24_hours must be {MAX_PROVIDER_REQUESTS_PER_24_HOURS}"
-            )
+            raise ValueError("poll interval, minimum, and maximum must match 14400 or 43200 seconds")
+        expected_frequency = (
+            POLL_FREQUENCY_FOUR_HOURS_LITERAL
+            if self.poll_interval_seconds == POLL_INTERVAL_FOUR_HOURS_SECONDS
+            else POLL_FREQUENCY_LITERAL
+        )
+        if self.polling_frequency != expected_frequency:
+            raise ValueError(f"polling_frequency must be '{expected_frequency}'")
         if self.catch_up_bursts_allowed:
             raise ValueError("catch_up_bursts_allowed must be False")
-        if self.maximum_requests_per_cycle != 1:
-            raise ValueError("maximum_requests_per_cycle must be 1")
+        if self.poll_all_match_types:
+            if self.poll_interval_seconds != POLL_INTERVAL_FOUR_HOURS_SECONDS:
+                raise ValueError("all-match-types mode requires the 14400-second interval")
+            if self.maximum_requests_per_cycle != 3:
+                raise ValueError("all-match-types mode requires exactly 3 requests per cycle")
+            if self.max_provider_requests_per_24_hours < 3:
+                raise ValueError("all-match-types mode requires a daily budget of at least 3")
+            if self.poll_match_types != APPROVED_MATCH_TYPES:
+                raise ValueError("all-match-types mode requires all supported match types in fixed order")
+        else:
+            if self.poll_interval_seconds != POLL_INTERVAL_SECONDS:
+                raise ValueError("14400 seconds requires all-match-types mode")
+            if self.maximum_requests_per_cycle != 1:
+                raise ValueError("rotation mode requires maximum_requests_per_cycle=1")
+        if len(set(self.poll_match_types)) != len(self.poll_match_types) or any(
+            match_type not in APPROVED_MATCH_TYPES for match_type in self.poll_match_types
+        ):
+            raise ValueError("poll_match_types must contain distinct supported values")
         if self.maximum_retries != 0:
             raise ValueError("maximum_retries must be 0")
         if not self.single_flight_enabled:
@@ -575,6 +591,25 @@ def _assert_no_forbidden_keys(obj: Any) -> None:
             _assert_no_forbidden_keys(item)
 
 
+class FC27PollTypeSummary(BaseModel):
+    """Sanitized summary for one match type within a polling cycle."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    match_type: str
+    poll_status: FC27PollStatusLiteral
+    provider_requests: int = Field(..., ge=0, le=1)
+    inserted_match_count: int = Field(default=0, ge=0)
+    discord_jobs_created: int = Field(default=0, ge=0)
+    error_category: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_forbidden_fields(cls, data: Any) -> Any:
+        _assert_no_forbidden_keys(data)
+        return data
+
+
 class FC27PollResult(BaseModel):
     """Structured, metadata-only result of a single FC27 poll cycle."""
 
@@ -599,7 +634,7 @@ class FC27PollResult(BaseModel):
     last_successful_match_type: str | None = None
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_FOUR_HOURS_SECONDS,
         le=POLL_INTERVAL_SECONDS,
     )
     polling_frequency: str = Field(
@@ -607,13 +642,13 @@ class FC27PollResult(BaseModel):
     )
     max_provider_requests_per_24_hours: int = Field(
         default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=1,
+        le=18,
     )
     poll_status: FC27PollStatusLiteral
     single_flight_acquired: bool
     cache_status: str = Field(..., min_length=1, max_length=64)
-    provider_requests: int = Field(..., ge=0, le=1)
+    provider_requests: int = Field(..., ge=0, le=3)
     retries_attempted: int = Field(..., ge=0, le=0)
     source_match_count: int = Field(..., ge=0, le=10)
     accepted_match_count: int = Field(..., ge=0, le=10)
@@ -677,6 +712,10 @@ class FC27PollResult(BaseModel):
     continuity_last_verified_at: datetime | None = None
     continuity_anchor_match_id: str | None = None
     error_category: str | None = None
+    batch_type_results: tuple[FC27PollTypeSummary, ...] = ()
+    batch_requests_attempted: int = Field(default=0, ge=0, le=3)
+    batch_requests_succeeded: int = Field(default=0, ge=0, le=3)
+    batch_requests_failed: int = Field(default=0, ge=0, le=3)
 
     @model_validator(mode="before")
     @classmethod
@@ -716,7 +755,7 @@ class FC27PollingHealth(BaseModel):
     alias_hmac_key_configured: bool = False
     poll_interval_seconds: int = Field(
         default=POLL_INTERVAL_SECONDS,
-        ge=POLL_INTERVAL_SECONDS,
+        ge=POLL_INTERVAL_FOUR_HOURS_SECONDS,
         le=POLL_INTERVAL_SECONDS,
     )
     polling_frequency: str = Field(
@@ -724,8 +763,8 @@ class FC27PollingHealth(BaseModel):
     )
     max_provider_requests_per_24_hours: int = Field(
         default=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        ge=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
-        le=MAX_PROVIDER_REQUESTS_PER_24_HOURS,
+        ge=1,
+        le=18,
     )
     catch_up_bursts_allowed: bool = False
     last_attempt_at: datetime | None = None
@@ -801,6 +840,10 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
     max_sec = get_fc27_community_poll_max_seconds(strict=strict)
     max_req = get_fc27_community_poll_max_requests(strict=strict)
     max_ret = get_fc27_community_poll_max_retries(strict=strict)
+    all_types = is_fc27_community_poll_all_match_types(strict=strict)
+    match_types = get_fc27_community_poll_match_types(strict=strict)
+    daily_max = get_fc27_community_poll_max_requests_per_24_hours(strict=strict)
+    inter_request_delay = get_fc27_community_poll_inter_request_delay_seconds(strict=strict)
     analytics_new_only = is_fc27_community_poll_analytics_on_new_only(strict=strict)
     single_flight = is_fc27_community_poll_single_flight(strict=strict)
 
@@ -827,6 +870,15 @@ def build_fc27_polling_policy_from_env(*, strict: bool = True) -> FC27PollingPol
         poll_interval_seconds=interval_sec,
         minimum_interval_seconds=min_sec,
         maximum_interval_seconds=max_sec,
+        polling_frequency=(
+            POLL_FREQUENCY_FOUR_HOURS_LITERAL
+            if interval_sec == POLL_INTERVAL_FOUR_HOURS_SECONDS
+            else POLL_FREQUENCY_LITERAL
+        ),
+        max_provider_requests_per_24_hours=daily_max,
+        poll_all_match_types=all_types,
+        poll_match_types=match_types,
+        inter_request_delay_seconds=inter_request_delay,
         cache_ttl_seconds=interval_sec,
         maximum_requests_per_cycle=max_req,
         maximum_retries=max_ret,
@@ -2461,6 +2513,7 @@ def _classify_provider_exception(
         (
             FC27PollingPrivacyRejectedError,
             FC27PrivacyViolationError,
+            FC27PrivacyModuleViolationError,
             FC27SensitiveFieldDetectedError,
             FC27PrivacyError,
         ),
@@ -2479,36 +2532,227 @@ def _classify_provider_exception(
         circuit_breaker.record_failure("SCHEMA_FAILURE")
         return ("SCHEMA_DRIFT", "SCHEMA_DRIFT")
 
+    # 1. HTTP 401
+    if isinstance(exc, FC27AuthenticationError) or "401" in msg_upper or "AUTHENTICATION" in msg_upper:
+        circuit_breaker.record_failure("AUTHENTICATION_FAILED")
+        return ("PROVIDER_BLOCKED", "AUTHENTICATION_FAILED")
+
+    # 3. HTTP 429
+    if "429" in msg_upper or "RATE_LIMIT" in msg_upper or "RATE LIMIT" in msg_upper:
+        circuit_breaker.record_failure("RATE_LIMITED")
+        return ("PROVIDER_BLOCKED", "RATE_LIMITED")
+
+    # 2. HTTP 403 / Access Blocked
     if isinstance(
         exc,
         (
             FC27PollingProviderBlockedError,
-            FC27AuthenticationError,
             FC27LiveAccessBlockedError,
         ),
+    ) or any(
+        token in msg_upper
+        for token in ("403", "AUTHORIZATION", "FORBIDDEN", "CHALLENGE", "CAPTCHA", "REDIRECT", "HTML")
     ):
-        circuit_breaker.record_failure("HTTP_403")
-        return ("PROVIDER_BLOCKED", "PROVIDER_BLOCKED")
+        circuit_breaker.record_failure("AUTHORIZATION_FAILED")
+        return ("PROVIDER_BLOCKED", "AUTHORIZATION_FAILED")
 
-    if isinstance(exc, FC27TransportError):
-        if any(
-            token in msg_upper
-            for token in ("401", "403", "429", "CHALLENGE", "CAPTCHA", "REDIRECT", "HTML")
-        ):
-            circuit_breaker.record_failure("HTTP_403")
-            return ("PROVIDER_BLOCKED", "PROVIDER_BLOCKED")
-        circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
-        return ("TRANSIENT_FAILURE", "TRANSIENT_TRANSPORT_ERROR")
+    if isinstance(exc, FC27PollingPostureError):
+        circuit_breaker.record_failure("DATABASE_POSTURE_ERROR")
+        return ("PROVIDER_BLOCKED", "DATABASE_POSTURE_ERROR")
 
-    if isinstance(exc, FC27PollingTransientFailureError):
+    if isinstance(exc, (FC27TransportError, FC27PollingTransientFailureError, TimeoutError)) or "TIMEOUT" in msg_upper:
         circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
-        return ("TRANSIENT_FAILURE", "TRANSIENT_TRANSPORT_ERROR")
+        return ("TRANSIENT_FAILURE", "TRANSIENT_TIMEOUT")
 
     circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
     return ("TRANSIENT_FAILURE", "PROVIDER_ERROR")
 
 
-def run_fc27_poll_cycle(
+def _reserve_provider_request_budget(
+    *,
+    db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
+    policy: FC27PollingPolicy,
+    cycle_id: str,
+    attempt_id: str,
+    match_type: str,
+    invocation_source: str = "SCHEDULED_POLL",
+) -> bool:
+    """Atomically reserve one durable rolling-window and per-cycle request slot."""
+    with open_guarded_polling_connection(db_conn_or_uri, enforce_posture=False) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                # Check 9-arg signature first, then 8-arg signature
+                cur.execute(
+                    "SELECT to_regprocedure('public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer,text)')"
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    cur.execute(
+                        "SELECT has_function_privilege(current_user, 'public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer,text)', 'EXECUTE')"
+                    )
+                    priv_row = cur.fetchone()
+                    if not priv_row or not priv_row[0]:
+                        return True
+                    cur.execute(
+                        """SELECT public.fc27_reserve_provider_request(
+                            %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::integer, %s::integer, %s::text
+                        )""",
+                        (
+                            attempt_id,
+                            cycle_id,
+                            policy.provider_id,
+                            policy.club_id,
+                            policy.platform,
+                            match_type,
+                            policy.maximum_requests_per_cycle,
+                            policy.max_provider_requests_per_24_hours,
+                            invocation_source,
+                        ),
+                    )
+                    proc_res = cur.fetchone()
+                    return bool(proc_res and proc_res[0])
+
+                cur.execute(
+                    "SELECT to_regprocedure('public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer)')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return True
+                cur.execute(
+                    "SELECT has_function_privilege(current_user, 'public.fc27_reserve_provider_request(text,text,text,text,text,text,integer,integer)', 'EXECUTE')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return True
+                cur.execute(
+                    """SELECT public.fc27_reserve_provider_request(
+                        %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::integer, %s::integer
+                    )""",
+                    (
+                        attempt_id,
+                        cycle_id,
+                        policy.provider_id,
+                        policy.club_id,
+                        policy.platform,
+                        match_type,
+                        policy.maximum_requests_per_cycle,
+                        policy.max_provider_requests_per_24_hours,
+                    ),
+                )
+                row = cur.fetchone()
+                return bool(row and row[0])
+
+
+def _record_provider_attempt_outcome(
+    *,
+    db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str,
+    attempt_id: str,
+    outcome_category: str,
+) -> None:
+    """Store a bounded category for an already-counted request attempt."""
+    allowed = {
+        "RESERVED",
+        "ATTEMPTED",
+        "SUCCEEDED",
+        "FAILED",
+        "ABANDONED",
+        "PROVIDER_BLOCKED",
+        "SCHEMA_DRIFT",
+        "TRANSIENT_FAILURE",
+        "PERSISTENCE_FAILURE",
+        "AUTHENTICATION_FAILED",
+        "AUTHORIZATION_FAILED",
+        "RATE_LIMITED",
+        "PRIVACY_REJECTED",
+    }
+    category = outcome_category if outcome_category in allowed else "TRANSIENT_FAILURE"
+    with open_guarded_polling_connection(db_conn_or_uri, enforce_posture=False) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT to_regprocedure('public.fc27_finalize_provider_request(text,text)')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return
+                cur.execute(
+                    "SELECT has_function_privilege(current_user, 'public.fc27_finalize_provider_request(text,text)', 'EXECUTE')"
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return
+                cur.execute(
+                    "SELECT public.fc27_finalize_provider_request(%s::text, %s::text)",
+                    (attempt_id, category),
+                )
+
+
+def should_continue_polling_cycle_after_result(
+    result: FC27PollResult,
+    *,
+    circuit_breaker: FC27AdapterCircuitBreaker | None = None,
+    single_flight_held: bool = True,
+    budget_exhausted: bool = False,
+) -> bool:
+    """Evaluate whether an all-match-types polling cycle may proceed to the next match type.
+
+    Explicit failure decision matrix:
+    1. HTTP 401 (AUTHENTICATION_FAILED): Stop remaining types.
+    2. HTTP 403 (AUTHORIZATION_FAILED): Stop remaining types.
+    3. HTTP 429 (RATE_LIMITED): Stop remaining types.
+    4. Shared schema/contract failure (SCHEMA_DRIFT): Stop remaining types.
+    5. Privacy/identity rejection (PRIVACY_REJECTED / IDENTITY_REJECTED): Stop remaining types.
+    6. Type-local network timeout: Count attempt, zero retries, continue if budget remains, lease held, breaker not OPEN.
+    7. Type-local empty result (NO_NEW_MATCHES): Continue.
+    8. Type-local persistence failure (PERSISTENCE_FAILURE): Rolled back, continue if not database outage.
+    9. Shared PostgreSQL outage: Stop remaining types.
+    """
+    if not single_flight_held:
+        return False
+    if budget_exhausted:
+        return False
+    if circuit_breaker is not None and circuit_breaker.state == FC27CircuitState.OPEN:
+        return False
+
+    status = result.poll_status
+    err = result.error_category or ""
+
+    if status in ("NO_NEW_MATCHES", "NEW_MATCHES_PERSISTED"):
+        return True
+
+    if status in (
+        "PROVIDER_BLOCKED",
+        "SCHEMA_DRIFT",
+        "IDENTITY_REJECTED",
+        "PRIVACY_REJECTED",
+        "SKIPPED_SINGLE_FLIGHT_BUSY",
+        "BUSY_CONCURRENT_POLL",
+        "RATE_LIMITED",
+    ):
+        return False
+
+    if status == "REPLAY_CONFLICT":
+        return False
+
+    if status == "TRANSIENT_FAILURE":
+        if err in ("DATABASE_POSTURE_ERROR", "POSTGRESQL_OUTAGE", "DATABASE_OUTAGE"):
+            return False
+        if err in (
+            "TRANSIENT_TIMEOUT",
+            "TRANSIENT_TRANSPORT_ERROR",
+            "TYPE_LOCAL_TIMEOUT",
+            "PERSISTENCE_FAILURE",
+            "PROVIDER_ERROR",
+        ):
+            if circuit_breaker is not None and circuit_breaker.state == FC27CircuitState.OPEN:
+                return False
+            return True
+        return False
+
+    return False
+
+
+def _run_fc27_poll_single_type_cycle(
     *,
     policy: FC27PollingPolicy | None = None,
     runtime: FC27PollingRuntime | None = None,
@@ -2532,8 +2776,12 @@ def run_fc27_poll_cycle(
     enforce_db_posture: bool = False,
     recover_state_from_db: bool = False,
     match_type_override: str | None = None,
+    single_flight_context: FC27SingleFlightLeaseContext | None = None,
+    within_batch: bool = False,
+    count_cycle: bool = True,
+    budget_cycle_id: str | None = None,
 ) -> FC27PollResult:
-    """Execute at most one bounded East Coasters FC27 poll cycle."""
+    """Execute one bounded single-type East Coasters poll transaction."""
     rt = runtime or get_default_polling_runtime()
     pol = policy or rt.policy
     clock_utc = now_utc_fn or (lambda: datetime.now(timezone.utc))
@@ -2634,7 +2882,8 @@ def run_fc27_poll_cycle(
                 rt.last_attempted_match_type = eff_match_type
             rt.last_status = poll_status
             rt.last_error_category = error_category
-            rt.total_cycles += 1
+            if count_cycle:
+                rt.total_cycles += 1
             rt.total_provider_requests += provider_requests
             rt.total_matches_inserted += inserted_match_count
             rt.total_duplicates_ignored += duplicate_ignored_count
@@ -2703,7 +2952,7 @@ def run_fc27_poll_cycle(
                         else prev_mt_state.last_new_match_at
                     ),
                     last_status=poll_status,
-                    total_cycles=prev_mt_state.total_cycles + 1,
+                    total_cycles=prev_mt_state.total_cycles + (1 if count_cycle else 0),
                     total_matches_inserted=prev_mt_state.total_matches_inserted + inserted_match_count,
                     total_duplicates_ignored=prev_mt_state.total_duplicates_ignored + duplicate_ignored_count,
                     continuity_anchor_match_id=(
@@ -2713,7 +2962,7 @@ def run_fc27_poll_cycle(
                     ),
                 )
 
-            if advance_rotation:
+            if advance_rotation and not within_batch:
                 next_mt = next_approved_match_type(
                     eff_match_type, approved_match_types=approved_types
                 )
@@ -2902,7 +3151,7 @@ def run_fc27_poll_cycle(
             )
 
     # 5. Check minimum interval window (43200s / 12 hours)
-    if rt.next_eligible_at is not None:
+    if not within_batch and rt.next_eligible_at is not None:
         norm_next_eligible = _normalize_utc(rt.next_eligible_at)
         rt.next_eligible_at = norm_next_eligible
         if started_at < norm_next_eligible:
@@ -2933,7 +3182,7 @@ def run_fc27_poll_cycle(
 
     # 6. Check bounded normalized cache (complete key)
     _, cache_key_spec = build_poll_cache_key(pol, match_type=active_match_type)
-    if use_cache:
+    if use_cache and not within_batch:
         cached_val = rt.cache.get(cache_key_spec)
         if (
             cached_val is None
@@ -2959,13 +3208,14 @@ def run_fc27_poll_cycle(
     if lock_db_src is None and isinstance(db_conn_or_uri, str):
         lock_db_src = db_conn_or_uri
 
-    lease_ctx = FC27SingleFlightLeaseContext(
+    owns_lease = single_flight_context is None
+    lease_ctx = single_flight_context or FC27SingleFlightLeaseContext(
         policy=pol,
         owner_id=rt.owner_id,
         db_uri_or_conn_factory=lock_db_src,
     )
-    lease = lease_ctx.acquire()
-    if not lease.acquired:
+    lease = lease_ctx.acquire() if owns_lease else lease_ctx.lease
+    if lease is None or not lease.acquired:
         return _finalize(
             poll_status="SKIPPED_SINGLE_FLIGHT_BUSY",
             single_flight_acquired=False,
@@ -2987,7 +3237,7 @@ def run_fc27_poll_cycle(
             )
 
         # Enforce token-bucket rate limiter
-        if use_rate_limiter:
+        if use_rate_limiter and not within_batch:
             try:
                 rt.rate_limiter.acquire(
                     pol.provider_id,
@@ -3015,6 +3265,33 @@ def run_fc27_poll_cycle(
             clock=clock_epoch,
         )
         budget.consume_before_transport(is_retry=False)
+        ledger_reserved = False
+        if db_conn_or_uri is not None:
+            ledger_reserved = _reserve_provider_request_budget(
+                db_conn_or_uri=db_conn_or_uri,
+                policy=pol,
+                cycle_id=budget_cycle_id or attempt_id,
+                attempt_id=attempt_id,
+                match_type=active_match_type,
+            )
+            if not ledger_reserved:
+                return _finalize(
+                    poll_status="PROVIDER_BLOCKED",
+                    single_flight_acquired=True,
+                    cache_status="BYPASSED_DURABLE_REQUEST_BUDGET",
+                    error_category="PROVIDER_BUDGET_EXHAUSTED",
+                    polled_match_type=active_match_type,
+                )
+        elif fetch_matches_fn is None and not (
+            adapter is not None and getattr(adapter, "_mock_matches", None) is not None
+        ):
+            return _finalize(
+                poll_status="PROVIDER_BLOCKED",
+                single_flight_acquired=True,
+                cache_status="BYPASSED_DURABLE_REQUEST_BUDGET_UNAVAILABLE",
+                error_category="PROVIDER_BUDGET_UNAVAILABLE",
+                polled_match_type=active_match_type,
+            )
         provider_requests = budget.attempts_used
 
         # Execute 1 bounded provider request for the active match type in rotation
@@ -3064,6 +3341,16 @@ def run_fc27_poll_cycle(
             status_code, err_cat = _classify_provider_exception(
                 exc, rt.circuit_breaker
             )
+            if ledger_reserved and db_conn_or_uri is not None:
+                _record_provider_attempt_outcome(
+                    db_conn_or_uri=db_conn_or_uri,
+                    attempt_id=attempt_id,
+                    outcome_category=(
+                        "PROVIDER_BLOCKED" if status_code == "PROVIDER_BLOCKED"
+                        else "SCHEMA_DRIFT" if status_code == "SCHEMA_DRIFT"
+                        else "TRANSIENT_FAILURE"
+                    ),
+                )
             return _finalize(
                 poll_status=status_code,
                 single_flight_acquired=True,
@@ -3076,6 +3363,13 @@ def run_fc27_poll_cycle(
                 missed_intervals=missed_interval_count,
                 elapsed_since_last_success=elapsed_since_prev_success,
                 polled_match_type=active_match_type,
+            )
+
+        if ledger_reserved and db_conn_or_uri is not None:
+            _record_provider_attempt_outcome(
+                db_conn_or_uri=db_conn_or_uri,
+                attempt_id=attempt_id,
+                outcome_category="SUCCEEDED",
             )
 
         # Revalidate identity, provenance, schema, and privacy on returned envelope
@@ -3260,7 +3554,15 @@ def run_fc27_poll_cycle(
                 polled_match_type=active_match_type,
             )
         except Exception:
-            rt.circuit_breaker.record_failure("TRANSIENT_TIMEOUT")
+            if ledger_reserved and db_conn_or_uri is not None:
+                try:
+                    _record_provider_attempt_outcome(
+                        db_conn_or_uri=db_conn_or_uri,
+                        attempt_id=attempt_id,
+                        outcome_category="PERSISTENCE_FAILURE",
+                    )
+                except Exception:
+                    pass
             return _finalize(
                 poll_status="TRANSIENT_FAILURE",
                 single_flight_acquired=True,
@@ -3560,6 +3862,151 @@ def run_fc27_poll_cycle(
         )
     finally:
         rt.current_owner = None
+        if owns_lease:
+            lease_ctx.release()
+
+
+def run_fc27_poll_cycle(
+    *,
+    policy: FC27PollingPolicy | None = None,
+    runtime: FC27PollingRuntime | None = None,
+    confirm_live_polling: bool = False,
+    db_conn_or_uri: psycopg.Connection[Any] | GuardedPollingConnection | str | None = None,
+    advisory_lock_db_source: str | Callable[[], psycopg.Connection[Any]] | None = None,
+    adapter: FC27CommunityProviderAdapter | None = None,
+    fetch_matches_fn: Callable[..., FC27CommunityProviderEnvelope] | None = None,
+    persist_fn: Callable[[FC27CommunityProviderEnvelope], FC27CommunityPersistenceApplySummary] | None = None,
+    analytics_fn: Callable[[], dict[str, Any]] | None = None,
+    shutdown_event: threading.Event | None = None,
+    now_utc_fn: Callable[[], datetime] | None = None,
+    now_epoch_fn: Callable[[], float] | None = None,
+    interval_selector: Callable[[FC27PollingPolicy], int] | None = None,
+    use_cache: bool = True,
+    use_rate_limiter: bool = True,
+    enforce_db_posture: bool = False,
+    recover_state_from_db: bool = False,
+    match_type_override: str | None = None,
+) -> FC27PollResult:
+    """Run one scheduled cycle, optionally querying every supported match type."""
+    rt = runtime or get_default_polling_runtime()
+    pol = policy or rt.policy
+    if not pol.poll_all_match_types or match_type_override is not None:
+        return _run_fc27_poll_single_type_cycle(
+            policy=pol, runtime=rt, confirm_live_polling=confirm_live_polling,
+            db_conn_or_uri=db_conn_or_uri, advisory_lock_db_source=advisory_lock_db_source,
+            adapter=adapter, fetch_matches_fn=fetch_matches_fn, persist_fn=persist_fn,
+            analytics_fn=analytics_fn, shutdown_event=shutdown_event,
+            now_utc_fn=now_utc_fn, now_epoch_fn=now_epoch_fn,
+            interval_selector=interval_selector, use_cache=use_cache,
+            use_rate_limiter=use_rate_limiter, enforce_db_posture=enforce_db_posture,
+            recover_state_from_db=recover_state_from_db,
+            match_type_override=match_type_override,
+        )
+    started = (now_utc_fn or (lambda: datetime.now(timezone.utc)))()
+    lock_db_src = advisory_lock_db_source or (db_conn_or_uri if isinstance(db_conn_or_uri, str) else None)
+    lease_ctx = FC27SingleFlightLeaseContext(policy=pol, owner_id=rt.owner_id, db_uri_or_conn_factory=lock_db_src)
+    lease = lease_ctx.acquire()
+    if not lease.acquired:
+        return _run_fc27_poll_single_type_cycle(
+            policy=pol,
+            runtime=rt,
+            confirm_live_polling=confirm_live_polling,
+            db_conn_or_uri=db_conn_or_uri,
+            advisory_lock_db_source=advisory_lock_db_source,
+            shutdown_event=shutdown_event,
+            now_utc_fn=now_utc_fn,
+            now_epoch_fn=now_epoch_fn,
+            fetch_matches_fn=fetch_matches_fn,
+            persist_fn=persist_fn,
+            analytics_fn=analytics_fn,
+            use_cache=use_cache,
+            use_rate_limiter=use_rate_limiter,
+            single_flight_context=lease_ctx,
+        )
+    results: list[FC27PollResult] = []
+    batch_cycle_id = f"cycle-{uuid.uuid4().hex[:16]}"
+    try:
+        for index, match_type in enumerate(pol.poll_match_types):
+            if index and shutdown_event is not None and shutdown_event.is_set():
+                break
+            if index:
+                if shutdown_event is not None:
+                    if shutdown_event.wait(pol.inter_request_delay_seconds):
+                        break
+                else:
+                    time.sleep(pol.inter_request_delay_seconds)
+            result = _run_fc27_poll_single_type_cycle(
+                policy=pol, runtime=rt, confirm_live_polling=confirm_live_polling,
+                db_conn_or_uri=db_conn_or_uri, advisory_lock_db_source=advisory_lock_db_source,
+                adapter=adapter, fetch_matches_fn=fetch_matches_fn, persist_fn=persist_fn,
+                analytics_fn=analytics_fn, shutdown_event=shutdown_event,
+                now_utc_fn=now_utc_fn, now_epoch_fn=now_epoch_fn,
+                interval_selector=interval_selector, use_cache=use_cache,
+                use_rate_limiter=use_rate_limiter, enforce_db_posture=enforce_db_posture,
+                recover_state_from_db=recover_state_from_db, match_type_override=match_type,
+                single_flight_context=lease_ctx, within_batch=True,
+                budget_cycle_id=batch_cycle_id,
+            )
+            results.append(result)
+            if not should_continue_polling_cycle_after_result(
+                result,
+                circuit_breaker=rt.circuit_breaker,
+                single_flight_held=lease.acquired,
+                budget_exhausted=(result.error_category == "PROVIDER_BUDGET_EXHAUSTED"),
+            ):
+                break
+        succeeded = sum(r.poll_status in {"NO_NEW_MATCHES", "NEW_MATCHES_PERSISTED"} for r in results)
+        attempted = sum(r.provider_requests for r in results)
+        last = results[-1] if results else _run_fc27_poll_single_type_cycle(
+            policy=pol, runtime=rt, confirm_live_polling=confirm_live_polling,
+            db_conn_or_uri=db_conn_or_uri, advisory_lock_db_source=advisory_lock_db_source,
+            shutdown_event=shutdown_event, now_utc_fn=now_utc_fn, now_epoch_fn=now_epoch_fn,
+        )
+        total_inserted = min(10, sum(r.inserted_match_count for r in results))
+        overall_status = last.poll_status
+        fatal_statuses = {"PROVIDER_BLOCKED", "SCHEMA_DRIFT", "IDENTITY_REJECTED", "PRIVACY_REJECTED", "BUSY_CONCURRENT_POLL"}
+        if any(r.poll_status in fatal_statuses for r in results):
+            for r in results:
+                if r.poll_status in fatal_statuses:
+                    overall_status = r.poll_status
+                    break
+        elif total_inserted > 0:
+            overall_status = "NEW_MATCHES_PERSISTED"
+
+        finished = (now_utc_fn or (lambda: datetime.now(timezone.utc)))()
+        duration = max(0, int((finished - started).total_seconds() * 1000))
+        any_analytics = any(r.analytics_executed for r in results)
+
+        return last.model_copy(update={
+            "poll_status": overall_status,
+            "finished_at": finished,
+            "duration_ms": duration,
+            "provider_requests": attempted,
+            "source_match_count": min(10, sum(r.source_match_count for r in results)),
+            "accepted_match_count": min(10, sum(r.accepted_match_count for r in results)),
+            "inserted_match_count": total_inserted,
+            "duplicate_ignored_count": min(10, sum(r.duplicate_ignored_count for r in results)),
+            "replay_conflict_count": min(10, sum(r.replay_conflict_count for r in results)),
+            "discord_jobs_inserted": sum(r.discord_jobs_inserted for r in results),
+            "discord_jobs_existing": sum(r.discord_jobs_existing for r in results),
+            "discord_job_conflicts": sum(r.discord_job_conflicts for r in results),
+            "fingerprints_inserted": sum(r.fingerprints_inserted for r in results),
+            "fingerprints_refreshed": sum(r.fingerprints_refreshed for r in results),
+            "fingerprint_duplicate_observations": sum(r.fingerprint_duplicate_observations for r in results),
+            "fingerprint_collisions": sum(r.fingerprint_collisions for r in results),
+            "analytics_executed": any_analytics if total_inserted > 0 else False,
+            "batch_type_results": tuple(FC27PollTypeSummary(
+                match_type=r.match_type, poll_status=r.poll_status,
+                provider_requests=r.provider_requests,
+                inserted_match_count=r.inserted_match_count,
+                discord_jobs_created=r.discord_jobs_inserted,
+                error_category=r.error_category,
+            ) for r in results),
+            "batch_requests_attempted": attempted,
+            "batch_requests_succeeded": succeeded,
+            "batch_requests_failed": max(0, attempted-succeeded),
+        })
+    finally:
         lease_ctx.release()
 
 
