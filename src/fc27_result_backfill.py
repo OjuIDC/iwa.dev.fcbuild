@@ -180,23 +180,36 @@ def run_result_backfill(
             f"Latest count must be between {MIN_LATEST_COUNT} and {MAX_LATEST_COUNT} (got {latest})."
         )
 
-    owns_conn = False
+    owns_reader = False
+    owns_writer = False
     if isinstance(db_conn_or_uri, psycopg.Connection):
-        conn = db_conn_or_uri
+        reader_conn = db_conn_or_uri
+        writer_conn = db_conn_or_uri
     elif isinstance(db_conn_or_uri, str):
-        conn = psycopg.connect(db_conn_or_uri)
-        owns_conn = True
+        reader_conn = psycopg.connect(db_conn_or_uri)
+        writer_conn = reader_conn
+        owns_reader = True
     elif db_conn_or_uri is None:
-        resolved = resolve_discord_readonly_uri(required=True)
-        assert resolved is not None
-        conn = psycopg.connect(resolved)
-        owns_conn = True
+        from src.fc27_match_results import resolve_match_results_writer_uri
+
+        ro_uri = resolve_discord_readonly_uri(required=True)
+        wr_uri = resolve_match_results_writer_uri(strict=False) or ro_uri
+        assert ro_uri is not None
+        reader_conn = psycopg.connect(ro_uri)
+        owns_reader = True
+        if wr_uri == ro_uri:
+            writer_conn = reader_conn
+        else:
+            writer_conn = psycopg.connect(wr_uri)
+            owns_writer = True
     else:
         conn = getattr(db_conn_or_uri, "_conn", db_conn_or_uri)
+        reader_conn = conn
+        writer_conn = conn
 
     try:
         # 1. Acquire single-flight advisory lock for backfill on this destination
-        with conn.cursor() as cur:
+        with writer_conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT pg_try_advisory_lock(
@@ -214,7 +227,7 @@ def run_result_backfill(
 
         try:
             # 2. Resolve destination registry entry
-            dest = get_destination_by_key(conn, clean_dest_key)
+            dest = get_destination_by_key(writer_conn, clean_dest_key)
             if dest is None:
                 raise FC27BackfillValidationError(
                     f"Destination '{clean_dest_key}' is not registered in public.fc27_discord_destinations."
@@ -240,7 +253,7 @@ def run_result_backfill(
 
             # 3. Discover eligible persisted matches
             eligible_rows = _discover_latest_persisted_matches(
-                conn,
+                reader_conn,
                 club_id=club_id,
                 platform=platform,
                 game_version=game_version,
@@ -261,7 +274,7 @@ def run_result_backfill(
                 m_ref = pseudonymize_match_ref(ext_match_id, club_id=club_id)
 
                 # Check if already delivered to this destination
-                with conn.cursor() as cur:
+                with writer_conn.cursor() as cur:
                     cur.execute(
                         """
                         SELECT message_id, delivery_state
@@ -283,14 +296,15 @@ def run_result_backfill(
                     continue
 
                 # Confirmed execution path
+                res: DeliveryReservationResult | None = None
                 try:
                     # Load authoritative match data
                     from src.fc27_discord_bot import GuardedDiscordReadOnlyConnection
 
                     guarded_ro = (
-                        conn
-                        if isinstance(conn, GuardedDiscordReadOnlyConnection)
-                        else GuardedDiscordReadOnlyConnection(conn, verify_posture=False)
+                        reader_conn
+                        if isinstance(reader_conn, GuardedDiscordReadOnlyConnection)
+                        else GuardedDiscordReadOnlyConnection(reader_conn, verify_posture=False)
                     )
                     match_data, extra_forbidden = load_authoritative_match_by_ref(
                         guarded_ro,
@@ -304,7 +318,7 @@ def run_result_backfill(
                         m_ref, dest.destination_key, dest.message_kind
                     )
                     res = reserve_discord_delivery(
-                        conn,
+                        writer_conn,
                         match_ref=m_ref,
                         destination_key=dest.destination_key,
                         message_kind=dest.message_kind,
@@ -350,30 +364,30 @@ def run_result_backfill(
                         )
 
                     if sent_id and res.delivery_id:
-                        record_delivery_success(conn, res.delivery_id, sent_id, m_ref)
-                        conn.commit()
+                        record_delivery_success(writer_conn, res.delivery_id, sent_id, m_ref)
+                        writer_conn.commit()
                         planned_or_sent += 1
                     else:
                         raise FC27BackfillError("Transport send returned empty message ID")
 
                 except Exception as exc:
-                    conn.rollback()
+                    writer_conn.rollback()
                     failed_count += 1
                     LOGGER.warning(
                         "Backfill delivery failed for match: %s",
                         type(exc).__name__,
                     )
-                    if res.delivery_id:
+                    if res is not None and res.delivery_id:
                         try:
                             record_delivery_failure(
-                                conn,
+                                writer_conn,
                                 res.delivery_id,
                                 type(exc).__name__.upper(),
                                 m_ref,
                             )
-                            conn.commit()
+                            writer_conn.commit()
                         except Exception:
-                            conn.rollback()
+                            writer_conn.rollback()
 
             remaining = total_found - (already_delivered + planned_or_sent)
             return FC27ResultBackfillSummary(
@@ -391,10 +405,10 @@ def run_result_backfill(
         finally:
             # 5. Release advisory lock
             try:
-                conn.rollback()
+                writer_conn.rollback()
             except Exception:
                 pass
-            with conn.cursor() as cur:
+            with writer_conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT pg_advisory_unlock(
@@ -404,11 +418,13 @@ def run_result_backfill(
                     """,
                     (BACKFILL_ADVISORY_NAMESPACE, clean_dest_key),
                 )
-                conn.commit()
+                writer_conn.commit()
 
     finally:
-        if owns_conn:
-            conn.close()
+        if owns_reader:
+            reader_conn.close()
+        if owns_writer:
+            writer_conn.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
