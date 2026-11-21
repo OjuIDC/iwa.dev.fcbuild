@@ -482,6 +482,33 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Roster reconciliation tokens, team-chat coaching summary, dual-channel message linkage, and CLI/bot integration tests using per-test DBs.",
         ),
         _entry(
+            "tests/test_fc27_delivery_and_linkage_freeze.py",
+            "PURE_UNIT_PARALLEL_SAFE",
+            ("unit", "domain", "offline", "network_forbidden"),
+            "unit_domain_parallel",
+            "full-unit-domain",
+            ("unit-domain",),
+            "Behavior-freeze verification for legacy single-destination delivery, post tag determinism, and linkage limits.",
+        ),
+        _entry(
+            "tests/test_fc27_destination_aware_delivery.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Destination registry schema, fan-out delivery, isolation, roster refresh multi-destination updates, and Migration 0021.",
+        ),
+        _entry(
+            "tests/test_fc27_result_backfill.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Bounded historical backfill CLI, dry-run simulation, confirmed delivery, ordering, bounds 10-25, and advisory locks.",
+        ),
+        _entry(
             "tests/test_fc27_polling_worker.py",
             "POSTGRES_PARALLEL_SAFE",
             (

@@ -1481,14 +1481,14 @@ def test_22_23_24_worker_bot_provider_boundaries_request_budget_and_role_grants(
     monkeypatch: pytest.MonkeyPatch,
     pg_db_migrated,
 ) -> None:
-    # 24. Migration max == 0020 and Grants Policy == 21
-    assert GRANTS_POLICY_VERSION == 22
+    # 24. Migration max == 0022 and Grants Policy == 23
+    assert GRANTS_POLICY_VERSION == 23
     with psycopg.connect(pg_db_migrated.admin) as conn:
         _max_mig_row = conn.execute(
             "SELECT MAX(version) FROM public.schema_migrations"
         ).fetchone()
         max_mig = _max_mig_row[0] if _max_mig_row else None
-        assert str(max_mig).startswith("0020")
+        assert str(max_mig).startswith("0021")
 
     # fc27_poll_writer cannot UPDATE/DELETE quarantine rows or write domain_events
     with psycopg.connect(pg_db_migrated.poll_writer) as pw_conn:

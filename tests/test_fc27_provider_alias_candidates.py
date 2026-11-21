@@ -1095,19 +1095,20 @@ class TestProviderAliasCandidatePipeline:
         assert applied_0019 == [
             "0019_fc27_player_alias_candidates.sql",
             "0020_fc27_alias_auto_promotion_and_exceptions.sql",
+            "0021_fc27_destination_aware_delivery_and_linkage.sql",
         ]
         # Idempotent rerun
         assert migrate(pg_db.migrator) == []
-        assert GRANTS_POLICY_VERSION == 22
-        assert GRANTS_POLICY.version == 21
+        assert GRANTS_POLICY_VERSION == 23
+        assert GRANTS_POLICY.version == 23
 
         with psycopg.connect(pg_db.admin) as aconn:
             assert verify_postconditions(aconn) == []
             max_ver_row = aconn.execute("SELECT MAX(version) FROM public.schema_migrations").fetchone()
-            assert max_ver_row is not None and str(max_ver_row[0]).startswith("0020")
+            assert max_ver_row is not None and str(max_ver_row[0]).startswith("0021")
             assert aconn.execute(
                 "SELECT version FROM public.schema_policy_versions WHERE policy = 'grants' ORDER BY version DESC LIMIT 1"
-            ).fetchone() == (21,)
+            ).fetchone() == (22,)
             # Preserved 0018 data
             assert aconn.execute(
                 "SELECT display_name FROM public.fc27_roster WHERE player_id = 'plr_ecf_112233445566'"
@@ -1358,7 +1359,7 @@ class TestBackupRestoreWithAliasCandidates:
             backup_dir=backup_dir,
         )
         assert manifest.migration_version == EXPECTED_MIGRATION_VERSION
-        assert manifest.table_counts.schema_migrations == 20
+        assert manifest.table_counts.schema_migrations == 21
         assert manifest.table_counts.fc27_roster == 1
         assert manifest.table_counts.fc27_player_alias_candidates >= 4
         assert manifest.table_counts.fc27_player_alias_candidate_observations >= 5

@@ -43,6 +43,7 @@
     <Folder Include=".github\" />
     <Folder Include=".github\workflows\" />
     <Folder Include="docs\" />
+    <Folder Include="docs\design\" />
     <Folder Include="migrations\" />
     <Folder Include="migrations\post\" />
     <Folder Include="ops\" />
@@ -60,6 +61,7 @@
     <Compile Include="scripts\fc27_discord_bot.py" />
     <Compile Include="scripts\fc27_polling_worker.py" />
     <Compile Include="scripts\fc27_restore_verify.py" />
+    <Compile Include="scripts\fc27_result_backfill.py" />
     <Compile Include="scripts\sanitize_test_report.py" />
     <Compile Include="src\__init__.py" />
     <Compile Include="src\db_migrate.py" />
@@ -78,6 +80,7 @@
     <Compile Include="src\fc27_dashboard_queries.py" />
     <Compile Include="src\fc27_director.py" />
     <Compile Include="src\fc27_discord_bot.py" />
+    <Compile Include="src\fc27_discord_delivery.py" />
     <Compile Include="src\fc27_match_results.py" />
     <Compile Include="src\fc27_pandas_view.py" />
     <Compile Include="src\fc27_performance.py" />
@@ -86,6 +89,7 @@
     <Compile Include="src\fc27_protected_state.py" />
     <Compile Include="src\fc27_provider.py" />
     <Compile Include="src\fc27_repository.py" />
+    <Compile Include="src\fc27_result_backfill.py" />
     <Compile Include="src\fc27_search_scout.py" />
     <Compile Include="src\fc27_tactics.py" />
     <Compile Include="src\schemas.py" />
@@ -111,6 +115,8 @@
     <Compile Include="tests\test_fc27_coach.py" />
     <Compile Include="tests\test_fc27_community_provider.py" />
     <Compile Include="tests\test_fc27_dashboard_queries.py" />
+    <Compile Include="tests\test_fc27_delivery_and_linkage_freeze.py" />
+    <Compile Include="tests\test_fc27_destination_aware_delivery.py" />
     <Compile Include="tests\test_fc27_director.py" />
     <Compile Include="tests\test_fc27_discord_bot.py" />
     <Compile Include="tests\test_fc27_match_results.py" />
@@ -121,6 +127,7 @@
     <Compile Include="tests\test_fc27_polling_worker.py" />
     <Compile Include="tests\test_fc27_privacy.py" />
     <Compile Include="tests\test_fc27_protected_state_recovery.py" />
+    <Compile Include="tests\test_fc27_result_backfill.py" />
     <Compile Include="tests\test_fc27_scout.py" />
     <Compile Include="tests\test_fc27_search.py" />
     <Compile Include="tests\test_fc27_search_scout_graph.py" />
@@ -177,6 +184,7 @@
     <Content Include="docs\FC27_GHCR_RUNTIME_PROMOTION.md" />
     <Content Include="docs\FC27_HOST_REBUILD_AND_RECOVERY.md" />
     <Content Include="docs\FC27_LANGUAGE_DECISION_MATRIX.md" />
+    <Content Include="docs\design\destination-aware-delivery-and-backfill-design.md" />
     <Content Include="docs\FC27_LOCAL_INFERENCE_BOUNDARY.md" />
     <Content Include="docs\FC27_PERFORMANCE_BASELINE.md" />
     <Content Include="docs\FC27_POLLING_WORKER.md" />
@@ -206,6 +214,7 @@
     <Content Include="migrations\0014_fc27_player_development.sql" />
     <Content Include="migrations\0015_fc27_player_development_fixups.sql" />
     <Content Include="migrations\0020_fc27_alias_auto_promotion_and_exceptions.sql" />
+    <Content Include="migrations\0021_fc27_destination_aware_delivery_and_linkage.sql" />
     <Content Include="migrations\post\grants.sql" />
     <Content Include="ops\fc27-protected-state-manifest.json" />
     <Content Include="pyproject.toml" />

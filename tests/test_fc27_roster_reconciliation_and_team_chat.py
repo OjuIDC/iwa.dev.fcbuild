@@ -2103,6 +2103,7 @@ def test_37_migration_0016_to_0017_upgrade_path(pg_db) -> None:
         "0018_fc27_roster_refresh_queue.sql",
         "0019_fc27_player_alias_candidates.sql",
         "0020_fc27_alias_auto_promotion_and_exceptions.sql",
+        "0021_fc27_destination_aware_delivery_and_linkage.sql",
     ]
     with psycopg.connect(pg_db.admin) as uconn:
         assert verify_postconditions(uconn) == []

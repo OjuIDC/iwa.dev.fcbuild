@@ -1417,6 +1417,7 @@ def verify_fc27_backup_restore(
                     "0001_THROUGH_0017",
                     "0001_THROUGH_0018",
                     "0001_THROUGH_0019",
+                    "0001_THROUGH_0020",
                     EXPECTED_MIGRATION_VERSION,
                 )
             )
