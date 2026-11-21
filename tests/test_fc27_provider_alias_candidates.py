@@ -1108,7 +1108,7 @@ class TestProviderAliasCandidatePipeline:
             assert max_ver_row is not None and str(max_ver_row[0]).startswith("0021")
             assert aconn.execute(
                 "SELECT version FROM public.schema_policy_versions WHERE policy = 'grants' ORDER BY version DESC LIMIT 1"
-            ).fetchone() == (21,)
+            ).fetchone() == (22,)
             # Preserved 0018 data
             assert aconn.execute(
                 "SELECT display_name FROM public.fc27_roster WHERE player_id = 'plr_ecf_112233445566'"
