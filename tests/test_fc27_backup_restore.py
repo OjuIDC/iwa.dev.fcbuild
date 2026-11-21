@@ -105,7 +105,7 @@ def test_backup_manifest_records_counts_and_sha256_hash(
     assert loaded["migration_version"] == EXPECTED_MIGRATION_VERSION
     assert loaded["provider_id"] == "fc-clubs-api-community-v1"
     assert loaded["table_counts"] == {
-        "schema_migrations": 20,
+        "schema_migrations": 21,
         "schema_policy_versions": 1,
         "fc27_clubs": 1,
         "fc27_export_batches": 1,

@@ -1096,16 +1096,16 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     if r_row and r_row[0]:
                         violations.append(f"forbidden_fc27_poll_writer_{priv.lower()}_on_fc27_roster")
 
-        # check Migration 0022 destination-aware delivery tables, indexes, ownership, and least-privilege matrix
+        # check Migration 0021 destination-aware delivery tables, indexes, ownership, and least-privilege matrix
         cur.execute("SELECT to_regclass('public.schema_migrations')")
         row = cur.fetchone()
         if row and row[0] is not None:
-            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0022%'")
-            has_0022 = cur.fetchone() is not None
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0021%'")
+            has_0021 = cur.fetchone() is not None
         else:
-            has_0022 = False
+            has_0021 = False
 
-        if has_0022:
+        if has_0021:
             for dest_tbl in (
                 "fc27_discord_destinations",
                 "fc27_match_discord_deliveries",
@@ -1188,7 +1188,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     elif priv not in allowed_privs and has_priv:
                         violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_match_discord_deliveries")
 
-            fn_0022_specs = (
+            fn_0021_specs = (
                 ("fc27_reserve_discord_delivery", ("fc27_dispatch", "fc27_match_results_writer")),
                 ("fc27_record_discord_delivery_success", ("fc27_dispatch", "fc27_match_results_writer")),
                 ("fc27_record_discord_delivery_failure", ("fc27_dispatch", "fc27_match_results_writer")),
@@ -1196,7 +1196,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 ("fc27_record_delivery_refresh_state", ("fc27_dispatch", "fc27_match_results_writer")),
                 ("fc27_upsert_discord_destination", ("fc27_match_results_writer",)),
             )
-            all_check_roles_0022 = (
+            all_check_roles_0021 = (
                 "public",
                 "fc27_app",
                 "fc27_dispatch",
@@ -1206,7 +1206,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 "fc27_discord_reader",
                 "fc27_match_results_writer",
             )
-            for fn_name, allowed_exec_roles in fn_0022_specs:
+            for fn_name, allowed_exec_roles in fn_0021_specs:
                 cur.execute(
                     """
                     SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
@@ -1229,7 +1229,7 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 f_cfg = " ".join(f_config) if f_config else ""
                 if "search_path=pg_catalog, pg_temp" not in f_cfg:
                     violations.append(f"{fn_name}_search_path")
-                for check_role in all_check_roles_0022:
+                for check_role in all_check_roles_0021:
                     if check_role != "public":
                         cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
                         if not cur.fetchone():

@@ -497,7 +497,7 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "postgres_parallel_safe",
             "full-postgres",
             ("postgres-focused",),
-            "Destination registry schema, fan-out delivery, isolation, roster refresh multi-destination updates, and Migration 0022.",
+            "Destination registry schema, fan-out delivery, isolation, roster refresh multi-destination updates, and Migration 0021.",
         ),
         _entry(
             "tests/test_fc27_result_backfill.py",
