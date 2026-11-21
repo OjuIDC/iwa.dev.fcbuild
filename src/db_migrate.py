@@ -20,7 +20,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 21
+GRANTS_POLICY_VERSION = 22
 
 
 def _compute_grants_sha256() -> str:
@@ -1095,6 +1095,155 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     r_row = cur.fetchone()
                     if r_row and r_row[0]:
                         violations.append(f"forbidden_fc27_poll_writer_{priv.lower()}_on_fc27_roster")
+
+        # check Migration 0022 destination-aware delivery tables, indexes, ownership, and least-privilege matrix
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            cur.execute("SELECT 1 FROM public.schema_migrations WHERE version LIKE '0022%'")
+            has_0022 = cur.fetchone() is not None
+        else:
+            has_0022 = False
+
+        if has_0022:
+            for dest_tbl in (
+                "fc27_discord_destinations",
+                "fc27_match_discord_deliveries",
+            ):
+                cur.execute(
+                    "SELECT c.relowner::regrole::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = %s",
+                    (dest_tbl,),
+                )
+                own_row = cur.fetchone()
+                if not own_row:
+                    violations.append(f"missing_table_{dest_tbl}")
+                elif own_row[0] != "fc27_owner":
+                    violations.append(f"wrong_owner_{dest_tbl}_{own_row[0]}")
+
+            for idx_name in (
+                "uq_fc27_discord_destinations_key",
+                "uq_fc27_discord_destinations_target",
+                "uq_fc27_match_discord_deliveries_idempotency",
+                "uq_fc27_match_discord_deliveries_match_dest",
+                "idx_fc27_match_discord_deliveries_match_ref",
+                "idx_fc27_match_discord_deliveries_dest_state",
+                "idx_fc27_match_discord_deliveries_refresh",
+            ):
+                cur.execute("SELECT to_regclass(%s)", (f"public.{idx_name}",))
+                i_row = cur.fetchone()
+                if i_row is None or i_row[0] is None:
+                    violations.append(f"missing_index_{idx_name}")
+
+            dest_matrix = {
+                "public": (),
+                "fc27_app": (),
+                "fc27_relay": (),
+                "fc27_player_dev_writer": (),
+                "fc27_poll_writer": (),
+                "fc27_dispatch": ("SELECT",),
+                "fc27_discord_reader": ("SELECT",),
+                "fc27_match_results_writer": ("SELECT", "INSERT", "UPDATE"),
+            }
+            for role_name, allowed_privs in dest_matrix.items():
+                if role_name != "public":
+                    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                    if not cur.fetchone():
+                        continue
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_discord_destinations', %s)",
+                        (role_name, priv),
+                    )
+                    p_row = cur.fetchone()
+                    has_priv = bool(p_row and p_row[0])
+                    if priv in allowed_privs and not has_priv:
+                        violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_discord_destinations")
+                    elif priv not in allowed_privs and has_priv:
+                        violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_discord_destinations")
+
+            deliveries_matrix = {
+                "public": (),
+                "fc27_app": (),
+                "fc27_relay": (),
+                "fc27_player_dev_writer": (),
+                "fc27_poll_writer": (),
+                "fc27_dispatch": ("SELECT", "INSERT", "UPDATE"),
+                "fc27_discord_reader": ("SELECT",),
+                "fc27_match_results_writer": ("SELECT", "INSERT", "UPDATE"),
+            }
+            for role_name, allowed_privs in deliveries_matrix.items():
+                if role_name != "public":
+                    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                    if not cur.fetchone():
+                        continue
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_match_discord_deliveries', %s)",
+                        (role_name, priv),
+                    )
+                    p_row = cur.fetchone()
+                    has_priv = bool(p_row and p_row[0])
+                    if priv in allowed_privs and not has_priv:
+                        violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_match_discord_deliveries")
+                    elif priv not in allowed_privs and has_priv:
+                        violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_match_discord_deliveries")
+
+            fn_0022_specs = (
+                ("fc27_reserve_discord_delivery", ("fc27_dispatch", "fc27_match_results_writer")),
+                ("fc27_record_discord_delivery_success", ("fc27_dispatch", "fc27_match_results_writer")),
+                ("fc27_record_discord_delivery_failure", ("fc27_dispatch", "fc27_match_results_writer")),
+                ("fc27_get_deliveries_for_refresh", ("fc27_dispatch", "fc27_match_results_writer", "fc27_discord_reader")),
+                ("fc27_record_delivery_refresh_state", ("fc27_dispatch", "fc27_match_results_writer")),
+                ("fc27_upsert_discord_destination", ("fc27_match_results_writer",)),
+            )
+            all_check_roles_0022 = (
+                "public",
+                "fc27_app",
+                "fc27_dispatch",
+                "fc27_relay",
+                "fc27_poll_writer",
+                "fc27_player_dev_writer",
+                "fc27_discord_reader",
+                "fc27_match_results_writer",
+            )
+            for fn_name, allowed_exec_roles in fn_0022_specs:
+                cur.execute(
+                    """
+                    SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public'
+                      AND p.proname = %s
+                    """,
+                    (fn_name,),
+                )
+                fn_row = cur.fetchone()
+                if not fn_row:
+                    violations.append(f"missing_function_{fn_name}")
+                    continue
+                f_oid, f_secdef, f_owner, f_config = fn_row
+                if not f_secdef:
+                    violations.append(f"{fn_name}_not_secdef")
+                if f_owner != "fc27_owner":
+                    violations.append(f"{fn_name}_not_owner")
+                f_cfg = " ".join(f_config) if f_config else ""
+                if "search_path=pg_catalog, pg_temp" not in f_cfg:
+                    violations.append(f"{fn_name}_search_path")
+                for check_role in all_check_roles_0022:
+                    if check_role != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
+                        if not cur.fetchone():
+                            continue
+                    cur.execute(
+                        "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                        (check_role, f_oid),
+                    )
+                    e_row = cur.fetchone()
+                    has_exec = bool(e_row and e_row[0])
+                    if check_role in allowed_exec_roles and not has_exec:
+                        violations.append(f"missing_{check_role}_exec_{fn_name}")
+                    elif check_role not in allowed_exec_roles and has_exec:
+                        violations.append(f"forbidden_{check_role}_exec_{fn_name}")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

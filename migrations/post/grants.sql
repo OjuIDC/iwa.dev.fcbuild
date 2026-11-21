@@ -1,4 +1,4 @@
--- grants-policy-version: 21
+-- grants-policy-version: 22
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1069,23 +1069,115 @@ BEGIN
         END IF;
     END IF;
 
-    IF to_regprocedure('public.fc27_sync_roster_comparison_key()') IS NOT NULL THEN
-        REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key()
-            FROM PUBLIC, fc27_app, fc27_dispatch;
+    -- Migration 0022 additions (Policy 22)
+    IF to_regclass('public.fc27_discord_destinations') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_discord_destinations FROM PUBLIC, fc27_app, fc27_dispatch;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
-            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_relay';
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_destinations FROM fc27_relay';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
-            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_player_dev_writer';
-        END IF;
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
-            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_discord_reader';
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_destinations FROM fc27_player_dev_writer';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
-            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_poll_writer';
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_destinations FROM fc27_poll_writer';
+        END IF;
+        GRANT SELECT ON TABLE public.fc27_discord_destinations TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON TABLE public.fc27_discord_destinations TO fc27_discord_reader';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
-            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_sync_roster_comparison_key() FROM fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON TABLE public.fc27_discord_destinations TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_discord_destinations_destination_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_discord_destinations_destination_id_seq FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE ON SEQUENCE public.fc27_discord_destinations_destination_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_match_discord_deliveries') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_match_discord_deliveries FROM PUBLIC, fc27_app;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_match_discord_deliveries FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_match_discord_deliveries FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_match_discord_deliveries FROM fc27_poll_writer';
+        END IF;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.fc27_match_discord_deliveries TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT SELECT ON TABLE public.fc27_match_discord_deliveries TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON TABLE public.fc27_match_discord_deliveries TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regclass('public.fc27_match_discord_deliveries_delivery_id_seq') IS NOT NULL THEN
+        REVOKE ALL ON SEQUENCE public.fc27_match_discord_deliveries_delivery_id_seq FROM PUBLIC, fc27_app;
+        GRANT USAGE ON SEQUENCE public.fc27_match_discord_deliveries_delivery_id_seq TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT USAGE ON SEQUENCE public.fc27_match_discord_deliveries_delivery_id_seq TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_reserve_discord_delivery(text, text, text, bigint, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_reserve_discord_delivery(text, text, text, bigint, text)
+            FROM PUBLIC, fc27_app;
+        GRANT EXECUTE ON FUNCTION public.fc27_reserve_discord_delivery(text, text, text, bigint, text) TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_reserve_discord_delivery(text, text, text, bigint, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_discord_delivery_success(bigint, text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_discord_delivery_success(bigint, text, text)
+            FROM PUBLIC, fc27_app;
+        GRANT EXECUTE ON FUNCTION public.fc27_record_discord_delivery_success(bigint, text, text) TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_discord_delivery_success(bigint, text, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_discord_delivery_failure(bigint, text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_discord_delivery_failure(bigint, text, text)
+            FROM PUBLIC, fc27_app;
+        GRANT EXECUTE ON FUNCTION public.fc27_record_discord_delivery_failure(bigint, text, text) TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_discord_delivery_failure(bigint, text, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_get_deliveries_for_refresh(text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_get_deliveries_for_refresh(text)
+            FROM PUBLIC, fc27_app;
+        GRANT EXECUTE ON FUNCTION public.fc27_get_deliveries_for_refresh(text) TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_deliveries_for_refresh(text) TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_deliveries_for_refresh(text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_delivery_refresh_state(bigint, text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_delivery_refresh_state(bigint, text, text)
+            FROM PUBLIC, fc27_app;
+        GRANT EXECUTE ON FUNCTION public.fc27_record_delivery_refresh_state(bigint, text, text) TO fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_delivery_refresh_state(bigint, text, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_upsert_discord_destination(text, text, text, text, boolean, boolean, boolean)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_upsert_discord_destination(text, text, text, text, boolean, boolean, boolean)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_upsert_discord_destination(text, text, text, text, boolean, boolean, boolean) TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

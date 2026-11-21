@@ -78,11 +78,28 @@ from src.fc27_match_results import (
     normalize_competition_label,
     normalize_display_label,
     normalize_formation_label,
+    open_guarded_match_results_writer_connection,
     record_match_discord_message_links,
     render_match_result_embed,
     render_matchday_embed,
     resolve_player_names,
     tag_match_post_content,
+)
+from src.fc27_discord_delivery import (
+    DELIVERY_STATE_DELIVERED,
+    DELIVERY_STATE_FAILED,
+    DELIVERY_STATE_MISSING,
+    DELIVERY_STATE_REVOKED,
+    MESSAGE_KIND_FORMAL,
+    MESSAGE_KIND_TEAM_CHAT,
+    FC27DiscordDestination,
+    build_delivery_idempotency_key,
+    get_deliveries_for_refresh,
+    list_destinations,
+    record_delivery_failure,
+    record_delivery_refresh_state,
+    record_delivery_success,
+    reserve_discord_delivery,
 )
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
@@ -4536,6 +4553,129 @@ def run_discord_dispatch_cycle(
                                     content=summary_txt[:MAX_DISCORD_CONTENT_LENGTH],
                                 )
 
+                        # Check destination-aware delivery registry (Phase 7)
+                        dest_deliveries: list[tuple[Any, ...]] = []
+                        try:
+                            with readonly_conn.cursor() as cur:
+                                cur.execute("SELECT to_regclass('public.fc27_match_discord_deliveries')")
+                                tbl_chk = cur.fetchone()
+                                if tbl_chk and tbl_chk[0] is not None:
+                                    cur.execute("""
+                                        SELECT d.delivery_id, d.destination_key, d.message_kind,
+                                               d.guild_id, d.channel_id, d.message_id, d.delivery_state,
+                                               COALESCE(dest.allow_roster_refresh, true) AS allow_roster_refresh
+                                        FROM public.fc27_match_discord_deliveries d
+                                        LEFT JOIN public.fc27_discord_destinations dest ON dest.destination_id = d.destination_id
+                                        WHERE d.match_ref = %s
+                                          AND d.delivery_state IN ('DELIVERED', 'MISSING', 'REVOKED')
+                                        ORDER BY d.delivery_id ASC
+                                    """, (target_m_ref,))
+                                    dest_deliveries = cur.fetchall()
+                            readonly_conn._conn.commit()
+                        except Exception:
+                            pass
+
+                        if dest_deliveries:
+                            snapshot_fn = getattr(transport, "fetch_notification_snapshot", None)
+                            for del_id, dest_key, m_kind, g_id, c_id, m_id, d_state, allow_ref in dest_deliveries:
+                                if not allow_ref or not m_id or d_state in (DELIVERY_STATE_MISSING, DELIVERY_STATE_REVOKED):
+                                    continue
+                                if c_id not in effective_allowed_channels:
+                                    continue
+                                if config.allowed_guild_ids and g_id not in config.allowed_guild_ids and g_id != "0":
+                                    continue
+
+                                if m_kind == MESSAGE_KIND_FORMAL and formal_msg is not None:
+                                    if formal_edits_in_job >= config.refresh_max_formal_edits_per_job:
+                                        needs_continuation = True
+                                        break
+                                    if callable(snapshot_fn):
+                                        try:
+                                            snap = snapshot_fn(channel_id=c_id, message_id=str(m_id))
+                                            if snap is None:
+                                                if match_results_writer_db_conn_or_uri is not None:
+                                                    with open_guarded_match_results_writer_connection(
+                                                        match_results_writer_db_conn_or_uri,
+                                                        require_dedicated_writer_role=verify_posture,
+                                                    ) as w_conn:
+                                                        record_delivery_refresh_state(w_conn, int(del_id), DELIVERY_STATE_MISSING, target_m_ref)
+                                                        w_conn.commit()
+                                                continue
+                                            if not snap.is_bot_authored:
+                                                continue
+                                        except Exception:
+                                            pass
+
+                                    try:
+                                        transport.edit_notification(channel_id=c_id, message_id=str(m_id), message=formal_msg)
+                                        formal_edits_in_job += 1
+                                        messages_edited += 1
+                                    except FC27DiscordDispatchTransportError as t_err:
+                                        if "404" in str(t_err) or t_err.category == "LINKED_MESSAGE_MISSING":
+                                            if match_results_writer_db_conn_or_uri is not None:
+                                                try:
+                                                    with open_guarded_match_results_writer_connection(
+                                                        match_results_writer_db_conn_or_uri,
+                                                        require_dedicated_writer_role=verify_posture,
+                                                    ) as w_conn:
+                                                        record_delivery_refresh_state(w_conn, int(del_id), DELIVERY_STATE_MISSING, target_m_ref)
+                                                        w_conn.commit()
+                                                except Exception:
+                                                    pass
+                                        elif "403" in str(t_err) or t_err.category == "PERMISSION_DENIED":
+                                            if match_results_writer_db_conn_or_uri is not None:
+                                                try:
+                                                    with open_guarded_match_results_writer_connection(
+                                                        match_results_writer_db_conn_or_uri,
+                                                        require_dedicated_writer_role=verify_posture,
+                                                    ) as w_conn:
+                                                        record_delivery_refresh_state(w_conn, int(del_id), DELIVERY_STATE_REVOKED, target_m_ref)
+                                                        w_conn.commit()
+                                                except Exception:
+                                                    pass
+                                        else:
+                                            _record_perm_error(t_err)
+
+                                elif m_kind == MESSAGE_KIND_TEAM_CHAT and tc_msg is not None:
+                                    if tc_edits_in_job >= config.refresh_max_team_chat_edits_per_job:
+                                        needs_continuation = True
+                                        break
+                                    edit_tc = getattr(transport, "edit_team_chat_notification", getattr(transport, "edit_notification", None))
+                                    if callable(edit_tc):
+                                        try:
+                                            edit_tc(channel_id=c_id, message_id=str(m_id), message=tc_msg)
+                                            tc_edits_in_job += 1
+                                            team_chat_messages_edited += 1
+                                        except FC27DiscordDispatchTransportError as t_err:
+                                            if "404" in str(t_err) or t_err.category == "LINKED_MESSAGE_MISSING":
+                                                if match_results_writer_db_conn_or_uri is not None:
+                                                    try:
+                                                        with open_guarded_match_results_writer_connection(
+                                                            match_results_writer_db_conn_or_uri,
+                                                            require_dedicated_writer_role=verify_posture,
+                                                        ) as w_conn:
+                                                            record_delivery_refresh_state(w_conn, int(del_id), DELIVERY_STATE_MISSING, target_m_ref)
+                                                            w_conn.commit()
+                                                    except Exception:
+                                                        pass
+                                            elif "403" in str(t_err) or t_err.category == "PERMISSION_DENIED":
+                                                if match_results_writer_db_conn_or_uri is not None:
+                                                    try:
+                                                        with open_guarded_match_results_writer_connection(
+                                                            match_results_writer_db_conn_or_uri,
+                                                            require_dedicated_writer_role=verify_posture,
+                                                        ) as w_conn:
+                                                            record_delivery_refresh_state(w_conn, int(del_id), DELIVERY_STATE_REVOKED, target_m_ref)
+                                                            w_conn.commit()
+                                                    except Exception:
+                                                        pass
+                                            else:
+                                                _record_perm_error(t_err)
+
+                            matches_examined += 1
+                            last_completed_key = target_key
+                            continue
+
                         db_links, db_res_id, db_tc_id, cached_res_id, cached_tc_id = (
                             _load_existing_linkage(target_m_ref, m_id=manual_match_id)
                         )
@@ -5088,6 +5228,260 @@ def run_discord_dispatch_cycle(
                         idempotency_key=job.idempotency_key,
                         extra_forbidden_tokens=merged_forbidden,
                     )
+
+                # Query enabled destinations from public.fc27_discord_destinations (Phase 6)
+                enabled_formal_dests: list[FC27DiscordDestination] = []
+                enabled_tc_dests: list[FC27DiscordDestination] = []
+                try:
+                    with readonly_conn.cursor() as cur:
+                        cur.execute("SELECT to_regclass('public.fc27_discord_destinations')")
+                        r = cur.fetchone()
+                        if r and r[0] is not None:
+                            cur.execute("""
+                                SELECT destination_id, destination_key, guild_id, channel_id,
+                                       message_kind, transport, enabled, allow_backfill,
+                                       allow_normal_delivery, allow_roster_refresh,
+                                       created_at, updated_at
+                                FROM public.fc27_discord_destinations
+                                WHERE enabled = TRUE AND allow_normal_delivery = TRUE
+                                ORDER BY destination_id ASC
+                            """)
+                            for r_row in cur.fetchall():
+                                d_obj = FC27DiscordDestination(
+                                    destination_id=int(r_row[0]),
+                                    destination_key=str(r_row[1]),
+                                    guild_id=str(r_row[2]),
+                                    channel_id=str(r_row[3]),
+                                    message_kind=str(r_row[4]),
+                                    transport=str(r_row[5]),
+                                    enabled=bool(r_row[6]),
+                                    allow_backfill=bool(r_row[7]),
+                                    allow_normal_delivery=bool(r_row[8]),
+                                    allow_roster_refresh=bool(r_row[9]),
+                                    created_at=r_row[10],
+                                    updated_at=r_row[11],
+                                )
+                                if d_obj.message_kind == MESSAGE_KIND_FORMAL:
+                                    enabled_formal_dests.append(d_obj)
+                                elif d_obj.message_kind == MESSAGE_KIND_TEAM_CHAT:
+                                    enabled_tc_dests.append(d_obj)
+                    readonly_conn._conn.commit()
+                except Exception:
+                    pass
+
+                if enabled_formal_dests or enabled_tc_dests:
+                    sent_any_now = False
+
+                    # Fan out to enabled formal destinations
+                    for f_dest in enabled_formal_dests:
+                        f_idem = build_delivery_idempotency_key(
+                            match_data.match_ref, f_dest.destination_key, MESSAGE_KIND_FORMAL
+                        )
+                        f_res_id: str | None = None
+                        del_res = None
+                        if match_results_writer_db_conn_or_uri is not None:
+                            try:
+                                with open_guarded_match_results_writer_connection(
+                                    match_results_writer_db_conn_or_uri,
+                                    require_dedicated_writer_role=verify_posture,
+                                ) as w_conn:
+                                    del_res = reserve_discord_delivery(
+                                        w_conn,
+                                        match_data.match_ref,
+                                        f_dest.destination_key,
+                                        MESSAGE_KIND_FORMAL,
+                                        source_job_id=job.job_id,
+                                        idempotency_key=f_idem,
+                                    )
+                                    w_conn.commit()
+                            except Exception as w_exc:
+                                LOGGER.warning("Could not reserve formal delivery: %s", w_exc)
+
+                        if del_res and del_res.is_already_delivered:
+                            f_res_id = del_res.message_id
+                            eff_cache.add(f_idem)
+                        elif f_idem in eff_cache:
+                            f_res_id = "IN_PROCESS_CACHE_HIT"
+
+                        if f_res_id is None:
+                            if not renew_discord_job_lease(
+                                queue_conn,
+                                job_id=job.job_id,
+                                claim_owner=eff_claim_owner,
+                                lease_minutes=config.lease_minutes,
+                            ):
+                                queue_conn.commit()
+                                _record_lease_lost(job, match_ref, "LEASE_LOST_BEFORE_SEND")
+                                continue
+                            queue_conn.commit()
+
+                            f_msg = build_post_new_results_notification(
+                                match_data,
+                                channel_id=f_dest.channel_id,
+                                idempotency_key=f_idem,
+                                extra_forbidden_tokens=merged_forbidden,
+                            )
+                            try:
+                                sent_id = str(
+                                    transport.send_notification(
+                                        channel_id=f_dest.channel_id,
+                                        message=f_msg,
+                                    )
+                                )
+                                eff_cache.add(f_idem)
+                                messages_sent += 1
+                                sent_any_now = True
+                                if _SNOWFLAKE_RE.fullmatch(sent_id) and del_res and del_res.delivery_id:
+                                    if match_results_writer_db_conn_or_uri is not None:
+                                        try:
+                                            with open_guarded_match_results_writer_connection(
+                                                match_results_writer_db_conn_or_uri,
+                                                require_dedicated_writer_role=verify_posture,
+                                            ) as w_conn:
+                                                record_delivery_success(
+                                                    w_conn,
+                                                    del_res.delivery_id,
+                                                    sent_id,
+                                                    match_data.match_ref,
+                                                )
+                                                w_conn.commit()
+                                        except Exception:
+                                            pass
+                                _persist_linkage(
+                                    m_ref=match_data.match_ref,
+                                    results_channel_id=f_dest.channel_id,
+                                    results_message_id=sent_id,
+                                )
+                            except Exception as send_exc:
+                                LOGGER.warning("Formal destination delivery failed: %s", send_exc)
+                                if del_res and del_res.delivery_id and match_results_writer_db_conn_or_uri is not None:
+                                    try:
+                                        with open_guarded_match_results_writer_connection(
+                                            match_results_writer_db_conn_or_uri,
+                                            require_dedicated_writer_role=verify_posture,
+                                        ) as w_conn:
+                                            record_delivery_failure(
+                                                w_conn,
+                                                del_res.delivery_id,
+                                                type(send_exc).__name__.upper(),
+                                                match_data.match_ref,
+                                            )
+                                            w_conn.commit()
+                                    except Exception:
+                                        pass
+
+                    # Fan out to enabled team-chat destinations
+                    for tc_dest in enabled_tc_dests:
+                        tc_idem = build_delivery_idempotency_key(
+                            match_data.match_ref, tc_dest.destination_key, MESSAGE_KIND_TEAM_CHAT
+                        )
+                        tc_res_id: str | None = None
+                        del_res = None
+                        if match_results_writer_db_conn_or_uri is not None:
+                            try:
+                                with open_guarded_match_results_writer_connection(
+                                    match_results_writer_db_conn_or_uri,
+                                    require_dedicated_writer_role=verify_posture,
+                                ) as w_conn:
+                                    del_res = reserve_discord_delivery(
+                                        w_conn,
+                                        match_data.match_ref,
+                                        tc_dest.destination_key,
+                                        MESSAGE_KIND_TEAM_CHAT,
+                                        source_job_id=job.job_id,
+                                        idempotency_key=tc_idem,
+                                    )
+                                    w_conn.commit()
+                            except Exception as w_exc:
+                                LOGGER.warning("Could not reserve team chat delivery: %s", w_exc)
+
+                        if del_res and del_res.is_already_delivered:
+                            tc_res_id = del_res.message_id
+                            eff_cache.add(tc_idem)
+                        elif tc_idem in eff_cache:
+                            tc_res_id = "IN_PROCESS_CACHE_HIT"
+
+                        if tc_res_id is None:
+                            if not renew_discord_job_lease(
+                                queue_conn,
+                                job_id=job.job_id,
+                                claim_owner=eff_claim_owner,
+                                lease_minutes=config.lease_minutes,
+                            ):
+                                queue_conn.commit()
+                                _record_lease_lost(job, match_ref, "LEASE_LOST_BEFORE_TC_SEND")
+                                continue
+                            queue_conn.commit()
+
+                            tc_msg = build_post_new_results_team_chat_message(
+                                match_data,
+                                channel_id=tc_dest.channel_id,
+                                idempotency_key=tc_idem,
+                                extra_forbidden_tokens=merged_forbidden,
+                            )
+                            tc_send_fn = getattr(
+                                transport, "send_team_chat_notification", getattr(transport, "send_notification", None)
+                            )
+                            try:
+                                sent_tc_id = str(
+                                    tc_send_fn(
+                                        channel_id=tc_dest.channel_id,
+                                        message=tc_msg,
+                                    )
+                                )
+                                eff_cache.add(tc_idem)
+                                team_chat_messages_sent += 1
+                                sent_any_now = True
+                                if _SNOWFLAKE_RE.fullmatch(sent_tc_id) and del_res and del_res.delivery_id:
+                                    if match_results_writer_db_conn_or_uri is not None:
+                                        try:
+                                            with open_guarded_match_results_writer_connection(
+                                                match_results_writer_db_conn_or_uri,
+                                                require_dedicated_writer_role=verify_posture,
+                                            ) as w_conn:
+                                                record_delivery_success(
+                                                    w_conn,
+                                                    del_res.delivery_id,
+                                                    sent_tc_id,
+                                                    match_data.match_ref,
+                                                )
+                                                w_conn.commit()
+                                        except Exception:
+                                            pass
+                                _persist_linkage(
+                                    m_ref=match_data.match_ref,
+                                    team_chat_channel_id=tc_dest.channel_id,
+                                    team_chat_message_id=sent_tc_id,
+                                )
+                            except Exception as send_exc:
+                                LOGGER.warning("Team chat destination delivery failed: %s", send_exc)
+                                if del_res and del_res.delivery_id and match_results_writer_db_conn_or_uri is not None:
+                                    try:
+                                        with open_guarded_match_results_writer_connection(
+                                            match_results_writer_db_conn_or_uri,
+                                            require_dedicated_writer_role=verify_posture,
+                                        ) as w_conn:
+                                            record_delivery_failure(
+                                                w_conn,
+                                                del_res.delivery_id,
+                                                type(send_exc).__name__.upper(),
+                                                match_data.match_ref,
+                                            )
+                                            w_conn.commit()
+                                    except Exception:
+                                        pass
+
+                    completed_ok = complete_discord_job(
+                        queue_conn,
+                        job_id=job.job_id,
+                        claim_owner=eff_claim_owner,
+                    )
+                    queue_conn.commit()
+                    if completed_ok:
+                        jobs_completed += 1
+                        if not sent_any_now:
+                            jobs_deduplicated += 1
+                    continue
 
                 (
                     _db_links_obj,
