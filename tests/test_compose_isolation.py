@@ -999,3 +999,52 @@ def test_auto_promotion_and_notification_env_propagation_and_defaults(
         ]
         == "3600"
     )
+
+
+def test_worker_poll_max_requests_forwarding_and_default(tmp_path):
+    """Verify Compose forwards FC27_COMMUNITY_POLL_MAX_REQUESTS with default 1."""
+    env = _env_file(tmp_path)
+
+    # 1. When FC27_COMMUNITY_POLL_MAX_REQUESTS is omitted, defaults to "1".
+    out_default = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "--profile",
+        "fc27-polling",
+    )
+    assert out_default.returncode == 0, out_default.stderr
+    merged_default = json.loads(out_default.stdout)
+    assert (
+        merged_default["services"]["fc27-community-worker"]["environment"][
+            "FC27_COMMUNITY_POLL_MAX_REQUESTS"
+        ]
+        == "1"
+    )
+
+    # 2. When FC27_COMMUNITY_POLL_MAX_REQUESTS is specified, forwards the value.
+    custom_env = tmp_path / "custom_poll_reqs.env"
+    custom_env.write_text(
+        env.read_text(encoding="utf-8")
+        + "\nFC27_COMMUNITY_POLL_MAX_REQUESTS=3\n",
+        encoding="utf-8",
+    )
+    out_forwarded = _config(
+        custom_env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "--profile",
+        "fc27-polling",
+    )
+    assert out_forwarded.returncode == 0, out_forwarded.stderr
+    merged_forwarded = json.loads(out_forwarded.stdout)
+    assert (
+        merged_forwarded["services"]["fc27-community-worker"]["environment"][
+            "FC27_COMMUNITY_POLL_MAX_REQUESTS"
+        ]
+        == "3"
+    )
