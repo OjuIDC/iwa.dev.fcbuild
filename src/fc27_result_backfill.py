@@ -61,6 +61,9 @@ DEFAULT_LATEST_COUNT: Final[int] = 10
 MAX_LATEST_COUNT: Final[int] = 25
 MIN_LATEST_COUNT: Final[int] = 1
 
+POST_SEND_FINALIZATION_FAILED: Final[str] = "POST_SEND_FINALIZATION_FAILED"
+AMBIGUOUS_EXISTING_DISCORD_DELIVERY: Final[str] = "AMBIGUOUS_EXISTING_DISCORD_DELIVERY"
+
 
 class FC27BackfillError(RuntimeError):
     """Base error for result backfill operations."""
@@ -89,13 +92,13 @@ _SYNTHETIC_MESSAGE_ID_PREFIXES: Final[tuple[str, ...]] = (
 
 def is_synthetic_message_id(message_id: str) -> bool:
     """Check if a Discord message ID belongs to known synthetic placeholder ranges."""
-    clean = str(message_id or "").strip()
+    clean = (message_id or "").strip()
     return clean.startswith(_SYNTHETIC_MESSAGE_ID_PREFIXES) or "synth" in clean.lower()
 
 
 def validate_discord_message_id(message_id: str) -> str:
     """Validate that a returned Discord message ID is a non-synthetic Discord snowflake."""
-    clean = str(message_id or "").strip()
+    clean = (message_id or "").strip()
     if not clean:
         raise FC27BackfillValidationError("Transport returned empty Discord message ID")
     if not _VALID_SNOWFLAKE_RE.fullmatch(clean):
@@ -338,11 +341,16 @@ def run_result_backfill(
                 # Compute canonical match_ref
                 m_ref = pseudonymize_match_ref(ext_match_id, club_id=club_id)
 
+                idem_key = build_delivery_idempotency_key(
+                    m_ref, dest.destination_key, dest.message_kind
+                )
+
                 # Check if already delivered to this destination
+                existing_delivery_id: int | None = None
                 with writer_conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT message_id, delivery_state
+                        SELECT delivery_id, message_id, delivery_state
                         FROM public.fc27_match_discord_deliveries
                         WHERE match_ref = %s
                           AND destination_key = %s
@@ -351,9 +359,13 @@ def run_result_backfill(
                         (m_ref, dest.destination_key, dest.message_kind),
                     )
                     del_row = cur.fetchone()
-                    if del_row and del_row[1] == DELIVERY_STATE_DELIVERED:
-                        already_delivered += 1
-                        continue
+                    if del_row:
+                        existing_delivery_id = (
+                            int(del_row[0]) if del_row[0] is not None else None
+                        )
+                        if del_row[2] == DELIVERY_STATE_DELIVERED:
+                            already_delivered += 1
+                            continue
 
                 if dry_run:
                     # In dry-run mode, we simulate planning delivery
@@ -362,7 +374,44 @@ def run_result_backfill(
 
                 # Confirmed execution path
                 res: DeliveryReservationResult | None = None
+                post_send_finalizing = False
                 try:
+                    # Marker reconciliation for a prior non-DELIVERED delivery
+                    # (production path only; test-only transports are excluded).
+                    if not allow_test_transport and existing_delivery_id is not None:
+                        find_candidates = getattr(
+                            eff_transport, "find_existing_notification_candidates", None
+                        )
+                        if find_candidates is None:
+                            raise FC27BackfillError(
+                                "Transport lacks Discord history lookup; cannot reconcile prior delivery"
+                            )
+                        candidates = tuple(
+                            find_candidates(
+                                channel_id=dest.channel_id,
+                                match_ref=m_ref,
+                                idempotency_key=idem_key,
+                                max_candidates=2,
+                            )
+                        )
+                        if len(candidates) == 1:
+                            clean_candidate = validate_discord_message_id(candidates[0])
+                            record_delivery_success(
+                                writer_conn,
+                                existing_delivery_id,
+                                clean_candidate,
+                                m_ref,
+                            )
+                            writer_conn.commit()
+                            already_delivered += 1
+                            continue  # zero new send: linkage repaired, message already live
+                        if len(candidates) > 1:
+                            raise FC27BackfillError(
+                                "AMBIGUOUS_EXISTING_DISCORD_DELIVERY: "
+                                "multiple matching Discord messages found; refusing to resend"
+                            )
+                        # len(candidates) == 0: no existing Discord message; proceed to send.
+
                     # Load authoritative match data
                     from src.fc27_discord_bot import GuardedDiscordReadOnlyConnection
 
@@ -379,9 +428,6 @@ def run_result_backfill(
                         game_version=game_version,
                     )
 
-                    idem_key = build_delivery_idempotency_key(
-                        m_ref, dest.destination_key, dest.message_kind
-                    )
                     res = reserve_discord_delivery(
                         writer_conn,
                         match_ref=m_ref,
@@ -429,7 +475,7 @@ def run_result_backfill(
                         )
 
                     # Validate snowflake format and reject synthetic IDs
-                    clean_sent_id = validate_discord_message_id(str(sent_id_raw or ""))
+                    clean_sent_id = validate_discord_message_id(sent_id_raw or "")
 
                     # Send-and-fetch verification
                     fetch_fn = getattr(eff_transport, "fetch_notification_snapshot", None)
@@ -452,7 +498,7 @@ def run_result_backfill(
                             "Fetch verification failed: message not found in destination channel"
                         )
 
-                    if str(snapshot.channel_id).strip() != str(dest.channel_id).strip():
+                    if snapshot.channel_id.strip() != dest.channel_id.strip():
                         raise FC27BackfillError(
                             "Fetch verification failed: channel mismatch"
                         )
@@ -460,7 +506,7 @@ def run_result_backfill(
                     if (
                         snapshot.guild_id
                         and dest.guild_id
-                        and str(snapshot.guild_id).strip() != str(dest.guild_id).strip()
+                        and snapshot.guild_id.strip() != dest.guild_id.strip()
                     ):
                         raise FC27BackfillError(
                             "Fetch verification failed: guild mismatch"
@@ -537,8 +583,11 @@ def run_result_backfill(
                                 "Fetch verification failed: expected team-chat content missing"
                             )
 
-                    # Finalize delivery
+                    # Finalize delivery (post-send). A failure here means the Discord
+                    # message was already sent but the delivery row could not be
+                    # persisted; the run stops and is never automatically resent.
                     assert res.delivery_id is not None
+                    post_send_finalizing = True
                     record_delivery_success(writer_conn, res.delivery_id, clean_sent_id, m_ref)
                     writer_conn.commit()
                     planned_or_sent += 1
@@ -553,9 +602,13 @@ def run_result_backfill(
                     if res is not None and res.delivery_id:
                         try:
                             err_cat = (
-                                "FETCH_VERIFICATION_FAILED"
-                                if "Fetch verification failed" in str(exc)
-                                else type(exc).__name__.upper()
+                                POST_SEND_FINALIZATION_FAILED
+                                if post_send_finalizing
+                                else (
+                                    "FETCH_VERIFICATION_FAILED"
+                                    if "Fetch verification failed" in str(exc)
+                                    else type(exc).__name__.upper()
+                                )
                             )
                             record_delivery_failure(
                                 writer_conn,

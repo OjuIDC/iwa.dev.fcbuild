@@ -26,6 +26,11 @@ Verifies:
 23. Existing dispatcher and destination-aware delivery tests remain green.
 24. Existing roster-refresh behavior remains green.
 25. Incident regression test reproducing exact prior failure.
+26. Post-send finalization failure stops and prevents resend.
+27. Multiple marker matches fail closed.
+28. Unreadable channel history fails closed.
+29. Wrong marker does not reconcile; new send proceeds.
+30. Reconciliation never searches another channel.
 """
 
 from __future__ import annotations
@@ -43,6 +48,8 @@ from src.db_migrate import migrate
 from src.fc27_discord_delivery import (
     MESSAGE_KIND_FORMAL,
     MESSAGE_KIND_TEAM_CHAT,
+    record_delivery_failure,
+    reserve_discord_delivery,
     upsert_destination,
 )
 from src.fc27_discord_dispatcher import (
@@ -63,6 +70,8 @@ from src.fc27_result_backfill import (
     FC27BackfillValidationError,
     FC27LiveDiscordTransportRequiredError,
     FC27ResultBackfillSummary,
+    POST_SEND_FINALIZATION_FAILED,
+    record_delivery_success,
     is_synthetic_message_id,
     main,
     run_result_backfill,
@@ -144,13 +153,17 @@ class MockLiveDiscordGatewayTransport:
         if self.strip_markers:
             emb = None
 
+        content = "" if self.strip_markers else getattr(message, "content", "")
+        if not self.strip_markers:
+            content = f"{content} ref:{getattr(message, 'match_ref', '')}".strip()
+
         self._snapshots[msg_id] = FC27DiscordMessageSnapshot(
             channel_id=cid,
             message_id=msg_id,
             guild_id=gid,
             is_bot_authored=self.override_is_bot,
             author_id=aid,
-            content="" if self.strip_markers else getattr(message, "content", ""),
+            content=content,
             embed=emb,
         )
         return msg_id
@@ -163,6 +176,8 @@ class MockLiveDiscordGatewayTransport:
         gid = self.override_guild_id or self._guild_id
         aid = self.override_author_id or self._bot_user_id
         content = "" if self.strip_markers else getattr(message, "content", "")
+        if not self.strip_markers:
+            content = f"{content} ref:{getattr(message, 'match_ref', '')}".strip()
 
         self._snapshots[msg_id] = FC27DiscordMessageSnapshot(
             channel_id=cid,
@@ -191,6 +206,68 @@ class MockLiveDiscordGatewayTransport:
         self.readiness_requests.append((channel_id, guild_id))
         if not self.is_live:
             raise FC27BackfillError("Gateway client not ready")
+
+    def find_existing_notification_candidates(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: Any = None,
+        max_candidates: int = 2,
+    ) -> tuple[str, ...]:
+        """Bounded channel-history search for an existing FC27 marker message.
+
+        Search is limited to the target channel, bot-authored snapshots only, exact
+        marker/idempotency-key matching, and a capped candidate count.
+        """
+        del not_before, message  # snapshots are recent; channel bound is the safety limit
+        marker = f"ref:{match_ref}"
+        matched: list[str] = []
+        for msg_id, snap in self._snapshots.items():
+            if len(matched) >= max_candidates:
+                break
+            if str(snap.channel_id).strip() != str(channel_id).strip():
+                continue
+            if not getattr(snap, "is_bot_authored", False):
+                continue
+            content = snap.content or ""
+            embed_text_parts: list[str] = []
+            if snap.embed is not None:
+                embed_text_parts.extend(
+                    part
+                    for part in (snap.embed.footer_text or "", snap.embed.description or "", snap.embed.title or "")
+                    if part
+                )
+                for field_val in snap.embed.fields.values():
+                    embed_text_parts.append(str(field_val))
+            embed_text = " ".join(embed_text_parts)
+            if (
+                idempotency_key
+                and idempotency_key in content
+            ) or match_ref in content or marker in content or match_ref in embed_text or marker in embed_text:
+                matched.append(msg_id)
+        return tuple(matched)
+
+    def find_existing_notification(
+        self,
+        *,
+        channel_id: str,
+        match_ref: str,
+        idempotency_key: str,
+        not_before: datetime | None = None,
+        message: Any = None,
+    ) -> str | None:
+        candidates = self.find_existing_notification_candidates(
+            channel_id=channel_id,
+            match_ref=match_ref,
+            idempotency_key=idempotency_key,
+            not_before=not_before,
+            message=message,
+            max_candidates=1,
+        )
+        return candidates[0] if candidates else None
 
 
 def _seed_test_matches(
@@ -317,7 +394,28 @@ def _register_destination(
     conn.commit()
 
 
-# --- Tests 1-25 ---
+def _seed_failed_delivery(
+    conn: psycopg.Connection,
+    match_ref: str,
+    *,
+    destination_key: str = "east-coasters-formal",
+    message_kind: str = MESSAGE_KIND_FORMAL,
+    error_category: str = "PRIOR_FAILURE",
+) -> int:
+    """Create a non-DELIVERED delivery row so reconciliation is exercised on retry."""
+    res = reserve_discord_delivery(
+        conn,
+        match_ref=match_ref,
+        destination_key=destination_key,
+        message_kind=message_kind,
+    )
+    record_delivery_failure(conn, res.delivery_id, error_category, match_ref)
+    conn.commit()
+    assert res.delivery_id is not None
+    return int(res.delivery_id)
+
+
+# --- Tests 1-30 ---
 
 @pytest.mark.postgres
 def test_1_dry_run_with_no_transport_succeeds_and_writes_nothing(pg_db) -> None:
@@ -962,6 +1060,228 @@ def test_25_incident_regression_transport_none_confirm_true_leaves_deliveries_un
 
         # After: count MUST remain exactly 0 (no false DELIVERED rows persisted)
         assert _fetch_scalar(conn, "SELECT count(*) FROM public.fc27_match_discord_deliveries") == 0
+
+
+@pytest.mark.postgres
+def test_26_post_send_finalization_failure_stops_and_prevents_resend(
+    pg_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """26. Verified send followed by DB finalization failure: zero second send on retry."""
+    migrate(pg_db.migrator)
+    with psycopg.connect(pg_db.admin) as admin_conn:
+        _seed_test_matches(admin_conn, 1)
+
+    with psycopg.connect(pg_db.match_results_writer) as conn:
+        _register_destination(conn)
+
+        transport = MockLiveDiscordGatewayTransport()
+
+        call_count: list[int] = [0]
+
+        def _boom_finalize(*args: Any, **kwargs: Any) -> None:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise FC27BackfillError("finalization database unavailable")
+            return record_delivery_success(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "src.fc27_result_backfill.record_delivery_success", _boom_finalize
+        )
+
+        summary = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary.failed_count == 1
+        assert len(transport.sent_messages) == 1
+        assert len(transport._snapshots) == 1
+
+        # The Discord message remains present; the delivery row is not DELIVERED.
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 0
+        row = _fetch_row(
+            conn,
+            "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries",
+        )
+        assert row[0] != "DELIVERED"
+        assert row[1] == POST_SEND_FINALIZATION_FAILED
+
+        # Second run: marker reconciliation finds the live Discord message,
+        # repairs linkage, finalizes DELIVERED, and performs zero new sends.
+        summary_2 = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary_2.failed_count == 0
+        assert summary_2.already_delivered_count == 1
+        assert summary_2.planned_or_sent_count == 0
+        assert len(transport.sent_messages) == 1  # zero second Discord send
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 1
+
+
+@pytest.mark.postgres
+def test_27_multiple_marker_matches_fail_closed(
+    pg_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """27. Multiple existing Discord messages for the same marker: fail closed, zero sends."""
+    migrate(pg_db.migrator)
+    with psycopg.connect(pg_db.admin) as admin_conn:
+        match_refs = _seed_test_matches(admin_conn, 1)
+    match_ref = match_refs[0]
+
+    with psycopg.connect(pg_db.match_results_writer) as conn:
+        _register_destination(conn)
+        _seed_failed_delivery(conn, match_ref)
+
+        transport = MockLiveDiscordGatewayTransport()
+        monkeypatch.setattr(
+            transport,
+            "find_existing_notification_candidates",
+            lambda *, channel_id, match_ref, idempotency_key, not_before=None, message=None, max_candidates=2: (
+                "111000000000000001",
+                "111000000000000002",
+            ),
+        )
+
+        summary = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary.failed_count == 1
+        assert len(transport.sent_messages) == 0  # no blind resend
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 0
+
+
+@pytest.mark.postgres
+def test_28_history_unreadable_fails_closed(
+    pg_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """28. Channel history cannot be read: stop, do not send."""
+    migrate(pg_db.migrator)
+    with psycopg.connect(pg_db.admin) as admin_conn:
+        match_refs = _seed_test_matches(admin_conn, 1)
+    match_ref = match_refs[0]
+
+    with psycopg.connect(pg_db.match_results_writer) as conn:
+        _register_destination(conn)
+        _seed_failed_delivery(conn, match_ref)
+
+        transport = MockLiveDiscordGatewayTransport()
+        monkeypatch.setattr(
+            transport,
+            "find_existing_notification_candidates",
+            lambda *, channel_id, match_ref, idempotency_key, not_before=None, message=None, max_candidates=2: (
+                _raise_history_unavailable()
+            ),
+        )
+
+        summary = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary.failed_count == 1
+        assert len(transport.sent_messages) == 0
+
+
+def _raise_history_unavailable() -> tuple[str, ...]:
+    raise FC27BackfillError("Discord channel history unavailable")
+
+
+@pytest.mark.postgres
+def test_29_wrong_marker_does_not_reconcile_sends_new(
+    pg_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """29. No matching marker on Discord: proceed with a new send (no false reconciliation)."""
+    migrate(pg_db.migrator)
+    with psycopg.connect(pg_db.admin) as admin_conn:
+        match_refs = _seed_test_matches(admin_conn, 1)
+    match_ref = match_refs[0]
+
+    with psycopg.connect(pg_db.match_results_writer) as conn:
+        _register_destination(conn)
+        _seed_failed_delivery(conn, match_ref)
+
+        transport = MockLiveDiscordGatewayTransport()
+        monkeypatch.setattr(
+            transport,
+            "find_existing_notification_candidates",
+            lambda *, channel_id, match_ref, idempotency_key, not_before=None, message=None, max_candidates=2: (),
+        )
+
+        summary = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary.failed_count == 0
+        assert summary.planned_or_sent_count == 1
+        assert len(transport.sent_messages) == 1
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 1
+
+
+@pytest.mark.postgres
+def test_30_reconciliation_never_searches_another_channel(pg_db) -> None:
+    """30. Reconciliation is bound to the destination channel only."""
+    migrate(pg_db.migrator)
+    with psycopg.connect(pg_db.admin) as admin_conn:
+        match_refs = _seed_test_matches(admin_conn, 1)
+    match_ref = match_refs[0]
+
+    with psycopg.connect(pg_db.match_results_writer) as conn:
+        _register_destination(conn)
+        _seed_failed_delivery(conn, match_ref)
+
+        transport = MockLiveDiscordGatewayTransport()
+        # A matching-marker message exists, but on a different channel: must not reconcile.
+        transport._snapshots["999000000000000001"] = FC27DiscordMessageSnapshot(
+            channel_id="99999999999999999",
+            message_id="999000000000000001",
+            guild_id=GUILD_ID,
+            is_bot_authored=True,
+            author_id="1573141508255776858",
+            content=f"ref:{match_ref}",
+            embed=None,
+        )
+
+        summary = run_result_backfill(
+            destination_key="east-coasters-formal",
+            db_conn_or_uri=pg_db.admin,
+            transport=transport,
+            latest=1,
+            dry_run=False,
+        )
+        assert summary.failed_count == 0
+        assert summary.planned_or_sent_count == 1
+        assert len(transport.sent_messages) == 1
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 1
 
 
 @pytest.mark.postgres
