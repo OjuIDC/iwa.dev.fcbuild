@@ -461,6 +461,11 @@ class FC27DiscordBotConfig(BaseModel):
     max_guild_commands_per_minute: int = Field(default=DEFAULT_GUILD_COMMANDS_PER_MINUTE, ge=1, le=120)
     export_cooldown_seconds: float = Field(default=DEFAULT_EXPORT_COOLDOWN_SECONDS, ge=1.0, le=3600.0)
     max_concurrent_exports: int = Field(default=DEFAULT_MAX_CONCURRENT_EXPORTS, ge=1, le=2)
+    backfill_enabled: bool = False
+    backfill_max_matches: int = Field(default=25, ge=1, le=25)
+    backfill_confirm_ttl_seconds: int = Field(default=900, ge=60, le=900)
+    backfill_cooldown_seconds: int = Field(default=900, ge=0, le=86400)
+    backfill_operator_role_ids: frozenset[str] = Field(default_factory=frozenset)
 
     @property
     def match_results_writer_role_ids(self) -> frozenset[str]:
@@ -504,6 +509,9 @@ class FC27DiscordBotConfig(BaseModel):
         for rid in self.identity_operator_role_ids:
             if not str(rid).isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError("Invalid Identity Operator role ID in allowlist")
+        for rid in self.backfill_operator_role_ids:
+            if not str(rid).isdecimal() or int(rid) <= 0:
+                raise FC27DiscordAuthzError("Invalid Backfill Operator role ID in allowlist")
         if self.results_channel_id is not None:
             rc_clean = self.results_channel_id.strip()
             if not rc_clean.isdecimal() or int(rc_clean) <= 0:
@@ -565,6 +573,11 @@ class FC27DiscordBotConfig(BaseModel):
             dispatch_max_jobs = settings.get_fc27_discord_max_jobs_per_cycle(strict=strict)
             dispatch_lease_mins = settings.get_fc27_discord_lease_minutes(strict=strict)
             dispatch_single_flight = settings.is_fc27_discord_single_flight_enabled(strict=strict)
+            backfill_enabled = settings.is_fc27_discord_backfill_enabled(strict=strict)
+            backfill_max_matches = settings.get_fc27_discord_backfill_max_matches(strict=strict)
+            backfill_confirm_ttl = settings.get_fc27_discord_backfill_confirm_ttl_seconds(strict=strict)
+            backfill_cooldown = settings.get_fc27_discord_backfill_cooldown_seconds(strict=strict)
+            backfill_operator_roles = settings.get_fc27_discord_backfill_operator_role_ids(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         if dispatch_enabled and not results_chan:
@@ -590,6 +603,11 @@ class FC27DiscordBotConfig(BaseModel):
             dispatch_max_jobs_per_cycle=dispatch_max_jobs,
             dispatch_lease_minutes=dispatch_lease_mins,
             dispatch_single_flight=dispatch_single_flight,
+            backfill_enabled=backfill_enabled,
+            backfill_max_matches=backfill_max_matches,
+            backfill_confirm_ttl_seconds=backfill_confirm_ttl,
+            backfill_cooldown_seconds=backfill_cooldown,
+            backfill_operator_role_ids=backfill_operator_roles,
         )
 
 
@@ -1036,6 +1054,10 @@ class FC27DiscordBotService:
     @property
     def provider_requests_executed(self) -> int:
         return DISCORD_PROVIDER_REQUESTS
+
+    @property
+    def dispatch_transport(self) -> Any:
+        return self._dispatch_transport or self._discord_channel_adapter
 
     @property
     def audit_entries(self) -> tuple[FC27DiscordAuditEntry, ...]:
@@ -3574,6 +3596,224 @@ class FC27DiscordBotService:
             xml_lines.extend(["  </Table>", " </Worksheet>", "</Workbook>"])
             return ("\n".join(xml_lines).encode("utf-8"), len(rows))
 
+    def handle_backfill_plan(
+        self,
+        *,
+        guild_id: str | int,
+        channel_id: str | int,
+        user_id: str | int,
+        user_role_ids: Iterable[str | int] | None = None,
+        is_admin: bool = False,
+        destination: str,
+        latest: int = 10,
+        message_kind: Optional[str] = None,
+    ) -> FC27DiscordResponse:
+        from src.fc27_discord_backfill_control import (
+            FC27BackfillAuthzError,
+            FC27BackfillControlError,
+            FC27BackfillCooldownActiveError,
+            FC27BackfillLockBusyError,
+            FC27BackfillValidationError,
+            format_plan_response,
+            is_backfill_operator,
+            plan_backfill,
+        )
+
+        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+            return FC27DiscordResponse(
+                command="backfill_plan",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content=PERMISSION_DENIED_MESSAGE,
+            )
+
+        if not self._config.backfill_enabled:
+            return FC27DiscordResponse(
+                command="backfill_plan",
+                status="ERROR",
+                ephemeral=True,
+                content="Historical result backfill control is disabled.",
+            )
+
+        try:
+            writer_uri = self._resolve_writer_conn_or_uri(required=False)
+            plan, raw_token = plan_backfill(
+                writer_uri,
+                actor_user_id=user_id,
+                guild_id=guild_id,
+                destination_key=destination,
+                latest=latest,
+                message_kind=message_kind,
+                config=self._config,
+            )
+            content = format_plan_response(plan, raw_token)
+            return FC27DiscordResponse(
+                command="backfill_plan",
+                status="OK",
+                ephemeral=True,
+                content=content,
+            )
+        except (
+            FC27BackfillValidationError,
+            FC27BackfillLockBusyError,
+            FC27BackfillCooldownActiveError,
+            FC27BackfillAuthzError,
+        ) as exc:
+            return FC27DiscordResponse(
+                command="backfill_plan",
+                status="ERROR",
+                ephemeral=True,
+                content=f"Backfill planning rejected: {exc}",
+            )
+        except Exception as exc:
+            safe_err = redact_sensitive_text(str(exc), extra_secrets=self._secret_tokens)
+            LOGGER.error("Backfill planning failed: %s", safe_err)
+            return FC27DiscordResponse(
+                command="backfill_plan",
+                status="ERROR",
+                ephemeral=True,
+                content="Backfill planning failed due to an internal error.",
+            )
+
+    def handle_backfill_status(
+        self,
+        *,
+        guild_id: str | int,
+        channel_id: str | int,
+        user_id: str | int,
+        user_role_ids: Iterable[str | int] | None = None,
+        is_admin: bool = False,
+        lookup: str | None = None,
+    ) -> FC27DiscordResponse:
+        from src.fc27_discord_backfill_control import (
+            format_status_response,
+            get_backfill_status,
+            is_backfill_operator,
+        )
+
+        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+            return FC27DiscordResponse(
+                command="backfill_status",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content=PERMISSION_DENIED_MESSAGE,
+            )
+
+        try:
+            reader_uri = self._resolve_readonly_conn_or_uri()
+            record = get_backfill_status(
+                reader_uri,
+                guild_id=guild_id,
+                lookup=lookup,
+            )
+            if not record:
+                return FC27DiscordResponse(
+                    command="backfill_status",
+                    status="OK",
+                    ephemeral=True,
+                    content="No backfill requests found for this guild.",
+                )
+            content = format_status_response(record)
+            return FC27DiscordResponse(
+                command="backfill_status",
+                status="OK",
+                ephemeral=True,
+                content=content,
+            )
+        except Exception as exc:
+            safe_err = redact_sensitive_text(str(exc), extra_secrets=self._secret_tokens)
+            LOGGER.error("Backfill status query failed: %s", safe_err)
+            return FC27DiscordResponse(
+                command="backfill_status",
+                status="ERROR",
+                ephemeral=True,
+                content="Backfill status query failed due to an internal error.",
+            )
+
+    def handle_backfill_confirm(
+        self,
+        *,
+        guild_id: str | int,
+        channel_id: str | int,
+        user_id: str | int,
+        user_role_ids: Iterable[str | int] | None = None,
+        is_admin: bool = False,
+        confirmation_token: str,
+    ) -> FC27DiscordResponse:
+        from src.fc27_discord_backfill_control import (
+            FC27BackfillAuthzError,
+            FC27BackfillPlanChangedError,
+            FC27BackfillTokenExpiredError,
+            FC27BackfillValidationError,
+            confirm_and_execute_backfill,
+            format_status_response,
+            is_backfill_operator,
+        )
+
+        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content=PERMISSION_DENIED_MESSAGE,
+            )
+
+        if not self._config.backfill_enabled:
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="ERROR",
+                ephemeral=True,
+                content="Historical result backfill control is disabled.",
+            )
+
+        transport = self._dispatch_transport or self._discord_channel_adapter
+        if transport is None:
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="ERROR",
+                ephemeral=True,
+                content="LIVE_DISCORD_TRANSPORT_REQUIRED: Discord gateway client is not connected.",
+            )
+
+        try:
+            writer_uri = self._resolve_writer_conn_or_uri(required=False)
+            record = confirm_and_execute_backfill(
+                writer_uri,
+                actor_user_id=user_id,
+                guild_id=guild_id,
+                confirmation_token=confirmation_token,
+                transport=transport,
+                config=self._config,
+            )
+            content = format_status_response(record)
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="OK",
+                ephemeral=True,
+                content=content,
+            )
+        except (
+            FC27BackfillTokenExpiredError,
+            FC27BackfillPlanChangedError,
+            FC27BackfillValidationError,
+            FC27BackfillAuthzError,
+        ) as exc:
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="ERROR",
+                ephemeral=True,
+                content=f"Backfill confirmation rejected: {exc}",
+            )
+        except Exception as exc:
+            safe_err = redact_sensitive_text(str(exc), extra_secrets=self._secret_tokens)
+            LOGGER.error("Backfill execution failed: %s", safe_err)
+            return FC27DiscordResponse(
+                command="backfill_confirm",
+                status="ERROR",
+                ephemeral=True,
+                content=f"Backfill execution failed: {safe_err}",
+            )
+
 
 async def dispatch_interaction_response(
     interaction: Any,
@@ -3712,6 +3952,8 @@ class RegisteredCommandSummary:
     top_level_guild_commands: tuple[str, ...]
     global_command_names: tuple[str, ...]
     total_guild_top_level_commands: int
+    backfill_group_name: str | None = None
+    backfill_subcommands: tuple[str, ...] = ()
 
 
 def register_fc27_application_commands(
@@ -3721,6 +3963,7 @@ def register_fc27_application_commands(
     allowed_guild_ids: Sequence[str] | frozenset[str] | None = None,
     discord_module: Any = None,
     app_commands_module: Any = None,
+    register_backfill: bool | None = None,
 ) -> RegisteredCommandSummary:
     """Register `/fc27` group and top-level guild slash commands on `tree`."""
     if discord_module is None:
@@ -4066,6 +4309,109 @@ def register_fc27_application_commands(
 
     tree.add_command(fc27_group)
 
+    should_register_backfill = (
+        register_backfill
+        if register_backfill is not None
+        else getattr(bot_service.config, "backfill_enabled", False)
+    )
+
+    if should_register_backfill:
+        backfill_group = app_commands_mod.Group(
+            name="backfillresults",
+            description="East Coasters FC27 historical result backfill control",
+            guild_ids=[int(gid) for gid in guild_id_values],
+        )
+
+        @backfill_group.command(
+            name="plan",
+            description="Plan a historical backfill dry run and mint confirmation token",
+        )
+        async def _cb_backfill_plan(
+            interaction: Any,
+            destination: str,
+            latest: int = 10,
+            message_kind: Optional[str] = None,
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            gid = str(getattr(interaction, "guild_id", "") or "").strip()
+            cid = str(getattr(interaction, "channel_id", "") or "").strip()
+            user = getattr(interaction, "user", None)
+            uid = str(getattr(user, "id", "") or "").strip()
+            role_objs = getattr(user, "roles", []) or []
+            role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
+            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
+
+            resp = await asyncio.to_thread(
+                bot_service.handle_backfill_plan,
+                guild_id=gid,
+                channel_id=cid,
+                user_id=uid,
+                user_role_ids=role_ids,
+                is_admin=is_admin,
+                destination=destination,
+                latest=latest,
+                message_kind=message_kind,
+            )
+            await interaction.followup.send(content=resp.content, ephemeral=True)
+
+        @backfill_group.command(
+            name="confirm",
+            description="Confirm and execute a planned historical backfill",
+        )
+        async def _cb_backfill_confirm(
+            interaction: Any,
+            confirmation_token: str,
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            gid = str(getattr(interaction, "guild_id", "") or "").strip()
+            cid = str(getattr(interaction, "channel_id", "") or "").strip()
+            user = getattr(interaction, "user", None)
+            uid = str(getattr(user, "id", "") or "").strip()
+            role_objs = getattr(user, "roles", []) or []
+            role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
+            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
+
+            resp = await asyncio.to_thread(
+                bot_service.handle_backfill_confirm,
+                guild_id=gid,
+                channel_id=cid,
+                user_id=uid,
+                user_role_ids=role_ids,
+                is_admin=is_admin,
+                confirmation_token=confirmation_token,
+            )
+            await interaction.followup.send(content=resp.content, ephemeral=True)
+
+        @backfill_group.command(
+            name="status",
+            description="Query durable status of backfill requests",
+        )
+        async def _cb_backfill_status(
+            interaction: Any,
+            request_id: Optional[str] = None,
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            gid = str(getattr(interaction, "guild_id", "") or "").strip()
+            cid = str(getattr(interaction, "channel_id", "") or "").strip()
+            user = getattr(interaction, "user", None)
+            uid = str(getattr(user, "id", "") or "").strip()
+            role_objs = getattr(user, "roles", []) or []
+            role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
+            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
+
+            resp = await asyncio.to_thread(
+                bot_service.handle_backfill_status,
+                guild_id=gid,
+                channel_id=cid,
+                user_id=uid,
+                user_role_ids=role_ids,
+                is_admin=is_admin,
+                lookup=request_id,
+            )
+            await interaction.followup.send(content=resp.content, ephemeral=True)
+
+        tree.add_command(backfill_group)
+
     global_commands = tuple(cmd.name for cmd in tree.get_commands(guild=None))
     top_level_for_first_guild = (
         tuple(cmd.name for cmd in tree.get_commands(guild=guild_objects[0]))
@@ -4078,6 +4424,8 @@ def register_fc27_application_commands(
         top_level_guild_commands=tuple(registered_top_level_commands),
         global_command_names=global_commands,
         total_guild_top_level_commands=len(top_level_for_first_guild),
+        backfill_group_name="backfillresults" if should_register_backfill else None,
+        backfill_subcommands=("plan", "confirm", "status") if should_register_backfill else (),
     )
 
 

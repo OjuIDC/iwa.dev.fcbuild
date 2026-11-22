@@ -509,6 +509,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Bounded historical backfill CLI, dry-run simulation, confirmed delivery, ordering, bounds 10-25, and advisory locks.",
         ),
         _entry(
+            "tests/test_fc27_discord_backfill_control.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Secured operator Discord backfill control, dry-run planning, CSPRNG tokens, cooldowns, live gateway transport, and audit schema.",
+        ),
+        _entry(
             "tests/test_fc27_polling_worker.py",
             "POSTGRES_PARALLEL_SAFE",
             (

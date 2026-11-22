@@ -1,4 +1,4 @@
--- grants-policy-version: 23
+-- grants-policy-version: 24
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1222,6 +1222,70 @@ BEGIN
             FROM PUBLIC, fc27_app, fc27_dispatch;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_finalize_provider_request(text, text) TO fc27_poll_writer';
+        END IF;
+    END IF;
+
+    -- Migration 0023 additions (Policy 24)
+    IF to_regclass('public.fc27_discord_backfill_requests') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'REVOKE ALL ON TABLE public.fc27_discord_backfill_requests FROM fc27_match_results_writer';
+            EXECUTE 'GRANT SELECT ON TABLE public.fc27_discord_backfill_requests TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_create_backfill_request(text, text, text, text, text, integer, integer, text, integer, integer)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_create_backfill_request(text, text, text, text, text, integer, integer, text, integer, integer)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_create_backfill_request(text, text, text, text, text, integer, integer, text, integer, integer) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_confirm_backfill_request(text, text, text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_confirm_backfill_request(text, text, text, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_confirm_backfill_request(text, text, text, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_mark_backfill_running(uuid)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_mark_backfill_running(uuid)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_mark_backfill_running(uuid) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_finalize_backfill_request(uuid, text, integer, integer, integer, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_finalize_backfill_request(uuid, text, integer, integer, integer, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_finalize_backfill_request(uuid, text, integer, integer, integer, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_get_backfill_request_status(text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_get_backfill_request_status(text, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_backfill_request_status(text, text) TO fc27_match_results_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_backfill_request_status(text, text) TO fc27_discord_reader';
         END IF;
     END IF;
 END $$;
