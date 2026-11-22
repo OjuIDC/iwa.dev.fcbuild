@@ -948,6 +948,7 @@ class FC27DiscordMessageSnapshot:
     message_id: str
     guild_id: str | None = None
     is_bot_authored: bool = True
+    author_id: str | None = None
     content: str = ""
     embed: FC27DiscordEmbed | None = None
 
@@ -1007,6 +1008,31 @@ class FC27DiscordDispatchCycleResult:
 
 class DiscordNotificationTransport(Protocol):
     """Protocol for publishing match result notifications into a Discord channel."""
+
+    @property
+    def transport_name(self) -> str:
+        """Name of the transport implementation."""
+        ...
+
+    @property
+    def is_live(self) -> bool:
+        """True if the transport represents an active, authenticated Discord connection."""
+        ...
+
+    @property
+    def supports_send(self) -> bool:
+        """True if the transport supports publishing messages."""
+        ...
+
+    @property
+    def supports_fetch_after_send(self) -> bool:
+        """True if the transport can fetch message snapshots after publishing."""
+        ...
+
+    @property
+    def authenticated_bot_user_id_available(self) -> bool:
+        """True if authenticated Discord bot user ID is established and accessible."""
+        ...
 
     def find_existing_notification(
         self,
@@ -1147,7 +1173,28 @@ async def _scan_team_chat_history(
 class SyntheticDiscordNotificationTransport:
     """In-memory deterministic transport for offline tests and failure injection."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        transport_name: str = "synthetic",
+        is_live: bool = False,
+        supports_send: bool = True,
+        supports_fetch_after_send: bool = True,
+        authenticated_bot_user_id_available: bool = False,
+        authenticated_bot_user_id: int | str | None = None,
+        base_message_id: int | None = None,
+        default_guild_id: str | None = None,
+    ) -> None:
+        self.transport_name = transport_name
+        self.is_live = is_live
+        self.supports_send = supports_send
+        self.supports_fetch_after_send = supports_fetch_after_send
+        self.authenticated_bot_user_id_available = authenticated_bot_user_id_available
+        self.authenticated_bot_user_id = (
+            str(authenticated_bot_user_id) if authenticated_bot_user_id is not None else None
+        )
+        self._base_message_id = base_message_id
+        self.default_guild_id = default_guild_id
         self.sent_messages: list[FC27PostNewResultsMessage] = []
         self.sent_team_chat_messages: list[FC27TeamChatMessage] = []
         self.sent_text_messages: list[tuple[str, str, str]] = []
@@ -1160,6 +1207,7 @@ class SyntheticDiscordNotificationTransport:
         self._linkages: dict[str, FC27MatchMessageLinkage] = {}
         self.deleted_message_ids: set[str] = set()
         self.non_bot_message_ids: set[str] = set()
+        self.message_authors: dict[str, str] = {}
         self.message_guilds: dict[str, str] = {}
         self._seq: int = 0
         self.on_before_send: Callable[[FC27PostNewResultsMessage], None] | None = None
@@ -1252,9 +1300,16 @@ class SyntheticDiscordNotificationTransport:
         if self.on_before_send is not None:
             self.on_before_send(message)
         self._seq += 1
-        msg_id = str(880000000000000000 + self._seq)
+        if self._base_message_id is not None:
+            msg_id = str(self._base_message_id + self._seq)
+        else:
+            msg_id = str(880000000000000000 + self._seq)
         self.sent_messages.append(message)
         self._channel_history.setdefault(channel_id, []).append((msg_id, message))
+        if self.default_guild_id and msg_id not in self.message_guilds:
+            self.message_guilds[msg_id] = self.default_guild_id
+        if self.authenticated_bot_user_id and msg_id not in self.message_authors:
+            self.message_authors[msg_id] = self.authenticated_bot_user_id
         self.record_match_linkage(
             match_ref=message.match_ref,
             results_channel_id=channel_id,
@@ -1339,13 +1394,19 @@ class SyntheticDiscordNotificationTransport:
             self.on_before_fetch(channel_id, message_id)
         if message_id in self.deleted_message_ids:
             return None
+        is_bot = message_id not in self.non_bot_message_ids
+        author_id = self.message_authors.get(message_id)
+        if author_id is None and self.authenticated_bot_user_id:
+            author_id = self.authenticated_bot_user_id if is_bot else "999999999999999999"
+        guild_id = self.message_guilds.get(message_id)
         for mid, msg in self._channel_history.get(channel_id, []):
             if mid == message_id:
                 return FC27DiscordMessageSnapshot(
                     channel_id=channel_id,
                     message_id=message_id,
-                    guild_id=self.message_guilds.get(message_id),
-                    is_bot_authored=(message_id not in self.non_bot_message_ids),
+                    guild_id=guild_id,
+                    is_bot_authored=is_bot,
+                    author_id=author_id,
                     content=msg.content,
                     embed=msg.embed,
                 )
@@ -1354,8 +1415,9 @@ class SyntheticDiscordNotificationTransport:
                 return FC27DiscordMessageSnapshot(
                     channel_id=channel_id,
                     message_id=message_id,
-                    guild_id=self.message_guilds.get(message_id),
-                    is_bot_authored=(message_id not in self.non_bot_message_ids),
+                    guild_id=guild_id,
+                    is_bot_authored=is_bot,
+                    author_id=author_id,
                     content=msg.content,
                     embed=None,
                 )
@@ -1391,9 +1453,16 @@ class SyntheticDiscordNotificationTransport:
         if self.on_before_team_chat_send is not None:
             self.on_before_team_chat_send(message)
         self._seq += 1
-        msg_id = str(890000000000000000 + self._seq)
+        if self._base_message_id is not None:
+            msg_id = str(self._base_message_id + self._seq)
+        else:
+            msg_id = str(890000000000000000 + self._seq)
         self.sent_team_chat_messages.append(message)
         self._team_chat_history.setdefault(channel_id, []).append((msg_id, message))
+        if self.default_guild_id and msg_id not in self.message_guilds:
+            self.message_guilds[msg_id] = self.default_guild_id
+        if self.authenticated_bot_user_id and msg_id not in self.message_authors:
+            self.message_authors[msg_id] = self.authenticated_bot_user_id
         self.record_match_linkage(
             match_ref=message.match_ref,
             team_chat_channel_id=channel_id,
@@ -1478,6 +1547,36 @@ class DiscordGatewayChannelTransport:
         self._loop = loop
         self._timeout_seconds = float(timeout_seconds)
         self._linkages: dict[str, FC27MatchMessageLinkage] = {}
+
+    @property
+    def transport_name(self) -> str:
+        return "discord_gateway"
+
+    @property
+    def supports_send(self) -> bool:
+        return True
+
+    @property
+    def supports_fetch_after_send(self) -> bool:
+        return True
+
+    @property
+    def authenticated_bot_user_id(self) -> str | None:
+        user = getattr(self._client, "user", None)
+        uid = getattr(user, "id", None)
+        return str(uid) if uid is not None else None
+
+    @property
+    def authenticated_bot_user_id_available(self) -> bool:
+        return self.authenticated_bot_user_id is not None
+
+    @property
+    def is_live(self) -> bool:
+        is_ready_fn = getattr(self._client, "is_ready", None)
+        is_ready = bool(is_ready_fn() if callable(is_ready_fn) else False)
+        is_closed_fn = getattr(self._client, "is_closed", None)
+        is_closed = bool(is_closed_fn() if callable(is_closed_fn) else False)
+        return is_ready and not is_closed and self.authenticated_bot_user_id_available
 
     def get_match_linkage(self, match_ref: str) -> FC27MatchMessageLinkage | None:
         return self._linkages.get(match_ref)
@@ -1957,8 +2056,60 @@ class DiscordGatewayChannelTransport:
             message_id=str(message_id),
             guild_id=guild_id,
             is_bot_authored=is_bot_authored,
+            author_id=str(author_id) if author_id is not None else None,
             content=str(getattr(msg, "content", "") or ""),
             embed=fc27_embed,
+        )
+
+    async def _async_verify_channel_access(
+        self,
+        *,
+        channel_id: str,
+        guild_id: str | None = None,
+    ) -> None:
+        channel = await self._resolve_channel(channel_id)
+        if guild_id is not None:
+            c_guild = getattr(channel, "guild", None)
+            c_guild_id = str(getattr(c_guild, "id", None)) if c_guild is not None else None
+            if c_guild_id and c_guild_id != str(guild_id):
+                raise FC27DiscordDispatchTransportError(
+                    "Target channel does not belong to expected Discord guild",
+                    category="DISCORD_GUILD_MISMATCH",
+                    retryable=False,
+                )
+        guild = getattr(channel, "guild", None)
+        me = getattr(guild, "me", None) if guild is not None else None
+        perms_for = getattr(channel, "permissions_for", None)
+        if me is not None and callable(perms_for):
+            perms = perms_for(me)
+            send_ok = getattr(perms, "send_messages", True)
+            history_ok = getattr(perms, "read_message_history", True)
+            view_ok = getattr(perms, "view_channel", True)
+            if not (send_ok and history_ok and view_ok):
+                raise FC27DiscordDispatchTransportError(
+                    "Discord bot lacks required channel permissions",
+                    category="DISCORD_CHANNEL_FORBIDDEN",
+                    retryable=False,
+                )
+
+    def verify_destination_readiness(
+        self,
+        *,
+        channel_id: str,
+        guild_id: str | None = None,
+    ) -> None:
+        if not self.is_live:
+            raise FC27DiscordDispatchTransportError(
+                "Discord gateway client is not ready or lacks authenticated bot user",
+                category="DISCORD_CLIENT_NOT_READY",
+                retryable=False,
+            )
+        self._run_loop_coroutine(
+            asyncio.wait_for(
+                self._async_verify_channel_access(channel_id=channel_id, guild_id=guild_id),
+                timeout=self._timeout_seconds,
+            ),
+            operation="verify destination readiness",
         )
 
     def fetch_notification_snapshot(

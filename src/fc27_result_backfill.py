@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import re
 import sys
 from dataclasses import dataclass
@@ -32,7 +31,7 @@ from src.fc27_discord_delivery import (
     DELIVERY_STATE_DELIVERED,
     MESSAGE_KIND_FORMAL,
     MESSAGE_KIND_TEAM_CHAT,
-    FC27DiscordDestination,
+    DeliveryReservationResult,
     build_delivery_idempotency_key,
     get_destination_by_key,
     record_delivery_failure,
@@ -40,8 +39,6 @@ from src.fc27_discord_delivery import (
     reserve_discord_delivery,
 )
 from src.fc27_discord_dispatcher import (
-    FC27AuthoritativeMatchData,
-    FC27DiscordDispatchConfig,
     FC27PostNewResultsMessage,
     FC27TeamChatMessage,
     SyntheticDiscordNotificationTransport,
@@ -69,12 +66,47 @@ class FC27BackfillError(RuntimeError):
     """Base error for result backfill operations."""
 
 
+class FC27LiveDiscordTransportRequiredError(FC27BackfillError):
+    """Raised when confirmed backfill is attempted without a live Discord transport."""
+
+
 class FC27BackfillLockBusyError(FC27BackfillError):
     """Raised when another backfill process holds the single-flight lease for the destination."""
 
 
 class FC27BackfillValidationError(FC27BackfillError):
     """Raised when backfill configuration or arguments fail validation."""
+
+
+_VALID_SNOWFLAKE_RE: Final[re.Pattern[str]] = re.compile(r"^[1-9][0-9]{16,21}$")
+_SYNTHETIC_MESSAGE_ID_PREFIXES: Final[tuple[str, ...]] = (
+    "8800000000",
+    "8900000000",
+    "9100000000",
+    "synth_",
+)
+
+
+def is_synthetic_message_id(message_id: str) -> bool:
+    """Check if a Discord message ID belongs to known synthetic placeholder ranges."""
+    clean = str(message_id or "").strip()
+    return clean.startswith(_SYNTHETIC_MESSAGE_ID_PREFIXES) or "synth" in clean.lower()
+
+
+def validate_discord_message_id(message_id: str) -> str:
+    """Validate that a returned Discord message ID is a non-synthetic Discord snowflake."""
+    clean = str(message_id or "").strip()
+    if not clean:
+        raise FC27BackfillValidationError("Transport returned empty Discord message ID")
+    if not _VALID_SNOWFLAKE_RE.fullmatch(clean):
+        raise FC27BackfillValidationError(
+            "Transport returned malformed Discord message ID (must be a valid numeric snowflake)"
+        )
+    if is_synthetic_message_id(clean):
+        raise FC27BackfillValidationError(
+            "Transport returned synthetic message ID in confirmed backfill"
+        )
+    return clean
 
 
 @dataclass(frozen=True)
@@ -164,6 +196,7 @@ def run_result_backfill(
     club_id: str = EAST_COASTERS_CLUB_ID,
     platform: str = EAST_COASTERS_PLATFORM,
     game_version: str = EAST_COASTERS_GAME_VERSION,
+    allow_test_transport: bool = False,
 ) -> FC27ResultBackfillSummary:
     """Execute or simulate a bounded result backfill to an authorized destination."""
     if not destination_key or not destination_key.strip():
@@ -179,6 +212,33 @@ def run_result_backfill(
         raise FC27BackfillValidationError(
             f"Latest count must be between {MIN_LATEST_COUNT} and {MAX_LATEST_COUNT} (got {latest})."
         )
+
+    # Transport capability and liveness gate for confirmed execution
+    if not dry_run:
+        if transport is None:
+            raise FC27LiveDiscordTransportRequiredError(
+                "LIVE_DISCORD_TRANSPORT_REQUIRED: confirmed backfill requires an explicit live Discord transport"
+            )
+        if not allow_test_transport:
+            is_synthetic_class = isinstance(transport, SyntheticDiscordNotificationTransport)
+            t_name = getattr(transport, "transport_name", "")
+            is_live = getattr(transport, "is_live", False)
+            if is_synthetic_class or t_name == "synthetic" or not is_live:
+                raise FC27LiveDiscordTransportRequiredError(
+                    "LIVE_DISCORD_TRANSPORT_REQUIRED: synthetic or non-live transport rejected for confirmed backfill"
+                )
+            if not getattr(transport, "authenticated_bot_user_id_available", False):
+                raise FC27LiveDiscordTransportRequiredError(
+                    "LIVE_DISCORD_TRANSPORT_REQUIRED: live transport lacks authenticated bot user ID"
+                )
+        if not getattr(transport, "supports_send", True):
+            raise FC27LiveDiscordTransportRequiredError(
+                "LIVE_DISCORD_TRANSPORT_REQUIRED: transport does not support message publishing"
+            )
+        if not getattr(transport, "supports_fetch_after_send", False):
+            raise FC27LiveDiscordTransportRequiredError(
+                "LIVE_DISCORD_TRANSPORT_REQUIRED: transport does not support message fetch verification"
+            )
 
     owns_reader = False
     owns_writer = False
@@ -200,6 +260,7 @@ def run_result_backfill(
         if wr_uri == ro_uri:
             writer_conn = reader_conn
         else:
+            assert wr_uri is not None
             writer_conn = psycopg.connect(wr_uri)
             owns_writer = True
     else:
@@ -251,6 +312,12 @@ def run_result_backfill(
                     f"--team-chat requested but destination '{clean_dest_key}' is of kind '{dest.message_kind}'."
                 )
 
+            eff_transport = transport
+            if not dry_run and eff_transport is not None:
+                verify_readiness_fn = getattr(eff_transport, "verify_destination_readiness", None)
+                if verify_readiness_fn is not None:
+                    verify_readiness_fn(channel_id=dest.channel_id, guild_id=dest.guild_id)
+
             # 3. Discover eligible persisted matches
             eligible_rows = _discover_latest_persisted_matches(
                 reader_conn,
@@ -264,8 +331,6 @@ def run_result_backfill(
             already_delivered = 0
             planned_or_sent = 0
             failed_count = 0
-
-            eff_transport = transport or SyntheticDiscordNotificationTransport()
 
             # 4. Process each match oldest to newest
             for row in eligible_rows:
@@ -324,13 +389,17 @@ def run_result_backfill(
                         message_kind=dest.message_kind,
                         idempotency_key=idem_key,
                     )
+                    writer_conn.commit()
 
                     if res.is_already_delivered:
                         already_delivered += 1
                         continue
 
                     # Render and send
-                    sent_id: str | None = None
+                    assert eff_transport is not None
+                    sent_id_raw: str | None = None
+                    formal_msg: FC27PostNewResultsMessage | None = None
+                    tc_msg: FC27TeamChatMessage | None = None
                     if dest.message_kind == MESSAGE_KIND_FORMAL:
                         formal_msg = build_post_new_results_notification(
                             match_data,
@@ -338,11 +407,9 @@ def run_result_backfill(
                             idempotency_key=idem_key,
                             extra_forbidden_tokens=extra_forbidden,
                         )
-                        sent_id = str(
-                            eff_transport.send_notification(
-                                channel_id=dest.channel_id,
-                                message=formal_msg,
-                            )
+                        sent_id_raw = eff_transport.send_notification(
+                            channel_id=dest.channel_id,
+                            message=formal_msg,
                         )
                     elif dest.message_kind == MESSAGE_KIND_TEAM_CHAT:
                         tc_msg = build_post_new_results_team_chat_message(
@@ -356,19 +423,125 @@ def run_result_backfill(
                             "send_team_chat_notification",
                             eff_transport.send_notification,
                         )
-                        sent_id = str(
-                            send_fn(
-                                channel_id=dest.channel_id,
-                                message=tc_msg,
-                            )
+                        sent_id_raw = send_fn(
+                            channel_id=dest.channel_id,
+                            message=tc_msg,
                         )
 
-                    if sent_id and res.delivery_id:
-                        record_delivery_success(writer_conn, res.delivery_id, sent_id, m_ref)
-                        writer_conn.commit()
-                        planned_or_sent += 1
-                    else:
-                        raise FC27BackfillError("Transport send returned empty message ID")
+                    # Validate snowflake format and reject synthetic IDs
+                    clean_sent_id = validate_discord_message_id(str(sent_id_raw or ""))
+
+                    # Send-and-fetch verification
+                    fetch_fn = getattr(eff_transport, "fetch_notification_snapshot", None)
+                    if fetch_fn is None:
+                        raise FC27BackfillValidationError(
+                            "Transport lacks fetch_notification_snapshot capability"
+                        )
+
+                    try:
+                        snapshot = fetch_fn(
+                            channel_id=dest.channel_id, message_id=clean_sent_id
+                        )
+                    except Exception as fetch_exc:
+                        raise FC27BackfillError(
+                            f"Fetch verification encountered error: {type(fetch_exc).__name__}"
+                        ) from fetch_exc
+
+                    if snapshot is None:
+                        raise FC27BackfillError(
+                            "Fetch verification failed: message not found in destination channel"
+                        )
+
+                    if str(snapshot.channel_id).strip() != str(dest.channel_id).strip():
+                        raise FC27BackfillError(
+                            "Fetch verification failed: channel mismatch"
+                        )
+
+                    if (
+                        snapshot.guild_id
+                        and dest.guild_id
+                        and str(snapshot.guild_id).strip() != str(dest.guild_id).strip()
+                    ):
+                        raise FC27BackfillError(
+                            "Fetch verification failed: guild mismatch"
+                        )
+
+                    if not getattr(snapshot, "is_bot_authored", True):
+                        raise FC27BackfillError(
+                            "Fetch verification failed: message is not bot-authored"
+                        )
+
+                    expected_bot_id = getattr(eff_transport, "authenticated_bot_user_id", None)
+                    actual_author_id = getattr(snapshot, "author_id", None)
+                    if (
+                        expected_bot_id
+                        and actual_author_id
+                        and str(actual_author_id).strip() != str(expected_bot_id).strip()
+                    ):
+                        raise FC27BackfillError(
+                            "Fetch verification failed: author ID does not match authenticated bot user ID"
+                        )
+
+                    marker_found = False
+                    if dest.message_kind == MESSAGE_KIND_FORMAL:
+                        marker = f"ref:{m_ref}"
+                        if m_ref in snapshot.content or marker in snapshot.content:
+                            marker_found = True
+                        elif snapshot.embed is not None:
+                            emb = snapshot.embed
+                            if (
+                                m_ref in (emb.footer_text or "")
+                                or marker in (emb.footer_text or "")
+                            ):
+                                marker_found = True
+                            elif (
+                                m_ref in (emb.description or "")
+                                or marker in (emb.description or "")
+                            ):
+                                marker_found = True
+                            elif (
+                                emb.title
+                                and formal_msg is not None
+                                and formal_msg.embed is not None
+                                and formal_msg.embed.title
+                                and emb.title == formal_msg.embed.title
+                            ):
+                                marker_found = True
+                            else:
+                                for fld_val in emb.fields.values():
+                                    if m_ref in fld_val:
+                                        marker_found = True
+                                        break
+                    elif dest.message_kind == MESSAGE_KIND_TEAM_CHAT:
+                        digest_marker = getattr(tc_msg, "discriminator", "") if tc_msg is not None else ""
+                        if digest_marker and digest_marker in snapshot.content:
+                            marker_found = True
+                        elif m_ref in snapshot.content:
+                            marker_found = True
+                        elif tc_msg is not None and tc_msg.content and snapshot.content.strip() == tc_msg.content.strip():
+                            marker_found = True
+
+                    if not marker_found:
+                        raise FC27BackfillError(
+                            "Fetch verification failed: expected match marker not found in message"
+                        )
+
+                    if dest.message_kind == MESSAGE_KIND_FORMAL:
+                        if snapshot.embed is None or not snapshot.embed.title:
+                            raise FC27BackfillError(
+                                "Fetch verification failed: expected formal result embed missing"
+                            )
+                    elif dest.message_kind == MESSAGE_KIND_TEAM_CHAT:
+                        if not snapshot.content or not snapshot.content.strip():
+                            raise FC27BackfillError(
+                                "Fetch verification failed: expected team-chat content missing"
+                            )
+
+                    # Finalize delivery
+                    assert res.delivery_id is not None
+                    record_delivery_success(writer_conn, res.delivery_id, clean_sent_id, m_ref)
+                    writer_conn.commit()
+                    planned_or_sent += 1
 
                 except Exception as exc:
                     writer_conn.rollback()
@@ -379,15 +552,22 @@ def run_result_backfill(
                     )
                     if res is not None and res.delivery_id:
                         try:
+                            err_cat = (
+                                "FETCH_VERIFICATION_FAILED"
+                                if "Fetch verification failed" in str(exc)
+                                else type(exc).__name__.upper()
+                            )
                             record_delivery_failure(
                                 writer_conn,
                                 res.delivery_id,
-                                type(exc).__name__.upper(),
+                                err_cat,
                                 m_ref,
                             )
                             writer_conn.commit()
                         except Exception:
                             writer_conn.rollback()
+                    # Stop backfill immediately on ambiguous delivery or verification failure
+                    break
 
             remaining = total_found - (already_delivered + planned_or_sent)
             return FC27ResultBackfillSummary(
@@ -476,6 +656,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     is_confirmed = bool(args.confirm)
     dry_run = not is_confirmed
 
+    if is_confirmed:
+        print(
+            "ERROR: FC27LiveDiscordTransportRequiredError: LIVE_DISCORD_TRANSPORT_REQUIRED: "
+            "confirmed backfill requires an explicit live Discord transport",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         summary = run_result_backfill(
             destination_key=args.destination,
@@ -487,6 +675,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(summary.format_sanitized_report())
         return 0 if summary.failed_count == 0 else 1
+    except FC27LiveDiscordTransportRequiredError as exc:
+        print(f"ERROR: LIVE_DISCORD_TRANSPORT_REQUIRED: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
