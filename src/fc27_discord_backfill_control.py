@@ -47,6 +47,9 @@ class FC27BackfillControlError(Exception):
     """Base error for backfill control workflows."""
 
 
+FC27_BACKFILL_PLAN_SCHEMA_VERSION = "v1"
+
+
 class FC27BackfillAuthzError(FC27BackfillControlError):
     """Operator authorization denial."""
 
@@ -122,6 +125,8 @@ def compute_plan_digest(
     message_kind: str,
     latest: int,
     matches: Sequence[dict[str, Any]],
+    *,
+    destination_updated_at: str | None = None,
 ) -> str:
     """Compute SHA-256 digest of planned matches to detect plan drift."""
     inventory_items = [
@@ -134,7 +139,9 @@ def compute_plan_digest(
         for m in matches
     ]
     payload = {
+        "schema_version": FC27_BACKFILL_PLAN_SCHEMA_VERSION,
         "destination_key": destination_key.strip(),
+        "destination_updated_at": (destination_updated_at or "").strip(),
         "message_kind": message_kind.strip(),
         "latest": latest,
         "items": inventory_items,
@@ -313,6 +320,7 @@ def plan_backfill(
             dest.message_kind,
             latest,
             eligible_rows,
+            destination_updated_at=dest.updated_at.isoformat() if dest.updated_at else None,
         )
 
         raw_token = secrets.token_urlsafe(32)
@@ -467,21 +475,29 @@ def confirm_and_execute_backfill(
 
         # If already COMPLETED or RUNNING, return idempotent record
         if planned_row["status"] in ("COMPLETED", "RUNNING"):
-            return get_backfill_status(conn, guild_id=guild_str, lookup=str(planned_row["request_id"])) or FC27BackfillRequestRecord(
-                request_id=str(planned_row["request_id"]),
-                status=str(planned_row["status"]),
-                destination_key=str(planned_row["destination_key"]),
-                message_kind=str(planned_row["message_kind"]),
-                latest_count=int(planned_row["latest_count"]),
-                planned_count=0,
-                delivered_count=0,
-                skipped_count=0,
-                failed_count=0,
-                last_error_category=None,
-                created_at=None,
-                expires_at=None,
-                confirmed_at=None,
-                completed_at=None,
+            return (
+                get_backfill_status(
+                    conn,
+                    guild_id=guild_str,
+                    lookup=str(planned_row["request_id"]),
+                    actor_user_id=actor_str,
+                )
+                or FC27BackfillRequestRecord(
+                    request_id=str(planned_row["request_id"]),
+                    status=str(planned_row["status"]),
+                    destination_key=str(planned_row["destination_key"]),
+                    message_kind=str(planned_row["message_kind"]),
+                    latest_count=int(planned_row["latest_count"]),
+                    planned_count=0,
+                    delivered_count=0,
+                    skipped_count=0,
+                    failed_count=0,
+                    last_error_category=None,
+                    created_at=None,
+                    expires_at=None,
+                    confirmed_at=None,
+                    completed_at=None,
+                )
             )
 
         if planned_row["actor_digest"] != actor_digest:
@@ -507,6 +523,7 @@ def confirm_and_execute_backfill(
             dest.message_kind,
             latest_count,
             current_rows,
+            destination_updated_at=dest.updated_at.isoformat() if dest.updated_at else None,
         )
 
         if current_digest != str(planned_row["plan_digest"]):
@@ -596,21 +613,29 @@ def confirm_and_execute_backfill(
             conn.commit()
             raise
 
-        return get_backfill_status(conn, guild_id=guild_str, lookup=str(req_uuid)) or FC27BackfillRequestRecord(
-            request_id=str(req_uuid),
-            status=final_status,
-            destination_key=dest.destination_key,
-            message_kind=dest.message_kind,
-            latest_count=latest_count,
-            planned_count=confirmed_row["planned_count"],
-            delivered_count=summary.planned_or_sent_count,
-            skipped_count=summary.already_delivered_count,
-            failed_count=summary.failed_count,
-            last_error_category=err_cat,
-            created_at=str(confirmed_row["created_at"]),
-            expires_at=str(confirmed_row["expires_at"]),
-            confirmed_at=str(confirmed_row["confirmed_at"]),
-            completed_at=datetime.now(timezone.utc).isoformat(),
+        return (
+            get_backfill_status(
+                conn,
+                guild_id=guild_str,
+                lookup=str(req_uuid),
+                actor_user_id=actor_str,
+            )
+            or FC27BackfillRequestRecord(
+                request_id=str(req_uuid),
+                status=final_status,
+                destination_key=dest.destination_key,
+                message_kind=dest.message_kind,
+                latest_count=latest_count,
+                planned_count=confirmed_row["planned_count"],
+                delivered_count=summary.planned_or_sent_count,
+                skipped_count=summary.already_delivered_count,
+                failed_count=summary.failed_count,
+                last_error_category=err_cat,
+                created_at=str(confirmed_row["created_at"]),
+                expires_at=str(confirmed_row["expires_at"]),
+                confirmed_at=str(confirmed_row["confirmed_at"]),
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
         )
     finally:
         if owns_conn:
@@ -622,10 +647,18 @@ def get_backfill_status(
     *,
     guild_id: str | int,
     lookup: str | None = None,
+    actor_user_id: str | int,
 ) -> FC27BackfillRequestRecord | None:
-    """Retrieve durable status for a backfill request by request_id, token, or latest."""
+    """Retrieve durable status for a backfill request by request_id, token, or latest.
+
+    Actor- and guild-bound: only rows issued to the invoking actor are visible.
+    """
     guild_str = str(guild_id).strip()
     if not guild_str.isdecimal() or int(guild_str) <= 0:
+        return None
+
+    actor_str = str(actor_user_id).strip()
+    if not actor_str.isdecimal() or int(actor_str) <= 0:
         return None
 
     clean_lookup = (lookup or "").strip()
@@ -633,6 +666,8 @@ def get_backfill_status(
         # If not a UUID, try hashing as confirmation token
         if len(clean_lookup) != 64:
             clean_lookup = hash_confirmation_token(clean_lookup)
+
+    actor_digest = hash_actor_id(actor_str)
 
     owns_conn = False
     if isinstance(db_conn_or_uri, psycopg.Connection):
@@ -647,9 +682,9 @@ def get_backfill_status(
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                SELECT * FROM public.fc27_get_backfill_request_status(%s, %s)
+                SELECT * FROM public.fc27_get_backfill_request_status(%s, %s, %s)
                 """,
-                (clean_lookup or None, guild_str),
+                (clean_lookup or None, guild_str, actor_digest),
             )
             row = cur.fetchone()
 

@@ -1064,13 +1064,45 @@ def test_43_multiple_marker_ambiguity_stops(pg_db_migrated: Any) -> None:
 
 
 def test_44_missing_history_stops(pg_db_migrated: Any) -> None:
-    """44. Missing history access fails closed."""
+    """44. Missing history access fails closed: no new send when channel history
+    cannot be read during reconciliation of a prior non-delivered delivery."""
     class NoHistoryTransport(MockLiveDiscordGatewayTransport):
         def find_existing_notification_candidates(self, **kwargs: Any) -> tuple[str, ...]:
             raise PermissionError("Missing Read Message History")
 
     transport = NoHistoryTransport()
-    assert isinstance(transport, MockLiveDiscordGatewayTransport)
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        m_refs = _seed_test_matches(conn, count=1)
+        m_ref = m_refs[0]
+        # Seed an unresolved prior failure delivery row to trigger reconciliation.
+        res = reserve_discord_delivery(
+            conn,
+            match_ref=m_ref,
+            destination_key="formal-backfill-dest",
+            message_kind=MESSAGE_KIND_FORMAL,
+        )
+        assert res.delivery_id is not None
+        record_delivery_failure(conn, res.delivery_id, "PRIOR_FAILURE", m_ref)
+        conn.commit()
+
+        _, raw_token = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            config=_make_bot_config(cooldown=0),
+        )
+        record = confirm_and_execute_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            confirmation_token=raw_token,
+            transport=transport,
+        )
+        assert record.status == "FAILED"
+        assert record.failed_count == 1
+        assert len(transport.sent_messages) == 0
 
 
 def test_45_ambiguous_timeout_does_not_resend(pg_db_migrated: Any) -> None:
@@ -1144,7 +1176,10 @@ def test_47_restart_safe_request_state(pg_db_migrated: Any) -> None:
 
     # Disconnect, reconnect fresh and query status
     with psycopg.connect(pg_db_migrated.admin) as fresh_conn:
-        record = get_backfill_status(fresh_conn, guild_id=TEST_GUILD_ID, lookup=plan.request_id)
+        record = get_backfill_status(
+            fresh_conn, guild_id=TEST_GUILD_ID, lookup=plan.request_id,
+            actor_user_id=OPERATOR_USER_ID,
+        )
         assert record is not None
         assert record.status == "PLANNED"
         assert record.destination_key == "formal-backfill-dest"
@@ -1166,12 +1201,65 @@ def test_48_status_command_sanitized(pg_db_migrated: Any) -> None:
             destination_key="formal-backfill-dest",
             config=_make_bot_config(cooldown=0),
         )
-        record = get_backfill_status(conn, guild_id=TEST_GUILD_ID, lookup=plan.request_id)
+        record = get_backfill_status(
+            conn, guild_id=TEST_GUILD_ID, lookup=plan.request_id,
+            actor_user_id=OPERATOR_USER_ID,
+        )
         assert record is not None
         text = format_status_response(record)
         assert "ext_match_" not in text
         assert "ref:" not in text
         assert TEST_FORMAL_CHANNEL_ID not in text
+
+
+def test_48b_cross_actor_status_lookup_denied(pg_db_migrated: Any) -> None:
+    """48b. Another operator cannot retrieve a request by UUID or token digest."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=2)
+        plan, _ = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            config=_make_bot_config(cooldown=0),
+        )
+
+    other_actor = "999000000000000002"
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        # By UUID: must not surface another operator's request.
+        by_uuid = get_backfill_status(
+            conn,
+            guild_id=TEST_GUILD_ID,
+            lookup=str(plan.request_id),
+            actor_user_id=other_actor,
+        )
+        assert by_uuid is None
+        # By token digest: must not surface another operator's request.
+        by_digest = get_backfill_status(
+            conn,
+            guild_id=TEST_GUILD_ID,
+            lookup=hash_confirmation_token(plan.confirmation_token),
+            actor_user_id=other_actor,
+        )
+        assert by_digest is None
+        # Latest for this actor: must not surface the other operator's request.
+        latest_for_other = get_backfill_status(
+            conn,
+            guild_id=TEST_GUILD_ID,
+            lookup=None,
+            actor_user_id=other_actor,
+        )
+        assert latest_for_other is None
+        # Same request remains visible to the issuing operator.
+        by_owner = get_backfill_status(
+            conn,
+            guild_id=TEST_GUILD_ID,
+            lookup=str(plan.request_id),
+            actor_user_id=OPERATOR_USER_ID,
+        )
+        assert by_owner is not None
+        assert str(by_owner.request_id) == str(plan.request_id)
 
 
 def test_49_audit_row_complete(pg_db_migrated: Any) -> None:

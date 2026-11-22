@@ -1146,6 +1146,16 @@ class FC27DiscordBotService:
             )
         return None
 
+    def _resolve_readonly_conn_or_uri(self, *, required: bool = True) -> Any:
+        resolved = resolve_discord_readonly_uri(strict=False)
+        if resolved:
+            return resolved
+        if required:
+            raise FC27DiscordError(
+                "No dedicated Discord reader connection (`FC27_DISCORD_READER_URI`) configured."
+            )
+        return None
+
     def _sync_match_card_with_channel_adapter(
         self,
         match_detail: ManualMatchDetail,
@@ -3705,6 +3715,7 @@ class FC27DiscordBotService:
                 reader_uri,
                 guild_id=guild_id,
                 lookup=lookup,
+                actor_user_id=user_id,
             )
             if not record:
                 return FC27DiscordResponse(

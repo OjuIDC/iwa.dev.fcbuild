@@ -31,7 +31,14 @@ CREATE TABLE IF NOT EXISTS public.fc27_discord_backfill_requests (
 
     CONSTRAINT fc27_backfill_guild_id_chk CHECK (guild_id ~ '^[0-9]{1,30}$'),
     CONSTRAINT fc27_backfill_token_digest_chk CHECK (token_digest ~ '^[a-f0-9]{64}$'),
-    CONSTRAINT fc27_backfill_actor_digest_chk CHECK (actor_digest ~ '^[a-f0-9]{64}$')
+    CONSTRAINT fc27_backfill_actor_digest_chk CHECK (actor_digest ~ '^[a-f0-9]{64}$'),
+    CONSTRAINT fc27_backfill_counts_chk CHECK (
+        delivered_count >= 0
+        AND skipped_count >= 0
+        AND failed_count >= 0
+        AND planned_count >= 0
+        AND (delivered_count + skipped_count + failed_count) <= latest_count
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_fc27_backfill_requests_guild_status
@@ -334,7 +341,8 @@ REVOKE ALL ON FUNCTION public.fc27_finalize_backfill_request(UUID, TEXT, INT, IN
 -- Procedure to query backfill status safely.
 CREATE OR REPLACE FUNCTION public.fc27_get_backfill_request_status(
     p_lookup TEXT,
-    p_guild_id TEXT
+    p_guild_id TEXT,
+    p_actor_digest TEXT
 )
 RETURNS TABLE (
     request_id UUID,
@@ -357,6 +365,11 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
+    -- If lookup is empty/null, return latest request for this actor+guild.
+    IF p_actor_digest IS NULL OR length(p_actor_digest) != 64 THEN
+        RAISE EXCEPTION 'p_actor_digest must be a 64-character hex digest';
+    END IF;
+
     -- If lookup is empty/null, return latest request for guild
     IF p_lookup IS NULL OR TRIM(p_lookup) = '' THEN
         RETURN QUERY
@@ -376,6 +389,7 @@ BEGIN
                r.completed_at
           FROM public.fc27_discord_backfill_requests r
          WHERE r.guild_id = p_guild_id
+           AND r.actor_digest = p_actor_digest
          ORDER BY r.created_at DESC
          LIMIT 1;
         RETURN;
@@ -400,7 +414,8 @@ BEGIN
                r.completed_at
           FROM public.fc27_discord_backfill_requests r
          WHERE r.request_id = p_lookup::UUID
-           AND r.guild_id = p_guild_id;
+            AND r.guild_id = p_guild_id
+            AND r.actor_digest = p_actor_digest;
         IF FOUND THEN
             RETURN;
         END IF;
@@ -426,9 +441,10 @@ BEGIN
            r.completed_at
       FROM public.fc27_discord_backfill_requests r
      WHERE r.token_digest = p_lookup
-       AND r.guild_id = p_guild_id;
+       AND r.guild_id = p_guild_id
+       AND r.actor_digest = p_actor_digest;
 END;
 $$;
 
-ALTER FUNCTION public.fc27_get_backfill_request_status(TEXT, TEXT) OWNER TO fc27_owner;
-REVOKE ALL ON FUNCTION public.fc27_get_backfill_request_status(TEXT, TEXT) FROM PUBLIC;
+ALTER FUNCTION public.fc27_get_backfill_request_status(TEXT, TEXT, TEXT) OWNER TO fc27_owner;
+REVOKE ALL ON FUNCTION public.fc27_get_backfill_request_status(TEXT, TEXT, TEXT) FROM PUBLIC;
