@@ -30,10 +30,11 @@ Verifies:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
+import logging
 import re
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, LiteralString
 
 import psycopg
 import pytest
@@ -68,6 +69,10 @@ from src.fc27_result_backfill import (
     validate_discord_message_id,
 )
 
+VALIDATION_ERROR_CATEGORY = "FC27BACKFILLVALIDATIONERROR"
+FORMAL_CHANNEL_ID = "22222222222222222"
+GUILD_ID = "11111111111111111"
+
 
 class MockLiveDiscordGatewayTransport:
     """Mock simulating an active live DiscordGatewayChannelTransport."""
@@ -76,8 +81,8 @@ class MockLiveDiscordGatewayTransport:
         self,
         *,
         bot_user_id: str = "1573141508255776858",
-        guild_id: str = "11111111111111111",
-        channel_id: str = "22222222222222222",
+        guild_id: str = GUILD_ID,
+        channel_id: str = FORMAL_CHANNEL_ID,
         is_ready: bool = True,
         is_closed: bool = False,
         base_message_id: int = 1573456332512825400,
@@ -111,6 +116,8 @@ class MockLiveDiscordGatewayTransport:
         self.supports_fetch_after_send = supports_fetch_after_send
         self._seq = 0
         self.sent_messages: list[Any] = []
+        self.fetch_requests: list[tuple[str, str]] = []
+        self.readiness_requests: list[tuple[str, str | None]] = []
         self._snapshots: dict[str, FC27DiscordMessageSnapshot] = {}
 
     @property
@@ -171,6 +178,7 @@ class MockLiveDiscordGatewayTransport:
     def fetch_notification_snapshot(
         self, *, channel_id: str, message_id: str
     ) -> FC27DiscordMessageSnapshot | None:
+        self.fetch_requests.append((channel_id, message_id))
         if self.fetch_timeout:
             raise TimeoutError("Discord fetch timed out")
         if self.fail_fetch:
@@ -180,6 +188,7 @@ class MockLiveDiscordGatewayTransport:
     def verify_destination_readiness(
         self, *, channel_id: str, guild_id: str | None = None
     ) -> None:
+        self.readiness_requests.append((channel_id, guild_id))
         if not self.is_live:
             raise FC27BackfillError("Gateway client not ready")
 
@@ -275,6 +284,39 @@ def _seed_test_matches(
     return match_refs
 
 
+def _fetch_row(
+    conn: psycopg.Connection, query: LiteralString, params: tuple[Any, ...] = ()
+) -> tuple[Any, ...]:
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        row = cur.fetchone()
+    assert row is not None, "query returned no rows"
+    return row
+
+
+def _fetch_scalar(
+    conn: psycopg.Connection, query: LiteralString, params: tuple[Any, ...] = ()
+) -> Any:
+    return _fetch_row(conn, query, params)[0]
+
+
+def _register_destination(
+    conn: psycopg.Connection,
+    *,
+    destination_key: str = "east-coasters-formal",
+    channel_id: str = FORMAL_CHANNEL_ID,
+    message_kind: str = MESSAGE_KIND_FORMAL,
+) -> None:
+    upsert_destination(
+        conn,
+        destination_key=destination_key,
+        guild_id=GUILD_ID,
+        channel_id=channel_id,
+        message_kind=message_kind,
+    )
+    conn.commit()
+
+
 # --- Tests 1-25 ---
 
 @pytest.mark.postgres
@@ -285,14 +327,7 @@ def test_1_dry_run_with_no_transport_succeeds_and_writes_nothing(pg_db) -> None:
         _seed_test_matches(admin_conn, 10)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         summary = run_result_backfill(
             destination_key="east-coasters-formal",
@@ -309,11 +344,10 @@ def test_1_dry_run_with_no_transport_succeeds_and_writes_nothing(pg_db) -> None:
         assert summary.failed_count == 0
         assert summary.provider_requests_executed == 0
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE destination_key = 'east-coasters-formal'"
-            )
-            assert cur.fetchone()[0] == 0
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE destination_key = 'east-coasters-formal'",
+        ) == 0
 
 
 @pytest.mark.postgres
@@ -324,14 +358,7 @@ def test_2_confirm_with_no_transport_fails_before_reservation(pg_db) -> None:
         _seed_test_matches(admin_conn, 10)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         with pytest.raises(
             FC27LiveDiscordTransportRequiredError,
@@ -345,9 +372,7 @@ def test_2_confirm_with_no_transport_fails_before_reservation(pg_db) -> None:
                 dry_run=False,
             )
 
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.fc27_match_discord_deliveries")
-            assert cur.fetchone()[0] == 0
+        assert _fetch_scalar(conn, "SELECT count(*) FROM public.fc27_match_discord_deliveries") == 0
 
 
 @pytest.mark.postgres
@@ -358,14 +383,7 @@ def test_3_confirm_with_synthetic_transport_fails_before_reservation(pg_db) -> N
         _seed_test_matches(admin_conn, 10)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = SyntheticDiscordNotificationTransport()
         with pytest.raises(
@@ -380,17 +398,28 @@ def test_3_confirm_with_synthetic_transport_fails_before_reservation(pg_db) -> N
                 dry_run=False,
             )
 
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.fc27_match_discord_deliveries")
-            assert cur.fetchone()[0] == 0
+        assert _fetch_scalar(conn, "SELECT count(*) FROM public.fc27_match_discord_deliveries") == 0
 
 
-def test_4_production_cli_never_constructs_synthetic_transport(capsys) -> None:
+def test_4_production_cli_never_constructs_synthetic_transport(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """4. Production CLI exits nonzero with LIVE_DISCORD_TRANSPORT_REQUIRED when confirmed."""
+    constructed: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _record_construction(*args: Any, **kwargs: Any) -> None:
+        constructed.append((args, kwargs))
+        raise AssertionError("production CLI must not construct a synthetic transport")
+
+    monkeypatch.setattr(
+        "src.fc27_result_backfill.SyntheticDiscordNotificationTransport",
+        _record_construction,
+    )
     exit_code = main(["--destination", "east-coasters-formal", "--confirm"])
-    assert exit_code != 0
     captured = capsys.readouterr()
+    assert exit_code != 0
     assert "LIVE_DISCORD_TRANSPORT_REQUIRED" in captured.err
+    assert constructed == []
 
 
 @pytest.mark.postgres
@@ -401,19 +430,12 @@ def test_5_synthetic_transport_usable_only_through_explicit_test_injection(pg_db
         _seed_test_matches(admin_conn, 3)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = SyntheticDiscordNotificationTransport(
             base_message_id=1573456332512825400,
             authenticated_bot_user_id="1573141508255776858",
-            default_guild_id="11111111111111111",
+            default_guild_id=GUILD_ID,
         )
 
         # Without explicit allow_test_transport: fails
@@ -448,14 +470,7 @@ def test_6_false_synthetic_message_id_rejected(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         # Returns known synthetic range 880000000000000001
         assert is_synthetic_message_id("880000000000000001") is True
@@ -468,13 +483,9 @@ def test_6_false_synthetic_message_id_rejected(pg_db) -> None:
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] == "FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == VALIDATION_ERROR_CATEGORY
 
 
 @pytest.mark.postgres
@@ -485,14 +496,7 @@ def test_7_empty_message_id_rejected(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(override_message_id="")
         summary = run_result_backfill(
@@ -503,13 +507,9 @@ def test_7_empty_message_id_rejected(pg_db) -> None:
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] == "FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == VALIDATION_ERROR_CATEGORY
 
 
 @pytest.mark.postgres
@@ -522,14 +522,7 @@ def test_8_malformed_discord_message_id_rejected(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(override_message_id="not_a_snowflake_123")
         summary = run_result_backfill(
@@ -540,11 +533,9 @@ def test_8_malformed_discord_message_id_rejected(pg_db) -> None:
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute("SELECT delivery_state FROM public.fc27_match_discord_deliveries")
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] == "FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == VALIDATION_ERROR_CATEGORY
 
 
 @pytest.mark.postgres
@@ -585,14 +576,7 @@ def test_11_live_send_plus_successful_fetch_finalizes_delivered(pg_db) -> None:
         _seed_test_matches(admin_conn, 3)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport()
         summary = run_result_backfill(
@@ -604,12 +588,13 @@ def test_11_live_send_plus_successful_fetch_finalizes_delivered(pg_db) -> None:
         )
         assert summary.planned_or_sent_count == 3
         assert summary.failed_count == 0
+        assert transport.readiness_requests == [(FORMAL_CHANNEL_ID, GUILD_ID)]
+        assert len(transport.fetch_requests) == 3
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'"
-            )
-            assert cur.fetchone()[0] == 3
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 3
 
 
 @pytest.mark.postgres
@@ -620,14 +605,7 @@ def test_12_live_send_plus_fetch_not_found_does_not_finalize_delivered(pg_db) ->
         _seed_test_matches(admin_conn, 3)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(fail_fetch=True)
         summary = run_result_backfill(
@@ -638,17 +616,13 @@ def test_12_live_send_plus_fetch_not_found_does_not_finalize_delivered(pg_db) ->
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'"
-            )
-            assert cur.fetchone()[0] == 0
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row[0] == "FAILED"
-            assert "FETCH_VERIFICATION_FAILED" in row[1]
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 0
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == "FETCH_VERIFICATION_FAILED"
 
 
 @pytest.mark.postgres
@@ -659,14 +633,7 @@ def test_13_live_send_plus_wrong_channel_does_not_finalize_delivered(pg_db) -> N
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(override_channel_id="99999999999999999")
         summary = run_result_backfill(
@@ -677,13 +644,10 @@ def test_13_live_send_plus_wrong_channel_does_not_finalize_delivered(pg_db) -> N
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row[0] == "FAILED"
-            assert row[1] == "FETCH_VERIFICATION_FAILED"
+        assert [channel for channel, _ in transport.fetch_requests] == [FORMAL_CHANNEL_ID]
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == "FETCH_VERIFICATION_FAILED"
 
 
 @pytest.mark.postgres
@@ -694,14 +658,7 @@ def test_14_live_send_plus_wrong_guild_does_not_finalize_delivered(pg_db) -> Non
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(override_guild_id="99999999999999999")
         summary = run_result_backfill(
@@ -712,13 +669,9 @@ def test_14_live_send_plus_wrong_guild_does_not_finalize_delivered(pg_db) -> Non
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row[0] == "FAILED"
-            assert row[1] == "FETCH_VERIFICATION_FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == "FETCH_VERIFICATION_FAILED"
 
 
 @pytest.mark.postgres
@@ -729,14 +682,7 @@ def test_15_live_send_plus_wrong_author_does_not_finalize_delivered(pg_db) -> No
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(override_author_id="99999999999999999")
         summary = run_result_backfill(
@@ -747,13 +693,9 @@ def test_15_live_send_plus_wrong_author_does_not_finalize_delivered(pg_db) -> No
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row[0] == "FAILED"
-            assert row[1] == "FETCH_VERIFICATION_FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == "FETCH_VERIFICATION_FAILED"
 
 
 @pytest.mark.postgres
@@ -764,14 +706,7 @@ def test_16_live_send_plus_missing_match_marker_does_not_finalize_delivered(pg_d
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(strip_markers=True)
         summary = run_result_backfill(
@@ -782,13 +717,9 @@ def test_16_live_send_plus_missing_match_marker_does_not_finalize_delivered(pg_d
             dry_run=False,
         )
         assert summary.failed_count == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries"
-            )
-            row = cur.fetchone()
-            assert row[0] == "FAILED"
-            assert row[1] == "FETCH_VERIFICATION_FAILED"
+        row = _fetch_row(conn, "SELECT delivery_state, last_error_category FROM public.fc27_match_discord_deliveries")
+        assert row[0] == "FAILED"
+        assert row[1] == "FETCH_VERIFICATION_FAILED"
 
 
 @pytest.mark.postgres
@@ -799,14 +730,7 @@ def test_17_ambiguous_timeout_does_not_resend_blindly(pg_db) -> None:
         _seed_test_matches(admin_conn, 5)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport(fetch_timeout=True)
         summary = run_result_backfill(
@@ -819,11 +743,10 @@ def test_17_ambiguous_timeout_does_not_resend_blindly(pg_db) -> None:
         # Should stop after first failure and NOT continue to remaining 4 matches
         assert summary.failed_count == 1
         assert len(transport.sent_messages) == 1
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'"
-            )
-            assert cur.fetchone()[0] == 0
+        assert _fetch_scalar(
+            conn,
+            "SELECT count(*) FROM public.fc27_match_discord_deliveries WHERE delivery_state = 'DELIVERED'",
+        ) == 0
 
 
 @pytest.mark.postgres
@@ -834,14 +757,7 @@ def test_18_same_destination_idempotency_still_prevents_duplicates(pg_db) -> Non
         _seed_test_matches(admin_conn, 3)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport()
         summary_1 = run_result_backfill(
@@ -874,21 +790,8 @@ def test_19_other_destination_delivery_remains_independent(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="dest-alpha",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        upsert_destination(
-            conn,
-            destination_key="dest-beta",
-            guild_id="11111111111111111",
-            channel_id="33333333333333333",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn, destination_key="dest-alpha", channel_id=FORMAL_CHANNEL_ID)
+        _register_destination(conn, destination_key="dest-beta", channel_id="33333333333333333")
 
         transport = MockLiveDiscordGatewayTransport()
         summary_a = run_result_backfill(
@@ -919,21 +822,13 @@ def test_20_formal_and_compact_backfills_remain_independent(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        upsert_destination(
+        _register_destination(conn, destination_key="east-coasters-formal")
+        _register_destination(
             conn,
             destination_key="east-coasters-compact",
-            guild_id="11111111111111111",
             channel_id="33333333333333333",
             message_kind=MESSAGE_KIND_TEAM_CHAT,
         )
-        conn.commit()
 
         transport = MockLiveDiscordGatewayTransport()
         summary_formal = run_result_backfill(
@@ -960,8 +855,8 @@ def test_20_formal_and_compact_backfills_remain_independent(pg_db) -> None:
                 "SELECT message_kind, count(*) FROM public.fc27_match_discord_deliveries GROUP BY message_kind"
             )
             rows = dict(cur.fetchall())
-            assert rows[MESSAGE_KIND_FORMAL] == 2
-            assert rows[MESSAGE_KIND_TEAM_CHAT] == 2
+        assert rows[MESSAGE_KIND_FORMAL] == 2
+        assert rows[MESSAGE_KIND_TEAM_CHAT] == 2
 
 
 @pytest.mark.postgres
@@ -972,14 +867,7 @@ def test_21_provider_requests_remain_zero(pg_db) -> None:
         _seed_test_matches(admin_conn, 2)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         transport = MockLiveDiscordGatewayTransport()
         summary = run_result_backfill(
@@ -992,8 +880,21 @@ def test_21_provider_requests_remain_zero(pg_db) -> None:
         assert summary.provider_requests_executed == 0
 
 
-def test_22_no_raw_ids_payloads_aliases_or_credentials_logged(caplog) -> None:
+def test_22_no_raw_ids_payloads_aliases_or_credentials_logged(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
     """22. No raw IDs, payloads, aliases, or credentials logged."""
+    raw_destination = "987654321098765432"
+    with caplog.at_level(logging.DEBUG):
+        exit_code = main(["--destination", raw_destination])
+    captured = capsys.readouterr()
+    emitted = captured.out + captured.err + caplog.text
+
+    assert exit_code != 0
+    assert "Raw numeric channel ID" in captured.err
+    assert raw_destination not in emitted
+    assert not re.search(r"\b[0-9]{15,22}\b", emitted)
+
     summary = FC27ResultBackfillSummary(
         destination_key="east-coasters-analytics",
         message_kind="FORMAL_RESULT",
@@ -1041,20 +942,10 @@ def test_25_incident_regression_transport_none_confirm_true_leaves_deliveries_un
         _seed_test_matches(admin_conn, 10)
 
     with psycopg.connect(pg_db.match_results_writer) as conn:
-        upsert_destination(
-            conn,
-            destination_key="east-coasters-formal",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn.commit()
+        _register_destination(conn)
 
         # Before: 0 deliveries
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.fc27_match_discord_deliveries")
-            count_before = cur.fetchone()[0]
-            assert count_before == 0
+        assert _fetch_scalar(conn, "SELECT count(*) FROM public.fc27_match_discord_deliveries") == 0
 
         # Attempt confirmed execution without transport
         with pytest.raises(
@@ -1070,10 +961,7 @@ def test_25_incident_regression_transport_none_confirm_true_leaves_deliveries_un
             )
 
         # After: count MUST remain exactly 0 (no false DELIVERED rows persisted)
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.fc27_match_discord_deliveries")
-            count_after = cur.fetchone()[0]
-            assert count_after == 0
+        assert _fetch_scalar(conn, "SELECT count(*) FROM public.fc27_match_discord_deliveries") == 0
 
 
 @pytest.mark.postgres
@@ -1082,22 +970,14 @@ def test_backfill_single_flight_advisory_lock(pg_db) -> None:
     migrate(pg_db.migrator)
 
     with psycopg.connect(pg_db.match_results_writer) as conn1, psycopg.connect(pg_db.match_results_writer) as conn2:
-        upsert_destination(
-            conn1,
-            destination_key="locked-dest",
-            guild_id="11111111111111111",
-            channel_id="22222222222222222",
-            message_kind=MESSAGE_KIND_FORMAL,
-        )
-        conn1.commit()
+        _register_destination(conn1, destination_key="locked-dest")
 
         # Hold lock on conn1
-        with conn1.cursor() as cur:
-            cur.execute(
-                "SELECT pg_try_advisory_lock(hashtext(%s), hashtext(%s))",
-                (BACKFILL_ADVISORY_NAMESPACE, "locked-dest"),
-            )
-            assert cur.fetchone()[0] is True
+        assert _fetch_scalar(
+            conn1,
+            "SELECT pg_try_advisory_lock(hashtext(%s), hashtext(%s))",
+            (BACKFILL_ADVISORY_NAMESPACE, "locked-dest"),
+        ) is True
 
         # Second backfill attempt on conn2 fails fast with lock busy error
         with pytest.raises(FC27BackfillLockBusyError, match="actively held by another process"):
@@ -1108,12 +988,11 @@ def test_backfill_single_flight_advisory_lock(pg_db) -> None:
             )
 
         # Release lock on conn1
-        with conn1.cursor() as cur:
-            cur.execute(
-                "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s))",
-                (BACKFILL_ADVISORY_NAMESPACE, "locked-dest"),
-            )
-            assert cur.fetchone()[0] is True
+        assert _fetch_scalar(
+            conn1,
+            "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s))",
+            (BACKFILL_ADVISORY_NAMESPACE, "locked-dest"),
+        ) is True
 
 
 @pytest.mark.postgres

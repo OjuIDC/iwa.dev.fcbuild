@@ -205,7 +205,7 @@ def run_result_backfill(
 
     if re.fullmatch(r"^[0-9]{15,22}$", clean_dest_key):
         raise FC27BackfillValidationError(
-            f"Raw numeric channel ID '{clean_dest_key}' cannot be used as destination. Require a preconfigured destination key."
+            "Raw numeric channel ID cannot be used as destination. Require a preconfigured destination key."
         )
 
     if latest < MIN_LATEST_COUNT or latest > MAX_LATEST_COUNT:
