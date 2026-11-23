@@ -64,8 +64,7 @@ Verifies all 58 matrix scenarios:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-from datetime import UTC, datetime, timedelta
+import inspect
 from typing import Any
 
 import psycopg
@@ -76,17 +75,13 @@ from src.fc27_discord_backfill_control import (
     FC27BackfillAuthzError,
     FC27BackfillCooldownActiveError,
     FC27BackfillLockBusyError,
-    FC27BackfillPlan,
     FC27BackfillPlanChangedError,
-    FC27BackfillRequestRecord,
     FC27BackfillTokenExpiredError,
     FC27BackfillValidationError,
-    compute_plan_digest,
     confirm_and_execute_backfill,
     format_plan_response,
     format_status_response,
     get_backfill_status,
-    hash_actor_id,
     hash_confirmation_token,
     is_backfill_operator,
     plan_backfill,
@@ -125,6 +120,12 @@ ADMIN_ROLE_ID = "77777777777777771"
 BACKFILL_OP_ROLE_ID = "77777777777777772"
 IDENTITY_OP_ROLE_ID = "77777777777777773"
 MEMBER_ROLE_ID = "77777777777777774"
+SVC_ACCT_ROLE_ID = "77777777777777775"
+MANAGER_ROLE_ID = "77777777777777776"
+CAPTAIN_ROLE_ID = "77777777777777777"
+MANAGED_BOT_ROLE_ID = "77777777777777778"
+CROSS_GUILD_ROLE_ID = "77777777777777779"
+DEDICATED_ADMIN_ROLE_ID = "77777777777777781"
 
 
 def _make_bot_config(
@@ -191,43 +192,348 @@ def test_01_feature_disabled_by_default() -> None:
         guild_id=TEST_GUILD_ID,
         channel_id=TEST_FORMAL_CHANNEL_ID,
         user_id=OPERATOR_USER_ID,
-        is_admin=True,
+        user_role_ids=[BACKFILL_OP_ROLE_ID],
+        destination="formal-backfill-dest",
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+    disabled = FC27DiscordBotService(_make_bot_config(backfill_enabled=False))
+    resp = disabled.handle_backfill_plan(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=[BACKFILL_OP_ROLE_ID],
         destination="formal-backfill-dest",
     )
     assert resp.status == "ERROR"
     assert "disabled" in resp.content.lower()
 
 
-def test_02_administrator_authorized() -> None:
-    """2. Administrator permission and configured Admin role authorized."""
+def test_02_dedicated_operator_authorized_general_admin_denied() -> None:
+    """2. Only the dedicated Backfill Operator allowlist authorizes live backfill."""
     cfg = _make_bot_config()
-    assert is_backfill_operator([], cfg, is_admin=True) is True
-    assert is_backfill_operator([ADMIN_ROLE_ID], cfg, is_admin=False) is True
+    assert is_backfill_operator([BACKFILL_OP_ROLE_ID], cfg) is True
+    assert is_backfill_operator([ADMIN_ROLE_ID], cfg) is False
 
 
 def test_03_configured_backfill_operator_authorized() -> None:
     """3. Configured Backfill Operator role is authorized."""
     cfg = _make_bot_config()
-    assert is_backfill_operator([BACKFILL_OP_ROLE_ID], cfg, is_admin=False) is True
+    assert is_backfill_operator([BACKFILL_OP_ROLE_ID], cfg) is True
 
 
 def test_04_identity_operator_alone_denied() -> None:
     """4. Identity Operator role alone is denied."""
     cfg = _make_bot_config()
-    assert is_backfill_operator([IDENTITY_OP_ROLE_ID], cfg, is_admin=False) is False
+    assert is_backfill_operator([IDENTITY_OP_ROLE_ID], cfg) is False
 
 
 def test_05_role_name_alone_denied() -> None:
     """5. Role name alone or unconfigured Administrator name is denied."""
     cfg = _make_bot_config()
-    assert is_backfill_operator(["Administrator", "[GDev]"], cfg, is_admin=False) is False
+    assert is_backfill_operator(["Administrator", "[GDev]"], cfg) is False
 
 
 def test_06_empty_role_configuration_fails_closed() -> None:
-    """6. Empty role configuration fails closed."""
-    cfg = _make_bot_config(admin_roles=frozenset(), backfill_op_roles=frozenset())
-    assert is_backfill_operator([BACKFILL_OP_ROLE_ID], cfg, is_admin=False) is False
-    assert is_backfill_operator([], cfg, is_admin=False) is False
+    """6. Empty dedicated allowlist fails closed for every caller."""
+    cfg = _make_bot_config(admin_roles=frozenset({ADMIN_ROLE_ID}), backfill_op_roles=frozenset())
+    assert is_backfill_operator([BACKFILL_OP_ROLE_ID], cfg) is False
+    assert is_backfill_operator([ADMIN_ROLE_ID], cfg) is False
+    assert is_backfill_operator([], cfg) is False
+
+
+def test_06a_general_admin_svc_acct_equivalent_denied() -> None:
+    """Regression for the prior defect: a general Admin role outside the dedicated list is denied."""
+    cfg = _make_bot_config(
+        admin_roles=frozenset({SVC_ACCT_ROLE_ID}),
+        backfill_op_roles=frozenset({BACKFILL_OP_ROLE_ID}),
+    )
+    assert is_backfill_operator([SVC_ACCT_ROLE_ID], cfg) is False
+
+
+def test_06b_discord_administrator_flag_is_not_an_authorization_input() -> None:
+    """Discord Administrator permission cannot authorize backfill: no such input exists on the path."""
+    for fn in (
+        is_backfill_operator,
+        FC27DiscordBotService.handle_backfill_plan,
+        FC27DiscordBotService.handle_backfill_status,
+        FC27DiscordBotService.handle_backfill_confirm,
+    ):
+        assert "is_admin" not in inspect.signature(fn).parameters
+    assert is_backfill_operator([], _make_bot_config()) is False
+
+
+_BACKFILL_HANDLER_NAMES = (
+    "handle_backfill_plan",
+    "handle_backfill_confirm",
+    "handle_backfill_status",
+)
+
+_DENIED_ROLE_SETS: dict[str, list[str]] = {
+    "general_admin": [ADMIN_ROLE_ID],
+    "svc_acct_equivalent_admin": [SVC_ACCT_ROLE_ID],
+    "general_allowed_role": [MEMBER_ROLE_ID],
+    "manager_role": [MANAGER_ROLE_ID],
+    "captain_role": [CAPTAIN_ROLE_ID],
+    "identity_operator": [IDENTITY_OP_ROLE_ID],
+    "managed_bot_role": [MANAGED_BOT_ROLE_ID],
+    "cross_guild_admin_role": [CROSS_GUILD_ROLE_ID],
+    "role_name_text": ["FC27 Backfill Operator", "Administrator"],
+    "no_roles": [],
+}
+
+
+def _authz_config(**overrides: Any) -> FC27DiscordBotConfig:
+    cfg = _make_bot_config(
+        admin_roles=frozenset({ADMIN_ROLE_ID, SVC_ACCT_ROLE_ID, CROSS_GUILD_ROLE_ID}),
+        identity_op_roles=frozenset({IDENTITY_OP_ROLE_ID}),
+        backfill_op_roles=frozenset({BACKFILL_OP_ROLE_ID}),
+        **overrides,
+    )
+    return cfg.model_copy(
+        update={
+            "allowed_role_ids": frozenset({MEMBER_ROLE_ID, MANAGED_BOT_ROLE_ID, ADMIN_ROLE_ID}),
+            "manager_role_ids": frozenset({MANAGER_ROLE_ID}),
+            "captain_role_ids": frozenset({CAPTAIN_ROLE_ID}),
+        }
+    )
+
+
+def _call_backfill_handler(svc: FC27DiscordBotService, handler_name: str, roles: list[str]) -> Any:
+    if handler_name == "handle_backfill_plan":
+        return svc.handle_backfill_plan(
+            guild_id=TEST_GUILD_ID,
+            channel_id=TEST_FORMAL_CHANNEL_ID,
+            user_id=OPERATOR_USER_ID,
+            user_role_ids=roles,
+            destination="formal-backfill-dest",
+        )
+    if handler_name == "handle_backfill_confirm":
+        return svc.handle_backfill_confirm(
+            guild_id=TEST_GUILD_ID,
+            channel_id=TEST_FORMAL_CHANNEL_ID,
+            user_id=OPERATOR_USER_ID,
+            user_role_ids=roles,
+            confirmation_token="synthetic-denied-token",
+        )
+    return svc.handle_backfill_status(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=roles,
+    )
+
+
+def _count_rows(admin_uri: str, sql: str) -> int:
+    with psycopg.connect(admin_uri) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return int(cur.fetchone()[0])
+
+
+def _denial_snapshot(admin_uri: str) -> tuple[int, int, int]:
+    return (
+        _count_rows(admin_uri, "SELECT count(*) FROM public.fc27_discord_backfill_requests"),
+        _count_rows(admin_uri, "SELECT count(*) FROM public.fc27_match_discord_deliveries"),
+        _count_rows(admin_uri, "SELECT count(*) FROM public.fc27_provider_request_attempts"),
+    )
+
+
+@pytest.mark.parametrize("handler_name", _BACKFILL_HANDLER_NAMES)
+def test_empty_dedicated_allowlist_denies_every_handler(pg_db_migrated: Any, handler_name: str) -> None:
+    """Empty dedicated allowlist denies plan, confirm, and status with zero side effects."""
+    admin_uri = pg_db_migrated.admin
+    cfg = _make_bot_config(admin_roles=frozenset({ADMIN_ROLE_ID}), backfill_op_roles=frozenset())
+    svc = FC27DiscordBotService(cfg)
+    transport = MockLiveDiscordGatewayTransport()
+    svc._dispatch_transport = transport
+    with psycopg.connect(admin_uri) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=2)
+    before = _denial_snapshot(admin_uri)
+    roles = [ADMIN_ROLE_ID, BACKFILL_OP_ROLE_ID]
+    resp = _call_backfill_handler(svc, handler_name, roles)
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+    assert len(transport.sent_messages) == 0
+    assert _denial_snapshot(admin_uri) == before
+
+
+@pytest.mark.parametrize("handler_name", _BACKFILL_HANDLER_NAMES)
+@pytest.mark.parametrize("case_name", sorted(_DENIED_ROLE_SETS))
+def test_denied_callers_get_ephemeral_denial_with_no_side_effects(
+    pg_db_migrated: Any, handler_name: str, case_name: str
+) -> None:
+    """Non-dedicated callers are denied ephemerally with zero audit rows, reservations, messages, or provider requests."""
+    admin_uri = pg_db_migrated.admin
+    roles = _DENIED_ROLE_SETS[case_name]
+    cfg = _authz_config()
+    assert is_backfill_operator(roles, cfg) is False
+    svc = FC27DiscordBotService(cfg)
+    transport = MockLiveDiscordGatewayTransport()
+    svc._dispatch_transport = transport
+    with psycopg.connect(admin_uri) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=2)
+    before = _denial_snapshot(admin_uri)
+    resp = _call_backfill_handler(svc, handler_name, roles)
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+    assert len(transport.sent_messages) == 0
+    assert _denial_snapshot(admin_uri) == before
+
+
+def test_dedicated_allowlist_is_numeric_and_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dedicated allowlist parses only numeric snowflakes and deduplicates them."""
+    monkeypatch.setenv(
+        "FC27_DISCORD_BACKFILL_OPERATOR_ROLE_IDS",
+        f"{BACKFILL_OP_ROLE_ID}, {BACKFILL_OP_ROLE_ID},{DEDICATED_ADMIN_ROLE_ID}",
+    )
+    assert settings.get_fc27_discord_backfill_operator_role_ids(strict=True) == frozenset(
+        {BACKFILL_OP_ROLE_ID, DEDICATED_ADMIN_ROLE_ID}
+    )
+    monkeypatch.setenv("FC27_DISCORD_BACKFILL_OPERATOR_ROLE_IDS", "Administrator")
+    with pytest.raises(settings.ConfigError):
+        settings.get_fc27_discord_backfill_operator_role_ids(strict=True)
+
+
+@pytest.mark.parametrize("dedicated_role", [DEDICATED_ADMIN_ROLE_ID, BACKFILL_OP_ROLE_ID])
+def test_dedicated_allowlist_entries_authorize_plan(
+    pg_db_migrated: Any, monkeypatch: pytest.MonkeyPatch, dedicated_role: str
+) -> None:
+    """Either entry of a two-role dedicated allowlist authorizes a plan."""
+    admin_uri = pg_db_migrated.admin
+    cfg = _make_bot_config(
+        backfill_op_roles=frozenset({DEDICATED_ADMIN_ROLE_ID, BACKFILL_OP_ROLE_ID}),
+        cooldown=0,
+    )
+    assert is_backfill_operator([dedicated_role], cfg) is True
+    with psycopg.connect(admin_uri) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=2)
+    svc = FC27DiscordBotService(cfg)
+    monkeypatch.setattr(svc, "_resolve_writer_conn_or_uri", lambda required=False: admin_uri)
+    resp = svc.handle_backfill_plan(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=[dedicated_role],
+        destination="formal-backfill-dest",
+        latest=2,
+    )
+    assert resp.status == "OK"
+    assert resp.ephemeral is True
+    assert _count_rows(admin_uri, "SELECT count(*) FROM public.fc27_discord_backfill_requests") == 1
+
+
+def test_dedicated_authorization_is_rechecked_on_confirm_and_status(
+    pg_db_migrated: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing the caller from the dedicated allowlist after planning blocks confirm and status."""
+    admin_uri = pg_db_migrated.admin
+    authorized_cfg = _make_bot_config(cooldown=0)
+    with psycopg.connect(admin_uri) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=2)
+        plan, raw_token = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            config=authorized_cfg,
+        )
+
+    removed_svc = FC27DiscordBotService(
+        _make_bot_config(backfill_op_roles=frozenset({DEDICATED_ADMIN_ROLE_ID}), cooldown=0)
+    )
+    transport = MockLiveDiscordGatewayTransport()
+    removed_svc._dispatch_transport = transport
+    monkeypatch.setattr(removed_svc, "_resolve_readonly_conn_or_uri", lambda: admin_uri)
+    before = _denial_snapshot(admin_uri)
+
+    confirm = removed_svc.handle_backfill_confirm(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=[BACKFILL_OP_ROLE_ID],
+        confirmation_token=raw_token,
+    )
+    assert confirm.status == "REJECTED_UNAUTHORIZED"
+    assert confirm.ephemeral is True
+    status = removed_svc.handle_backfill_status(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=[BACKFILL_OP_ROLE_ID],
+        lookup=str(plan.request_id),
+    )
+    assert status.status == "REJECTED_UNAUTHORIZED"
+    assert len(transport.sent_messages) == 0
+    assert _denial_snapshot(admin_uri) == before
+    with psycopg.connect(admin_uri) as conn:
+        record = get_backfill_status(
+            conn,
+            guild_id=TEST_GUILD_ID,
+            lookup=str(plan.request_id),
+            actor_user_id=OPERATOR_USER_ID,
+        )
+    assert record is not None
+    assert record.status == "PLANNED"
+
+    authorized_svc = FC27DiscordBotService(authorized_cfg)
+    monkeypatch.setattr(authorized_svc, "_resolve_readonly_conn_or_uri", lambda: admin_uri)
+    allowed = authorized_svc.handle_backfill_status(
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_FORMAL_CHANNEL_ID,
+        user_id=OPERATOR_USER_ID,
+        user_role_ids=[BACKFILL_OP_ROLE_ID],
+        lookup=str(plan.request_id),
+    )
+    assert allowed.status == "OK"
+
+
+def test_feature_disabled_registers_no_backfill_group_and_keeps_fourteen_guild_commands() -> None:
+    """With the feature disabled, /backfillresults is not registered and the guild count stays at 14."""
+    import discord
+    from discord import app_commands
+
+    intents = discord.Intents.none()
+    intents.guilds = True
+    cfg = _make_bot_config(backfill_enabled=False)
+    svc = FC27DiscordBotService(cfg)
+    client = discord.Client(intents=intents, application_id=int(cfg.application_id))
+    tree = app_commands.CommandTree(client)
+    summary = register_fc27_application_commands(
+        tree,
+        svc,
+        allowed_guild_ids=cfg.allowed_guild_ids,
+        discord_module=discord,
+        app_commands_module=app_commands,
+    )
+    assert not summary.backfill_subcommands
+    assert summary.total_guild_top_level_commands == 14
+    assert summary.global_command_names == ()
+
+
+def test_general_administration_and_writer_gating_unchanged() -> None:
+    """General Admin, Manager/Captain, and Identity Operator match-results gating is unaffected."""
+    svc = FC27DiscordBotService(_authz_config())
+    gate = svc._match_results_write_authorized
+
+    assert gate("deletematch", user_role_ids=[ADMIN_ROLE_ID], is_admin=False) is True
+    assert gate("deletematch", user_role_ids=[SVC_ACCT_ROLE_ID], is_admin=False) is True
+    assert gate("deletematch", user_role_ids=[], is_admin=True) is True
+    for roles in ([MANAGER_ROLE_ID], [CAPTAIN_ROLE_ID], [IDENTITY_OP_ROLE_ID], [BACKFILL_OP_ROLE_ID]):
+        assert gate("deletematch", user_role_ids=roles, is_admin=False) is False
+
+    assert gate("result", user_role_ids=[MANAGER_ROLE_ID], is_admin=False) is True
+    assert gate("result", user_role_ids=[CAPTAIN_ROLE_ID], is_admin=False) is True
+    assert gate("result", user_role_ids=[IDENTITY_OP_ROLE_ID], is_admin=False) is False
+    assert gate("result", user_role_ids=[BACKFILL_OP_ROLE_ID], is_admin=False) is False
+
+    assert gate("unresolvedplayers", user_role_ids=[IDENTITY_OP_ROLE_ID], is_admin=False) is True
+    assert gate("unresolvedplayers", user_role_ids=[MANAGER_ROLE_ID], is_admin=False) is False
 
 
 # ---------------------------------------------------------------------------

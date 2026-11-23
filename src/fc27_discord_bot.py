@@ -3607,7 +3607,6 @@ class FC27DiscordBotService:
         channel_id: str | int,
         user_id: str | int,
         user_role_ids: Iterable[str | int] | None = None,
-        is_admin: bool = False,
         destination: str,
         latest: int = 10,
         message_kind: Optional[str] = None,
@@ -3622,7 +3621,7 @@ class FC27DiscordBotService:
             plan_backfill,
         )
 
-        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+        if not is_backfill_operator(user_role_ids, self._config):
             return FC27DiscordResponse(
                 command="backfill_plan",
                 status="REJECTED_UNAUTHORIZED",
@@ -3685,7 +3684,6 @@ class FC27DiscordBotService:
         channel_id: str | int,
         user_id: str | int,
         user_role_ids: Iterable[str | int] | None = None,
-        is_admin: bool = False,
         lookup: str | None = None,
     ) -> FC27DiscordResponse:
         from src.fc27_discord_backfill_control import (
@@ -3694,7 +3692,7 @@ class FC27DiscordBotService:
             is_backfill_operator,
         )
 
-        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+        if not is_backfill_operator(user_role_ids, self._config):
             return FC27DiscordResponse(
                 command="backfill_status",
                 status="REJECTED_UNAUTHORIZED",
@@ -3741,7 +3739,6 @@ class FC27DiscordBotService:
         channel_id: str | int,
         user_id: str | int,
         user_role_ids: Iterable[str | int] | None = None,
-        is_admin: bool = False,
         confirmation_token: str,
     ) -> FC27DiscordResponse:
         from src.fc27_discord_backfill_control import (
@@ -3754,7 +3751,7 @@ class FC27DiscordBotService:
             is_backfill_operator,
         )
 
-        if not is_backfill_operator(user_role_ids, self._config, is_admin=is_admin):
+        if not is_backfill_operator(user_role_ids, self._config):
             return FC27DiscordResponse(
                 command="backfill_confirm",
                 status="REJECTED_UNAUTHORIZED",
@@ -4343,7 +4340,6 @@ def register_fc27_application_commands(
             uid = str(getattr(user, "id", "") or "").strip()
             role_objs = getattr(user, "roles", []) or []
             role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
-            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
 
             resp = await asyncio.to_thread(
                 bot_service.handle_backfill_plan,
@@ -4351,7 +4347,6 @@ def register_fc27_application_commands(
                 channel_id=cid,
                 user_id=uid,
                 user_role_ids=role_ids,
-                is_admin=is_admin,
                 destination=destination,
                 latest=latest,
                 message_kind=message_kind,
@@ -4373,7 +4368,6 @@ def register_fc27_application_commands(
             uid = str(getattr(user, "id", "") or "").strip()
             role_objs = getattr(user, "roles", []) or []
             role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
-            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
 
             resp = await asyncio.to_thread(
                 bot_service.handle_backfill_confirm,
@@ -4381,7 +4375,6 @@ def register_fc27_application_commands(
                 channel_id=cid,
                 user_id=uid,
                 user_role_ids=role_ids,
-                is_admin=is_admin,
                 confirmation_token=confirmation_token,
             )
             await interaction.followup.send(content=resp.content, ephemeral=True)
@@ -4401,7 +4394,6 @@ def register_fc27_application_commands(
             uid = str(getattr(user, "id", "") or "").strip()
             role_objs = getattr(user, "roles", []) or []
             role_ids = [str(getattr(r, "id", "") or "") for r in role_objs]
-            is_admin = bool(getattr(getattr(user, "guild_permissions", None), "administrator", False))
 
             resp = await asyncio.to_thread(
                 bot_service.handle_backfill_status,
@@ -4409,7 +4401,6 @@ def register_fc27_application_commands(
                 channel_id=cid,
                 user_id=uid,
                 user_role_ids=role_ids,
-                is_admin=is_admin,
                 lookup=request_id,
             )
             await interaction.followup.send(content=resp.content, ephemeral=True)
