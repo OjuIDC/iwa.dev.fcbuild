@@ -1048,3 +1048,165 @@ def test_worker_poll_max_requests_forwarding_and_default(tmp_path):
         ]
         == "3"
     )
+
+
+ROLE_FORWARD_KEYS = (
+    "FC27_DISCORD_ADMIN_ROLE_IDS",
+    "FC27_DISCORD_MANAGER_ROLE_IDS",
+    "FC27_DISCORD_CAPTAIN_ROLE_IDS",
+)
+SYNTHETIC_SNOWFLAKE_PREFIX = "9000000000000000"
+SYNTHETIC_ROLE_VALUES = {
+    "FC27_DISCORD_ADMIN_ROLE_IDS": (
+        SYNTHETIC_SNOWFLAKE_PREFIX + "01,"
+        + SYNTHETIC_SNOWFLAKE_PREFIX + "02"
+    ),
+    "FC27_DISCORD_MANAGER_ROLE_IDS": (
+        SYNTHETIC_SNOWFLAKE_PREFIX + "03,"
+        + SYNTHETIC_SNOWFLAKE_PREFIX + "04"
+    ),
+    "FC27_DISCORD_CAPTAIN_ROLE_IDS": (
+        SYNTHETIC_SNOWFLAKE_PREFIX + "05,"
+        + SYNTHETIC_SNOWFLAKE_PREFIX + "06"
+    ),
+}
+
+
+def _discord_render(tmp_path, values=None):
+    values = dict(values or {})
+    drop = tuple(set(ROLE_FORWARD_KEYS) | set(values))
+    env = _env_file(tmp_path, drop=drop)
+    if values:
+        extra = "".join(f"{k}={v}\n" for k, v in values.items())
+        env.write_text(env.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    out = _config(
+        env,
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.community-worker.yml",
+        "-f",
+        "docker-compose.discord.yml",
+        "--profile",
+        "bootstrap",
+        "--profile",
+        "fc27-polling",
+        "--profile",
+        "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def _bot_env(model):
+    return model["services"]["fc27-discord-bot"].get("environment") or {}
+
+
+@pytest.mark.parametrize("key", ROLE_FORWARD_KEYS)
+def test_protected_role_value_reaches_discord_bot(tmp_path, key):
+    model = _discord_render(tmp_path, {key: SYNTHETIC_ROLE_VALUES[key]})
+    assert _bot_env(model)[key] == SYNTHETIC_ROLE_VALUES[key]
+
+
+@pytest.mark.parametrize("key", ROLE_FORWARD_KEYS)
+def test_missing_role_value_resolves_to_empty(tmp_path, key):
+    model = _discord_render(tmp_path)
+    assert _bot_env(model).get(key, "") == ""
+
+
+@pytest.mark.parametrize(
+    "service",
+    [
+        "fc27-community-worker",
+        "postgres",
+        "redis",
+        "db-migrate",
+        "db-bootstrap",
+    ],
+)
+def test_role_values_do_not_reach_other_services(tmp_path, service):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    env = model["services"][service].get("environment") or {}
+    for key in ROLE_FORWARD_KEYS:
+        assert key not in env, f"{service} receives {key}"
+
+
+def test_role_values_reach_no_service_except_discord_bot(tmp_path):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    for name, svc in model["services"].items():
+        if name == "fc27-discord-bot":
+            continue
+        env = svc.get("environment") or {}
+        for key in ROLE_FORWARD_KEYS:
+            assert key not in env, f"{name} receives {key}"
+
+
+def test_numeric_comma_separated_role_lists_remain_intact(tmp_path):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    env = _bot_env(model)
+    for key, value in SYNTHETIC_ROLE_VALUES.items():
+        assert env[key] == value
+        parts = env[key].split(",")
+        assert len(parts) == 2
+        assert all(p.isdecimal() for p in parts)
+
+
+def test_role_forwarding_tests_use_only_synthetic_snowflakes():
+    source = Path(__file__).read_text(encoding="utf-8")
+    for literal in re.findall(r"(?<!\d)\d{17,20}(?!\d)", source):
+        assert literal.startswith(SYNTHETIC_SNOWFLAKE_PREFIX), (
+            "non-synthetic snowflake literal in test source"
+        )
+
+
+def test_identity_operator_forwarding_remains_intact(tmp_path):
+    key = "FC27_DISCORD_IDENTITY_OPERATOR_ROLE_IDS"
+    value = SYNTHETIC_SNOWFLAKE_PREFIX + "41"
+    model = _discord_render(tmp_path, {key: value, **SYNTHETIC_ROLE_VALUES})
+    assert _bot_env(model)[key] == value
+
+
+def test_backfill_operator_forwarding_remains_intact(tmp_path):
+    key = "FC27_DISCORD_BACKFILL_OPERATOR_ROLE_IDS"
+    value = SYNTHETIC_SNOWFLAKE_PREFIX + "51"
+    model = _discord_render(tmp_path, {key: value})
+    assert _bot_env(model)[key] == value
+
+
+def test_destination_forwarding_remains_intact(tmp_path):
+    results = SYNTHETIC_SNOWFLAKE_PREFIX + "61"
+    team_chat = SYNTHETIC_SNOWFLAKE_PREFIX + "62"
+    model = _discord_render(
+        tmp_path,
+        {
+            "FC27_DISCORD_RESULTS_CHANNEL_ID": results,
+            "FC27_DISCORD_TEAM_CHAT_CHANNEL_ID": team_chat,
+        },
+    )
+    env = _bot_env(model)
+    assert env["FC27_DISCORD_RESULTS_CHANNEL_ID"] == results
+    assert env["FC27_DISCORD_TEAM_CHAT_CHANNEL_ID"] == team_chat
+
+
+def test_provider_credentials_remain_absent_from_discord_bot(tmp_path):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    secrets = _service_secrets(model["services"]["fc27-discord-bot"])
+    assert not [s for s in secrets if "provider" in s.lower()]
+
+
+def test_poll_writer_credential_remains_absent_from_discord_bot(tmp_path):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    bot = model["services"]["fc27-discord-bot"]
+    assert "fc27_poll_writer_uri" not in _service_secrets(bot)
+    assert "FC27_POLL_WRITER_URI_FILE" not in _bot_env(model)
+
+
+def test_admin_and_migrator_credentials_absent_from_runtime_services(tmp_path):
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    admin_set = {"postgres_admin_uri", "fc27_migrator_uri", "fc27_migrator_password"}
+    for name, svc in model["services"].items():
+        if name in ("db-bootstrap", "db-migrate"):
+            continue
+        assert not (_service_secrets(svc) & admin_set), (
+            f"{name} mounts an admin or migrator credential"
+        )
