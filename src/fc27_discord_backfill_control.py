@@ -153,40 +153,29 @@ def compute_plan_digest(
 def is_backfill_operator(
     user_role_ids: Iterable[str | int] | None,
     config: Any,
-    *,
-    is_admin: bool = False,
 ) -> bool:
-    """Check if the member has backfill operator or administrator authority.
+    """Return whether the caller holds a numeric role in the dedicated backfill allowlist.
 
-    Precedence:
-    1. Discord Administrator permission (`is_admin=True`) is always authorized.
-    2. Any configured `FC27 Administrator` role ID is always authorized.
-    3. Any configured `FC27 Backfill Operator` role ID is authorized.
-    4. Identity Operator alone is NOT authorized.
-    5. Visible role names, tags, nicknames, usernames are NEVER trusted.
-    6. Empty role configuration fails closed.
+    Authority derives only from `FC27_DISCORD_BACKFILL_OPERATOR_ROLE_IDS`
+    (`config.backfill_operator_role_ids`). General Admin roles, the Discord
+    Administrator permission, Manager/Captain/Identity Operator/Allowed roles,
+    managed integration roles, role names, usernames, and guild metadata never
+    grant live-backfill authority. An empty dedicated allowlist denies all callers.
     """
-    if is_admin:
-        return True
-
-    cleaned_roles: set[str] = set()
-    for r in user_role_ids or ():
-        s = str(r).strip()
-        if s.isdecimal() and int(s) > 0:
-            cleaned_roles.add(s)
-
-    if not cleaned_roles:
+    backfill_roles = {
+        s
+        for r in (getattr(config, "backfill_operator_role_ids", None) or ())
+        if (s := str(r).strip()).isdecimal() and int(s) > 0
+    }
+    if not backfill_roles:
         return False
 
-    admin_roles = getattr(config, "admin_role_ids", frozenset())
-    if admin_roles and (cleaned_roles & admin_roles):
-        return True
-
-    backfill_roles = getattr(config, "backfill_operator_role_ids", frozenset())
-    if backfill_roles and (cleaned_roles & backfill_roles):
-        return True
-
-    return False
+    caller_roles = {
+        s
+        for r in (user_role_ids or ())
+        if (s := str(r).strip()).isdecimal() and int(s) > 0
+    }
+    return bool(caller_roles & backfill_roles)
 
 
 def resolve_and_validate_destination(
