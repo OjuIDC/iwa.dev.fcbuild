@@ -562,7 +562,7 @@ def test_ghcr_overlay_merged_compose_preserves_invariants_and_local_build_mode(
         "scripts/fc27_discord_healthcheck.py",
     ]
     assert discord["healthcheck"]["interval"] == "30s"
-    assert discord["healthcheck"]["timeout"] == "6s"
+    assert discord["healthcheck"]["timeout"] == "12s"
     assert discord["healthcheck"]["retries"] == 3
     assert discord["healthcheck"]["start_period"] == "1m30s"
     assert discord["user"] == "10001:65534"

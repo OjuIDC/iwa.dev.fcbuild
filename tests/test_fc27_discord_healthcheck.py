@@ -42,6 +42,7 @@ def test_healthcheck_entrypoint_is_lightweight_and_compose_wired() -> None:
     assert script.is_file()
     assert '"scripts/fc27_discord_healthcheck.py"' in compose
     assert '"scripts/fc27_discord_healthcheck.py"' in dockerfile
+    assert "--timeout=12s" in dockerfile
     assert "--status" not in compose.split("healthcheck:", 1)[1].split("restart:", 1)[0]
 
 
@@ -285,7 +286,7 @@ def test_compose_healthcheck_is_bounded_and_keeps_start_period() -> None:
     healthcheck = doc["services"]["fc27-discord-bot"]["healthcheck"]
     assert healthcheck["test"] == ["CMD", "python", "scripts/fc27_discord_healthcheck.py"]
     assert healthcheck["interval"] == "30s"
-    assert healthcheck["timeout"] == "6s"
+    assert healthcheck["timeout"] == "12s"
     assert healthcheck["retries"] == 3
     assert healthcheck["start_period"] == "90s"
 
