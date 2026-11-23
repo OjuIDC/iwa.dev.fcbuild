@@ -764,7 +764,15 @@ def test_50_discord_container_and_compose_isolation() -> None:
     assert "ports" not in svc
     assert "volumes" not in svc
     assert svc["command"] == ["--run"]
-    assert svc["healthcheck"]["test"] == ["CMD", "python", "scripts/fc27_discord_bot.py", "--status"]
+    assert svc["healthcheck"]["test"] == [
+        "CMD",
+        "python",
+        "scripts/fc27_discord_healthcheck.py",
+    ]
+    assert svc["healthcheck"]["interval"] == "30s"
+    assert svc["healthcheck"]["timeout"] == "6s"
+    assert svc["healthcheck"]["retries"] == 3
+    assert svc["healthcheck"]["start_period"] == "90s"
     assert set(svc["secrets"]) == {
         "discord_bot_token",
         "fc27_app_uri",

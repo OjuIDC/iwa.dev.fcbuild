@@ -26,7 +26,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import time
 from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +91,9 @@ EXPECTED_IMAGE_CONTRACTS: dict[str, dict[str, Any]] = {
         },
         "required_files": [
             "/app/src/fc27_discord_bot.py",
+            "/app/src/fc27_discord_health.py",
             "/app/scripts/fc27_discord_bot.py",
+            "/app/scripts/fc27_discord_healthcheck.py",
         ],
         "smoke_args": ["--status"],
     },

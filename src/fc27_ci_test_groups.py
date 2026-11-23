@@ -190,6 +190,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Invokes docker compose config across profiles and verifies container/network/secret/digest isolation.",
         ),
         _entry(
+            "tests/test_fc27_discord_healthcheck.py",
+            "PURE_UNIT_PARALLEL_SAFE",
+            ("unit", "security", "offline", "network_forbidden"),
+            "unit_domain_parallel",
+            "full-unit-domain",
+            ("unit-domain",),
+            "Readiness heartbeat, bounded health probe, and healthcheck isolation contract tests.",
+        ),
+        _entry(
             "tests/test_fc27_search.py",
             "OFFLINE_DOMAIN_PARALLEL_SAFE",
             ("unit", "domain", "offline", "network_forbidden"),
