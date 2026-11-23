@@ -770,7 +770,7 @@ def test_50_discord_container_and_compose_isolation() -> None:
         "scripts/fc27_discord_healthcheck.py",
     ]
     assert svc["healthcheck"]["interval"] == "30s"
-    assert svc["healthcheck"]["timeout"] == "6s"
+    assert svc["healthcheck"]["timeout"] == "12s"
     assert svc["healthcheck"]["retries"] == 3
     assert svc["healthcheck"]["start_period"] == "90s"
     assert set(svc["secrets"]) == {

@@ -74,7 +74,7 @@ services:
     healthcheck:
       test: ["CMD", "python", "scripts/fc27_discord_healthcheck.py"]
       interval: 30s
-      timeout: 6s
+      timeout: 12s
       retries: 3
       start_period: 90s
     restart: unless-stopped
