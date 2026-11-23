@@ -27,6 +27,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -57,6 +58,11 @@ from src.fc27_community_provider import (
     COMMUNITY_PROVIDER_ID,
     LIVE_EA_CLUBS_COMMUNITY_CLIENT,
     run_analytics_from_persisted_community_records,
+)
+from src.fc27_discord_health import (
+    HEALTH_STATE_PATH,
+    HEARTBEAT_INTERVAL_SECONDS,
+    write_health_state,
 )
 from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_match_results import (
@@ -4500,6 +4506,31 @@ def run_discord_gateway_bot(
     guild_objects = [discord.Object(id=int(gid)) for gid in sorted(config.allowed_guild_ids)]
 
     dispatch_runtime: dict[str, Any] = {"task": None, "stop_event": None}
+    health_runtime: dict[str, Any] = {
+        "ready": False,
+        "gateway_connected": False,
+        "disconnected_since_monotonic": None,
+    }
+
+    def _persist_health_state() -> None:
+        dispatch_task = dispatch_runtime.get("task")
+        write_health_state(
+            HEALTH_STATE_PATH,
+            pid=os.getpid(),
+            bot_enabled=config.enabled,
+            ready=bool(health_runtime["ready"]),
+            gateway_connected=bool(health_runtime["gateway_connected"]),
+            disconnected_since_monotonic=health_runtime[
+                "disconnected_since_monotonic"
+            ],
+            dispatch_enabled=config.dispatch_enabled,
+            dispatch_running=dispatch_task is not None and not dispatch_task.done(),
+        )
+
+    async def _health_heartbeat_loop() -> None:
+        while True:
+            _persist_health_state()
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
     def _on_dispatch_task_done(task: asyncio.Task[None]) -> None:
         if task.cancelled():
@@ -4521,6 +4552,11 @@ def run_discord_gateway_bot(
             self.tree = app_commands.CommandTree(self)
 
         async def setup_hook(self) -> None:
+            _persist_health_state()
+            asyncio.create_task(
+                _health_heartbeat_loop(),
+                name="fc27-discord-health-heartbeat",
+            )
             for guild_obj in guild_objects:
                 synced = await self.tree.sync(guild=guild_obj)
                 print(
@@ -4560,6 +4596,10 @@ def run_discord_gateway_bot(
                 dispatch_runtime["task"] = task
 
         async def on_ready(self) -> None:
+            health_runtime["ready"] = True
+            health_runtime["gateway_connected"] = True
+            health_runtime["disconnected_since_monotonic"] = None
+            _persist_health_state()
             print("DISCORD_BOT_READY=YES", flush=True)
             print("DISCORD_GATEWAY_CONNECTED=YES", flush=True)
             print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}", flush=True)
@@ -4571,6 +4611,18 @@ def run_discord_gateway_bot(
                 f"DISCORD_DISPATCH_ENABLED={'YES' if config.dispatch_enabled else 'NO'}",
                 flush=True,
             )
+
+        async def on_disconnect(self) -> None:
+            health_runtime["gateway_connected"] = False
+            if health_runtime["disconnected_since_monotonic"] is None:
+                health_runtime["disconnected_since_monotonic"] = time.monotonic()
+            _persist_health_state()
+
+        async def on_resumed(self) -> None:
+            health_runtime["ready"] = True
+            health_runtime["gateway_connected"] = True
+            health_runtime["disconnected_since_monotonic"] = None
+            _persist_health_state()
 
     client = _FC27ReadOnlyGatewayClient()
     register_fc27_application_commands(

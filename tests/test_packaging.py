@@ -73,10 +73,12 @@ def test_required_repository_files_and_entrypoints_exist():
         "src/fc27_community_provider.py",
         "src/fc27_polling_worker.py",
         "src/fc27_discord_bot.py",
+        "src/fc27_discord_health.py",
         "src/fc27_match_results.py",
         "src/fc27_privacy.py",
         "scripts/fc27_polling_worker.py",
         "scripts/fc27_discord_bot.py",
+        "scripts/fc27_discord_healthcheck.py",
         "scripts/check_matchpulse_boundary.py",
     )
     for rel in required:
