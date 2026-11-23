@@ -628,6 +628,111 @@ def get_fc27_discord_identity_operator_role_ids(*, strict: bool = True) -> froze
     return frozenset()
 
 
+def get_fc27_discord_backfill_operator_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlist of Discord Backfill Operator numeric role IDs.
+
+    Fails closed, permits empty configuration (defaults to empty frozenset),
+    deduplicates positive numeric snowflake IDs only.
+    """
+    for env_name in (
+        "FC27_DISCORD_BACKFILL_OPERATOR_ROLE_IDS",
+        "DISCORD_BACKFILL_OPERATOR_ROLE_IDS",
+    ):
+        raw = os.getenv(env_name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return _parse_discord_snowflake_allowlist(env_name, strict=strict)
+        except ConfigError as exc:
+            raise ConfigError(
+                f"{env_name} must contain only comma-separated positive numeric Discord role IDs"
+            ) from exc
+    return frozenset()
+
+
+def is_fc27_discord_backfill_enabled(*, strict: bool = False) -> bool:
+    """Check if the FC27 Discord operator backfill control is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_DISCORD_BACKFILL_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_DISCORD_BACKFILL_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+
+
+def get_fc27_discord_backfill_max_matches(*, strict: bool = False) -> int:
+    """Return max matches allowed per backfill operation (default: 25, range 1..25)."""
+    raw = os.getenv("FC27_DISCORD_BACKFILL_MAX_MATCHES")
+    if raw is None or not raw.strip():
+        return 25
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_MAX_MATCHES must be an integer between 1 and 25, got '{raw}'"
+            )
+        return 25
+    num = int(token)
+    if num < 1 or num > 25:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_MAX_MATCHES must be between 1 and 25, got {num}"
+            )
+        return 25
+    return num
+
+
+def get_fc27_discord_backfill_confirm_ttl_seconds(*, strict: bool = False) -> int:
+    """Return confirmation token TTL in seconds (default: 900, range 60..900)."""
+    raw = os.getenv("FC27_DISCORD_BACKFILL_CONFIRM_TTL_SECONDS")
+    if raw is None or not raw.strip():
+        return 900
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_CONFIRM_TTL_SECONDS must be an integer between 60 and 900, got '{raw}'"
+            )
+        return 900
+    num = int(token)
+    if num < 60 or num > 900:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_CONFIRM_TTL_SECONDS must be between 60 and 900, got {num}"
+            )
+        return 900
+    return num
+
+
+def get_fc27_discord_backfill_cooldown_seconds(*, strict: bool = False) -> int:
+    """Return backfill cooldown in seconds (default: 900, range 0..86400)."""
+    raw = os.getenv("FC27_DISCORD_BACKFILL_COOLDOWN_SECONDS")
+    if raw is None or not raw.strip():
+        return 900
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_COOLDOWN_SECONDS must be an integer between 0 and 86400, got '{raw}'"
+            )
+        return 900
+    num = int(token)
+    if num < 0 or num > 86400:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_BACKFILL_COOLDOWN_SECONDS must be between 0 and 86400, got {num}"
+            )
+        return 900
+    return num
+
+
 def get_fc27_discord_match_results_writer_role_ids(*, strict: bool = False) -> frozenset[str]:
     """Return union of configured Discord Manager, Captain, and Admin role IDs."""
     return (

@@ -261,7 +261,7 @@ def test_fc27_decision_evidence_immutability(pg_uri):
 
 def test_fc27_performance_storage_least_privilege(pg_db_migrated):
     """Verifies Grants Policy Version 22 least-privilege separation for Migration 0012 through 0021 objects."""
-    assert GRANTS_POLICY.version == 23
+    assert GRANTS_POLICY.version == 24
     with psycopg.connect(pg_db_migrated.app, autocommit=True) as app_conn:
         for tbl in (
             "fc27_clubs",
@@ -328,7 +328,8 @@ def test_migration_0014_fresh_and_idempotent(pg_db):
     assert "0020_fc27_alias_auto_promotion_and_exceptions.sql" in applied_first
     assert "0021_fc27_destination_aware_delivery_and_linkage.sql" in applied_first
     assert "0022_fc27_provider_request_budget.sql" in applied_first
-    assert len(applied_first) == 22
+    assert "0023_fc27_discord_backfill_control.sql" in applied_first
+    assert len(applied_first) == 23
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -495,6 +496,7 @@ def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, mo
         "0020_fc27_alias_auto_promotion_and_exceptions.sql",
         "0021_fc27_destination_aware_delivery_and_linkage.sql",
         "0022_fc27_provider_request_budget.sql",
+        "0023_fc27_discord_backfill_control.sql",
     ]
 
     with psycopg.connect(pg_db.admin) as conn:

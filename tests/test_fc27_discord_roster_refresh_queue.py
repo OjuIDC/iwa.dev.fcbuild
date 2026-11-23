@@ -490,8 +490,8 @@ def test_06_duplicate_same_revision_is_idempotent_and_new_revision_creates_new_j
 
 def test_07_security_definer_producer_boundary_and_role_matrix(pg_db_migrated) -> None:
     """8-10, 31-34. Verify SECURITY DEFINER owner/search_path, PUBLIC & sibling denial, writer table isolation, and SQL injection rejection."""
-    assert GRANTS_POLICY_VERSION == 23
-    assert GRANTS_POLICY.version == 23
+    assert GRANTS_POLICY_VERSION == 24
+    assert GRANTS_POLICY.version == 24
 
     # Function metadata checks (owner, secdef, strict search_path)
     with psycopg.connect(pg_db_migrated.admin) as aconn:

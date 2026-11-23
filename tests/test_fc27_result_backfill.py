@@ -409,10 +409,10 @@ def _seed_failed_delivery(
         destination_key=destination_key,
         message_kind=message_kind,
     )
+    assert res.delivery_id is not None
     record_delivery_failure(conn, res.delivery_id, error_category, match_ref)
     conn.commit()
-    assert res.delivery_id is not None
-    return int(res.delivery_id)
+    return res.delivery_id
 
 
 # --- Tests 1-30 ---

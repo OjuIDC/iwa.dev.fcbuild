@@ -106,9 +106,9 @@
     "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": 24
   },
   "database_expected_state": {
-    "minimum_migration": "0022_fc27_provider_request_budget.sql",
-    "expected_migration_version": "0001_THROUGH_0022",
-    "grants_policy_version": 23,
+    "minimum_migration": "0023_fc27_discord_backfill_control.sql",
+    "expected_migration_version": "0001_THROUGH_0023",
+    "grants_policy_version": 24,
     "alias_hmac_key_continuity_required": true
   },
   "acl_policy": {

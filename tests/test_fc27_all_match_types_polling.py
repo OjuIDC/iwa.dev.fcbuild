@@ -740,7 +740,7 @@ def test_017_chronological_discord_jobs_no_raw_payloads(
 
 def test_018_migration_0022_and_grants_policy_23_idempotency_and_security(pg_db_migrated) -> None:
     """Verify Migration 0022 and Grants Policy 23 permissions, ownership, and idempotent re-application."""
-    assert GRANTS_POLICY_VERSION == 23
+    assert GRANTS_POLICY_VERSION == 24
 
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:
