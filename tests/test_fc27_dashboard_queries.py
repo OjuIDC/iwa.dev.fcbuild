@@ -283,6 +283,7 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
     m5 = _make_match_dict("m_syn_005", REF_NOW - timedelta(days=60), result="WIN", goals_for=2, goals_against=1, formation="4-3-3(2)")
     m6_old = _make_match_dict("m_syn_006", REF_NOW - timedelta(days=120), result="WIN", goals_for=4, goals_against=0, formation="4-3-3(2)")
 
+    now_utc = datetime.now(timezone.utc)
     with patch.dict("os.environ", {"FC27_PERSISTENCE_ENABLED": "true"}, clear=False):
         # Batch 1: m1..m5
         _plan_and_apply(ctx.app, _make_export_dict("exp-main-330323", [m1, m2, m3, m4, m5]))
@@ -302,7 +303,7 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
             payload_sha256=_sha256_hex("q-replay-1"),
             record_hash=_sha256_hex("r-replay-1"),
             quarantined_at=REF_NOW - timedelta(days=3),
-            expires_at=REF_NOW + timedelta(days=27),
+            expires_at=now_utc + timedelta(days=27),
         )
         insert_quarantine_record(
             ctx.app,
@@ -316,7 +317,7 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
             diagnostic_paths=["matches[1].goals_for"],
             payload_sha256=_sha256_hex("q-anom-1"),
             quarantined_at=REF_NOW - timedelta(days=4),
-            expires_at=REF_NOW + timedelta(days=26),
+            expires_at=now_utc + timedelta(days=26),
         )
         insert_quarantine_record(
             ctx.app,
@@ -330,7 +331,7 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
             diagnostic_paths=["matches[2].unexpected_key"],
             payload_sha256=_sha256_hex("q-drift-1"),
             quarantined_at=REF_NOW - timedelta(days=4),
-            expires_at=REF_NOW + timedelta(days=26),
+            expires_at=now_utc + timedelta(days=26),
         )
         insert_quarantine_record(
             ctx.app,
@@ -344,7 +345,7 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
             diagnostic_paths=["matches[3].player_performances[0].provider_rating"],
             payload_sha256=_sha256_hex("q-oor-1"),
             quarantined_at=REF_NOW - timedelta(days=4),
-            expires_at=REF_NOW + timedelta(days=26),
+            expires_at=now_utc + timedelta(days=26),
         )
         insert_quarantine_record(
             ctx.app,
@@ -357,8 +358,8 @@ def pg_analytics_db(pg_admin_uri: str) -> Iterator[AnalyticsDbContext]:
             reason_code="EXPIRED_ANOMALY",
             diagnostic_paths=["matches[4].formation"],
             payload_sha256=_sha256_hex("q-expired-1"),
-            quarantined_at=REF_NOW - timedelta(days=45),
-            expires_at=REF_NOW - timedelta(days=15),
+            quarantined_at=now_utc - timedelta(days=45),
+            expires_at=now_utc - timedelta(days=15),
         )
 
     with psycopg.connect(ctx.admin, autocommit=True) as conn:

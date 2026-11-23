@@ -34,7 +34,6 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable, Final, Literal, Mapping, Optional, Sequence
 
 import psycopg
@@ -44,12 +43,7 @@ from src import settings
 from src.db_roles import check_runtime_posture
 from src.fc27_advisory_cache import (
     FC27AdvisoryCache,
-    FC27AdvisoryCacheEntry,
-    FC27AdvisoryCacheKey,
-    FC27AdvisoryCachePolicy,
-    FC27AdvisoryCacheStats,
     fetch_persisted_advisory_cache_key,
-    get_default_advisory_cache,
 )
 from src.fc27_analyst import FC27AnalystReport
 from src.fc27_clubs_api_contracts import (
@@ -68,22 +62,14 @@ from src.fc27_director import FC27DirectorInput, build_fc27_director_report
 from src.fc27_match_results import (
     DEFAULT_MATCHDAY_TIME,
     DEFAULT_RECONCILIATION_TOKEN_STORE,
-    EAST_COASTERS_FOOTER_TEXT,
     EAST_COASTERS_FULL_NAME,
     EAST_COASTERS_SHORT_NAME,
-    MANUAL_MATCH_RESULT,
     PERMISSION_DENIED_MESSAGE,
     ManualMatchDetail,
-    MatchDeleteConfirmationView,
     MatchResultsConcurrencyError,
-    MatchResultsError,
     MatchResultsNotFoundError,
-    MatchResultsPaginationView,
-    MatchResultsPermissionError,
-    MatchResultsPostureError,
     MatchResultsValidationError,
     ReconciliationTokenStore,
-    RosterPlayerRecord,
     build_result_content,
     build_result_embed,
     build_match_post_tag,
@@ -138,7 +124,6 @@ from src.fc27_polling_worker import (
     POLL_FREQUENCY_LITERAL as POLLING_FREQUENCY_12H,
     POLL_INTERVAL_SECONDS as SUPPORTED_POLL_INTERVAL_SECONDS,
     get_default_polling_runtime,
-    recover_polling_state_from_postgres,
 )
 from src.fc27_privacy import (
     contains_discord_mention,
@@ -3623,7 +3608,6 @@ class FC27DiscordBotService:
     ) -> FC27DiscordResponse:
         from src.fc27_discord_backfill_control import (
             FC27BackfillAuthzError,
-            FC27BackfillControlError,
             FC27BackfillCooldownActiveError,
             FC27BackfillLockBusyError,
             FC27BackfillValidationError,
@@ -4474,7 +4458,6 @@ def run_discord_gateway_bot(
     dispatch_cfg = None
     if config.dispatch_enabled:
         from src.fc27_discord_dispatcher import (
-            DiscordGatewayChannelTransport,
             FC27DiscordDispatchConfig,
             resolve_discord_job_writer_uri,
             resolve_discord_readonly_uri,

@@ -429,7 +429,8 @@ def inspect_database_state_for_manifest(
             quarantine_cnt = int(_quarantine_row[0]) if _quarantine_row else 0
 
             cur.execute("SELECT to_regclass('public.fc27_roster') IS NOT NULL")
-            if cur.fetchone()[0]:
+            roster_check_row = cur.fetchone()
+            if roster_check_row and roster_check_row[0]:
                 cur.execute(
                     """
                     SELECT player_id,

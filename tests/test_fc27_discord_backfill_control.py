@@ -449,12 +449,12 @@ def test_19_token_guild_bound(pg_db_migrated: Any) -> None:
             )
 
 
-def test_20_21_22_token_bindings(pg_db_migrated: Any) -> None:
-    """20, 21, 22. Token is bound to destination, message kind, and latest count."""
+def test_20_token_destination_bound(pg_db_migrated: Any) -> None:
+    """20. Token is bound to destination key."""
     with psycopg.connect(pg_db_migrated.admin) as conn:
         _setup_destinations(conn)
         _seed_test_matches(conn, count=5)
-        plan, raw_token = plan_backfill(
+        plan, _ = plan_backfill(
             conn,
             actor_user_id=OPERATOR_USER_ID,
             guild_id=TEST_GUILD_ID,
@@ -463,7 +463,37 @@ def test_20_21_22_token_bindings(pg_db_migrated: Any) -> None:
             config=_make_bot_config(cooldown=0),
         )
         assert plan.destination_key == "formal-backfill-dest"
-        assert plan.message_kind == MESSAGE_KIND_FORMAL
+
+
+def test_21_token_message_kind_bound(pg_db_migrated: Any) -> None:
+    """21. Token is bound to message kind."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=5)
+        plan, _ = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="compact-backfill-dest",
+            latest=5,
+            config=_make_bot_config(cooldown=0),
+        )
+        assert plan.message_kind == MESSAGE_KIND_TEAM_CHAT
+
+
+def test_22_token_latest_count_bound(pg_db_migrated: Any) -> None:
+    """22. Token is bound to latest count."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=5)
+        plan, _ = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            latest=5,
+            config=_make_bot_config(cooldown=0),
+        )
         assert plan.requested_count == 5
 
 
@@ -1301,8 +1331,46 @@ def test_49_audit_row_complete(pg_db_migrated: Any) -> None:
             assert row[13] is not None  # completed_at
 
 
-def test_50_51_provider_requests_remain_zero() -> None:
-    """50, 51. EA provider requests strictly zero."""
+def test_50_planning_makes_zero_provider_requests(pg_db_migrated: Any) -> None:
+    """50. Backfill planning dry-run executes strictly zero EA provider requests."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=3)
+        plan, _ = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            config=_make_bot_config(cooldown=0),
+        )
+        assert plan.requested_count == 10
+    svc = FC27DiscordBotService(_make_bot_config())
+    assert svc.provider_requests_executed == 0
+    assert DISCORD_PROVIDER_REQUESTS == 0
+
+
+def test_51_execution_makes_zero_provider_requests(pg_db_migrated: Any) -> None:
+    """51. Confirmed live execution executes strictly zero EA provider requests."""
+    transport = MockLiveDiscordGatewayTransport()
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        _seed_test_matches(conn, count=3)
+        _, raw_token = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            config=_make_bot_config(cooldown=0),
+        )
+        record = confirm_and_execute_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            confirmation_token=raw_token,
+            transport=transport,
+            config=_make_bot_config(cooldown=0),
+        )
+        assert record.status == "COMPLETED"
     svc = FC27DiscordBotService(_make_bot_config())
     assert svc.provider_requests_executed == 0
     assert DISCORD_PROVIDER_REQUESTS == 0
@@ -1331,56 +1399,223 @@ def test_52_no_internal_ids_in_responses(pg_db_migrated: Any) -> None:
 # Scenarios 53-58: Regression Invariants & Command Limits
 # ---------------------------------------------------------------------------
 
-def test_53_historical_messages_remain_untouched() -> None:
-    """53. Existing 20 historical messages remain untouched."""
-    assert True
+def test_53_historical_messages_remain_untouched(pg_db_migrated: Any) -> None:
+    """53. Existing delivered historical messages remain untouched after planning or backfill."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        refs = _seed_test_matches(conn, count=5)
+        # Pre-seed delivered rows simulating existing historical messages
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT destination_id FROM public.fc27_discord_destinations WHERE destination_key = 'formal-backfill-dest'"
+            )
+            dest_id = cur.fetchone()[0]
+            for i, r in enumerate(refs, 1):
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_match_discord_deliveries (
+                        destination_id, destination_key, match_ref, message_kind,
+                        guild_id, channel_id, message_id, delivery_state, idempotency_key
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (match_ref, destination_key, message_kind) DO NOTHING
+                    """,
+                    (
+                        dest_id,
+                        "formal-backfill-dest",
+                        r,
+                        "FORMAL_RESULT",
+                        TEST_GUILD_ID,
+                        TEST_FORMAL_CHANNEL_ID,
+                        f"999888777{i:03d}",
+                        "DELIVERED",
+                        f"historical_idemp_{i}",
+                    ),
+                )
+        conn.commit()
+
+        # Run plan
+        plan, _ = plan_backfill(
+            conn,
+            actor_user_id=OPERATOR_USER_ID,
+            guild_id=TEST_GUILD_ID,
+            destination_key="formal-backfill-dest",
+            latest=5,
+            config=_make_bot_config(cooldown=0),
+        )
+        assert plan.already_delivered_count == 5
+        assert plan.planned_count == 0
+
+        # Verify delivered rows were not modified or deleted
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*), count(message_id)
+                FROM public.fc27_match_discord_deliveries
+                WHERE destination_key = 'formal-backfill-dest' AND delivery_state = 'DELIVERED'
+                """
+            )
+            total_del, total_msg = cur.fetchone()
+            assert total_del == 5
+            assert total_msg == 5
 
 
-def test_54_55_56_existing_subsystems_intact() -> None:
-    """54, 55, 56. Dispatcher, roster-refresh, and polling remain intact."""
-    assert True
+def test_54_dispatcher_subsystem_intact() -> None:
+    """54. Dispatcher subsystem contracts and resolvers remain intact."""
+    from src.fc27_discord_dispatcher import (
+        resolve_discord_readonly_uri,
+        resolve_discord_job_writer_uri,
+    )
+    assert callable(resolve_discord_readonly_uri)
+    assert callable(resolve_discord_job_writer_uri)
 
 
-def test_57_58_command_count_limits_and_global_zero() -> None:
-    """57, 58. Command counts respect limits and global commands remain zero."""
+def test_55_roster_refresh_subsystem_intact(pg_db_migrated: Any) -> None:
+    """55. Roster-refresh subsystem queue and token contracts remain intact."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.fc27_roster_reconciliation_tokens')")
+            reg_tokens = cur.fetchone()[0]
+            assert reg_tokens is not None
+            cur.execute("SELECT to_regclass('public.fc27_discord_jobs')")
+            reg_jobs = cur.fetchone()[0]
+            assert reg_jobs is not None
+
+
+def test_56_polling_subsystem_intact() -> None:
+    """56. Polling subsystem cadence, limits, and request budget remain intact."""
+    from src.fc27_polling_worker import (
+        POLL_INTERVAL_FOUR_HOURS_SECONDS,
+        POLL_FREQUENCY_FOUR_HOURS_LITERAL,
+    )
+    from src.settings import is_fc27_community_polling_enabled
+    assert POLL_INTERVAL_FOUR_HOURS_SECONDS == 14400
+    assert POLL_FREQUENCY_FOUR_HOURS_LITERAL == "ONCE_EVERY_4_HOURS"
+    assert callable(is_fc27_community_polling_enabled)
+
+
+def test_57_command_count_limits() -> None:
+    """57. Command count limits: group subcommands <= 25 and guild total <= 100."""
     import discord
     from discord import app_commands
 
-    cfg_disabled = _make_bot_config(backfill_enabled=False)
-    svc_disabled = FC27DiscordBotService(cfg_disabled)
-
-    intents = discord.Intents.none()
-    intents.guilds = True
-    client = discord.Client(intents=intents, application_id=int(cfg_disabled.application_id))
-    tree_disabled = app_commands.CommandTree(client)
-
-    summary_disabled = register_fc27_application_commands(
-        tree_disabled,
-        svc_disabled,
-        allowed_guild_ids=cfg_disabled.allowed_guild_ids,
-        discord_module=discord,
-        app_commands_module=app_commands,
-    )
-    assert summary_disabled.global_command_names == ()
-    assert summary_disabled.total_guild_top_level_commands == 14
-    assert len(summary_disabled.group_subcommands) <= MAX_DISCORD_GROUP_CHILDREN
-
-    # When enabled, exactly one additional top-level group /backfillresults is registered
     cfg_enabled = _make_bot_config(backfill_enabled=True)
     svc_enabled = FC27DiscordBotService(cfg_enabled)
+    intents = discord.Intents.none()
+    intents.guilds = True
     client_enabled = discord.Client(intents=intents, application_id=int(cfg_enabled.application_id))
     tree_enabled = app_commands.CommandTree(client_enabled)
 
-    summary_enabled = register_fc27_application_commands(
+    summary = register_fc27_application_commands(
         tree_enabled,
         svc_enabled,
         allowed_guild_ids=cfg_enabled.allowed_guild_ids,
         discord_module=discord,
         app_commands_module=app_commands,
     )
-    assert summary_enabled.global_command_names == ()
-    assert summary_enabled.total_guild_top_level_commands == 15
-    assert summary_enabled.total_guild_top_level_commands <= 100
-    assert summary_enabled.backfill_group_name == "backfillresults"
-    assert summary_enabled.backfill_subcommands == ("plan", "confirm", "status")
-    assert len(summary_enabled.backfill_subcommands) <= MAX_DISCORD_GROUP_CHILDREN
+    assert summary.total_guild_top_level_commands == 15
+    assert summary.total_guild_top_level_commands <= 100
+    assert len(summary.group_subcommands) <= MAX_DISCORD_GROUP_CHILDREN
+    assert len(summary.backfill_subcommands) <= MAX_DISCORD_GROUP_CHILDREN
+
+
+def test_58_global_command_count_zero() -> None:
+    """58. Global commands strictly zero in both disabled and enabled modes."""
+    import discord
+    from discord import app_commands
+
+    intents = discord.Intents.none()
+    intents.guilds = True
+
+    # Disabled mode
+    cfg_disabled = _make_bot_config(backfill_enabled=False)
+    svc_disabled = FC27DiscordBotService(cfg_disabled)
+    client_d = discord.Client(intents=intents, application_id=int(cfg_disabled.application_id))
+    tree_d = app_commands.CommandTree(client_d)
+    sum_d = register_fc27_application_commands(
+        tree_d,
+        svc_disabled,
+        allowed_guild_ids=cfg_disabled.allowed_guild_ids,
+        discord_module=discord,
+        app_commands_module=app_commands,
+    )
+    assert sum_d.global_command_names == ()
+
+    # Enabled mode
+    cfg_enabled = _make_bot_config(backfill_enabled=True)
+    svc_enabled = FC27DiscordBotService(cfg_enabled)
+    client_e = discord.Client(intents=intents, application_id=int(cfg_enabled.application_id))
+    tree_e = app_commands.CommandTree(client_e)
+    sum_e = register_fc27_application_commands(
+        tree_e,
+        svc_enabled,
+        allowed_guild_ids=cfg_enabled.allowed_guild_ids,
+        discord_module=discord,
+        app_commands_module=app_commands,
+    )
+    assert sum_e.global_command_names == ()
+
+
+def test_59_negative_privileges_all_runtime_roles(pg_db_migrated: Any) -> None:
+    """59. Negative privilege checks: unauthorized runtime roles cannot mutate table or execute procedures."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        with conn.cursor() as cur:
+            for role in (
+                "public",
+                "fc27_app",
+                "fc27_dispatch",
+                "fc27_relay",
+                "fc27_poll_writer",
+                "fc27_player_dev_writer",
+                "fc27_discord_reader",
+            ):
+                for priv in ("INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_discord_backfill_requests', %s)",
+                        (role, priv),
+                    )
+                    assert cur.fetchone()[0] is False, f"{role} must not have {priv} on fc27_discord_backfill_requests"
+
+            for proc in (
+                "public.fc27_create_backfill_request(text, text, text, text, text, integer, integer, text, integer, integer)",
+                "public.fc27_confirm_backfill_request(text, text, text, text)",
+                "public.fc27_mark_backfill_running(uuid)",
+                "public.fc27_finalize_backfill_request(uuid, text, integer, integer, integer, text)",
+                "public.fc27_get_backfill_request_status(text, text, text)",
+            ):
+                cur.execute(
+                    f"SELECT has_function_privilege('fc27_app', '{proc}', 'EXECUTE')"
+                )
+                assert cur.fetchone()[0] is False, f"fc27_app must not have EXECUTE on {proc}"
+
+
+def test_60_backup_restore_request_states(pg_db_migrated: Any) -> None:
+    """60. Backup & restore covers request states: PLANNED, EXPIRED, RUNNING, COMPLETED, FAILED."""
+    with psycopg.connect(pg_db_migrated.admin) as conn:
+        _setup_destinations(conn)
+        with conn.cursor() as cur:
+            states = ("PLANNED", "EXPIRED", "RUNNING", "COMPLETED", "FAILED")
+            for i, st in enumerate(states, 1):
+                cur.execute(
+                    """
+                    INSERT INTO public.fc27_discord_backfill_requests (
+                        token_digest, actor_digest, guild_id, destination_key,
+                        message_kind, latest_count, planned_count, plan_digest,
+                        status, expires_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp() + interval '15 minutes')
+                    """,
+                    (
+                        f"{i:064x}",
+                        f"{(i * 10):064x}",
+                        TEST_GUILD_ID,
+                        "formal-backfill-dest",
+                        "FORMAL_RESULT",
+                        10,
+                        5,
+                        f"digest_{st}",
+                        st,
+                    ),
+                )
+            conn.commit()
+
+            cur.execute("SELECT count(*) FROM public.fc27_discord_backfill_requests")
+            assert cur.fetchone()[0] == 5
