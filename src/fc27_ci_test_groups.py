@@ -527,6 +527,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Secured operator Discord backfill control, dry-run planning, CSPRNG tokens, cooldowns, live gateway transport, and audit schema.",
         ),
         _entry(
+            "tests/test_fc27_backfill_db_role_split.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Split reader/writer database roles for secured backfill planning, confirmation, and status using real least-privilege roles.",
+        ),
+        _entry(
             "tests/test_fc27_polling_worker.py",
             "POSTGRES_PARALLEL_SAFE",
             (

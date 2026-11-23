@@ -45,7 +45,6 @@ from src.fc27_discord_dispatcher import (
     build_post_new_results_notification,
     build_post_new_results_team_chat_message,
     load_authoritative_match_by_ref,
-    resolve_discord_readonly_uri,
 )
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
@@ -191,6 +190,7 @@ def run_result_backfill(
     *,
     destination_key: str,
     db_conn_or_uri: Any,
+    reader_conn_or_uri: Any | None = None,
     transport: Any | None = None,
     latest: int = DEFAULT_LATEST_COUNT,
     formal: bool = False,
@@ -201,7 +201,13 @@ def run_result_backfill(
     game_version: str = EAST_COASTERS_GAME_VERSION,
     allow_test_transport: bool = False,
 ) -> FC27ResultBackfillSummary:
-    """Execute or simulate a bounded result backfill to an authorized destination."""
+    """Execute or simulate a bounded result backfill to an authorized destination.
+
+    ``db_conn_or_uri`` is the writer path used for delivery reservations and mutations.
+    ``reader_conn_or_uri`` optionally supplies an independent least-privilege reader path
+    for destination, match, and delivery reads. When omitted, the writer path is used for
+    reads as well (legacy single-connection and test behavior).
+    """
     if not destination_key or not destination_key.strip():
         raise FC27BackfillValidationError("Destination key is required.")
     clean_dest_key = destination_key.strip()
@@ -246,30 +252,38 @@ def run_result_backfill(
     owns_reader = False
     owns_writer = False
     if isinstance(db_conn_or_uri, psycopg.Connection):
-        reader_conn = db_conn_or_uri
         writer_conn = db_conn_or_uri
     elif isinstance(db_conn_or_uri, str):
-        reader_conn = psycopg.connect(db_conn_or_uri)
-        writer_conn = reader_conn
-        owns_reader = True
+        writer_conn = psycopg.connect(db_conn_or_uri)
+        owns_writer = True
     elif db_conn_or_uri is None:
         from src.fc27_match_results import resolve_match_results_writer_uri
 
-        ro_uri = resolve_discord_readonly_uri(required=True)
-        wr_uri = resolve_match_results_writer_uri(strict=False) or ro_uri
-        assert ro_uri is not None
-        reader_conn = psycopg.connect(ro_uri)
-        owns_reader = True
-        if wr_uri == ro_uri:
-            writer_conn = reader_conn
-        else:
-            assert wr_uri is not None
-            writer_conn = psycopg.connect(wr_uri)
-            owns_writer = True
+        wr_uri = resolve_match_results_writer_uri(strict=False)
+        if wr_uri is None:
+            raise FC27BackfillValidationError("BACKFILL_WRITER_CONNECTION_REQUIRED")
+        writer_conn = psycopg.connect(wr_uri)
+        owns_writer = True
     else:
-        conn = getattr(db_conn_or_uri, "_conn", db_conn_or_uri)
-        reader_conn = conn
-        writer_conn = conn
+        writer_conn = getattr(db_conn_or_uri, "_conn", db_conn_or_uri)
+
+    if reader_conn_or_uri is None:
+        if db_conn_or_uri is not None:
+            reader_conn = writer_conn
+        else:
+            from src.fc27_discord_dispatcher import resolve_discord_readonly_uri
+
+            ro_uri = resolve_discord_readonly_uri(required=True)
+            assert ro_uri is not None
+            reader_conn = psycopg.connect(ro_uri)
+            owns_reader = True
+    elif isinstance(reader_conn_or_uri, psycopg.Connection):
+        reader_conn = reader_conn_or_uri
+    elif isinstance(reader_conn_or_uri, str):
+        reader_conn = psycopg.connect(reader_conn_or_uri)
+        owns_reader = True
+    else:
+        reader_conn = getattr(reader_conn_or_uri, "_conn", reader_conn_or_uri)
 
     try:
         # 1. Acquire single-flight advisory lock for backfill on this destination
@@ -291,7 +305,7 @@ def run_result_backfill(
 
         try:
             # 2. Resolve destination registry entry
-            dest = get_destination_by_key(writer_conn, clean_dest_key)
+            dest = get_destination_by_key(reader_conn, clean_dest_key)
             if dest is None:
                 raise FC27BackfillValidationError(
                     f"Destination '{clean_dest_key}' is not registered in public.fc27_discord_destinations."
@@ -347,7 +361,7 @@ def run_result_backfill(
 
                 # Check if already delivered to this destination
                 existing_delivery_id: int | None = None
-                with writer_conn.cursor() as cur:
+                with reader_conn.cursor() as cur:
                     cur.execute(
                         """
                         SELECT delivery_id, message_id, delivery_state
