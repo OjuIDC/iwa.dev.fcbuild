@@ -31,6 +31,7 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1147,7 +1148,9 @@ class FC27DiscordBotService:
         return None
 
     def _resolve_readonly_conn_or_uri(self, *, required: bool = True) -> Any:
-        resolved = resolve_discord_readonly_uri(strict=False)
+        from src.fc27_discord_dispatcher import resolve_discord_readonly_uri
+
+        resolved = resolve_discord_readonly_uri(required=False)
         if resolved:
             return resolved
         if required:
@@ -2983,16 +2986,16 @@ class FC27DiscordBotService:
                 fields={
                     "polling_frequency": f"{POLLING_FREQUENCY_12H} (every 12 hours / 43200s)",
                     "approved_match_types": ",".join(str(x) for x in approved_types_raw),
-                    "current_rotation_match_type": str(
-                        getattr(snap, "current_rotation_match_type", FIXED_MATCH_TYPE)
+                    "current_rotation_match_type": getattr(
+                        snap, "current_rotation_match_type", FIXED_MATCH_TYPE
                     ),
-                    "next_rotation_match_type": str(
-                        getattr(snap, "next_rotation_match_type", "playoffMatch")
+                    "next_rotation_match_type": getattr(
+                        snap, "next_rotation_match_type", "playoffMatch"
                     ),
-                    "last_attempted_match_type": str(
+                    "last_attempted_match_type": (
                         getattr(snap, "last_attempted_match_type", None) or "NONE"
                     ),
-                    "last_successful_match_type": str(
+                    "last_successful_match_type": (
                         getattr(snap, "last_successful_match_type", None) or "NONE"
                     ),
                     "alias_hmac_key_configured": str(
@@ -3863,7 +3866,7 @@ async def dispatch_interaction_response(
         discord_mod = discord_module
         if discord_mod is None:
             try:
-                import discord as imported_discord
+                import discord as imported_discord  # type: ignore
 
                 discord_mod = imported_discord
             except ModuleNotFoundError:
@@ -3979,11 +3982,11 @@ def register_fc27_application_commands(
     """Register `/fc27` group and top-level guild slash commands on `tree`."""
     if discord_module is None:
         try:
-            import discord as imported_discord
+            import discord as imported_discord  # type: ignore
 
             discord_mod = imported_discord
         except ModuleNotFoundError as exc:
-            missing = str(getattr(exc, "name", "") or "")
+            missing = getattr(exc, "name", "") or ""
             if missing != "discord" and not missing.startswith("discord."):
                 raise
             raise FC27DiscordDisabledError(
@@ -3996,7 +3999,7 @@ def register_fc27_application_commands(
     if app_commands_module is None:
         app_commands_mod = getattr(discord_mod, "app_commands", None)
         if app_commands_mod is None:
-            from discord import app_commands as imported_app_commands
+            from discord import app_commands as imported_app_commands  # type: ignore
 
             app_commands_mod = imported_app_commands
     else:
@@ -4497,10 +4500,10 @@ def run_discord_gateway_bot(
     import signal
 
     try:
-        import discord
-        from discord import app_commands
+        import discord  # type: ignore
+        from discord import app_commands  # type: ignore
     except ModuleNotFoundError as exc:
-        missing = str(getattr(exc, "name", "") or "")
+        missing = getattr(exc, "name", "") or ""
         if missing != "discord" and not missing.startswith("discord."):
             raise
         raise FC27DiscordDisabledError(
