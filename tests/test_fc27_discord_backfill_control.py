@@ -414,6 +414,7 @@ def test_dedicated_allowlist_entries_authorize_plan(
         _seed_test_matches(conn, count=2)
     svc = FC27DiscordBotService(cfg)
     monkeypatch.setattr(svc, "_resolve_writer_conn_or_uri", lambda required=False: admin_uri)
+    monkeypatch.setattr(svc, "_resolve_readonly_conn_or_uri", lambda required=False: admin_uri)
     resp = svc.handle_backfill_plan(
         guild_id=TEST_GUILD_ID,
         channel_id=TEST_FORMAL_CHANNEL_ID,

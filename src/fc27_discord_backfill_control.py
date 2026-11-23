@@ -70,6 +70,55 @@ class FC27BackfillPlanChangedError(FC27BackfillControlError):
     """Eligible match plan materially changed between plan and confirm."""
 
 
+class FC27BackfillReaderConnectionRequiredError(FC27BackfillControlError):
+    """Reader path is required for secured backfill planning."""
+
+    def __init__(self) -> None:
+        super().__init__("BACKFILL_READER_CONNECTION_REQUIRED")
+
+
+class FC27BackfillWriterConnectionRequiredError(FC27BackfillControlError):
+    """Writer path is required for secured backfill planning."""
+
+    def __init__(self) -> None:
+        super().__init__("BACKFILL_WRITER_CONNECTION_REQUIRED")
+
+
+def _resolve_backfill_connection_pair(
+    db_conn_or_uri: Any,
+    reader_conn_or_uri: Any,
+    writer_conn_or_uri: Any,
+) -> tuple[Any, Any]:
+    """Resolve explicit reader/writer paths without cross-role fallback.
+
+    A legacy single ``db_conn_or_uri`` is honored only when no split argument is
+    supplied; it is then used for both paths. Supplying either split argument
+    requires both, and never falls back to the other path or to ``db_conn_or_uri``.
+    """
+    split_requested = reader_conn_or_uri is not None or writer_conn_or_uri is not None
+    if split_requested:
+        if reader_conn_or_uri is None:
+            raise FC27BackfillReaderConnectionRequiredError()
+        if writer_conn_or_uri is None:
+            raise FC27BackfillWriterConnectionRequiredError()
+        return reader_conn_or_uri, writer_conn_or_uri
+    if db_conn_or_uri is None:
+        raise FC27BackfillReaderConnectionRequiredError()
+    return db_conn_or_uri, db_conn_or_uri
+
+
+def _open_backfill_connection(source: Any, *, role: str) -> tuple[Any, bool]:
+    """Open or unwrap one backfill connection, returning ``(connection, owned)``."""
+    if isinstance(source, psycopg.Connection):
+        return source, False
+    if isinstance(source, str):
+        try:
+            return psycopg.connect(source, autocommit=True), True
+        except psycopg.Error as exc:
+            raise FC27BackfillControlError(f"BACKFILL_{role}_CONNECTION_UNAVAILABLE") from exc
+    return getattr(source, "_conn", source), False
+
+
 @dataclass(frozen=True)
 class FC27BackfillPlan:
     """Sanitized backfill dry-run plan presented to the operator."""
@@ -228,8 +277,10 @@ def resolve_and_validate_destination(
 
 
 def plan_backfill(
-    db_conn_or_uri: Any,
+    db_conn_or_uri: Any = None,
     *,
+    reader_conn_or_uri: Any = None,
+    writer_conn_or_uri: Any = None,
     actor_user_id: str | int,
     guild_id: str | int,
     destination_key: str,
@@ -237,7 +288,14 @@ def plan_backfill(
     message_kind: str | None = None,
     config: Any = None,
 ) -> tuple[FC27BackfillPlan, str]:
-    """Execute a dry-run plan for historical backfill and mint a confirmation token."""
+    """Execute a dry-run plan for historical backfill and mint a confirmation token.
+
+    Planning uses an explicit split capability:
+    * ``reader_conn_or_uri`` performs destination validation, dry-run inventory, and
+      eligibility reads. It never creates or mutates a backfill request.
+    * ``writer_conn_or_uri`` is opened only after the plan digest and token are
+      computed, and is used solely for ``public.fc27_create_backfill_request``.
+    """
     clean_dest = destination_key.strip()
     if not clean_dest:
         raise FC27BackfillValidationError("Destination key is required.")
@@ -261,22 +319,25 @@ def plan_backfill(
         ttl_seconds = getattr(config, "backfill_confirm_ttl_seconds", 900)
         cooldown_seconds = getattr(config, "backfill_cooldown_seconds", 900)
 
-    owns_conn = False
-    if isinstance(db_conn_or_uri, psycopg.Connection):
-        conn = db_conn_or_uri
-    elif isinstance(db_conn_or_uri, str):
-        conn = psycopg.connect(db_conn_or_uri, autocommit=True)
-        owns_conn = True
-    else:
-        conn = getattr(db_conn_or_uri, "_conn", db_conn_or_uri)
+    reader_source, writer_source = _resolve_backfill_connection_pair(
+        db_conn_or_uri, reader_conn_or_uri, writer_conn_or_uri
+    )
+
+    reader_conn: Any = None
+    writer_conn: Any = None
+    owns_reader = False
+    owns_writer = False
 
     try:
-        dest = resolve_and_validate_destination(conn, clean_dest, message_kind=message_kind)
+        # Reader path: destination validation, dry-run inventory, eligibility reads.
+        reader_conn, owns_reader = _open_backfill_connection(reader_source, role="READER")
 
-        # Execute dry run through guarded backfill engine
+        dest = resolve_and_validate_destination(reader_conn, clean_dest, message_kind=message_kind)
+
+        # Execute dry run through guarded backfill engine on the reader-only path.
         summary: FC27ResultBackfillSummary = run_result_backfill(
             destination_key=dest.destination_key,
-            db_conn_or_uri=conn,
+            db_conn_or_uri=reader_conn,
             latest=latest,
             formal=(dest.message_kind == MESSAGE_KIND_FORMAL),
             team_chat=(dest.message_kind == MESSAGE_KIND_TEAM_CHAT),
@@ -285,7 +346,7 @@ def plan_backfill(
 
         # Discover eligible matches to build sanitized inventory & plan digest
         eligible_rows = _discover_latest_persisted_matches(
-            conn,
+            reader_conn,
             club_id=EAST_COASTERS_CLUB_ID,
             platform=EAST_COASTERS_PLATFORM,
             game_version=EAST_COASTERS_GAME_VERSION,
@@ -312,12 +373,17 @@ def plan_backfill(
             destination_updated_at=dest.updated_at.isoformat() if dest.updated_at else None,
         )
 
+        # Token is generated in memory only after the dry run succeeds and before
+        # the writer path is opened. It is never persisted or logged in raw form.
         raw_token = secrets.token_urlsafe(32)
         token_digest = hash_confirmation_token(raw_token)
         actor_digest = hash_actor_id(actor_str)
 
-        with conn.cursor() as cur:
-            try:
+        # Writer path: narrow request-creation procedure only.
+        writer_conn, owns_writer = _open_backfill_connection(writer_source, role="WRITER")
+
+        try:
+            with writer_conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT public.fc27_create_backfill_request(
@@ -339,22 +405,26 @@ def plan_backfill(
                 )
                 req_row = cur.fetchone()
                 request_id = str(req_row[0]) if req_row else ""
-                conn.commit()
-            except psycopg.Error as exc:
-                err_msg = str(exc)
-                if "GUILD_BACKFILL_ACTIVE" in err_msg:
-                    raise FC27BackfillLockBusyError(
-                        "Another backfill request is actively planned or running for this guild."
-                    ) from exc
-                if "ACTOR_COOLDOWN_ACTIVE" in err_msg:
-                    raise FC27BackfillCooldownActiveError(
-                        f"Backfill cooldown is currently active for operator (cooldown: {cooldown_seconds}s)."
-                    ) from exc
-                if "GUILD_COOLDOWN_ACTIVE" in err_msg:
-                    raise FC27BackfillCooldownActiveError(
-                        f"Backfill cooldown is currently active for this guild (cooldown: {cooldown_seconds}s)."
-                    ) from exc
-                raise FC27BackfillControlError(f"Failed to record backfill plan: {err_msg}") from exc
+            writer_conn.commit()
+        except psycopg.Error as exc:
+            try:
+                writer_conn.rollback()
+            except Exception:
+                pass
+            err_msg = str(exc)
+            if "GUILD_BACKFILL_ACTIVE" in err_msg:
+                raise FC27BackfillLockBusyError(
+                    "Another backfill request is actively planned or running for this guild."
+                ) from exc
+            if "ACTOR_COOLDOWN_ACTIVE" in err_msg:
+                raise FC27BackfillCooldownActiveError(
+                    f"Backfill cooldown is currently active for operator (cooldown: {cooldown_seconds}s)."
+                ) from exc
+            if "GUILD_COOLDOWN_ACTIVE" in err_msg:
+                raise FC27BackfillCooldownActiveError(
+                    f"Backfill cooldown is currently active for this guild (cooldown: {cooldown_seconds}s)."
+                ) from exc
+            raise FC27BackfillControlError("Failed to record backfill plan.") from exc
 
         # Calculate expiration ISO string
         exp_dt = datetime.now(timezone.utc).timestamp() + ttl_seconds
@@ -378,20 +448,29 @@ def plan_backfill(
 
         return plan, raw_token
     finally:
-        if owns_conn:
-            conn.close()
+        if owns_writer and writer_conn is not None:
+            writer_conn.close()
+        if owns_reader and reader_conn is not None:
+            reader_conn.close()
 
 
 def confirm_and_execute_backfill(
-    db_conn_or_uri: Any,
+    db_conn_or_uri: Any = None,
     *,
+    reader_conn_or_uri: Any = None,
+    writer_conn_or_uri: Any = None,
     actor_user_id: str | int,
     guild_id: str | int,
     confirmation_token: str,
     transport: Any,
     config: Any = None,
 ) -> FC27BackfillRequestRecord:
-    """Validate confirmation token, verify live transport gates, and execute backfill."""
+    """Validate confirmation token, verify live transport gates, and execute backfill.
+
+    The reader path recomputes match inventory for drift detection and loads
+    authoritative match data. The writer path performs the bounded request-state
+    procedures and delivery mutations. Neither path falls back to the other.
+    """
     clean_token = confirmation_token.strip()
     if not clean_token:
         raise FC27BackfillValidationError("Confirmation token is required.")
@@ -436,18 +515,21 @@ def confirm_and_execute_backfill(
     token_digest = hash_confirmation_token(clean_token)
     actor_digest = hash_actor_id(actor_str)
 
-    owns_conn = False
-    if isinstance(db_conn_or_uri, psycopg.Connection):
-        conn = db_conn_or_uri
-    elif isinstance(db_conn_or_uri, str):
-        conn = psycopg.connect(db_conn_or_uri, autocommit=True)
-        owns_conn = True
-    else:
-        conn = getattr(db_conn_or_uri, "_conn", db_conn_or_uri)
+    reader_source, writer_source = _resolve_backfill_connection_pair(
+        db_conn_or_uri, reader_conn_or_uri, writer_conn_or_uri
+    )
+
+    reader_conn: Any = None
+    writer_conn: Any = None
+    owns_reader = False
+    owns_writer = False
 
     try:
+        reader_conn, owns_reader = _open_backfill_connection(reader_source, role="READER")
+        writer_conn, owns_writer = _open_backfill_connection(writer_source, role="WRITER")
+
         # 1. Fetch planned request to get destination and latest_count
-        with conn.cursor(row_factory=dict_row) as cur:
+        with writer_conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 SELECT request_id, status, destination_key, message_kind, latest_count,
@@ -466,7 +548,7 @@ def confirm_and_execute_backfill(
         if planned_row["status"] in ("COMPLETED", "RUNNING"):
             return (
                 get_backfill_status(
-                    conn,
+                    reader_conn,
                     guild_id=guild_str,
                     lookup=str(planned_row["request_id"]),
                     actor_user_id=actor_str,
@@ -496,12 +578,14 @@ def confirm_and_execute_backfill(
             raise FC27BackfillAuthzError("Confirmation token is bound to a different guild.")
 
         dest_key = str(planned_row["destination_key"])
-        dest = resolve_and_validate_destination(conn, dest_key, message_kind=str(planned_row["message_kind"]))
+        dest = resolve_and_validate_destination(
+            reader_conn, dest_key, message_kind=str(planned_row["message_kind"])
+        )
         latest_count = int(planned_row["latest_count"])
 
         # 2. Re-compute plan digest to verify inventory hasn't drifted
         current_rows = _discover_latest_persisted_matches(
-            conn,
+            reader_conn,
             club_id=EAST_COASTERS_CLUB_ID,
             platform=EAST_COASTERS_PLATFORM,
             game_version=EAST_COASTERS_GAME_VERSION,
@@ -526,7 +610,7 @@ def confirm_and_execute_backfill(
             verify_fn(channel_id=dest.channel_id, guild_id=dest.guild_id)
 
         # 4. Atomically confirm request in DB
-        with conn.cursor(row_factory=dict_row) as cur:
+        with writer_conn.cursor(row_factory=dict_row) as cur:
             try:
                 cur.execute(
                     """
@@ -535,14 +619,14 @@ def confirm_and_execute_backfill(
                     (token_digest, actor_digest, guild_str, current_digest),
                 )
                 confirmed_row = cur.fetchone()
-                conn.commit()
+                writer_conn.commit()
             except psycopg.Error as exc:
                 err_text = str(exc)
                 if "TOKEN_EXPIRED" in err_text:
                     raise FC27BackfillTokenExpiredError("Confirmation token has expired.") from exc
                 if "PLAN_DIGEST_MISMATCH" in err_text:
                     raise FC27BackfillPlanChangedError("Plan digest mismatch; re-planning required.") from exc
-                raise FC27BackfillControlError(f"Confirmation failed: {err_text}") from exc
+                raise FC27BackfillControlError("Confirmation failed.") from exc
 
         if not confirmed_row:
             raise FC27BackfillTokenExpiredError("Confirmation transition failed.")
@@ -550,15 +634,16 @@ def confirm_and_execute_backfill(
         req_uuid = confirmed_row["request_id"]
 
         # 5. Mark as RUNNING
-        with conn.cursor() as cur:
+        with writer_conn.cursor() as cur:
             cur.execute("SELECT public.fc27_mark_backfill_running(%s)", (req_uuid,))
-        conn.commit()
+        writer_conn.commit()
 
         # 6. Execute live backfill
         try:
             summary: FC27ResultBackfillSummary = run_result_backfill(
                 destination_key=dest.destination_key,
-                db_conn_or_uri=conn,
+                db_conn_or_uri=writer_conn,
+                reader_conn_or_uri=reader_conn,
                 transport=transport,
                 latest=latest_count,
                 formal=(dest.message_kind == MESSAGE_KIND_FORMAL),
@@ -568,7 +653,7 @@ def confirm_and_execute_backfill(
             final_status = "COMPLETED" if summary.failed_count == 0 else "FAILED"
             err_cat = None if summary.failed_count == 0 else "PARTIAL_DELIVERY_FAILURE"
 
-            with conn.cursor() as cur:
+            with writer_conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT public.fc27_finalize_backfill_request(%s, %s, %s, %s, %s, %s)
@@ -582,10 +667,10 @@ def confirm_and_execute_backfill(
                         err_cat,
                     ),
                 )
-            conn.commit()
+            writer_conn.commit()
         except Exception as exc:
             # Mark failed in DB
-            with conn.cursor() as cur:
+            with writer_conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT public.fc27_finalize_backfill_request(%s, %s, %s, %s, %s, %s)
@@ -599,12 +684,12 @@ def confirm_and_execute_backfill(
                         type(exc).__name__,
                     ),
                 )
-            conn.commit()
+            writer_conn.commit()
             raise
 
         return (
             get_backfill_status(
-                conn,
+                reader_conn,
                 guild_id=guild_str,
                 lookup=str(req_uuid),
                 actor_user_id=actor_str,
@@ -627,8 +712,10 @@ def confirm_and_execute_backfill(
             )
         )
     finally:
-        if owns_conn:
-            conn.close()
+        if owns_writer and writer_conn is not None:
+            writer_conn.close()
+        if owns_reader and reader_conn is not None:
+            reader_conn.close()
 
 
 def get_backfill_status(

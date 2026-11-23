@@ -3615,7 +3615,9 @@ class FC27DiscordBotService:
             FC27BackfillAuthzError,
             FC27BackfillCooldownActiveError,
             FC27BackfillLockBusyError,
+            FC27BackfillReaderConnectionRequiredError,
             FC27BackfillValidationError,
+            FC27BackfillWriterConnectionRequiredError,
             format_plan_response,
             is_backfill_operator,
             plan_backfill,
@@ -3638,9 +3640,11 @@ class FC27DiscordBotService:
             )
 
         try:
+            reader_uri = self._resolve_readonly_conn_or_uri(required=False)
             writer_uri = self._resolve_writer_conn_or_uri(required=False)
             plan, raw_token = plan_backfill(
-                writer_uri,
+                reader_conn_or_uri=reader_uri,
+                writer_conn_or_uri=writer_uri,
                 actor_user_id=user_id,
                 guild_id=guild_id,
                 destination_key=destination,
@@ -3660,6 +3664,8 @@ class FC27DiscordBotService:
             FC27BackfillLockBusyError,
             FC27BackfillCooldownActiveError,
             FC27BackfillAuthzError,
+            FC27BackfillReaderConnectionRequiredError,
+            FC27BackfillWriterConnectionRequiredError,
         ) as exc:
             return FC27DiscordResponse(
                 command="backfill_plan",
@@ -3744,8 +3750,10 @@ class FC27DiscordBotService:
         from src.fc27_discord_backfill_control import (
             FC27BackfillAuthzError,
             FC27BackfillPlanChangedError,
+            FC27BackfillReaderConnectionRequiredError,
             FC27BackfillTokenExpiredError,
             FC27BackfillValidationError,
+            FC27BackfillWriterConnectionRequiredError,
             confirm_and_execute_backfill,
             format_status_response,
             is_backfill_operator,
@@ -3777,9 +3785,11 @@ class FC27DiscordBotService:
             )
 
         try:
+            reader_uri = self._resolve_readonly_conn_or_uri(required=False)
             writer_uri = self._resolve_writer_conn_or_uri(required=False)
             record = confirm_and_execute_backfill(
-                writer_uri,
+                reader_conn_or_uri=reader_uri,
+                writer_conn_or_uri=writer_uri,
                 actor_user_id=user_id,
                 guild_id=guild_id,
                 confirmation_token=confirmation_token,
@@ -3798,6 +3808,8 @@ class FC27DiscordBotService:
             FC27BackfillPlanChangedError,
             FC27BackfillValidationError,
             FC27BackfillAuthzError,
+            FC27BackfillReaderConnectionRequiredError,
+            FC27BackfillWriterConnectionRequiredError,
         ) as exc:
             return FC27DiscordResponse(
                 command="backfill_confirm",
