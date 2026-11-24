@@ -206,6 +206,8 @@ DECLARE
     v_last_cycle_start TIMESTAMPTZ;
     v_last_cycle_completion TIMESTAMPTZ;
     v_last_cycle_outcome TEXT;
+    v_last_cycle_invocation_source TEXT := 'SCHEDULED_POLL';
+    v_attempts_used_last_cycle INT := 0;
     v_match_types_attempted JSONB;
     v_per_type_outcome JSONB;
     v_provider_attempts_24h INT := 0;
@@ -242,11 +244,15 @@ BEGIN
         SELECT cycle_id,
                min(attempted_at),
                max(finalized_at),
+               count(*),
+               max(invocation_source),
                jsonb_agg(DISTINCT match_type ORDER BY match_type),
                jsonb_object_agg(match_type, outcome_category)
           INTO v_last_cycle_id,
                v_last_cycle_start,
                v_last_cycle_completion,
+               v_attempts_used_last_cycle,
+               v_last_cycle_invocation_source,
                v_match_types_attempted,
                v_per_type_outcome
           FROM public.fc27_provider_request_attempts
@@ -337,7 +343,7 @@ BEGIN
                count(*) FILTER (WHERE state = 'completed'),
                count(*) FILTER (WHERE state = 'failed'),
                count(*) FILTER (WHERE state = 'dead_letter'),
-               EXTRACT(EPOCH FROM (v_db_clock - min(created_at))) FILTER (WHERE state = 'pending')
+               EXTRACT(EPOCH FROM (v_db_clock - min(created_at) FILTER (WHERE state = 'pending')))
           INTO v_jobs_pending,
                v_jobs_claimed,
                v_jobs_completed,
@@ -397,6 +403,8 @@ BEGIN
             'last_cycle_start_at', v_last_cycle_start,
             'last_cycle_completed_at', v_last_cycle_completion,
             'last_cycle_outcome', v_last_cycle_outcome,
+            'invocation_source', v_last_cycle_invocation_source,
+            'attempts_used_last_cycle', v_attempts_used_last_cycle,
             'match_types_attempted', COALESCE(v_match_types_attempted, '[]'::jsonb),
             'per_type_outcome', COALESCE(v_per_type_outcome, '{}'::jsonb),
             'next_expected_poll_at', CASE

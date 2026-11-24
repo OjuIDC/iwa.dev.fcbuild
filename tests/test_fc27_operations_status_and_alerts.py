@@ -808,3 +808,457 @@ def test_47_existing_healthcheck_tests_pass() -> None:
     """47. Operational status and alerting disabled by default."""
     assert settings.is_fc27_operations_status_enabled() is False
     assert settings.is_fc27_operations_alerts_enabled() is False
+
+
+# ==============================================================================
+# PHASE 1 & 3: STRICT NUMERIC-ROLE AUTHORIZATION & ZERO-MUTATION REGRESSION TESTS
+# ==============================================================================
+
+
+def test_p1_01_admin_numeric_role_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 1.1: FC27 Administrator numeric role succeeds."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    monkeypatch.setattr(
+        "src.fc27_operations_status.fetch_operations_status_snapshot",
+        lambda _uri: _make_sample_snapshot(),
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[ADMIN_ROLE_ID],
+        is_admin=False,
+    )
+    assert resp.status == "OK"
+    assert resp.ephemeral is True
+    assert "FC27 Operations" in resp.content
+
+
+def test_p1_02_operator_numeric_role_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 1.2: FC27 Operator numeric role succeeds."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    monkeypatch.setattr(
+        "src.fc27_operations_status.fetch_operations_status_snapshot",
+        lambda _uri: _make_sample_snapshot(),
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[OPERATOR_ROLE_ID],
+        is_admin=False,
+    )
+    assert resp.status == "OK"
+    assert resp.ephemeral is True
+
+
+def test_p1_03_discord_admin_perm_alone_denied() -> None:
+    """Phase 1.3: Discord Administrator permission alone is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[],
+        is_admin=True,
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_04_general_admin_boolean_alone_denied() -> None:
+    """Phase 1.4: General Admin Boolean alone is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[UNAUTHORIZED_ROLE_ID],
+        is_admin=True,
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_05_identity_operator_alone_denied() -> None:
+    """Phase 1.5: Identity Operator alone is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[IDENTITY_OP_ROLE_ID],
+        is_admin=False,
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_06_role_name_text_denied() -> None:
+    """Phase 1.6: Role-name text is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=["Administrator", "FC27 Operator"],
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_07_managed_role_denied() -> None:
+    """Phase 1.7: Managed bot role is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=["88888888888888888"],
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_08_cross_guild_role_id_denied() -> None:
+    """Phase 1.8: Cross-guild role ID is denied."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=["77777777777777777"],
+    )
+    assert resp.status == "REJECTED_UNAUTHORIZED"
+    assert resp.ephemeral is True
+
+
+def test_p1_09_denial_is_ephemeral() -> None:
+    """Phase 1.9: Denial is ephemeral."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[UNAUTHORIZED_ROLE_ID],
+    )
+    assert resp.ephemeral is True
+
+
+def test_p1_10_denial_zero_side_effects() -> None:
+    """Phase 1.10: Denial performs zero query mutation, zero message send, and zero provider call."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[UNAUTHORIZED_ROLE_ID],
+    )
+    assert resp.provider_requests_executed == 0
+    assert DISCORD_PROVIDER_REQUESTS == 0
+
+
+def test_p3_zero_mutation_in_mutable_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 3: Invocation of /fc27 status mutates zero rows across all operational tables."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+    monkeypatch.setattr(
+        "src.fc27_operations_status.fetch_operations_status_snapshot",
+        lambda _uri: _make_sample_snapshot(),
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[OPERATOR_ROLE_ID],
+    )
+    assert resp.status == "OK"
+    assert resp.provider_requests_executed == 0
+
+
+# ==============================================================================
+# PHASE 2 & 10: CONFIGURATION & SYMBOLIC DESTINATION TESTS
+# ==============================================================================
+
+
+def test_p2_symbolic_destination_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 2: Symbolic alert destination contract."""
+    monkeypatch.setenv("FC27_OPERATIONS_ALERT_DESTINATION", "fc27-operations")
+    assert settings.get_fc27_operations_alert_destination() == "fc27-operations"
+
+    # Numeric ID must be rejected
+    monkeypatch.setenv("FC27_OPERATIONS_ALERT_DESTINATION", "123456789012345678")
+    assert settings.get_fc27_operations_alert_destination() == ""
+    with pytest.raises(settings.ConfigError):
+        settings.get_fc27_operations_alert_destination(strict=True)
+
+
+def test_p10_thresholds_validation() -> None:
+    """Phase 10: Warning must be less than critical."""
+    from src.fc27_discord_bot import FC27DiscordAuthzError
+    with pytest.raises(FC27DiscordAuthzError):
+        _build_test_config(
+            operations_poll_warning_seconds=36000,
+            operations_poll_critical_seconds=30000,
+        )
+    with pytest.raises(FC27DiscordAuthzError):
+        _build_test_config(
+            operations_job_warning_seconds=2000,
+            operations_job_critical_seconds=1000,
+        )
+    with pytest.raises(FC27DiscordAuthzError):
+        _build_test_config(
+            operations_heartbeat_warning_seconds=400,
+            operations_heartbeat_critical_seconds=200,
+        )
+
+
+# ==============================================================================
+# PHASE 7: ALERT LIFECYCLE & RACE SIMULATION TESTS
+# ==============================================================================
+
+
+def test_p7_alert_lifecycle_acknowledged_incident() -> None:
+    """Phase 7: Acknowledged alert remains acknowledged during the same incident."""
+    conn = _MockAlertConnection()
+    mgr = FC27AlertManager(conn, suppression_seconds=1800)
+    mgr.record_alert("POLL_OVERDUE", "polling", "WARNING", "Polling delayed")
+    alert = mgr.get_active_alerts()[0]
+    conn.alerts[("POLL_OVERDUE", "polling")]["status"] = "ACKNOWLEDGED"
+
+    # Subsequent record during same incident preserves ACKNOWLEDGED
+    mgr.record_alert("POLL_OVERDUE", "polling", "WARNING", "Still delayed")
+    alert_after = mgr.get_active_alerts()[0]
+    assert alert_after.status == "ACKNOWLEDGED"
+
+
+def test_p7_alert_lifecycle_recurrent_incident() -> None:
+    """Phase 7: New incident after resolution starts a new lifecycle."""
+    conn = _MockAlertConnection()
+    mgr = FC27AlertManager(conn, suppression_seconds=1800)
+    n1 = mgr.record_alert("POLL_OVERDUE", "polling", "WARNING", "Incident 1")
+    assert n1 is not None
+
+    mgr.resolve_alert("POLL_OVERDUE", "polling")
+    assert len(mgr.get_active_alerts()) == 0
+
+    # New incident after resolution opens a fresh alert
+    n2 = mgr.record_alert("POLL_OVERDUE", "polling", "WARNING", "Incident 2")
+    assert n2 is not None
+    assert n2.alert_id != n1.alert_id
+    assert n2.is_new is True
+
+
+def test_p7_unknown_heartbeat_not_healthy() -> None:
+    """Phase 7: Unknown heartbeat does not evaluate to HEALTHY."""
+    snap = _make_sample_snapshot(worker_hb_age=None, bot_hb_age=None)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.UNKNOWN
+    assert classification != HealthClassification.HEALTHY
+    assert any("heartbeat source unknown" in r.lower() for r in reasons)
+
+
+# ==============================================================================
+# PHASE 9: GOLDEN-OUTPUT TESTS FOR STATUS MARKDOWN
+# ==============================================================================
+
+
+def test_p9_golden_output_healthy() -> None:
+    """Phase 9.1: Golden output for HEALTHY state."""
+    snap = _make_sample_snapshot(worker_hb_age=20.0, bot_hb_age=15.0)
+    text = render_operations_status_markdown(snap, HealthClassification.HEALTHY)
+    assert "FC27 Operations" in text
+    assert "🟢" in text
+    assert "HEALTHY" in text
+    assert "Polling" in text
+    assert "Ingestion" in text
+    assert "Discord" in text
+    assert "Runtime" in text
+
+
+def test_p9_golden_output_degraded() -> None:
+    """Phase 9.2: Golden output for DEGRADED state."""
+    snap = _make_sample_snapshot(last_poll_hours_ago=6.0)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.DEGRADED
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "🟡" in text
+    assert "DEGRADED" in text
+    assert "Polling delayed" in text
+
+
+def test_p9_golden_output_critical() -> None:
+    """Phase 9.3: Golden output for CRITICAL state."""
+    snap = _make_sample_snapshot(last_poll_hours_ago=10.0, dead_letters=3)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.CRITICAL
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "🔴" in text
+    assert "CRITICAL" in text
+    assert "Polling overdue" in text
+
+
+def test_p9_golden_output_unknown() -> None:
+    """Phase 9.4: Golden output for UNKNOWN state."""
+    snap = _make_sample_snapshot(worker_hb_age=None, bot_hb_age=None)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.UNKNOWN
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "⚪" in text
+    assert "UNKNOWN" in text
+
+
+def test_p9_golden_output_no_cycle_history() -> None:
+    """Phase 9.5: Golden output when no cycle history exists."""
+    now = datetime.now(timezone.utc)
+    raw = {
+        "database_clock": now.isoformat(),
+        "snapshot_generated_at": now.isoformat(),
+        "polling": {
+            "last_cycle_id_sanitized": None,
+            "last_cycle_start_at": None,
+            "last_cycle_completed_at": None,
+            "last_cycle_outcome": "NO_CYCLES_RECORDED",
+            "match_types_attempted": [],
+            "per_type_outcome": {},
+            "next_expected_poll_at": None,
+            "polling_interval_seconds": 14400,
+            "single_flight_state": "free",
+            "active_lease_age_seconds": None,
+            "rolling_provider_attempts_used": 0,
+            "provider_attempt_limit": 18,
+            "remaining_provider_capacity": 18,
+            "oldest_unresolved_reservation_age_seconds": None,
+        },
+        "ingestion": {
+            "new_matches_in_last_cycle": 0,
+            "existing_duplicate_matches": 0,
+            "quarantined_matches": 0,
+            "replay_conflicts": 0,
+            "export_batch_state": "N/A",
+            "last_persisted_match_at": None,
+            "latest_source_match_at": None,
+            "data_freshness_age_seconds": None,
+        },
+        "discord_delivery": {
+            "jobs_pending": 0,
+            "jobs_claimed": 0,
+            "jobs_completed": 0,
+            "jobs_failed": 0,
+            "jobs_dead_lettered": 0,
+            "oldest_pending_job_age_seconds": None,
+            "formal_result_delivery_count": 0,
+            "team_summary_delivery_count": 0,
+            "failed_destination_delivery_count": 0,
+            "last_successful_delivery_time": None,
+        },
+        "runtime": {
+            "worker_heartbeat_age_seconds": 25.0,
+            "bot_heartbeat_age_seconds": 25.0,
+            "current_migration_version": "0024",
+            "grants_policy_version": 25,
+            "active_backfill_request_count": 0,
+        },
+    }
+    snap = parse_operations_status_snapshot(raw)
+    text = render_operations_status_markdown(snap, HealthClassification.HEALTHY)
+    assert "Last cycle: None" in text
+
+
+def test_p9_golden_output_partial_cycle() -> None:
+    """Phase 9.6: Golden output for partial cycle."""
+    snap = _make_sample_snapshot()
+    raw = snap.polling
+    object.__setattr__(raw, "last_cycle_outcome", "PARTIAL_OR_FAILED")
+    text = render_operations_status_markdown(snap, HealthClassification.HEALTHY)
+    assert "partial_or_failed" in text.lower()
+
+
+def test_p9_golden_output_quiet_successful_cycle() -> None:
+    """Phase 9.7: Golden output for quiet successful cycle."""
+    snap = _make_sample_snapshot(new_matches=0)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.HEALTHY
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "New: 0" in text
+    assert "🟢" in text
+
+
+def test_p9_golden_output_budget_exhausted() -> None:
+    """Phase 9.8: Golden output for exhausted provider budget."""
+    snap = _make_sample_snapshot(rolling_attempts=18)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.CRITICAL
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "capacity exhausted" in text.lower()
+
+
+def test_p9_golden_output_pending_job_critical() -> None:
+    """Phase 9.9: Golden output for critical pending job age."""
+    snap = _make_sample_snapshot(pending_jobs=5, oldest_pending_age=2000.0)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.CRITICAL
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "pending discord job stuck" in text.lower()
+
+
+def test_p9_golden_output_stale_worker_heartbeat() -> None:
+    """Phase 9.10: Golden output for stale worker heartbeat."""
+    snap = _make_sample_snapshot(worker_hb_age=200.0)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.DEGRADED
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "worker heartbeat stale" in text.lower()
+
+
+def test_p9_golden_output_stale_bot_heartbeat() -> None:
+    """Phase 9.11: Golden output for stale bot heartbeat."""
+    snap = _make_sample_snapshot(bot_hb_age=200.0)
+    classification, reasons = classify_operations_health(snap)
+    assert classification == HealthClassification.DEGRADED
+    text = render_operations_status_markdown(snap, classification, reasons)
+    assert "discord bot heartbeat stale" in text.lower()
+
+
+def test_p9_golden_output_database_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 9.12: Database error during snapshot fetch returns error response."""
+    cfg = _build_test_config(operations_status_enabled=True)
+    svc = FC27DiscordBotService(cfg, db_conn_or_uri="postgresql://fake")
+
+    def _timeout_fetch(uri: Any) -> Any:
+        raise psycopg.OperationalError("connection timeout expired")
+
+    monkeypatch.setattr(
+        "src.fc27_operations_status.fetch_operations_status_snapshot",
+        _timeout_fetch,
+    )
+    resp = svc.handle_slash_command(
+        "status",
+        guild_id=TEST_GUILD_ID,
+        channel_id=TEST_CHANNEL_ID,
+        user_id=TEST_USER_ID,
+        user_role_ids=[OPERATOR_ROLE_ID],
+    )
+    assert resp.status == "ERROR"
+    assert "unable to query operator status" in resp.content.lower()

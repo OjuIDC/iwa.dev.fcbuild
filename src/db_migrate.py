@@ -1309,9 +1309,9 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     "fc27_dispatch": (),
                     "fc27_relay": (),
                     "fc27_player_dev_writer": (),
-                    "fc27_discord_reader": ("SELECT",),
+                    "fc27_discord_reader": (),
                     "fc27_poll_writer": (),
-                    "fc27_match_results_writer": ("SELECT", "INSERT", "UPDATE"),
+                    "fc27_match_results_writer": (),
                 }
                 for role_name, allowed_privs in alerts_matrix.items():
                     if role_name != "public":

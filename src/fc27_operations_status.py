@@ -309,12 +309,15 @@ def classify_operations_health(
             warning_reasons.append(f"Pending Discord job delayed ({int(oldest_job_age)}s)")
 
     # 3. Runtime heartbeat checks
+    unknown_reasons: list[str] = []
     w_hb = snapshot.runtime.worker_heartbeat_age_seconds
     if w_hb is not None:
         if w_hb > hb_crit_sec:
             critical_reasons.append(f"Worker heartbeat missing ({int(w_hb)}s > {hb_crit_sec}s)")
         elif w_hb > hb_warn_sec:
             warning_reasons.append(f"Worker heartbeat stale ({int(w_hb)}s > {hb_warn_sec}s)")
+    else:
+        unknown_reasons.append("Worker heartbeat source unknown")
 
     b_hb = snapshot.runtime.bot_heartbeat_age_seconds
     if b_hb is not None:
@@ -322,11 +325,15 @@ def classify_operations_health(
             critical_reasons.append(f"Discord bot heartbeat missing ({int(b_hb)}s > {hb_crit_sec}s)")
         elif b_hb > hb_warn_sec:
             warning_reasons.append(f"Discord bot heartbeat stale ({int(b_hb)}s > {hb_warn_sec}s)")
+    else:
+        unknown_reasons.append("Discord bot heartbeat source unknown")
 
     if critical_reasons:
-        return HealthClassification.CRITICAL, critical_reasons + warning_reasons
+        return HealthClassification.CRITICAL, critical_reasons + warning_reasons + unknown_reasons
     if warning_reasons:
-        return HealthClassification.DEGRADED, warning_reasons
+        return HealthClassification.DEGRADED, warning_reasons + unknown_reasons
+    if unknown_reasons:
+        return HealthClassification.UNKNOWN, unknown_reasons
     return HealthClassification.HEALTHY, []
 
 

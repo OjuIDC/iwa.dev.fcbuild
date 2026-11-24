@@ -470,7 +470,7 @@ class FC27DiscordBotConfig(BaseModel):
     operations_job_critical_seconds: int = Field(default=1800, ge=120, le=14400)
     operations_heartbeat_warning_seconds: int = Field(default=120, ge=30, le=3600)
     operations_heartbeat_critical_seconds: int = Field(default=300, ge=60, le=7200)
-    alerts_channel_id: str | None = None
+    operations_alert_destination: str = Field(default="", max_length=100)
 
     @property
     def match_results_writer_role_ids(self) -> frozenset[str]:
@@ -520,12 +520,24 @@ class FC27DiscordBotConfig(BaseModel):
         for rid in self.operator_role_ids:
             if not str(rid).isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError("Invalid Operator role ID in allowlist")
-        if self.alerts_channel_id is not None:
-            ac_clean = self.alerts_channel_id.strip()
-            if not ac_clean.isdecimal() or int(ac_clean) <= 0:
+        if self.operations_alert_destination:
+            dest_clean = self.operations_alert_destination.strip()
+            if dest_clean.isdecimal():
                 raise FC27DiscordAuthzError(
-                    f"Invalid Discord alerts_channel_id: '{self.alerts_channel_id}'"
+                    f"FC27 operations_alert_destination must be a symbolic key, not a numeric ID: '{self.operations_alert_destination}'"
                 )
+        if self.operations_poll_warning_seconds >= self.operations_poll_critical_seconds:
+            raise FC27DiscordAuthzError(
+                f"operations_poll_warning_seconds ({self.operations_poll_warning_seconds}) must be less than operations_poll_critical_seconds ({self.operations_poll_critical_seconds})"
+            )
+        if self.operations_job_warning_seconds >= self.operations_job_critical_seconds:
+            raise FC27DiscordAuthzError(
+                f"operations_job_warning_seconds ({self.operations_job_warning_seconds}) must be less than operations_job_critical_seconds ({self.operations_job_critical_seconds})"
+            )
+        if self.operations_heartbeat_warning_seconds >= self.operations_heartbeat_critical_seconds:
+            raise FC27DiscordAuthzError(
+                f"operations_heartbeat_warning_seconds ({self.operations_heartbeat_warning_seconds}) must be less than operations_heartbeat_critical_seconds ({self.operations_heartbeat_critical_seconds})"
+            )
         if self.results_channel_id is not None:
             rc_clean = self.results_channel_id.strip()
             if not rc_clean.isdecimal() or int(rc_clean) <= 0:
@@ -602,7 +614,7 @@ class FC27DiscordBotConfig(BaseModel):
             ops_job_crit = settings.get_fc27_operations_job_critical_seconds(strict=strict)
             ops_hb_warn = settings.get_fc27_operations_heartbeat_warning_seconds(strict=strict)
             ops_hb_crit = settings.get_fc27_operations_heartbeat_critical_seconds(strict=strict)
-            alerts_chan = settings.get_fc27_discord_alerts_channel_id(strict=strict)
+            alerts_dest = settings.get_fc27_operations_alert_destination(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         if dispatch_enabled and not results_chan:
@@ -643,7 +655,7 @@ class FC27DiscordBotConfig(BaseModel):
             operations_job_critical_seconds=ops_job_crit,
             operations_heartbeat_warning_seconds=ops_hb_warn,
             operations_heartbeat_critical_seconds=ops_hb_crit,
-            alerts_channel_id=alerts_chan,
+            operations_alert_destination=alerts_dest,
         )
 
 
@@ -3970,14 +3982,17 @@ class FC27DiscordBotService:
             if (s := str(r).strip()).isdecimal() and int(s) > 0
         }
 
-        admin_roles = self._config.admin_role_ids
-        operator_roles = self._config.operator_role_ids
+        # Strict numeric-role-only authorization:
+        # caller_role_ids intersects (FC27_DISCORD_ADMIN_ROLE_IDS union FC27_DISCORD_OPERATOR_ROLE_IDS)
+        # Guild Administrator permission alone or general Admin Boolean alone is explicitly DENIED.
+        admin_roles = self._config.admin_role_ids or frozenset()
+        operator_roles = self._config.operator_role_ids or frozenset()
+        authorized_roles = admin_roles | operator_roles
 
-        has_admin = bool(is_admin or (admin_roles and (caller_role_ids & admin_roles)))
-        has_operator = bool(operator_roles and (caller_role_ids & operator_roles))
+        has_authorized_role = bool(authorized_roles and (caller_role_ids & authorized_roles))
 
-        # Check: Identity Operator alone or text role is denied
-        if not (has_admin or has_operator):
+        # Check: Identity Operator alone, text roles, or general is_admin Boolean alone is denied
+        if not has_authorized_role:
             return FC27DiscordResponse(
                 command="status",
                 status="REJECTED_UNAUTHORIZED",

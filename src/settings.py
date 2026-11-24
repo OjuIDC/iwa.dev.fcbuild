@@ -838,23 +838,23 @@ def get_fc27_operations_heartbeat_critical_seconds(*, strict: bool = False) -> i
     return num
 
 
-def get_fc27_discord_alerts_channel_id(*, strict: bool = False) -> str | None:
-    """Return optional dedicated Discord Alerts channel ID if configured."""
-    raw = os.getenv("FC27_DISCORD_ALERTS_CHANNEL_ID")
-    if raw is None or not raw.strip():
-        raw = os.getenv("DISCORD_ALERTS_CHANNEL_ID")
-    if raw is None or not raw.strip():
-        return None
-    token = raw.strip()
-    if token.startswith("replace_with_"):
-        return None
-    if not token.isdecimal() or int(token) <= 0:
+def get_fc27_operations_alert_destination(*, strict: bool = False) -> str:
+    """Return the symbolic destination key for operations alerts if configured.
+
+    Defaults to empty string (fail closed). Symbolic key only (e.g. 'fc27-operations').
+    Must not be a numeric snowflake ID.
+    """
+    raw = os.getenv("FC27_OPERATIONS_ALERT_DESTINATION", "")
+    val = raw.strip()
+    if not val:
+        return ""
+    if val.isdecimal():
         if strict:
             raise ConfigError(
-                f"FC27_DISCORD_ALERTS_CHANNEL_ID must be a positive numeric Discord snowflake ID, got '{token}'"
+                f"FC27_OPERATIONS_ALERT_DESTINATION must be a symbolic key, not a numeric ID: '{val}'"
             )
-        return None
-    return token
+        return ""
+    return val
 
 
 def get_fc27_discord_backfill_operator_role_ids(*, strict: bool = False) -> frozenset[str]:

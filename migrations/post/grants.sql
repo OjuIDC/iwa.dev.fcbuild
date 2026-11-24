@@ -1313,13 +1313,7 @@ BEGIN
     -- Migration 0025 additions (Policy 26): Operations status snapshot and deduplicated alerting
     IF to_regclass('public.fc27_operator_alerts') IS NOT NULL THEN
         REVOKE ALL ON TABLE public.fc27_operator_alerts
-            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer;
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
-            EXECUTE 'GRANT SELECT ON TABLE public.fc27_operator_alerts TO fc27_discord_reader';
-        END IF;
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
-            EXECUTE 'GRANT SELECT, INSERT, UPDATE ON TABLE public.fc27_operator_alerts TO fc27_match_results_writer';
-        END IF;
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader, fc27_match_results_writer;
     END IF;
 
     IF to_regprocedure('public.fc27_record_operator_alert(text, text, text, text, jsonb, integer)') IS NOT NULL THEN
