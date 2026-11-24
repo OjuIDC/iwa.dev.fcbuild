@@ -631,6 +631,11 @@ def confirm_and_execute_backfill(
         if not confirmed_row:
             raise FC27BackfillTokenExpiredError("Confirmation transition failed.")
 
+        # Migration 0024 returns the EXPIRED row after committing the transition.
+        # Do not enter the RUNNING/live-transport path for an expired token.
+        if str(confirmed_row["status"]) == "EXPIRED":
+            raise FC27BackfillTokenExpiredError("Confirmation token has expired.")
+
         req_uuid = confirmed_row["request_id"]
 
         # 5. Mark as RUNNING
@@ -825,16 +830,17 @@ def format_status_response(record: FC27BackfillRequestRecord) -> str:
     err_line = f"\n**Last Error:** `{record.last_error_category}`" if record.last_error_category else ""
     return (
         f"### FC27 Backfill Request Status\n\n"
-        f"**Request ID:** `{record.request_id}`\n"
         f"**Status:** `{record.status}`\n"
         f"**Destination:** `{record.destination_key}`\n"
         f"**Message Kind:** `{record.message_kind}`\n"
+        f"**Latest Count:** {record.latest_count}\n"
         f"**Planned Count:** {record.planned_count}\n"
         f"**Delivered Count:** {record.delivered_count}\n"
         f"**Skipped Count:** {record.skipped_count}\n"
         f"**Failed Count:** {record.failed_count}"
         f"{err_line}\n"
         f"**Created At:** {record.created_at or 'N/A'}\n"
+        f"**Expires At:** {record.expires_at or 'N/A'}\n"
         f"**Confirmed At:** {record.confirmed_at or 'N/A'}\n"
         f"**Completed At:** {record.completed_at or 'N/A'}"
     )

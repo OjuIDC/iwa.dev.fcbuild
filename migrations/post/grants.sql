@@ -1,4 +1,4 @@
--- grants-policy-version: 24
+-- grants-policy-version: 25
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1286,6 +1286,27 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_backfill_request_status(text, text, text) TO fc27_discord_reader';
+        END IF;
+    END IF;
+
+    -- Migration 0024 additions (Policy 25): bounded overdue reconciliation
+    IF to_regprocedure('public.fc27_expire_overdue_backfill_requests()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_expire_overdue_backfill_requests()
+            FROM PUBLIC, fc27_app, fc27_dispatch;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_relay') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_expire_overdue_backfill_requests() FROM fc27_relay';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_player_dev_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_expire_overdue_backfill_requests() FROM fc27_player_dev_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_expire_overdue_backfill_requests() FROM fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'REVOKE ALL ON FUNCTION public.fc27_expire_overdue_backfill_requests() FROM fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_expire_overdue_backfill_requests() TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

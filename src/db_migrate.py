@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import sys
 from pathlib import Path
@@ -20,7 +19,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 24
+GRANTS_POLICY_VERSION = 25
 
 
 def _compute_grants_sha256() -> str:
@@ -1223,13 +1222,21 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         elif priv not in allowed_privs and has_priv:
                             violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_discord_backfill_requests")
 
-                fn_0023_specs = (
+                cur.execute("SELECT max(version) FROM public.schema_migrations")
+                max_migration_row = cur.fetchone()
+                max_migration = str(max_migration_row[0]) if max_migration_row and max_migration_row[0] else ""
+
+                fn_0023_specs = [
                     ("fc27_create_backfill_request", ("fc27_match_results_writer",)),
                     ("fc27_confirm_backfill_request", ("fc27_match_results_writer",)),
                     ("fc27_mark_backfill_running", ("fc27_match_results_writer",)),
                     ("fc27_finalize_backfill_request", ("fc27_match_results_writer",)),
                     ("fc27_get_backfill_request_status", ("fc27_match_results_writer", "fc27_discord_reader")),
-                )
+                ]
+                if max_migration >= "0024":
+                    fn_0023_specs.append(
+                        ("fc27_expire_overdue_backfill_requests", ("fc27_match_results_writer",))
+                    )
                 all_check_roles_0023 = (
                     "public",
                     "fc27_app",
