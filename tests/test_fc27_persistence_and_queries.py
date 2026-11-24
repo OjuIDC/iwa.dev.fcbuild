@@ -440,7 +440,7 @@ def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 25
+            assert row[0] == 26
             assert row[1] == GRANTS_POLICY.sha256
             assert row[2] == "fc27_migrator"
 
