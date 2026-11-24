@@ -427,15 +427,15 @@ def test_09_postgres_saver_tables_unchanged(pg_db_migrated) -> None:
 
 def test_10_grants_policy_version_14_recorded(pg_db_migrated) -> None:
     """10. Current grants policy version is recorded in public.schema_policy_versions."""
-    assert GRANTS_POLICY_VERSION == 25
-    assert GRANTS_POLICY.version == 25
+    assert GRANTS_POLICY_VERSION == 26
+    assert GRANTS_POLICY.version == 26
     with psycopg.connect(pg_db_migrated.admin) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT version, sha256, applied_by
                 FROM public.schema_policy_versions
-                WHERE policy = 'grants' AND version = 25
+                WHERE policy = 'grants' AND version = 26
                 """
             )
             row = cur.fetchone()

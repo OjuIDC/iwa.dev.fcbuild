@@ -2640,12 +2640,12 @@ def run_recovery_readiness_checks(
     _add(
         "database_migration_current",
         mig_current,
-        f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0024 not verified",
+        f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0025 not verified",
     )
     _add(
         "database_grants_policy_current",
         grants_current,
-        f"grants policy v{pg_vol_res.grants_policy_version}" if (grants_current and pg_vol_res) else "Grants Policy 25 not verified",
+        f"grants policy v{pg_vol_res.grants_policy_version}" if (grants_current and pg_vol_res) else "Grants Policy 26 not verified",
     )
     _add(
         "database_tables_present",
