@@ -68,7 +68,9 @@
       "secrets/fc27_alias_hmac_key",
       "secrets/discord_bot_token"
     ],
-    "optional": []
+    "optional": [
+      "secrets/fc27_match_results_writer_uri"
+    ]
   },
   "protected_metadata_files": {
     "optional": [
@@ -155,6 +157,7 @@
     "fc27_app_uri": "secrets/fc27_app_uri",
     "fc27_discord_reader_uri": "secrets/fc27_discord_reader_uri",
     "fc27_player_dev_writer_uri": "secrets/fc27_player_dev_writer_uri",
+    "fc27_match_results_writer_uri": "secrets/fc27_match_results_writer_uri",
     "fc27_poll_writer_uri": "secrets/fc27_poll_writer_uri",
     "fc27_alias_hmac_key": "secrets/fc27_alias_hmac_key"
   }

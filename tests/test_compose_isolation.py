@@ -25,6 +25,7 @@ ALL_DB_SECRETS = {
     "fc27_dispatch_password",
     "fc27_relay_password",
     "fc27_match_results_writer_password",
+    "fc27_match_results_writer_uri",
     "fc27_poll_writer_password",
     "fc27_player_dev_writer_password",
     "fc27_discord_reader_password",
@@ -634,6 +635,11 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(
         discord["environment"]["FC27_PLAYER_DEV_WRITER_URI_FILE"]
         == "/run/secrets/fc27_player_dev_writer_uri"
     )
+    assert (
+        discord["environment"]["FC27_MATCH_RESULTS_WRITER_URI_FILE"]
+        == "/run/secrets/fc27_match_results_writer_uri"
+    )
+    assert "FC27_MATCH_RESULTS_WRITER_URI_FILE" not in worker["environment"]
     assert "FC27_POLL_WRITER_URI_FILE" not in discord["environment"]
     assert "FC27_ALIAS_HMAC_KEY_FILE" not in discord["environment"]
     assert "POSTGRES_URI_FILE" not in worker["environment"]
@@ -656,6 +662,7 @@ def test_optional_overlays_join_fc27_data_and_use_transitional_fc27_app_uri(
         "discord_bot_token",
         "fc27_app_uri",
         "fc27_discord_reader_uri",
+        "fc27_match_results_writer_uri",
         "fc27_player_dev_writer_uri",
     }
     assert _service_secrets(worker) == {
@@ -706,6 +713,7 @@ def test_stage_c_role_secrets_and_uri_separation(tmp_path, monkeypatch):
         "fc27_poll_writer_uri",
         "fc27_player_dev_writer_uri",
         "fc27_discord_reader_uri",
+        "fc27_match_results_writer_uri",
         "fc27_alias_hmac_key",
     ):
         assert sec_name in secrets_cfg
@@ -1213,3 +1221,91 @@ def test_admin_and_migrator_credentials_absent_from_runtime_services(tmp_path):
         assert not (_service_secrets(svc) & admin_set), (
             f"{name} mounts an admin or migrator credential"
         )
+
+
+def test_tracked_match_results_writer_secret_declaration_and_mount(tmp_path):
+    """Verify fc27_match_results_writer_uri is declared tracked, mounted in bot only, and isolated."""
+    model = _discord_render(tmp_path, SYNTHETIC_ROLE_VALUES)
+    services = model["services"]
+    bot = services["fc27-discord-bot"]
+
+    # 1. Top-level secret is declared with valid local path
+    secrets_cfg = model.get("secrets") or {}
+    assert "fc27_match_results_writer_uri" in secrets_cfg
+    src_file = str(secrets_cfg["fc27_match_results_writer_uri"].get("file", "")).replace("\\", "/")
+    assert src_file.endswith("secrets/fc27_match_results_writer_uri")
+
+    # 2. Mounted into fc27-discord-bot at exact target path
+    assert "fc27_match_results_writer_uri" in _service_secrets(bot)
+    bot_secrets = bot.get("secrets", [])
+    mrw_entry = next((s for s in bot_secrets if s.get("source") == "fc27_match_results_writer_uri"), None)
+    assert mrw_entry is not None
+    assert mrw_entry.get("target") == "/run/secrets/fc27_match_results_writer_uri"
+
+    # 3. Environment variable points to exact secret file
+    env = _bot_env(model)
+    assert env["FC27_MATCH_RESULTS_WRITER_URI_FILE"] == "/run/secrets/fc27_match_results_writer_uri"
+
+    # 4. Strictly isolated: never mounted or configured in other services
+    for svc_name, svc in services.items():
+        if svc_name == "fc27-discord-bot":
+            continue
+        svc_secrets = _service_secrets(svc)
+        assert "fc27_match_results_writer_uri" not in svc_secrets, (
+            f"{svc_name} must not mount fc27_match_results_writer_uri"
+        )
+        svc_env = svc.get("environment") or {}
+        assert "FC27_MATCH_RESULTS_WRITER_URI_FILE" not in svc_env, (
+            f"{svc_name} environment must not contain FC27_MATCH_RESULTS_WRITER_URI_FILE"
+        )
+        assert "FC27_MATCH_RESULTS_WRITER_URI" not in svc_env, (
+            f"{svc_name} environment must not contain FC27_MATCH_RESULTS_WRITER_URI"
+        )
+
+
+def test_tracked_match_results_writer_secret_with_local_override_deduplication(tmp_path):
+    """Verify compose gracefully deduplicates secret mount when local override also declares it."""
+    override = tmp_path / "docker-compose.override.yml"
+    override.write_text(
+        "services:\n"
+        "  fc27-discord-bot:\n"
+        "    environment:\n"
+        "      FC27_MATCH_RESULTS_WRITER_URI_FILE: /run/secrets/fc27_match_results_writer_uri\n"
+        "    secrets:\n"
+        "      - fc27_match_results_writer_uri\n"
+        "secrets:\n"
+        "  fc27_match_results_writer_uri:\n"
+        "    file: ./secrets/fc27_match_results_writer_uri\n",
+        encoding="utf-8",
+    )
+    env = _env_file(tmp_path, SYNTHETIC_ROLE_VALUES)
+    out = _config(
+        env,
+        "-f", "docker-compose.yml",
+        "-f", "docker-compose.discord.yml",
+        "-f", str(override),
+        "--profile", "fc27-discord",
+    )
+    assert out.returncode == 0, out.stderr
+    model = json.loads(out.stdout)
+    bot = model["services"]["fc27-discord-bot"]
+    bot_secrets = bot.get("secrets", [])
+    matching = [s for s in bot_secrets if s.get("source") == "fc27_match_results_writer_uri"]
+    assert len(matching) == 1, f"Expected exactly 1 mount, found {len(matching)}"
+    assert matching[0].get("target") == "/run/secrets/fc27_match_results_writer_uri"
+    assert bot["environment"]["FC27_MATCH_RESULTS_WRITER_URI_FILE"] == "/run/secrets/fc27_match_results_writer_uri"
+
+
+def test_tracked_match_results_writer_secret_manifest_and_gitignore():
+    """Verify manifest records fc27_match_results_writer_uri as source and optional secret, and secret is gitignored."""
+    manifest_path = ROOT / "ops" / "fc27-protected-state-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Manifest checks
+    assert manifest["compose_secret_sources"].get("fc27_match_results_writer_uri") == "secrets/fc27_match_results_writer_uri"
+    assert "secrets/fc27_match_results_writer_uri" in manifest["protected_secret_files"]["optional"]
+    assert len(manifest["protected_secret_files"]["required"]) == 18
+
+    # Gitignore checks
+    gitignore_text = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "secrets/" in gitignore_text or "secrets/*" in gitignore_text

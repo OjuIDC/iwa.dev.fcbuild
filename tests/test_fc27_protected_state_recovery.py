@@ -282,6 +282,7 @@ def _populate_synthetic_repo(root: Path, *, include_override: bool = True) -> Pa
         "fc27_dispatch_password": "synthetic-dispatch-password",
         "fc27_relay_password": "synthetic-relay-password",
         "fc27_match_results_writer_password": "synthetic-mrw-password",
+        "fc27_match_results_writer_uri": "postgresql://fc27_match_results_writer:synthetic-mrw-password@postgres:5432/fc27",
         "fc27_poll_writer_password": "synthetic-pw-password",
         "fc27_poll_writer_uri": "postgresql://fc27_poll_writer:synthetic-pw-password@postgres:5432/fc27",
         "fc27_player_dev_writer_password": "synthetic-pdw-password",

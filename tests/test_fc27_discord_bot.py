@@ -777,8 +777,13 @@ def test_50_discord_container_and_compose_isolation() -> None:
         "discord_bot_token",
         "fc27_app_uri",
         "fc27_discord_reader_uri",
+        "fc27_match_results_writer_uri",
         "fc27_player_dev_writer_uri",
     }
+    assert (
+        svc["environment"]["FC27_MATCH_RESULTS_WRITER_URI_FILE"]
+        == "/run/secrets/fc27_match_results_writer_uri"
+    )
 
 
 def test_51_identity_and_webauthn_tables_blocked_and_role_allowlist_enforced(
