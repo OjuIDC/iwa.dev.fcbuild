@@ -536,6 +536,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "Split reader/writer database roles for secured backfill planning, confirmation, and status using real least-privilege roles.",
         ),
         _entry(
+            "tests/test_fc27_backfill_expiry_state.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Committed EXPIRED backfill state, bounded overdue reconciliation, and status identifier redaction using real PostgreSQL transactions.",
+        ),
+        _entry(
             "tests/test_fc27_polling_worker.py",
             "POSTGRES_PARALLEL_SAFE",
             (

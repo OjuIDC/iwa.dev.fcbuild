@@ -221,6 +221,7 @@
     <Content Include="migrations\0021_fc27_destination_aware_delivery_and_linkage.sql" />
     <Content Include="migrations\0022_fc27_provider_request_budget.sql" />
     <Content Include="migrations\0023_fc27_discord_backfill_control.sql" />
+    <Content Include="migrations\0024_fc27_backfill_expiration_state_fix.sql" />
     <Content Include="migrations\post\grants.sql" />
     <Content Include="ops\fc27-protected-state-manifest.json" />
     <Content Include="pyproject.toml" />

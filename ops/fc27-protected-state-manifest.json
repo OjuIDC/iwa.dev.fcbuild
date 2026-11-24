@@ -27,8 +27,8 @@
       "mountpoint": "/var/lib/postgresql/data",
       "service": "postgres",
       "required": true,
-      "migration_version": "0021_fc27_provider_request_budget.sql",
-      "grants_policy_version": 22
+      "migration_version": "0024_fc27_backfill_expiration_state_fix.sql",
+      "grants_policy_version": 25
     },
     "redis_data": {
       "full_volume_name": "fc27-full-stack_redis_data",
@@ -106,9 +106,9 @@
     "FC27_RECONCILIATION_TOKEN_RETENTION_HOURS": 24
   },
   "database_expected_state": {
-    "minimum_migration": "0023_fc27_discord_backfill_control.sql",
-    "expected_migration_version": "0001_THROUGH_0023",
-    "grants_policy_version": 24,
+    "minimum_migration": "0024_fc27_backfill_expiration_state_fix.sql",
+    "expected_migration_version": "0001_THROUGH_0024",
+    "grants_policy_version": 25,
     "alias_hmac_key_continuity_required": true
   },
   "acl_policy": {
