@@ -1,4 +1,4 @@
--- grants-policy-version: 25
+-- grants-policy-version: 26
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1307,6 +1307,50 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_expire_overdue_backfill_requests() TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    -- Migration 0025 additions (Policy 26): Operations status snapshot and deduplicated alerting
+    IF to_regclass('public.fc27_operator_alerts') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_operator_alerts
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader, fc27_match_results_writer;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_operator_alert(text, text, text, text, jsonb, integer)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_operator_alert(text, text, text, text, jsonb, integer)
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_operator_alert(text, text, text, text, jsonb, integer) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_resolve_operator_alert(text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_resolve_operator_alert(text, text)
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer, fc27_discord_reader;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_resolve_operator_alert(text, text) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_get_active_operator_alerts()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_get_active_operator_alerts()
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_active_operator_alerts() TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_active_operator_alerts() TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_get_operations_status_snapshot()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_get_operations_status_snapshot()
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_operations_status_snapshot() TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_operations_status_snapshot() TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

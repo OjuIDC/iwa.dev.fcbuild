@@ -19,7 +19,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 25
+GRANTS_POLICY_VERSION = 26
 
 
 def _compute_grants_sha256() -> str:
@@ -1271,6 +1271,105 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                     if "search_path=pg_catalog, pg_temp" not in f_cfg:
                         violations.append(f"{fn_name}_search_path")
                     for check_role in all_check_roles_0023:
+                        if check_role != "public":
+                            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
+                            if not cur.fetchone():
+                                continue
+                        cur.execute(
+                            "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                            (check_role, f_oid),
+                        )
+                        e_row = cur.fetchone()
+                        has_exec = bool(e_row and e_row[0])
+                        if check_role in allowed_exec_roles and not has_exec:
+                            violations.append(f"missing_{check_role}_exec_{fn_name}")
+                        elif check_role not in allowed_exec_roles and has_exec:
+                            violations.append(f"forbidden_{check_role}_exec_{fn_name}")
+
+            # Migration 0025 / Policy 26 checks (Operations status snapshot and deduplicated alerting)
+            cur.execute("SELECT to_regclass('public.fc27_operator_alerts')")
+            reg_0025 = cur.fetchone()
+            has_0025_table = bool(reg_0025 and reg_0025[0])
+            if has_0025_table:
+                cur.execute(
+                    """
+                    SELECT c.relowner::regrole::text
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = 'fc27_operator_alerts'
+                    """
+                )
+                t_row = cur.fetchone()
+                if not t_row or t_row[0] != "fc27_owner":
+                    violations.append("fc27_operator_alerts_not_owner")
+
+                alerts_matrix = {
+                    "public": (),
+                    "fc27_app": (),
+                    "fc27_dispatch": (),
+                    "fc27_relay": (),
+                    "fc27_player_dev_writer": (),
+                    "fc27_discord_reader": (),
+                    "fc27_poll_writer": (),
+                    "fc27_match_results_writer": (),
+                }
+                for role_name, allowed_privs in alerts_matrix.items():
+                    if role_name != "public":
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+                        if not cur.fetchone():
+                            continue
+                    for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        cur.execute(
+                            "SELECT has_table_privilege(%s, 'public.fc27_operator_alerts', %s)",
+                            (role_name, priv),
+                        )
+                        p_row = cur.fetchone()
+                        has_priv = bool(p_row and p_row[0])
+                        if priv in allowed_privs and not has_priv:
+                            violations.append(f"missing_{role_name}_{priv.lower()}_on_fc27_operator_alerts")
+                        elif priv not in allowed_privs and has_priv:
+                            violations.append(f"forbidden_{role_name}_{priv.lower()}_on_fc27_operator_alerts")
+
+                fn_0025_specs = [
+                    ("fc27_record_operator_alert", ("fc27_match_results_writer",)),
+                    ("fc27_resolve_operator_alert", ("fc27_match_results_writer",)),
+                    ("fc27_get_active_operator_alerts", ("fc27_match_results_writer", "fc27_discord_reader")),
+                    ("fc27_get_operations_status_snapshot", ("fc27_match_results_writer", "fc27_discord_reader")),
+                ]
+                all_check_roles_0025 = (
+                    "public",
+                    "fc27_app",
+                    "fc27_dispatch",
+                    "fc27_relay",
+                    "fc27_poll_writer",
+                    "fc27_player_dev_writer",
+                    "fc27_discord_reader",
+                    "fc27_match_results_writer",
+                )
+                for fn_name, allowed_exec_roles in fn_0025_specs:
+                    cur.execute(
+                        """
+                        SELECT p.oid, p.prosecdef, p.proowner::regrole::text, p.proconfig
+                        FROM pg_proc p
+                        JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.proname = %s
+                        """,
+                        (fn_name,),
+                    )
+                    fn_row = cur.fetchone()
+                    if not fn_row:
+                        violations.append(f"missing_function_{fn_name}")
+                        continue
+                    f_oid, f_secdef, f_owner, f_config = fn_row
+                    if not f_secdef:
+                        violations.append(f"{fn_name}_not_secdef")
+                    if f_owner != "fc27_owner":
+                        violations.append(f"{fn_name}_not_owner")
+                    f_cfg = " ".join(f_config) if f_config else ""
+                    if "search_path=pg_catalog, pg_temp" not in f_cfg:
+                        violations.append(f"{fn_name}_search_path")
+                    for check_role in all_check_roles_0025:
                         if check_role != "public":
                             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (check_role,))
                             if not cur.fetchone():
