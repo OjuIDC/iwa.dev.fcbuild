@@ -1,4 +1,4 @@
--- grants-policy-version: 26
+-- grants-policy-version: 27
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1351,6 +1351,41 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_operations_status_snapshot() TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    -- Migration 0026 durable service heartbeats.
+    -- Runtime roles receive ONLY bounded procedure EXECUTE; no direct table
+    -- INSERT/UPDATE/DELETE/SELECT grants on public.fc27_service_heartbeats.
+    IF to_regclass('public.fc27_service_heartbeats') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.fc27_service_heartbeats
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer,
+                 fc27_player_dev_writer, fc27_match_results_writer, fc27_discord_reader;
+    END IF;
+
+    IF to_regprocedure('public.fc27_record_service_heartbeat(text, text, text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_record_service_heartbeat(TEXT, TEXT, TEXT)
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_player_dev_writer,
+                 fc27_discord_reader;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_poll_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_service_heartbeat(TEXT, TEXT, TEXT) TO fc27_poll_writer';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_record_service_heartbeat(TEXT, TEXT, TEXT) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_get_service_heartbeat_status()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_get_service_heartbeat_status()
+            FROM PUBLIC, fc27_dispatch, fc27_relay, fc27_poll_writer, fc27_player_dev_writer;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_discord_reader') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_service_heartbeat_status() TO fc27_discord_reader';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_app') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_service_heartbeat_status() TO fc27_app';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_get_service_heartbeat_status() TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

@@ -663,6 +663,24 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             (),
             "Append-only domain_events and outbox trigger tests on isolated per-test DBs.",
         ),
+        _entry(
+            "tests/test_fc27_service_heartbeat.py",
+            "PURE_UNIT_PARALLEL_SAFE",
+            ("unit", "security", "offline", "network_forbidden"),
+            "unit_domain_parallel",
+            "full-unit-domain",
+            ("unit-domain",),
+            "Durable heartbeat writer contract, digest/status validation, bounded config, non-overlap, rate-limited failure isolation, and status classification/rendering.",
+        ),
+        _entry(
+            "tests/test_fc27_service_heartbeat_postgres.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            ("postgres-focused",),
+            "Migration 0026 heartbeat procedure contract, database clock, upsert semantics, idempotency, and narrow runtime grants on disposable PostgreSQL 16.",
+        ),
     ]
 )
 

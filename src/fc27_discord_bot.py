@@ -4647,12 +4647,26 @@ def register_fc27_application_commands(
     )
 
 
+def _build_bot_heartbeat() -> Any | None:
+    """Best-effort durable heartbeat for the Discord bot; never fatal."""
+    try:
+        from src.fc27_service_heartbeat import build_service_heartbeat_from_env
+
+        return build_service_heartbeat_from_env(
+            "fc27-discord-bot",
+            uri_file=os.getenv("FC27_MATCH_RESULTS_WRITER_URI_FILE", "").strip() or None,
+        )
+    except Exception:
+        return None
+
+
 def run_discord_gateway_bot(
     config: FC27DiscordBotConfig,
     *,
     token: str | None = None,
     service: FC27DiscordBotService | None = None,
     gateway_runner: Callable[[FC27DiscordBotService, str], int] | None = None,
+    heartbeat: Any | None = None,
 ) -> int:
     """Validate all activation gates and run the read-only Discord Gateway bot (`--run`)."""
     resolved_token = (token or load_discord_bot_token(required=True) or "").strip()
@@ -4674,6 +4688,14 @@ def run_discord_gateway_bot(
 
     if gateway_runner is not None:
         return gateway_runner(bot_service, resolved_token)
+
+    if heartbeat is None:
+        heartbeat = _build_bot_heartbeat()
+    if heartbeat is not None:
+        try:
+            heartbeat.start("STARTING")
+        except Exception:
+            heartbeat = None
 
     dispatch_cfg = None
     if config.dispatch_enabled:
@@ -4814,6 +4836,12 @@ def run_discord_gateway_bot(
             health_runtime["gateway_connected"] = True
             health_runtime["disconnected_since_monotonic"] = None
             _persist_health_state()
+            if heartbeat is not None:
+                try:
+                    # READY only after gateway connected, bot ready, dispatch init.
+                    heartbeat.set_status("READY")
+                except Exception:
+                    pass
             print("DISCORD_BOT_READY=YES", flush=True)
             print("DISCORD_GATEWAY_CONNECTED=YES", flush=True)
             print(f"DISCORD_PROVIDER_REQUESTS={DISCORD_PROVIDER_REQUESTS}", flush=True)
@@ -4831,12 +4859,22 @@ def run_discord_gateway_bot(
             if health_runtime["disconnected_since_monotonic"] is None:
                 health_runtime["disconnected_since_monotonic"] = time.monotonic()
             _persist_health_state()
+            if heartbeat is not None:
+                try:
+                    heartbeat.set_status("DEGRADED")
+                except Exception:
+                    pass
 
         async def on_resumed(self) -> None:
             health_runtime["ready"] = True
             health_runtime["gateway_connected"] = True
             health_runtime["disconnected_since_monotonic"] = None
             _persist_health_state()
+            if heartbeat is not None:
+                try:
+                    heartbeat.set_status("READY")
+                except Exception:
+                    pass
 
     client = _FC27ReadOnlyGatewayClient()
     register_fc27_application_commands(
@@ -4896,6 +4934,11 @@ def run_discord_gateway_bot(
                             await dispatch_task
                         except (asyncio.CancelledError, Exception):
                             pass
+            if heartbeat is not None:
+                try:
+                    heartbeat.stop()
+                except Exception:
+                    pass
 
     return asyncio.run(_runner())
 

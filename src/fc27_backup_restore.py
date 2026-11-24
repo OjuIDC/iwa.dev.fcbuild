@@ -48,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0025"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0026"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -81,6 +81,16 @@ FC27_DOMAIN_TABLES: tuple[str, ...] = (
 
 # `fc27_match_team_stats` and `fc27_manual_discord_linked_matches` in `FC27BackupTableCounts`
 # are derived manifest row-count aliases over `fc27_matches` and `fc27_manual_matches`.
+#
+# `public.fc27_service_heartbeats` is transient liveness state and is intentionally
+# excluded from the domain backup bundle. If an operator includes it manually,
+# restored rows retain their original `last_seen_at`; the read helper always
+# computes age as clock_timestamp() - last_seen_at, so a restored stale row is
+# classified DEGRADED/CRITICAL and never treated as fresh merely because a
+# restore occurred. A live runtime heartbeat naturally advances the row.
+FC27_TRANSIENT_LIVENESS_TABLES: tuple[str, ...] = (
+    "fc27_service_heartbeats",
+)
 FC27_DERIVED_MANIFEST_COUNT_ALIASES: dict[str, str] = {
     "fc27_match_team_stats": "fc27_matches",
     "fc27_manual_discord_linked_matches": "fc27_manual_matches",
@@ -169,6 +179,7 @@ def get_fc27_backup_scope_inventory() -> dict[str, Any]:
         "omitted_tables_flat": list(omitted_flat),
         "omitted_views": list(FC27_BACKUP_OMITTED_VIEWS),
         "pending_future_domains": list(FC27_PENDING_FUTURE_BACKUP_DOMAINS),
+        "excluded_transient_tables": list(FC27_TRANSIENT_LIVENESS_TABLES),
         "historical_recovery_verified": False,
     }
 
@@ -1416,7 +1427,7 @@ def verify_fc27_backup_restore(
                 restored_mig_cnt >= 13
                 and any(
                     v in restored_mig
-                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025")
+                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026")
                 )
                 and manifest.migration_version
                 in (
@@ -1432,6 +1443,7 @@ def verify_fc27_backup_restore(
                     "0001_THROUGH_0022",
                     "0001_THROUGH_0023",
                     "0001_THROUGH_0024",
+                    "0001_THROUGH_0025",
                     EXPECTED_MIGRATION_VERSION,
                 )
             )
