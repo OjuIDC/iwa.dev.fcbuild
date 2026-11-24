@@ -628,6 +628,235 @@ def get_fc27_discord_identity_operator_role_ids(*, strict: bool = True) -> froze
     return frozenset()
 
 
+def get_fc27_discord_operator_role_ids(*, strict: bool = False) -> frozenset[str]:
+    """Return allowlist of Discord Operator numeric role IDs.
+
+    Fails closed, permits empty configuration (defaults to empty frozenset),
+    deduplicates positive numeric snowflake IDs only.
+    """
+    for env_name in (
+        "FC27_DISCORD_OPERATOR_ROLE_IDS",
+        "DISCORD_OPERATOR_ROLE_IDS",
+    ):
+        raw = os.getenv(env_name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return _parse_discord_snowflake_allowlist(env_name, strict=strict)
+        except ConfigError as exc:
+            raise ConfigError(
+                f"{env_name} must contain only comma-separated positive numeric Discord role IDs"
+            ) from exc
+    return frozenset()
+
+
+def is_fc27_operations_status_enabled(*, strict: bool = False) -> bool:
+    """Check if the FC27 operator status surface is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_OPERATIONS_STATUS_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_OPERATIONS_STATUS_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+
+
+def is_fc27_operations_alerts_enabled(*, strict: bool = False) -> bool:
+    """Check if the FC27 operator alerting surface is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERTS_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_OPERATIONS_ALERTS_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+
+
+def get_fc27_operations_alert_suppression_seconds(*, strict: bool = False) -> int:
+    """Return alert suppression cooldown in seconds (default: 1800, range 60..86400)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERT_SUPPRESSION_SECONDS")
+    if raw is None or not raw.strip():
+        return 1800
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_SUPPRESSION_SECONDS must be an integer between 60 and 86400, got '{raw}'"
+            )
+        return 1800
+    num = int(token)
+    if num < 60 or num > 86400:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_SUPPRESSION_SECONDS must be between 60 and 86400, got {num}"
+            )
+        return 1800
+    return num
+
+
+def get_fc27_operations_poll_warning_seconds(*, strict: bool = False) -> int:
+    """Return poll warning threshold in seconds (default: 18000 (5 hours), range 3600..86400)."""
+    raw = os.getenv("FC27_OPERATIONS_POLL_WARNING_SECONDS")
+    if raw is None or not raw.strip():
+        return 18000
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_POLL_WARNING_SECONDS must be an integer between 3600 and 86400, got '{raw}'"
+            )
+        return 18000
+    num = int(token)
+    if num < 3600 or num > 86400:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_POLL_WARNING_SECONDS must be between 3600 and 86400, got {num}"
+            )
+        return 18000
+    return num
+
+
+def get_fc27_operations_poll_critical_seconds(*, strict: bool = False) -> int:
+    """Return poll critical threshold in seconds (default: 32400 (9 hours), range 7200..172800)."""
+    raw = os.getenv("FC27_OPERATIONS_POLL_CRITICAL_SECONDS")
+    if raw is None or not raw.strip():
+        return 32400
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_POLL_CRITICAL_SECONDS must be an integer between 7200 and 172800, got '{raw}'"
+            )
+        return 32400
+    num = int(token)
+    if num < 7200 or num > 172800:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_POLL_CRITICAL_SECONDS must be between 7200 and 172800, got {num}"
+            )
+        return 32400
+    return num
+
+
+def get_fc27_operations_job_warning_seconds(*, strict: bool = False) -> int:
+    """Return job age warning threshold in seconds (default: 600, range 60..7200)."""
+    raw = os.getenv("FC27_OPERATIONS_JOB_WARNING_SECONDS")
+    if raw is None or not raw.strip():
+        return 600
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_JOB_WARNING_SECONDS must be an integer between 60 and 7200, got '{raw}'"
+            )
+        return 600
+    num = int(token)
+    if num < 60 or num > 7200:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_JOB_WARNING_SECONDS must be between 60 and 7200, got {num}"
+            )
+        return 600
+    return num
+
+
+def get_fc27_operations_job_critical_seconds(*, strict: bool = False) -> int:
+    """Return job age critical threshold in seconds (default: 1800, range 120..14400)."""
+    raw = os.getenv("FC27_OPERATIONS_JOB_CRITICAL_SECONDS")
+    if raw is None or not raw.strip():
+        return 1800
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_JOB_CRITICAL_SECONDS must be an integer between 120 and 14400, got '{raw}'"
+            )
+        return 1800
+    num = int(token)
+    if num < 120 or num > 14400:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_JOB_CRITICAL_SECONDS must be between 120 and 14400, got {num}"
+            )
+        return 1800
+    return num
+
+
+def get_fc27_operations_heartbeat_warning_seconds(*, strict: bool = False) -> int:
+    """Return heartbeat warning threshold in seconds (default: 120, range 30..3600)."""
+    raw = os.getenv("FC27_OPERATIONS_HEARTBEAT_WARNING_SECONDS")
+    if raw is None or not raw.strip():
+        return 120
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_HEARTBEAT_WARNING_SECONDS must be an integer between 30 and 3600, got '{raw}'"
+            )
+        return 120
+    num = int(token)
+    if num < 30 or num > 3600:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_HEARTBEAT_WARNING_SECONDS must be between 30 and 3600, got {num}"
+            )
+        return 120
+    return num
+
+
+def get_fc27_operations_heartbeat_critical_seconds(*, strict: bool = False) -> int:
+    """Return heartbeat critical threshold in seconds (default: 300, range 60..7200)."""
+    raw = os.getenv("FC27_OPERATIONS_HEARTBEAT_CRITICAL_SECONDS")
+    if raw is None or not raw.strip():
+        return 300
+    token = raw.strip()
+    if not token.lstrip("-").isdecimal():
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_HEARTBEAT_CRITICAL_SECONDS must be an integer between 60 and 7200, got '{raw}'"
+            )
+        return 300
+    num = int(token)
+    if num < 60 or num > 7200:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_HEARTBEAT_CRITICAL_SECONDS must be between 60 and 7200, got {num}"
+            )
+        return 300
+    return num
+
+
+def get_fc27_discord_alerts_channel_id(*, strict: bool = False) -> str | None:
+    """Return optional dedicated Discord Alerts channel ID if configured."""
+    raw = os.getenv("FC27_DISCORD_ALERTS_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        raw = os.getenv("DISCORD_ALERTS_CHANNEL_ID")
+    if raw is None or not raw.strip():
+        return None
+    token = raw.strip()
+    if token.startswith("replace_with_"):
+        return None
+    if not token.isdecimal() or int(token) <= 0:
+        if strict:
+            raise ConfigError(
+                f"FC27_DISCORD_ALERTS_CHANNEL_ID must be a positive numeric Discord snowflake ID, got '{token}'"
+            )
+        return None
+    return token
+
+
 def get_fc27_discord_backfill_operator_role_ids(*, strict: bool = False) -> frozenset[str]:
     """Return allowlist of Discord Backfill Operator numeric role IDs.
 

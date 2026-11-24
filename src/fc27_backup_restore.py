@@ -48,7 +48,7 @@ from src.settings import ConfigError, read_secret
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP_DIR = REPO_ROOT / ".local-data" / "backups"
 BACKUP_RETENTION_COUNT = 7
-EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0024"
+EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0025"
 BACKUP_SCHEMA_VERSION = "1.0.0"
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -1416,7 +1416,7 @@ def verify_fc27_backup_restore(
                 restored_mig_cnt >= 13
                 and any(
                     v in restored_mig
-                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024")
+                    for v in ("0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025")
                 )
                 and manifest.migration_version
                 in (
@@ -1430,6 +1430,8 @@ def verify_fc27_backup_restore(
                     "0001_THROUGH_0020",
                     "0001_THROUGH_0021",
                     "0001_THROUGH_0022",
+                    "0001_THROUGH_0023",
+                    "0001_THROUGH_0024",
                     EXPECTED_MIGRATION_VERSION,
                 )
             )

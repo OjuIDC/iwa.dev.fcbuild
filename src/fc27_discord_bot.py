@@ -281,6 +281,8 @@ DISCORD_SUBCOMMAND_ALIASES: Final[dict[str, str]] = {
     "last5": "latest",
     "summary": "form",
     "squad": "topscorers",
+    "operations-status": "status",
+    "operator-status": "status",
 }
 
 MATCH_RESULTS_WRITE_SUBCOMMANDS: Final[frozenset[str]] = frozenset(
@@ -458,6 +460,17 @@ class FC27DiscordBotConfig(BaseModel):
     backfill_confirm_ttl_seconds: int = Field(default=900, ge=60, le=900)
     backfill_cooldown_seconds: int = Field(default=900, ge=0, le=86400)
     backfill_operator_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    operator_role_ids: frozenset[str] = Field(default_factory=frozenset)
+    operations_status_enabled: bool = False
+    operations_alerts_enabled: bool = False
+    operations_alert_suppression_seconds: int = Field(default=1800, ge=60, le=86400)
+    operations_poll_warning_seconds: int = Field(default=18000, ge=3600, le=86400)
+    operations_poll_critical_seconds: int = Field(default=32400, ge=7200, le=172800)
+    operations_job_warning_seconds: int = Field(default=600, ge=60, le=7200)
+    operations_job_critical_seconds: int = Field(default=1800, ge=120, le=14400)
+    operations_heartbeat_warning_seconds: int = Field(default=120, ge=30, le=3600)
+    operations_heartbeat_critical_seconds: int = Field(default=300, ge=60, le=7200)
+    alerts_channel_id: str | None = None
 
     @property
     def match_results_writer_role_ids(self) -> frozenset[str]:
@@ -504,6 +517,15 @@ class FC27DiscordBotConfig(BaseModel):
         for rid in self.backfill_operator_role_ids:
             if not str(rid).isdecimal() or int(rid) <= 0:
                 raise FC27DiscordAuthzError("Invalid Backfill Operator role ID in allowlist")
+        for rid in self.operator_role_ids:
+            if not str(rid).isdecimal() or int(rid) <= 0:
+                raise FC27DiscordAuthzError("Invalid Operator role ID in allowlist")
+        if self.alerts_channel_id is not None:
+            ac_clean = self.alerts_channel_id.strip()
+            if not ac_clean.isdecimal() or int(ac_clean) <= 0:
+                raise FC27DiscordAuthzError(
+                    f"Invalid Discord alerts_channel_id: '{self.alerts_channel_id}'"
+                )
         if self.results_channel_id is not None:
             rc_clean = self.results_channel_id.strip()
             if not rc_clean.isdecimal() or int(rc_clean) <= 0:
@@ -570,6 +592,17 @@ class FC27DiscordBotConfig(BaseModel):
             backfill_confirm_ttl = settings.get_fc27_discord_backfill_confirm_ttl_seconds(strict=strict)
             backfill_cooldown = settings.get_fc27_discord_backfill_cooldown_seconds(strict=strict)
             backfill_operator_roles = settings.get_fc27_discord_backfill_operator_role_ids(strict=strict)
+            operator_roles = settings.get_fc27_discord_operator_role_ids(strict=strict)
+            ops_status_enabled = settings.is_fc27_operations_status_enabled(strict=strict)
+            ops_alerts_enabled = settings.is_fc27_operations_alerts_enabled(strict=strict)
+            ops_suppress = settings.get_fc27_operations_alert_suppression_seconds(strict=strict)
+            ops_poll_warn = settings.get_fc27_operations_poll_warning_seconds(strict=strict)
+            ops_poll_crit = settings.get_fc27_operations_poll_critical_seconds(strict=strict)
+            ops_job_warn = settings.get_fc27_operations_job_warning_seconds(strict=strict)
+            ops_job_crit = settings.get_fc27_operations_job_critical_seconds(strict=strict)
+            ops_hb_warn = settings.get_fc27_operations_heartbeat_warning_seconds(strict=strict)
+            ops_hb_crit = settings.get_fc27_operations_heartbeat_critical_seconds(strict=strict)
+            alerts_chan = settings.get_fc27_discord_alerts_channel_id(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         if dispatch_enabled and not results_chan:
@@ -600,6 +633,17 @@ class FC27DiscordBotConfig(BaseModel):
             backfill_confirm_ttl_seconds=backfill_confirm_ttl,
             backfill_cooldown_seconds=backfill_cooldown,
             backfill_operator_role_ids=backfill_operator_roles,
+            operator_role_ids=operator_roles,
+            operations_status_enabled=ops_status_enabled,
+            operations_alerts_enabled=ops_alerts_enabled,
+            operations_alert_suppression_seconds=ops_suppress,
+            operations_poll_warning_seconds=ops_poll_warn,
+            operations_poll_critical_seconds=ops_poll_crit,
+            operations_job_warning_seconds=ops_job_warn,
+            operations_job_critical_seconds=ops_job_crit,
+            operations_heartbeat_warning_seconds=ops_hb_warn,
+            operations_heartbeat_critical_seconds=ops_hb_crit,
+            alerts_channel_id=alerts_chan,
         )
 
 
@@ -1740,8 +1784,28 @@ class FC27DiscordBotService:
             return True
         if cmd_clean not in SUPPORTED_DISCORD_SUBCOMMANDS:
             return True
-        if cmd_clean in {"deletematch", "unresolvedplayers"}:
+        if cmd_clean in {"deletematch", "unresolvedplayers", "operations-status", "operator-status"}:
             return True
+        if cmd_clean == "status":
+            scope_val = cmd_kwargs.get("scope")
+            caller_role_set = {
+                s
+                for r in (user_role_ids or ())
+                if (s := str(r).strip()).isdecimal() and int(s) > 0
+            }
+            if (
+                scope_val == "operations"
+                or (
+                    scope_val != "summary"
+                    and (
+                        self._config.operations_status_enabled
+                        or bool(is_admin or (self._config.admin_role_ids and (caller_role_set & self._config.admin_role_ids)))
+                        or bool(self._config.operator_role_ids and (caller_role_set & self._config.operator_role_ids))
+                        or bool(self._config.identity_operator_role_ids and (caller_role_set & self._config.identity_operator_role_ids))
+                    )
+                )
+            ):
+                return True
         if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
             if not self._match_results_write_authorized(
                 cmd_clean,
@@ -1840,6 +1904,7 @@ class FC27DiscordBotService:
         new_name: str | None = None,
         confirm_delete: bool = False,
         is_admin: bool = False,
+        scope: str | None = None,
     ) -> FC27DiscordResponse:
         """Authorize, rate-limit, execute, sanitize, and audit a `/fc27` slash command."""
         started = float(self._clock_fn())
@@ -1965,6 +2030,26 @@ class FC27DiscordBotService:
                 content=f"Unsupported `/fc27` command. Supported commands: {', '.join(SUPPORTED_DISCORD_SUBCOMMANDS)}.",
             )
 
+        caller_role_set = {
+            s
+            for r in (user_role_ids or ())
+            if (s := str(r).strip()).isdecimal() and int(s) > 0
+        }
+        is_op_status = (
+            scope == "operations"
+            or cmd_clean in {"operations-status", "operator-status"}
+            or (
+                cmd_clean == "status"
+                and scope != "summary"
+                and (
+                    self._config.operations_status_enabled
+                    or bool(is_admin or (self._config.admin_role_ids and (caller_role_set & self._config.admin_role_ids)))
+                    or bool(self._config.operator_role_ids and (caller_role_set & self._config.operator_role_ids))
+                    or bool(self._config.identity_operator_role_ids and (caller_role_set & self._config.identity_operator_role_ids))
+                    or (user_role_ids is not None and any(not str(r).strip().isdecimal() for r in user_role_ids))
+                )
+            )
+        )
         if cmd_clean in MATCH_RESULTS_WRITE_SUBCOMMANDS:
             authorized_write = self._match_results_write_authorized(
                 cmd_clean,
@@ -1996,6 +2081,9 @@ class FC27DiscordBotService:
                     ephemeral=True,
                     content=PERMISSION_DENIED_MESSAGE,
                 )
+        elif is_op_status:
+            # Operator status handles its own authorization check (Admin/Operator only)
+            pass
         elif self._config.allowed_role_ids:
             caller_roles = {
                 s
@@ -2110,6 +2198,15 @@ class FC27DiscordBotService:
                         ephemeral=True,
                         content=error_content,
                     )
+            elif is_op_status:
+                resp = self.handle_operator_status(
+                    guild_id=gid_str,
+                    channel_id=cid_str,
+                    user_id=uid_str,
+                    user_role_ids=user_role_ids,
+                    is_slash_interaction=is_slash_interaction,
+                    is_admin=is_admin,
+                )
             else:
                 resp = self._dispatch_authorized_subcommand(
                     cmd_clean,
@@ -3825,6 +3922,105 @@ class FC27DiscordBotService:
                 status="ERROR",
                 ephemeral=True,
                 content=f"Backfill execution failed: {safe_err}",
+            )
+
+    def handle_operator_status(
+        self,
+        *,
+        guild_id: str | int | None,
+        channel_id: str | int | None,
+        user_id: str | int | None,
+        user_role_ids: Sequence[str | int] | None = None,
+        is_slash_interaction: bool = True,
+        is_admin: bool = False,
+    ) -> FC27DiscordResponse:
+        """Handle the read-only /fc27 status operator invocation."""
+        gid_str = str(guild_id or "").strip()
+        cid_str = str(channel_id or "").strip()
+        uid_str = str(user_id or "").strip() or "0"
+
+        if not self._config.enabled or not is_slash_interaction:
+            return FC27DiscordResponse(
+                command="status",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content="FC27 Discord integration is disabled.",
+            )
+
+        if self._config.allowed_guild_ids and gid_str not in self._config.allowed_guild_ids:
+            return FC27DiscordResponse(
+                command="status",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content="This Discord server is not allowlisted for East Coasters FC27 analytics.",
+            )
+
+        if self._config.allowed_channel_ids and cid_str not in self._config.allowed_channel_ids:
+            return FC27DiscordResponse(
+                command="status",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content="This Discord channel is not allowlisted for East Coasters FC27 analytics.",
+            )
+
+        # Extract only positive decimal numeric snowflake role IDs
+        caller_role_ids = {
+            s
+            for r in (user_role_ids or ())
+            if (s := str(r).strip()).isdecimal() and int(s) > 0
+        }
+
+        admin_roles = self._config.admin_role_ids
+        operator_roles = self._config.operator_role_ids
+
+        has_admin = bool(is_admin or (admin_roles and (caller_role_ids & admin_roles)))
+        has_operator = bool(operator_roles and (caller_role_ids & operator_roles))
+
+        # Check: Identity Operator alone or text role is denied
+        if not (has_admin or has_operator):
+            return FC27DiscordResponse(
+                command="status",
+                status="REJECTED_UNAUTHORIZED",
+                ephemeral=True,
+                content="Your Discord role is not authorized for the FC27 operator status surface.",
+            )
+
+        # Check: Feature flag
+        if not self._config.operations_status_enabled:
+            return FC27DiscordResponse(
+                command="status",
+                status="ERROR",
+                ephemeral=True,
+                content="FC27 operator status surface is disabled.",
+            )
+
+        from src.fc27_operations_status import (
+            fetch_operations_status_snapshot,
+            classify_operations_health,
+            render_operations_status_markdown,
+        )
+
+        try:
+            reader_conn_or_uri = self._db_conn_or_uri or self._resolve_readonly_conn_or_uri(required=False)
+            if reader_conn_or_uri is None:
+                raise FC27DiscordError("No database connection or reader URI configured.")
+            snapshot = fetch_operations_status_snapshot(reader_conn_or_uri)
+            classification, reasons = classify_operations_health(snapshot, self._config)
+            content = render_operations_status_markdown(snapshot, classification, reasons)
+            return FC27DiscordResponse(
+                command="status",
+                status="OK",
+                ephemeral=True,
+                content=content,
+                row_count=snapshot.ingestion.new_matches_in_last_cycle,
+            )
+        except Exception as exc:
+            safe_err = redact_sensitive_text(str(exc), extra_secrets=self._secret_tokens)
+            return FC27DiscordResponse(
+                command="status",
+                status="ERROR",
+                ephemeral=True,
+                content=f"Unable to query operator status: {safe_err}",
             )
 
 

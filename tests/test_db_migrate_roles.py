@@ -330,7 +330,8 @@ def test_migration_0014_fresh_and_idempotent(pg_db):
     assert "0022_fc27_provider_request_budget.sql" in applied_first
     assert "0023_fc27_discord_backfill_control.sql" in applied_first
     assert "0024_fc27_backfill_expiration_state_fix.sql" in applied_first
-    assert len(applied_first) == 24
+    assert "0025_fc27_operations_status_and_alerts.sql" in applied_first
+    assert len(applied_first) == 25
 
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
@@ -499,6 +500,7 @@ def test_migration_0016_canonical_roster_and_legacy_matches_idempotent(pg_db, mo
         "0022_fc27_provider_request_budget.sql",
         "0023_fc27_discord_backfill_control.sql",
         "0024_fc27_backfill_expiration_state_fix.sql",
+        "0025_fc27_operations_status_and_alerts.sql",
     ]
 
     with psycopg.connect(pg_db.admin) as conn:
