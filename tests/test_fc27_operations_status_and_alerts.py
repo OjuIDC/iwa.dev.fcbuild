@@ -171,8 +171,8 @@ def _make_sample_snapshot(
         "runtime": {
             "worker_heartbeat_age_seconds": worker_hb_age,
             "bot_heartbeat_age_seconds": bot_hb_age,
-            "current_migration_version": "0025_fc27_operations_status_and_alerts.sql",
-            "grants_policy_version": 26,
+            "current_migration_version": "0026_fc27_durable_service_heartbeats.sql",
+            "grants_policy_version": 27,
             "active_backfill_request_count": 0,
         },
     }
@@ -442,13 +442,13 @@ def test_20_bot_heartbeat_state() -> None:
 def test_21_migration_version() -> None:
     """21. Migration version."""
     snap = _make_sample_snapshot()
-    assert snap.runtime.current_migration_version == "0025_fc27_operations_status_and_alerts.sql"
+    assert snap.runtime.current_migration_version == "0026_fc27_durable_service_heartbeats.sql"
 
 
 def test_22_grants_policy_version() -> None:
     """22. Grants Policy version."""
     snap = _make_sample_snapshot()
-    assert snap.runtime.grants_policy_version == 26
+    assert snap.runtime.grants_policy_version == 27
 
 
 # ==============================================================================

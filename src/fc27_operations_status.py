@@ -25,6 +25,39 @@ class HealthClassification(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+HEARTBEAT_WARNING_SECONDS = 120
+HEARTBEAT_CRITICAL_SECONDS = 300
+
+
+def classify_heartbeat_state(
+    age_seconds: float | None,
+    runtime_status: str | None,
+    known: bool,
+    *,
+    warning_seconds: float = HEARTBEAT_WARNING_SECONDS,
+    critical_seconds: float = HEARTBEAT_CRITICAL_SECONDS,
+) -> str:
+    """Classify one service heartbeat using database-clock age and runtime status.
+
+    - No row (not known / no age): UNKNOWN
+    - age > critical: CRITICAL
+    - runtime_status != READY: DEGRADED
+    - age > warning: DEGRADED
+    - otherwise: HEALTHY
+    UNKNOWN never maps to HEALTHY.
+    """
+    if not known or age_seconds is None:
+        return HealthClassification.UNKNOWN.value
+    if age_seconds > critical_seconds:
+        return HealthClassification.CRITICAL.value
+    status = (runtime_status or "READY").strip().upper()
+    if status != "READY":
+        return HealthClassification.DEGRADED.value
+    if age_seconds > warning_seconds:
+        return HealthClassification.DEGRADED.value
+    return HealthClassification.HEALTHY.value
+
+
 @dataclass(frozen=True)
 class PollingStatusSnapshot:
     """Sanitized operational metrics for four-hour all-match-types polling."""
@@ -84,6 +117,34 @@ class RuntimeStatusSnapshot:
     current_migration_version: str | None
     grants_policy_version: int | None
     active_backfill_request_count: int
+    # Durable PostgreSQL heartbeat contract (Migration 0026).
+    worker_heartbeat_known: bool = False
+    bot_heartbeat_known: bool = False
+    worker_runtime_status: str | None = None
+    bot_runtime_status: str | None = None
+    worker_started_age_seconds: float | None = None
+    bot_started_age_seconds: float | None = None
+
+    def _known(self, explicit: bool, age: float | None) -> bool:
+        # Legacy snapshots only carried an age; absence of a durable flag with a
+        # present age is treated as known for backward compatibility.
+        return bool(explicit or age is not None)
+
+    @property
+    def worker_heartbeat_state(self) -> str:
+        return classify_heartbeat_state(
+            self.worker_heartbeat_age_seconds,
+            self.worker_runtime_status,
+            self._known(self.worker_heartbeat_known, self.worker_heartbeat_age_seconds),
+        )
+
+    @property
+    def bot_heartbeat_state(self) -> str:
+        return classify_heartbeat_state(
+            self.bot_heartbeat_age_seconds,
+            self.bot_runtime_status,
+            self._known(self.bot_heartbeat_known, self.bot_heartbeat_age_seconds),
+        )
 
 
 @dataclass(frozen=True)
@@ -196,6 +257,20 @@ def parse_operations_status_snapshot(raw_data: Mapping[str, Any]) -> FC27Operati
             else None
         ),
         active_backfill_request_count=int(r_raw.get("active_backfill_request_count") or 0),
+        worker_heartbeat_known=bool(r_raw.get("worker_heartbeat_known") or False),
+        bot_heartbeat_known=bool(r_raw.get("bot_heartbeat_known") or False),
+        worker_runtime_status=r_raw.get("worker_runtime_status"),
+        bot_runtime_status=r_raw.get("bot_runtime_status"),
+        worker_started_age_seconds=(
+            float(r_raw["worker_started_age_seconds"])
+            if r_raw.get("worker_started_age_seconds") is not None
+            else None
+        ),
+        bot_started_age_seconds=(
+            float(r_raw["bot_started_age_seconds"])
+            if r_raw.get("bot_started_age_seconds") is not None
+            else None
+        ),
     )
 
     return FC27OperationsStatusSnapshot(
@@ -229,7 +304,61 @@ def _execute_snapshot_proc(conn: psycopg.Connection[Any]) -> FC27OperationsStatu
             raw_dict = json.loads(raw_val)
         else:
             raw_dict = cast(dict[str, Any], raw_val)
+        _merge_durable_heartbeats(conn, cur, raw_dict)
         return parse_operations_status_snapshot(raw_dict)
+
+
+def _merge_durable_heartbeats(
+    conn: psycopg.Connection[Any],
+    cur: Any,
+    raw_dict: dict[str, Any],
+) -> None:
+    """Overlay durable PostgreSQL heartbeat ages/status onto the snapshot.
+
+    The legacy snapshot procedure may return ages from ``service_heartbeats``.
+    When the Migration 0026 durable source is present it is authoritative; when
+    the helper is absent (pre-0026 database) the legacy values are retained.
+    Best-effort: any failure leaves the legacy snapshot untouched.
+    """
+    try:
+        cur.execute(
+            "SELECT to_regprocedure('public.fc27_get_service_heartbeat_status()')"
+        )
+        exists = cur.fetchone()
+        if not exists or exists[0] is None:
+            return
+        cur.execute("SELECT public.fc27_get_service_heartbeat_status();")
+        hb_row = cur.fetchone()
+        if not hb_row or hb_row[0] is None:
+            return
+        hb_val = hb_row[0]
+        hb = json.loads(hb_val) if isinstance(hb_val, str) else hb_val
+        if not isinstance(hb, Mapping):
+            return
+        runtime = raw_dict.setdefault("runtime", {})
+        for service in ("worker", "bot"):
+            info = hb.get(service) or {}
+            if info.get("known"):
+                runtime[f"{service}_heartbeat_age_seconds"] = info.get(
+                    "heartbeat_age_seconds"
+                )
+                runtime[f"{service}_started_age_seconds"] = info.get(
+                    "started_age_seconds"
+                )
+                runtime[f"{service}_runtime_status"] = info.get("runtime_status")
+                runtime[f"{service}_heartbeat_known"] = True
+            else:
+                # Durable source present but no row: authoritative UNKNOWN.
+                runtime[f"{service}_heartbeat_age_seconds"] = None
+                runtime[f"{service}_started_age_seconds"] = None
+                runtime[f"{service}_runtime_status"] = None
+                runtime[f"{service}_heartbeat_known"] = False
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
 
 
 def classify_operations_health(
@@ -308,24 +437,58 @@ def classify_operations_health(
         elif oldest_job_age > job_warn_sec:
             warning_reasons.append(f"Pending Discord job delayed ({int(oldest_job_age)}s)")
 
-    # 3. Runtime heartbeat checks
+    # 3. Runtime heartbeat checks (durable PostgreSQL heartbeat, DB clock)
     unknown_reasons: list[str] = []
-    w_hb = snapshot.runtime.worker_heartbeat_age_seconds
-    if w_hb is not None:
-        if w_hb > hb_crit_sec:
-            critical_reasons.append(f"Worker heartbeat missing ({int(w_hb)}s > {hb_crit_sec}s)")
-        elif w_hb > hb_warn_sec:
-            warning_reasons.append(f"Worker heartbeat stale ({int(w_hb)}s > {hb_warn_sec}s)")
-    else:
+    w_age = snapshot.runtime.worker_heartbeat_age_seconds
+    w_known = snapshot.runtime.worker_heartbeat_known or w_age is not None
+    w_state = classify_heartbeat_state(
+        w_age,
+        snapshot.runtime.worker_runtime_status,
+        w_known,
+        warning_seconds=hb_warn_sec,
+        critical_seconds=hb_crit_sec,
+    )
+    if w_state == HealthClassification.CRITICAL.value:
+        w_reported = int(w_age) if w_age is not None else 0
+        critical_reasons.append(
+            f"Worker heartbeat missing ({w_reported}s > {hb_crit_sec}s)"
+        )
+    elif w_state == HealthClassification.DEGRADED.value:
+        if w_age is not None and w_age > hb_warn_sec:
+            warning_reasons.append(
+                f"Worker heartbeat stale ({int(w_age)}s > {hb_warn_sec}s)"
+            )
+        else:
+            warning_reasons.append(
+                f"Worker reporting {snapshot.runtime.worker_runtime_status or 'UNKNOWN'}"
+            )
+    elif w_state == HealthClassification.UNKNOWN.value:
         unknown_reasons.append("Worker heartbeat source unknown")
 
-    b_hb = snapshot.runtime.bot_heartbeat_age_seconds
-    if b_hb is not None:
-        if b_hb > hb_crit_sec:
-            critical_reasons.append(f"Discord bot heartbeat missing ({int(b_hb)}s > {hb_crit_sec}s)")
-        elif b_hb > hb_warn_sec:
-            warning_reasons.append(f"Discord bot heartbeat stale ({int(b_hb)}s > {hb_warn_sec}s)")
-    else:
+    b_age = snapshot.runtime.bot_heartbeat_age_seconds
+    b_known = snapshot.runtime.bot_heartbeat_known or b_age is not None
+    b_state = classify_heartbeat_state(
+        b_age,
+        snapshot.runtime.bot_runtime_status,
+        b_known,
+        warning_seconds=hb_warn_sec,
+        critical_seconds=hb_crit_sec,
+    )
+    if b_state == HealthClassification.CRITICAL.value:
+        b_reported = int(b_age) if b_age is not None else 0
+        critical_reasons.append(
+            f"Discord bot heartbeat missing ({b_reported}s > {hb_crit_sec}s)"
+        )
+    elif b_state == HealthClassification.DEGRADED.value:
+        if b_age is not None and b_age > hb_warn_sec:
+            warning_reasons.append(
+                f"Discord bot heartbeat stale ({int(b_age)}s > {hb_warn_sec}s)"
+            )
+        else:
+            warning_reasons.append(
+                f"Discord bot reporting {snapshot.runtime.bot_runtime_status or 'UNKNOWN'}"
+            )
+    elif b_state == HealthClassification.UNKNOWN.value:
         unknown_reasons.append("Discord bot heartbeat source unknown")
 
     if critical_reasons:
@@ -377,13 +540,29 @@ def render_operations_status_markdown(
         else "none"
     )
 
-    worker_status = "healthy"
-    if snapshot.runtime.worker_heartbeat_age_seconds is not None and snapshot.runtime.worker_heartbeat_age_seconds > 120:
-        worker_status = f"stale ({int(snapshot.runtime.worker_heartbeat_age_seconds)}s)"
+    def _heartbeat_line(age: float | None, runtime_status: str | None, state: str) -> str:
+        if state == HealthClassification.UNKNOWN.value:
+            return "unknown"
+        if state == HealthClassification.CRITICAL.value and age is not None:
+            return f"heartbeat missing ({int(age)}s)"
+        if state == HealthClassification.DEGRADED.value:
+            if age is not None and age > HEARTBEAT_WARNING_SECONDS:
+                return f"stale ({int(age)}s)"
+            return f"degraded ({(runtime_status or 'unknown').lower()})"
+        if age is not None:
+            return f"healthy, heartbeat {int(age)}s"
+        return "healthy"
 
-    bot_status = "healthy"
-    if snapshot.runtime.bot_heartbeat_age_seconds is not None and snapshot.runtime.bot_heartbeat_age_seconds > 120:
-        bot_status = f"stale ({int(snapshot.runtime.bot_heartbeat_age_seconds)}s)"
+    worker_status = _heartbeat_line(
+        snapshot.runtime.worker_heartbeat_age_seconds,
+        snapshot.runtime.worker_runtime_status,
+        snapshot.runtime.worker_heartbeat_state,
+    )
+    bot_status = _heartbeat_line(
+        snapshot.runtime.bot_heartbeat_age_seconds,
+        snapshot.runtime.bot_runtime_status,
+        snapshot.runtime.bot_heartbeat_state,
+    )
 
     migration_str = snapshot.runtime.current_migration_version or "N/A"
     if migration_str.endswith(".sql"):

@@ -19,7 +19,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 26
+GRANTS_POLICY_VERSION = 27
 
 
 def _compute_grants_sha256() -> str:
@@ -1547,6 +1547,54 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                         violations.append(f"missing_{check_role}_exec_{fn_name}")
                     elif check_role not in allowed_exec_roles and has_exec:
                         violations.append(f"forbidden_{check_role}_exec_{fn_name}")
+
+    # Migration 0026 durable service heartbeat posture: narrow procedure EXECUTE,
+    # no direct runtime table grants, hardened SECURITY DEFINER function.
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.fc27_service_heartbeats')")
+        hb_table_row = cur.fetchone()
+        if hb_table_row and hb_table_row[0] is not None:
+            for hb_role in ("fc27_poll_writer", "fc27_match_results_writer"):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (hb_role,))
+                if not cur.fetchone():
+                    continue
+                for hb_priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_service_heartbeats', %s)",
+                        (hb_role, hb_priv),
+                    )
+                    if cur.fetchone()[0]:
+                        violations.append(
+                            f"heartbeat_direct_{hb_priv.lower()}_{hb_role}"
+                        )
+                cur.execute(
+                    "SELECT has_function_privilege(%s, "
+                    "'public.fc27_record_service_heartbeat(text,text,text)', 'EXECUTE')",
+                    (hb_role,),
+                )
+                if not cur.fetchone()[0]:
+                    violations.append(f"missing_heartbeat_exec_{hb_role}")
+            cur.execute(
+                """
+                SELECT p.prosecdef, p.proowner::regrole::text, p.proconfig
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname = 'fc27_record_service_heartbeat'
+                """
+            )
+            hb_fn_row = cur.fetchone()
+            if not hb_fn_row:
+                violations.append("missing_fc27_record_service_heartbeat")
+            else:
+                hb_secdef, hb_owner, hb_config = hb_fn_row
+                if not hb_secdef:
+                    violations.append("record_service_heartbeat_not_secdef")
+                if hb_owner != "fc27_owner":
+                    violations.append("record_service_heartbeat_not_owner")
+                hb_cfg = " ".join(hb_config) if hb_config else ""
+                if "search_path=pg_catalog, pg_temp" not in hb_cfg:
+                    violations.append("record_service_heartbeat_search_path")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

@@ -23,7 +23,7 @@ from src.db_roles import (
 
 
 def test_bootstrap_is_idempotent(pg_admin_uri):
-    assert GRANTS_POLICY_VERSION == 26
+    assert GRANTS_POLICY_VERSION == 27
     passwords = {
         ROLE_MIGRATOR: None,
         ROLE_APP: None,

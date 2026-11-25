@@ -14,6 +14,7 @@ Supported modes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -236,6 +237,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_worker_heartbeat() -> object | None:
+    """Best-effort durable heartbeat for the community worker; never fatal."""
+    try:
+        from src.fc27_service_heartbeat import build_service_heartbeat_from_env
+
+        return build_service_heartbeat_from_env(
+            "fc27-community-worker",
+            uri_file=os.getenv("FC27_POLL_WRITER_URI_FILE", "").strip() or None,
+        )
+    except Exception:
+        return None
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -315,6 +329,7 @@ def main(
         confirm_live_polling=bool(args.confirm_live_polling),
         db_conn_or_uri=db_uri,
         max_cycles=args.max_cycles,
+        heartbeat=_build_worker_heartbeat(),
     )
     if results:
         _print_cycle_result(results[-1])

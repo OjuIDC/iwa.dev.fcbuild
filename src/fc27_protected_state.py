@@ -2640,7 +2640,7 @@ def run_recovery_readiness_checks(
     _add(
         "database_migration_current",
         mig_current,
-        f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0025 not verified",
+            f"latest migration {pg_vol_res.latest_migration}" if (mig_current and pg_vol_res) else "Migration 0026 not verified",
     )
     _add(
         "database_grants_policy_current",

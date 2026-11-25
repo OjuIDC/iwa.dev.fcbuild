@@ -4041,12 +4041,16 @@ def run_fc27_polling_worker(
     recover_state_from_db: bool = True,
     now_utc_fn: Callable[[], datetime] | None = None,
     now_epoch_fn: Callable[[], float] | None = None,
+    heartbeat: Any | None = None,
 ) -> list[FC27PollResult]:
     """Run the bounded FC27 polling loop until shutdown or ``max_cycles``."""
     rt = runtime or get_default_polling_runtime()
     pol = policy or rt.policy
     stop_event = shutdown_event or threading.Event()
     results: list[FC27PollResult] = []
+
+    if heartbeat is not None:
+        heartbeat.start("STARTING")
 
     previous_sigterm: Any = None
     previous_sigint: Any = None
@@ -4069,6 +4073,10 @@ def run_fc27_polling_worker(
         if stop_event.is_set() or rt.shutdown_requested:
             rt.shutdown_requested = True
             return results
+
+        if heartbeat is not None:
+            # Worker initialization (policy/runtime) succeeded: report READY.
+            heartbeat.set_status("READY")
 
         cycles_run = 0
         while not stop_event.is_set() and not rt.shutdown_requested:
@@ -4127,6 +4135,11 @@ def run_fc27_polling_worker(
     finally:
         rt.worker_running = False
         rt.current_owner = None
+        if heartbeat is not None:
+            try:
+                heartbeat.stop()
+            except Exception:
+                pass
         if installed_signals:
             try:
                 signal.signal(signal.SIGTERM, previous_sigterm)

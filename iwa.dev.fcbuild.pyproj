@@ -94,6 +94,7 @@
     <Compile Include="src\fc27_repository.py" />
     <Compile Include="src\fc27_result_backfill.py" />
     <Compile Include="src\fc27_search_scout.py" />
+    <Compile Include="src\fc27_service_heartbeat.py" />
     <Compile Include="src\fc27_tactics.py" />
     <Compile Include="src\schemas.py" />
     <Compile Include="src\security.py" />
