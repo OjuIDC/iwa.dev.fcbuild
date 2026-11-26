@@ -857,6 +857,89 @@ def get_fc27_operations_alert_destination(*, strict: bool = False) -> str:
     return val
 
 
+def is_fc27_operations_alert_dispatch_enabled(*, strict: bool = False) -> bool:
+    """Check if operations alert dispatch to Discord is enabled (default: False, fail-closed)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERT_DISPATCH_ENABLED")
+    if raw is None or not raw.strip():
+        return False
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    if strict:
+        raise ConfigError(
+            f"FC27_OPERATIONS_ALERT_DISPATCH_ENABLED must be a valid boolean, got '{raw}'"
+        )
+    return False
+
+
+def get_fc27_operations_alert_dispatch_interval_seconds(*, strict: bool = False) -> int:
+    """Return operations alert dispatch cycle interval in seconds (default: 30, range 10..300)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERT_DISPATCH_INTERVAL_SECONDS")
+    if raw is None or not raw.strip():
+        return 30
+    try:
+        num = int(raw.strip())
+    except ValueError:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_INTERVAL_SECONDS must be an integer between 10 and 300, got '{raw}'"
+            )
+        return 30
+    if not 10 <= num <= 300:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_INTERVAL_SECONDS must be between 10 and 300, got {num}"
+            )
+        return 30
+    return num
+
+
+def get_fc27_operations_alert_dispatch_batch_size(*, strict: bool = False) -> int:
+    """Return max alert deliveries claimed per cycle (default: 5, range 1..10)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERT_DISPATCH_BATCH_SIZE")
+    if raw is None or not raw.strip():
+        return 5
+    try:
+        num = int(raw.strip())
+    except ValueError:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_BATCH_SIZE must be an integer between 1 and 10, got '{raw}'"
+            )
+        return 5
+    if not 1 <= num <= 10:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_BATCH_SIZE must be between 1 and 10, got {num}"
+            )
+        return 5
+    return num
+
+
+def get_fc27_operations_alert_dispatch_max_attempts(*, strict: bool = False) -> int:
+    """Return max delivery attempts before dead-lettering (default: 3, range 1..5)."""
+    raw = os.getenv("FC27_OPERATIONS_ALERT_DISPATCH_MAX_ATTEMPTS")
+    if raw is None or not raw.strip():
+        return 3
+    try:
+        num = int(raw.strip())
+    except ValueError:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_MAX_ATTEMPTS must be an integer between 1 and 5, got '{raw}'"
+            )
+        return 3
+    if not 1 <= num <= 5:
+        if strict:
+            raise ConfigError(
+                f"FC27_OPERATIONS_ALERT_DISPATCH_MAX_ATTEMPTS must be between 1 and 5, got {num}"
+            )
+        return 3
+    return num
+
+
 def get_fc27_discord_backfill_operator_role_ids(*, strict: bool = False) -> frozenset[str]:
     """Return allowlist of Discord Backfill Operator numeric role IDs.
 

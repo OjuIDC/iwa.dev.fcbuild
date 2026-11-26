@@ -70,3 +70,19 @@ Discord limits each `app_commands.Group` (`/fc27`) to 25 direct child subcommand
 11. `/fc27 export-csv` — Bounded sanitized CSV export attachment
 12. `/fc27 export-excel` — Bounded sanitized Excel XML export attachment
 13. `/fc27 help` (plus `/fc27 club`, `/fc27 extremes`, `/fc27 players`, `/fc27 squad`) — Command reference and safety posture
+
+---
+
+## Operations Alert Dispatch Subsystem (Migration 0027 / Grants Policy 28)
+
+The operations alert dispatch subsystem asynchronously delivers queued operator alerts to dedicated Discord channels:
+- **Default Disabled**: `FC27_OPERATIONS_ALERT_DISPATCH_ENABLED=false` ensures no messages are sent unless explicitly enabled.
+- **Symbolic Destination Binding**: `FC27_OPERATIONS_ALERT_DESTINATION=fc27-operations` enforces symbolic key routing through `public.fc27_discord_destinations` with `message_kind = 'OPERATIONS_ALERT'`. Numeric channel IDs as destinations fail closed.
+- **Alert Lifecycle Events**:
+  - `OPEN`: Dispatched when an alert is first opened (🔴 `CRITICAL`, 🟡 `WARNING`).
+  - `RESOLVED`: Dispatched when the alert condition clears (🟢 `RESOLVED`).
+- **Deterministic Marker Tagging & Reconciliation**:
+  - Non-sensitive tag format: `fc27-ops-{sha256[:16]}` (total 25 characters).
+  - Pre-flight history search and send-and-fetch verification ensure zero duplicate messages during network retries or process restarts.
+  - Database stored procedure `public.fc27_reconcile_operator_alert_delivery_by_marker` resolves unconfirmed deliveries without re-posting.
+- **Least-Privilege Model**: Direct table operations on `public.fc27_operator_alert_deliveries` are prohibited. The runtime operates strictly through stored procedures granted to `fc27_match_results_writer`.

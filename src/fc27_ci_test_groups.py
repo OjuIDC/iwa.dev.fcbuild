@@ -646,6 +646,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "FC27 read-only operator status, deduplicated alerting lifecycle, and health classification tests.",
         ),
         _entry(
+            "tests/test_fc27_operations_alert_dispatch.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            (),
+            "FC27 destination-aware Discord operations alert dispatch, lifecycle reservation, ambiguous send recovery, and least privilege.",
+        ),
+        _entry(
             "tests/test_fc27_search_scout_graph.py",
             "POSTGRES_PARALLEL_SAFE",
             ("postgres", "domain", "offline", "network_forbidden"),

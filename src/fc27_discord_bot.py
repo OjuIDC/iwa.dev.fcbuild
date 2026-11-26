@@ -471,6 +471,10 @@ class FC27DiscordBotConfig(BaseModel):
     operations_heartbeat_warning_seconds: int = Field(default=120, ge=30, le=3600)
     operations_heartbeat_critical_seconds: int = Field(default=300, ge=60, le=7200)
     operations_alert_destination: str = Field(default="", max_length=100)
+    operations_alert_dispatch_enabled: bool = False
+    operations_alert_dispatch_interval_seconds: int = Field(default=30, ge=10, le=300)
+    operations_alert_dispatch_batch_size: int = Field(default=5, ge=1, le=10)
+    operations_alert_dispatch_max_attempts: int = Field(default=3, ge=1, le=5)
 
     @property
     def match_results_writer_role_ids(self) -> frozenset[str]:
@@ -615,6 +619,10 @@ class FC27DiscordBotConfig(BaseModel):
             ops_hb_warn = settings.get_fc27_operations_heartbeat_warning_seconds(strict=strict)
             ops_hb_crit = settings.get_fc27_operations_heartbeat_critical_seconds(strict=strict)
             alerts_dest = settings.get_fc27_operations_alert_destination(strict=strict)
+            ops_dispatch_enabled = settings.is_fc27_operations_alert_dispatch_enabled(strict=strict)
+            ops_dispatch_interval = settings.get_fc27_operations_alert_dispatch_interval_seconds(strict=strict)
+            ops_dispatch_batch = settings.get_fc27_operations_alert_dispatch_batch_size(strict=strict)
+            ops_dispatch_max_attempts = settings.get_fc27_operations_alert_dispatch_max_attempts(strict=strict)
         except ConfigError as exc:
             raise FC27DiscordDisabledError(str(exc)) from exc
         if dispatch_enabled and not results_chan:
@@ -656,6 +664,10 @@ class FC27DiscordBotConfig(BaseModel):
             operations_heartbeat_warning_seconds=ops_hb_warn,
             operations_heartbeat_critical_seconds=ops_hb_crit,
             operations_alert_destination=alerts_dest,
+            operations_alert_dispatch_enabled=ops_dispatch_enabled,
+            operations_alert_dispatch_interval_seconds=ops_dispatch_interval,
+            operations_alert_dispatch_batch_size=ops_dispatch_batch,
+            operations_alert_dispatch_max_attempts=ops_dispatch_max_attempts,
         )
 
 
@@ -4742,6 +4754,7 @@ def run_discord_gateway_bot(
     guild_objects = [discord.Object(id=int(gid)) for gid in sorted(config.allowed_guild_ids)]
 
     dispatch_runtime: dict[str, Any] = {"task": None, "stop_event": None}
+    ops_dispatch_runtime: dict[str, Any] = {"task": None, "stop_event": None}
     health_runtime: dict[str, Any] = {
         "ready": False,
         "gateway_connected": False,
@@ -4831,6 +4844,31 @@ def run_discord_gateway_bot(
                 dispatch_runtime["stop_event"] = stop_event
                 dispatch_runtime["task"] = task
 
+            if getattr(config, "operations_alert_dispatch_enabled", False):
+                from src.fc27_operations_alert_dispatcher import (
+                    FC27OperationsAlertDispatchConfig,
+                    run_operations_alert_dispatcher_loop,
+                )
+                ops_stop_event = asyncio.Event()
+                ops_dispatch_cfg = FC27OperationsAlertDispatchConfig(
+                    enabled=True,
+                    destination_key=config.operations_alert_destination,
+                    interval_seconds=config.operations_alert_dispatch_interval_seconds,
+                    batch_size=config.operations_alert_dispatch_batch_size,
+                    max_attempts=config.operations_alert_dispatch_max_attempts,
+                )
+                ops_task = asyncio.create_task(
+                    run_operations_alert_dispatcher_loop(
+                        config=ops_dispatch_cfg,
+                        transport=transport,
+                        conn_or_uri_factory=lambda: resolve_match_results_writer_uri(strict=False),
+                        stop_event=ops_stop_event,
+                    ),
+                    name="fc27-operations-alert-dispatcher",
+                )
+                ops_dispatch_runtime["stop_event"] = ops_stop_event
+                ops_dispatch_runtime["task"] = ops_task
+
         async def on_ready(self) -> None:
             health_runtime["ready"] = True
             health_runtime["gateway_connected"] = True
@@ -4851,6 +4889,10 @@ def run_discord_gateway_bot(
             )
             print(
                 f"DISCORD_DISPATCH_ENABLED={'YES' if config.dispatch_enabled else 'NO'}",
+                flush=True,
+            )
+            print(
+                f"DISCORD_OPERATIONS_ALERT_DISPATCH_ENABLED={'YES' if config.operations_alert_dispatch_enabled else 'NO'}",
                 flush=True,
             )
 
@@ -4932,6 +4974,20 @@ def run_discord_gateway_bot(
                         dispatch_task.cancel()
                         try:
                             await dispatch_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+            ops_stop_event = ops_dispatch_runtime.get("stop_event")
+            ops_task = ops_dispatch_runtime.get("task")
+            if ops_stop_event is not None:
+                ops_stop_event.set()
+            if ops_task is not None:
+                if not ops_task.done():
+                    try:
+                        await asyncio.wait_for(ops_task, timeout=5.0)
+                    except (asyncio.TimeoutError, Exception):
+                        ops_task.cancel()
+                        try:
+                            await ops_task
                         except (asyncio.CancelledError, Exception):
                             pass
             if heartbeat is not None:

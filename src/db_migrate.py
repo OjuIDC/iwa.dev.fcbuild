@@ -19,7 +19,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 27
+GRANTS_POLICY_VERSION = 28
 
 
 def _compute_grants_sha256() -> str:
@@ -1595,6 +1595,39 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
                 hb_cfg = " ".join(hb_config) if hb_config else ""
                 if "search_path=pg_catalog, pg_temp" not in hb_cfg:
                     violations.append("record_service_heartbeat_search_path")
+
+    # Migration 0027 operations alert dispatch posture.
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.fc27_operator_alert_deliveries')")
+        alert_deliv_table = cur.fetchone()
+        if alert_deliv_table and alert_deliv_table[0] is not None:
+            for runtime_role in (
+                "fc27_app",
+                "fc27_dispatch",
+                "fc27_relay",
+                "fc27_poll_writer",
+                "fc27_player_dev_writer",
+                "fc27_match_results_writer",
+                "fc27_discord_reader",
+            ):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (runtime_role,))
+                if not cur.fetchone():
+                    continue
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.fc27_operator_alert_deliveries', %s)",
+                        (runtime_role, priv),
+                    )
+                    if cur.fetchone()[0]:
+                        violations.append(
+                            f"alert_deliv_direct_{priv.lower()}_{runtime_role}"
+                        )
+            cur.execute(
+                "SELECT has_function_privilege('fc27_match_results_writer', "
+                "'public.fc27_reserve_operator_alert_delivery(uuid,text,text,text)', 'EXECUTE')"
+            )
+            if not cur.fetchone()[0]:
+                violations.append("missing_reserve_operator_alert_delivery_exec_fc27_match_results_writer")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

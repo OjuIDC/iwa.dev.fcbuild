@@ -255,6 +255,7 @@ jobs:
             .ci-reports/container-${{ matrix.image }}/job-summary.md
             .ci-reports/container-${{ matrix.image }}/index.html
             .ci-reports/container-${{ matrix.image }}/sbom.spdx.json
+            .ci-reports/container-${{ matrix.image }}/trivy.json
           retention-days: 7
           if-no-files-found: error
 

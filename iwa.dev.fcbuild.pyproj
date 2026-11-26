@@ -83,6 +83,7 @@
     <Compile Include="src\fc27_discord_backfill_control.py" />
     <Compile Include="src\fc27_discord_delivery.py" />
     <Compile Include="src\fc27_match_results.py" />
+    <Compile Include="src\fc27_operations_alert_dispatcher.py" />
     <Compile Include="src\fc27_operations_alerts.py" />
     <Compile Include="src\fc27_operations_status.py" />
     <Compile Include="src\fc27_pandas_view.py" />

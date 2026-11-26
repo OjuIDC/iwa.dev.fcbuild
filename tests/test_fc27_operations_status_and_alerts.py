@@ -171,8 +171,8 @@ def _make_sample_snapshot(
         "runtime": {
             "worker_heartbeat_age_seconds": worker_hb_age,
             "bot_heartbeat_age_seconds": bot_hb_age,
-            "current_migration_version": "0026_fc27_durable_service_heartbeats.sql",
-            "grants_policy_version": 27,
+            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
+            "grants_policy_version": 28,
             "active_backfill_request_count": 0,
         },
     }
@@ -442,13 +442,13 @@ def test_20_bot_heartbeat_state() -> None:
 def test_21_migration_version() -> None:
     """21. Migration version."""
     snap = _make_sample_snapshot()
-    assert snap.runtime.current_migration_version == "0026_fc27_durable_service_heartbeats.sql"
+    assert snap.runtime.current_migration_version == "0027_fc27_operations_alert_dispatch.sql"
 
 
 def test_22_grants_policy_version() -> None:
     """22. Grants Policy version."""
     snap = _make_sample_snapshot()
-    assert snap.runtime.grants_policy_version == 27
+    assert snap.runtime.grants_policy_version == 28
 
 
 # ==============================================================================
@@ -610,10 +610,13 @@ class _MockAlertConnection:
                     alert_type, component = params
                     key = (alert_type, component)
                     if key in conn.alerts and conn.alerts[key]["status"] in ("OPEN", "ACKNOWLEDGED"):
+                        a_id = conn.alerts[key]["alert_id"]
                         conn.alerts[key]["status"] = "RESOLVED"
-                        self._result = [(True,)]
+                        self._result = [(True, a_id)]
                     else:
-                        self._result = [(False,)]
+                        self._result = [(False, None)]
+                elif "fc27_reserve_operator_alert_delivery" in q:
+                    self._result = [(1, True, "PENDING")]
                 elif "fc27_get_active_operator_alerts" in q:
                     rows = [
                         (
