@@ -2,10 +2,6 @@
 -- Additive, idempotent schema migration expanding message_kind for operations alerts,
 -- creating durable alert delivery tracking, and providing narrow stored procedures.
 
-INSERT INTO public.schema_migrations (version, name, applied_at)
-VALUES ('0027', '0027_fc27_operations_alert_dispatch.sql', clock_timestamp())
-ON CONFLICT (version) DO NOTHING;
-
 -- 1. Extend destination message_kind check constraint to permit OPERATIONS_ALERT
 DO $$
 BEGIN
