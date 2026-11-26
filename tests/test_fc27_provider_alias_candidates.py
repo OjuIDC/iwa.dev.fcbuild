@@ -1366,7 +1366,7 @@ class TestBackupRestoreWithAliasCandidates:
             backup_dir=backup_dir,
         )
         assert manifest.migration_version == EXPECTED_MIGRATION_VERSION
-        assert manifest.table_counts.schema_migrations == 27
+        assert manifest.table_counts.schema_migrations == 28
         assert manifest.table_counts.fc27_roster == 1
         assert manifest.table_counts.fc27_player_alias_candidates >= 4
         assert manifest.table_counts.fc27_player_alias_candidate_observations >= 5
