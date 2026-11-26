@@ -25,7 +25,7 @@ The tracked manifest [`ops/fc27-protected-state-manifest.json`](../ops/fc27-prot
 - `src.fc27_protected_state` records a non-secret domain-separated verification digest (`alias_hmac_key_fingerprint_sha256 = HMAC-SHA256(key, "fc27:alias-hmac-key-fingerprint:v1")`) inside `bundle-manifest.json` and `.local-data/runtime-deployment.json`, allowing `verify-postgres-volume` and `readiness` to detect accidental key replacement before starting the polling worker.
 
 ### Logical `pg_dump` / `pg_restore` vs. Raw Docker Volume Copies
-- **Prefer logical backups (`scripts/fc27_backup.py` -> `.dump` + `.manifest.json`)** for OS reinstalls, Windows/WSL2 rebuilds, PostgreSQL minor version upgrades, and cross-machine transfers. Logical backups include `schema_migrations`, `schema_policy_versions`, `fc27_roster`, `fc27_player_alias_candidates`, `fc27_player_alias_candidate_observations`, `fc27_player_alias_promotion_audit`, `fc27_player_alias_review_exceptions`, `fc27_discord_jobs`, `fc27_provider_request_attempts`, and all match/stats tables (`EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0025"`).
+- **Prefer logical backups (`scripts/fc27_backup.py` -> `.dump` + `.manifest.json`)** for OS reinstalls, Windows/WSL2 rebuilds, PostgreSQL minor version upgrades, and cross-machine transfers. Logical backups include `schema_migrations`, `schema_policy_versions`, `fc27_roster`, `fc27_player_alias_candidates`, `fc27_player_alias_candidate_observations`, `fc27_player_alias_promotion_audit`, `fc27_player_alias_review_exceptions`, `fc27_discord_jobs`, `fc27_provider_request_attempts`, and all match/stats tables (`EXPECTED_MIGRATION_VERSION = "0001_THROUGH_0027"`).
 - **Docker volume snapshots (`fc27-full-stack_postgres_data`)** are fast for local container recreation or Docker Desktop restarts on the same host engine, provided PostgreSQL is stopped cleanly (`docker compose stop postgres`) before copying the backing ext4/VHDX volume data.
 
 ---
@@ -116,12 +116,12 @@ The tracked manifest [`ops/fc27-protected-state-manifest.json`](../ops/fc27-prot
     docker compose -p fc27-full-stack --env-file .env --profile bootstrap run --rm db-bootstrap
     docker compose -p fc27-full-stack --env-file .env --profile bootstrap run --rm db-bootstrap --confirm
     ```
-15. On **Path B**, apply schema migrations cleanly (`0001` through `0024` and Grants Policy `25`):
+15. On **Path B**, apply schema migrations cleanly (`0001` through `0027` and Grants Policy `28`):
     ```powershell
     docker compose -p fc27-full-stack --env-file .env run --rm db-migrate
     ```
 16. On **Path B**, restore the logical custom dump into the PostgreSQL database after copying the verified `.dump` into `.local-data/backups/` and run `pg_restore` / `scripts/fc27_restore_verify.py`.
-17. On **Path A or Path B**, re-run `db-migrate` cleanly to confirm idempotent Migration `0024` and Grants Policy `25` postconditions:
+17. On **Path A or Path B**, re-run `db-migrate` cleanly to confirm idempotent Migration `0027` and Grants Policy `28` postconditions:
     ```powershell
     docker compose -p fc27-full-stack --env-file .env run --rm db-migrate
     ```

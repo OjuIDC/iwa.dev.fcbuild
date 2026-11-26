@@ -454,16 +454,16 @@ def test_cross_actor_and_cross_guild_status_lookup_denied(pg_db_migrated: Any) -
 def test_fresh_migration_through_0024(pg_db: Any) -> None:
     applied = migrate(pg_db.migrator)
     assert "0024_fc27_backfill_expiration_state_fix.sql" in applied
-    assert len(applied) == 26
-    assert GRANTS_POLICY_VERSION == 27
+    assert len(applied) == 27
+    assert GRANTS_POLICY_VERSION == 28
     with psycopg.connect(pg_db.admin) as conn:
         assert verify_postconditions(conn) == []
         max_version = conn.execute("SELECT max(version) FROM public.schema_migrations").fetchone()[0]
-        assert str(max_version).startswith("0026")
+        assert str(max_version).startswith("0027")
         policy = conn.execute(
             "SELECT version FROM public.schema_policy_versions WHERE policy='grants' ORDER BY version DESC LIMIT 1"
         ).fetchone()[0]
-        assert policy == 27
+        assert policy == 28
 
 
 def test_upgrade_from_0023_applies_single_correction(pg_db: Any) -> None:

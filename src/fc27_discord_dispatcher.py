@@ -51,39 +51,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from src import settings
 from src.db_roles import ROLE_PLAYER_DEV_WRITER, check_runtime_posture
 from src.fc27_discord_bot import (
+    MAX_DISCORD_CONTENT_LENGTH,
+    MAX_DISCORD_FIELD_VALUE_LENGTH,
     FC27DiscordEmbed,
     FC27DiscordPrivacyError,
     FC27DiscordWriteAccessDeniedError,
     GuardedDiscordReadOnlyConnection,
-    MAX_DISCORD_CONTENT_LENGTH,
-    MAX_DISCORD_FIELD_VALUE_LENGTH,
     assert_discord_output_sanitized,
-)
-from src.fc27_match_results import (
-    EAST_COASTERS_FOOTER_TEXT,
-    EAST_COASTERS_SHORT_NAME,
-    ManualMatchDetail,
-    ManualMatchPlayerDetail,
-    MatchDiscordMessageLinks,
-    ParsedScorerEntry,
-    build_result_content,
-    build_result_embed,
-    build_match_post_tag,
-    build_team_chat_result_summary,
-    clean_opponent,
-    extract_match_post_tag,
-    fetch_manual_match,
-    get_match_discord_message_links,
-    get_player_name,
-    normalize_competition_label,
-    normalize_display_label,
-    normalize_formation_label,
-    open_guarded_match_results_writer_connection,
-    record_match_discord_message_links,
-    render_match_result_embed,
-    render_matchday_embed,
-    resolve_player_names,
-    tag_match_post_content,
 )
 from src.fc27_discord_delivery import (
     DELIVERY_STATE_DELIVERED,
@@ -101,6 +75,35 @@ from src.fc27_discord_delivery import (
     record_delivery_success,
     reserve_discord_delivery,
 )
+from src.fc27_match_results import (
+    EAST_COASTERS_FOOTER_TEXT,
+    EAST_COASTERS_SHORT_NAME,
+    ManualMatchDetail,
+    ManualMatchPlayerDetail,
+    MatchDiscordMessageLinks,
+    ParsedScorerEntry,
+    build_match_post_tag,
+    build_result_content,
+    build_result_embed,
+    build_team_chat_result_summary,
+    clean_opponent,
+    extract_match_post_tag,
+    fetch_manual_match,
+    get_match_discord_message_links,
+    get_player_name,
+    normalize_competition_label,
+    normalize_display_label,
+    normalize_formation_label,
+    open_guarded_match_results_writer_connection,
+    record_match_discord_message_links,
+    render_match_result_embed,
+    render_matchday_embed,
+    resolve_player_names,
+    tag_match_post_content,
+)
+from src.fc27_operations_alerts import (
+    extract_operations_alert_tag,
+)
 from src.fc27_privacy import (
     EAST_COASTERS_CLUB_ID,
     EAST_COASTERS_CLUB_NAME,
@@ -117,10 +120,10 @@ from src.fc27_privacy import (
     validate_safe_text,
 )
 from src.fc27_repository import (
-    FC27PostNewResultsPayload,
-    FC27RosterRefreshPayload,
     POST_NEW_RESULTS_EVENT_TYPE,
     REFRESH_ROSTER_MESSAGES_EVENT_TYPE,
+    FC27PostNewResultsPayload,
+    FC27RosterRefreshPayload,
     build_roster_refresh_idempotency_key,
     validate_roster_refresh_payload,
 )
@@ -1070,8 +1073,11 @@ def _team_chat_history_matches(
     per-match discriminator wins, with exact content equality as the legacy fallback.
     """
     candidate = str(content or "").strip()
-    if expected_discriminator and extract_match_post_tag(candidate) == expected_discriminator:
-        return True
+    if expected_discriminator:
+        if extract_match_post_tag(candidate) == expected_discriminator:
+            return True
+        if extract_operations_alert_tag(candidate) == expected_discriminator:
+            return True
     return bool(expected_content) and candidate == expected_content
 
 
@@ -1421,6 +1427,17 @@ class SyntheticDiscordNotificationTransport:
                     content=msg.content,
                     embed=None,
                 )
+        for mid, text_content in self._text_history.get(channel_id, []):
+            if mid == message_id:
+                return FC27DiscordMessageSnapshot(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    guild_id=guild_id,
+                    is_bot_authored=is_bot,
+                    author_id=author_id,
+                    content=text_content,
+                    embed=None,
+                )
         return None
 
     def find_existing_text(
@@ -1438,6 +1455,15 @@ class SyntheticDiscordNotificationTransport:
                 continue
             if _team_chat_history_matches(
                 msg.content,
+                expected_discriminator=expected_discriminator,
+                expected_content=expected_content,
+            ):
+                return msg_id
+        for msg_id, text_content in reversed(self._text_history.get(channel_id, [])):
+            if msg_id in self.deleted_message_ids:
+                continue
+            if _team_chat_history_matches(
+                text_content,
                 expected_discriminator=expected_discriminator,
                 expected_content=expected_content,
             ):
