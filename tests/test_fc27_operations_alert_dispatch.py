@@ -1358,4 +1358,3 @@ def test_42_mock_evaluator_to_delivery_integration() -> None:
 
     resolved_count = sum(1 for d in conn.deliveries.values() if d["lifecycle_event"] == "RESOLVED")
     assert resolved_count >= 1
-
