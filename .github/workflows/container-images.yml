@@ -225,20 +225,6 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0"
 
-      - name: Print High and Critical Trivy vulnerabilities
-        run: |
-          python3 -c '
-          import json, sys
-          try:
-              data = json.load(open(".ci-reports/container-${{ matrix.image }}/trivy.json"))
-              for res in data.get("Results") or []:
-                  for v in res.get("Vulnerabilities") or []:
-                      if v.get("Severity") in ("CRITICAL", "HIGH") and v.get("FixedVersion"):
-                          print(f"::warning::HIGH/CRITICAL FIXED: {v.get(\"VulnerabilityID\")} in {v.get(\"PkgName\")} {v.get(\"InstalledVersion\")} -> fixed in {v.get(\"FixedVersion\")}")
-          except Exception as exc:
-              print(f"Error reading trivy json: {exc}")
-          '
-
       - name: Build and sanitize per-image report and enforce Critical/High gate
         env:
           PLANNED_TAGS: ${{ steps.meta.outputs.tags }}

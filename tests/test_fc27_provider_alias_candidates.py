@@ -1101,11 +1101,12 @@ class TestProviderAliasCandidatePipeline:
             "0024_fc27_backfill_expiration_state_fix.sql",
             "0025_fc27_operations_status_and_alerts.sql",
             "0026_fc27_durable_service_heartbeats.sql",
+            "0027_fc27_operations_alert_dispatch.sql",
         ]
         # Idempotent rerun
         assert migrate(pg_db.migrator) == []
-        assert GRANTS_POLICY_VERSION == 27
-        assert GRANTS_POLICY.version == 27
+        assert GRANTS_POLICY_VERSION == 28
+        assert GRANTS_POLICY.version == 28
 
         with psycopg.connect(pg_db.admin) as aconn:
             assert verify_postconditions(aconn) == []
@@ -1364,7 +1365,7 @@ class TestBackupRestoreWithAliasCandidates:
             backup_dir=backup_dir,
         )
         assert manifest.migration_version == EXPECTED_MIGRATION_VERSION
-        assert manifest.table_counts.schema_migrations == 26
+        assert manifest.table_counts.schema_migrations == 27
         assert manifest.table_counts.fc27_roster == 1
         assert manifest.table_counts.fc27_player_alias_candidates >= 4
         assert manifest.table_counts.fc27_player_alias_candidate_observations >= 5

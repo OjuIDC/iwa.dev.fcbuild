@@ -444,15 +444,16 @@ def test_18_finalize_delivery(pg_db_migrated: Any, test_destination_key: str) ->
         )
         assert ok is True
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delivery_state, discord_message_id, delivered_at FROM public.fc27_operator_alert_deliveries WHERE delivery_id = %s;",
-                (del_id,),
-            )
-            state, msg_id, del_at = cur.fetchone()
-            assert state == "DELIVERED"
-            assert msg_id == "888000000000000001"
-            assert del_at is not None
+        with psycopg.connect(pg_db_migrated.admin) as aconn:
+            with aconn.cursor() as cur:
+                cur.execute(
+                    "SELECT delivery_state, discord_message_id, delivered_at FROM public.fc27_operator_alert_deliveries WHERE delivery_id = %s;",
+                    (del_id,),
+                )
+                state, msg_id, del_at = cur.fetchone()
+                assert state == "DELIVERED"
+                assert msg_id == "888000000000000001"
+                assert del_at is not None
 
 
 def test_19_fail_and_dead_letter_delivery(pg_db_migrated: Any, test_destination_key: str) -> None:
@@ -662,7 +663,7 @@ def test_28_evaluator_reserves_delivery_on_new_alert(pg_db_migrated: Any, test_d
         "database_clock": now.isoformat(),
         "health_classification": "CRITICAL",
         "polling": {
-            "last_cycle_completed_at": (now - os.path.supports_unicode_filenames and datetime(2026, 11, 25, 0, 0, 0, tzinfo=UTC)).isoformat(),
+            "last_cycle_completed_at": (now - timedelta(hours=5)).isoformat(),
             "rolling_provider_attempts_used": 18,
             "provider_attempt_limit": 18,
             "all_match_types_active": True,
@@ -783,6 +784,7 @@ class _MockAlertDispatchConnection:
     """Mock database connection simulating the atomic alert dispatch stored procedures."""
 
     def __init__(self) -> None:
+        self.autocommit = False
         self.alerts: dict[tuple[str, str], dict[str, Any]] = {}
         self.deliveries: dict[int, dict[str, Any]] = {}
         self._next_delivery_id: int = 1

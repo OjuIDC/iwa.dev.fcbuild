@@ -152,7 +152,7 @@ class FC27AlertManager:
 
     def _get_connection(self) -> psycopg.Connection[Any]:
         if isinstance(self._conn_or_uri, str):
-            return psycopg.connect(self._conn_or_uri)
+            return psycopg.connect(self._conn_or_uri, autocommit=True)
         return self._conn_or_uri
 
     def record_alert(
@@ -178,6 +178,8 @@ class FC27AlertManager:
                     (alert_type, component, severity, summary, payload_json, self._suppression_seconds),
                 )
                 row = cur.fetchone()
+                if hasattr(conn, "commit") and not getattr(conn, "autocommit", False):
+                    conn.commit()
                 if not row:
                     return None
                 alert_id, should_notify, is_new, count = row
@@ -206,6 +208,8 @@ class FC27AlertManager:
                     (alert_type, component),
                 )
                 row = cur.fetchone()
+                if hasattr(conn, "commit") and not getattr(conn, "autocommit", False):
+                    conn.commit()
                 was_resolved = bool(row[0]) if row else False
                 alert_id = str(row[1]) if (row and row[1] is not None) else None
                 return AlertResolutionEvent(
@@ -242,6 +246,8 @@ class FC27AlertManager:
                     (alert_id, lifecycle_event, destination_key, marker_digest),
                 )
                 row = cur.fetchone()
+                if hasattr(conn, "commit") and not getattr(conn, "autocommit", False):
+                    conn.commit()
                 if not row:
                     return None
                 return int(row[0]), bool(row[1]), str(row[2])

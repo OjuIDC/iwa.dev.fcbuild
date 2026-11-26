@@ -1267,7 +1267,7 @@ def test_25_dispatcher_lease_and_single_flight_intact(pg_db_migrated) -> None:
 
 def test_26_migration_0016_and_audit_linkage_compatibility(pg_db) -> None:
     """26. Fresh migration + idempotent re-run stay at current Grants Policy with nullable match_id RELINK linkage."""
-    assert GRANTS_POLICY_VERSION == 27
+    assert GRANTS_POLICY_VERSION == 28
     migrate(pg_db.migrator)
     migrate(pg_db.migrator)
 
@@ -2109,6 +2109,7 @@ def test_37_migration_0016_to_0017_upgrade_path(pg_db) -> None:
         "0024_fc27_backfill_expiration_state_fix.sql",
         "0025_fc27_operations_status_and_alerts.sql",
         "0026_fc27_durable_service_heartbeats.sql",
+        "0027_fc27_operations_alert_dispatch.sql",
     ]
     with psycopg.connect(pg_db.admin) as uconn:
         assert verify_postconditions(uconn) == []

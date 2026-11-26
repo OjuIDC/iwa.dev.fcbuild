@@ -298,8 +298,8 @@ def _raw_snapshot(worker_age, bot_age, worker_known=False, bot_known=False, work
             "bot_heartbeat_known": bot_known,
             "worker_runtime_status": worker_rt,
             "bot_runtime_status": bot_rt,
-            "current_migration_version": "0026_fc27_durable_service_heartbeats.sql",
-            "grants_policy_version": 27,
+            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
+            "grants_policy_version": 28,
             "active_backfill_request_count": 0,
         },
     }
