@@ -44,7 +44,7 @@ import hashlib
 import os
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Self
 
 import psycopg
@@ -422,7 +422,7 @@ def test_17_claim_deliveries(pg_db_migrated: Any, test_destination_key: str) -> 
 
 def test_18_finalize_delivery(pg_db_migrated: Any, test_destination_key: str) -> None:
     """18. Finalize delivery transitions to DELIVERED with message and channel IDs."""
-    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+    with psycopg.connect(pg_db_migrated.match_results_writer, autocommit=True) as conn:
         alert_id = _insert_test_alert(conn, "DELIVERY_DEAD_LETTER", "discord_delivery")
         _, digest = build_operations_alert_marker(alert_id, "OPEN", "DELIVERY_DEAD_LETTER", "discord_delivery", test_destination_key)
 
@@ -688,7 +688,7 @@ def test_28_evaluator_reserves_delivery_on_new_alert(pg_db_migrated: Any, test_d
     assert len(notifs) >= 1
 
     # Check delivery table: exactly 1 OPEN reservation per alert
-    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+    with psycopg.connect(pg_db_migrated.admin) as conn:
         deliveries = conn.execute(
             "SELECT lifecycle_event, delivery_state FROM public.fc27_operator_alert_deliveries;"
         ).fetchall()
@@ -700,7 +700,7 @@ def test_28_evaluator_reserves_delivery_on_new_alert(pg_db_migrated: Any, test_d
     # Repeated evaluation while condition persists must NOT insert duplicate delivery rows
     count_before = len(deliveries)
     mgr.evaluate_and_sync(snap, destination_key=test_destination_key)
-    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+    with psycopg.connect(pg_db_migrated.admin) as conn:
         count_after = conn.execute("SELECT count(*) FROM public.fc27_operator_alert_deliveries;").fetchone()[0]
         assert count_after == count_before
 
@@ -748,7 +748,7 @@ def test_29_evaluator_reserves_delivery_on_resolution(pg_db_migrated: Any, test_
     snap_healthy = parse_operations_status_snapshot(raw_healthy)
     mgr.evaluate_and_sync(snap_healthy, destination_key=test_destination_key)
 
-    with psycopg.connect(pg_db_migrated.match_results_writer) as conn:
+    with psycopg.connect(pg_db_migrated.admin) as conn:
         resolved_deliveries = conn.execute(
             "SELECT lifecycle_event, delivery_state FROM public.fc27_operator_alert_deliveries WHERE lifecycle_event = 'RESOLVED';"
         ).fetchall()
