@@ -19,7 +19,7 @@ class GrantsPolicy:
     version: int
     sha256: str
 
-GRANTS_POLICY_VERSION = 28
+GRANTS_POLICY_VERSION = 29
 
 
 def _compute_grants_sha256() -> str:
@@ -1628,6 +1628,70 @@ def verify_postconditions(conn: psycopg.Connection) -> list[str]:
             )
             if not cur.fetchone()[0]:
                 violations.append("missing_reserve_operator_alert_delivery_exec_fc27_match_results_writer")
+
+    # Migration 0028 operations alert canary posture.
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regprocedure('public.fc27_open_operations_alert_canary()')")
+        canary_fn_row = cur.fetchone()
+        if canary_fn_row and canary_fn_row[0] is not None:
+            cur.execute(
+                "SELECT has_function_privilege('fc27_match_results_writer', "
+                "'public.fc27_open_operations_alert_canary()', 'EXECUTE')"
+            )
+            if not cur.fetchone()[0]:
+                violations.append("missing_open_operations_alert_canary_exec_fc27_match_results_writer")
+            cur.execute(
+                "SELECT has_function_privilege('fc27_match_results_writer', "
+                "'public.fc27_resolve_operations_alert_canary()', 'EXECUTE')"
+            )
+            if not cur.fetchone()[0]:
+                violations.append("missing_resolve_operations_alert_canary_exec_fc27_match_results_writer")
+            for denied_role in (
+                "fc27_app",
+                "fc27_dispatch",
+                "fc27_relay",
+                "fc27_poll_writer",
+                "fc27_player_dev_writer",
+                "fc27_discord_reader",
+            ):
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (denied_role,))
+                if not cur.fetchone():
+                    continue
+                cur.execute(
+                    "SELECT has_function_privilege(%s, 'public.fc27_open_operations_alert_canary()', 'EXECUTE')",
+                    (denied_role,),
+                )
+                if cur.fetchone()[0]:
+                    violations.append(f"open_canary_unauthorized_exec_{denied_role}")
+                cur.execute(
+                    "SELECT has_function_privilege(%s, 'public.fc27_resolve_operations_alert_canary()', 'EXECUTE')",
+                    (denied_role,),
+                )
+                if cur.fetchone()[0]:
+                    violations.append(f"resolve_canary_unauthorized_exec_{denied_role}")
+            for canary_proc in ("fc27_open_operations_alert_canary", "fc27_resolve_operations_alert_canary"):
+                cur.execute(
+                    """
+                    SELECT p.prosecdef, p.proowner::regrole::text, p.proconfig
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public'
+                      AND p.proname = %s
+                    """,
+                    (canary_proc,),
+                )
+                p_row = cur.fetchone()
+                if not p_row:
+                    violations.append(f"missing_{canary_proc}")
+                else:
+                    p_secdef, p_owner, p_config = p_row
+                    if not p_secdef:
+                        violations.append(f"{canary_proc}_not_secdef")
+                    if p_owner != "fc27_owner":
+                        violations.append(f"{canary_proc}_not_owner")
+                    p_cfg = " ".join(p_config) if p_config else ""
+                    if "search_path=pg_catalog, pg_temp" not in p_cfg:
+                        violations.append(f"{canary_proc}_search_path")
     return violations
 
 def check_runtime_posture(conn: psycopg.Connection) -> list[str]:

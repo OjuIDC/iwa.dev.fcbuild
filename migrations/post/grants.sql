@@ -1,4 +1,4 @@
--- grants-policy-version: 28
+-- grants-policy-version: 29
 DO $$
 BEGIN
     IF to_regclass('public.graph_threads') IS NOT NULL THEN
@@ -1461,6 +1461,24 @@ BEGIN
                  fc27_player_dev_writer, fc27_discord_reader;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
             EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_resolve_operator_alert(TEXT, TEXT) TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_open_operations_alert_canary()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_open_operations_alert_canary()
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer,
+                 fc27_player_dev_writer, fc27_discord_reader;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_open_operations_alert_canary() TO fc27_match_results_writer';
+        END IF;
+    END IF;
+
+    IF to_regprocedure('public.fc27_resolve_operations_alert_canary()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.fc27_resolve_operations_alert_canary()
+            FROM PUBLIC, fc27_app, fc27_dispatch, fc27_relay, fc27_poll_writer,
+                 fc27_player_dev_writer, fc27_discord_reader;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fc27_match_results_writer') THEN
+            EXECUTE 'GRANT EXECUTE ON FUNCTION public.fc27_resolve_operations_alert_canary() TO fc27_match_results_writer';
         END IF;
     END IF;
 END $$;

@@ -375,6 +375,7 @@ def run_operations_alert_dispatch_cycle(
                 opened_at=delivery.opened_at,
                 resolved_at=delivery.resolved_at,
                 marker_tag=marker_tag,
+                details=delivery.details,
             )
 
             # 4. Post message
