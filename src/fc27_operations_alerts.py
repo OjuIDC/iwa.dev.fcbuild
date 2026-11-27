@@ -27,6 +27,33 @@ OPERATIONS_ALERT_MESSAGE_KIND = "OPERATIONS_ALERT"
 OPERATIONS_ALERT_TAG_PREFIX = "fc27-ops-"
 OPERATIONS_ALERT_TAG_LENGTH = 25
 
+CANARY_ALERT_TYPE = "OPERATIONS_CANARY"
+CANARY_COMPONENT = "operations-alert-dispatch"
+CANARY_SEVERITY = "INFO"
+CANARY_SUMMARY = "FC27 operations alert delivery canary"
+CANARY_RECOMMENDED_ACTION = "No action required; controlled verification only"
+CANARY_DESTINATION_KEY = "fc27-operations"
+
+
+@dataclass(frozen=True)
+class FC27CanaryOpenResult:
+    """Result of opening an operations alert canary lifecycle."""
+
+    is_new: bool
+    lifecycle_status: str
+    delivery_id: int | None
+    delivery_state: str | None
+
+
+@dataclass(frozen=True)
+class FC27CanaryResolveResult:
+    """Result of resolving an operations alert canary lifecycle."""
+
+    was_resolved: bool
+    lifecycle_status: str
+    delivery_id: int | None
+    delivery_state: str | None
+
 
 def build_operations_alert_marker(
     alert_id: str,
@@ -64,30 +91,51 @@ def format_operations_alert_message(
     opened_at: datetime | str | None = None,
     resolved_at: datetime | str | None = None,
     marker_tag: str | None = None,
+    details: Mapping[str, Any] | None = None,
 ) -> str:
     """Format an operator alert into clean, privacy-safe Discord markdown under 2000 characters."""
     event = lifecycle_event.upper()
+    rec_action = (
+        details.get("recommended_action")
+        if details and isinstance(details, Mapping) and "recommended_action" in details
+        else (CANARY_RECOMMENDED_ACTION if alert_type == CANARY_ALERT_TYPE else None)
+    )
+
     if event == "RESOLVED":
         header = f"🟢 **FC27 Operations Alert Resolved: {alert_type}**"
         lines = [
             header,
+            f"**Event**: `{event}`",
             f"**Component**: `{component}`",
             f"**Summary**: {summary}",
         ]
+        if isinstance(opened_at, datetime) and isinstance(resolved_at, datetime):
+            dur_sec = max(0, int((resolved_at - opened_at).total_seconds()))
+            lines.append(f"**Duration**: `{dur_sec}s`")
         if resolved_at:
             ts_str = resolved_at.isoformat() if isinstance(resolved_at, datetime) else str(resolved_at)
             lines.append(f"**Resolved**: `{ts_str}`")
+        if rec_action:
+            lines.append(f"**Action**: {rec_action}")
     else:
-        icon = "🔴" if severity.upper() == "CRITICAL" else "🟡"
+        if severity.upper() == "CRITICAL":
+            icon = "🔴"
+        elif severity.upper() == "INFO":
+            icon = "ℹ️"
+        else:
+            icon = "🟡"
         header = f"{icon} **FC27 Operations Alert: {alert_type}** (`{severity.upper()}`)"
         lines = [
             header,
+            f"**Event**: `{event}`",
             f"**Component**: `{component}`",
             f"**Summary**: {summary}",
         ]
         if opened_at:
             ts_str = opened_at.isoformat() if isinstance(opened_at, datetime) else str(opened_at)
             lines.append(f"**Opened**: `{ts_str}`")
+        if rec_action:
+            lines.append(f"**Action**: {rec_action}")
 
     if marker_tag:
         lines.append(f"\n{marker_tag.strip()}")
@@ -164,6 +212,14 @@ class FC27AlertManager:
         details: Mapping[str, Any] | None = None,
     ) -> AlertNotification | None:
         """Atomically record or update an alert, suppressing notifications if within the suppression window."""
+        if alert_type == CANARY_ALERT_TYPE:
+            raise ValueError(
+                "OPERATIONS_CANARY cannot be recorded through the general record_alert API; "
+                "use open_operations_alert_canary"
+            )
+        if severity == CANARY_SEVERITY:
+            raise ValueError("INFO severity is valid only for OPERATIONS_CANARY")
+
         payload_json = json.dumps(details or {})
         conn = self._get_connection()
         try:
@@ -200,6 +256,12 @@ class FC27AlertManager:
 
     def resolve_alert(self, alert_type: str, component: str) -> AlertResolutionEvent:
         """Resolve any active alert matching alert_type and component."""
+        if alert_type == CANARY_ALERT_TYPE:
+            raise ValueError(
+                "OPERATIONS_CANARY cannot be resolved through the general resolve_alert API; "
+                "use resolve_operations_alert_canary"
+            )
+
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
@@ -217,6 +279,58 @@ class FC27AlertManager:
                     component=component,
                     was_resolved=was_resolved,
                     alert_id=alert_id,
+                )
+        finally:
+            if isinstance(self._conn_or_uri, str):
+                conn.close()
+
+    def open_operations_alert_canary(self) -> FC27CanaryOpenResult:
+        """Open an operations alert canary lifecycle and reserve its OPEN delivery idempotently."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT is_new, lifecycle_status, delivery_id, delivery_state
+                      FROM public.fc27_open_operations_alert_canary();
+                    """
+                )
+                row = cur.fetchone()
+                if hasattr(conn, "commit") and not getattr(conn, "autocommit", False):
+                    conn.commit()
+                if not row:
+                    raise RuntimeError("fc27_open_operations_alert_canary returned no rows")
+                return FC27CanaryOpenResult(
+                    is_new=bool(row[0]),
+                    lifecycle_status=str(row[1]),
+                    delivery_id=int(row[2]) if row[2] is not None else None,
+                    delivery_state=str(row[3]) if row[3] is not None else None,
+                )
+        finally:
+            if isinstance(self._conn_or_uri, str):
+                conn.close()
+
+    def resolve_operations_alert_canary(self) -> FC27CanaryResolveResult:
+        """Resolve an operations alert canary lifecycle and reserve its RESOLVED delivery idempotently."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT was_resolved, lifecycle_status, delivery_id, delivery_state
+                      FROM public.fc27_resolve_operations_alert_canary();
+                    """
+                )
+                row = cur.fetchone()
+                if hasattr(conn, "commit") and not getattr(conn, "autocommit", False):
+                    conn.commit()
+                if not row:
+                    raise RuntimeError("fc27_resolve_operations_alert_canary returned no rows")
+                return FC27CanaryResolveResult(
+                    was_resolved=bool(row[0]),
+                    lifecycle_status=str(row[1]),
+                    delivery_id=int(row[2]) if row[2] is not None else None,
+                    delivery_state=str(row[3]) if row[3] is not None else None,
                 )
         finally:
             if isinstance(self._conn_or_uri, str):

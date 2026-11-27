@@ -73,14 +73,18 @@ Discord limits each `app_commands.Group` (`/fc27`) to 25 direct child subcommand
 
 ---
 
-## Operations Alert Dispatch Subsystem (Migration 0027 / Grants Policy 28)
+## Operations Alert Dispatch Subsystem (Migration 0027, 0028 / Grants Policy 29)
 
 The operations alert dispatch subsystem asynchronously delivers queued operator alerts to dedicated Discord channels:
 - **Default Disabled**: `FC27_OPERATIONS_ALERT_DISPATCH_ENABLED=false` ensures no messages are sent unless explicitly enabled.
 - **Symbolic Destination Binding**: `FC27_OPERATIONS_ALERT_DESTINATION=fc27-operations` enforces symbolic key routing through `public.fc27_discord_destinations` with `message_kind = 'OPERATIONS_ALERT'`. Numeric channel IDs as destinations fail closed.
 - **Alert Lifecycle Events**:
-  - `OPEN`: Dispatched when an alert is first opened (🔴 `CRITICAL`, 🟡 `WARNING`).
+  - `OPEN`: Dispatched when an alert is first opened (🔴 `CRITICAL`, 🟡 `WARNING`, ℹ️ `INFO`).
   - `RESOLVED`: Dispatched when the alert condition clears (🟢 `RESOLVED`).
+- **Controlled Canary Contract (Migration 0028)**:
+  - Narrow, production-safe synthetic alert type `OPERATIONS_CANARY` paired exclusively with severity `INFO` and component `operations-alert-dispatch`.
+  - Created and resolved strictly through narrow SECURITY DEFINER procedures (`fc27_open_operations_alert_canary`, `fc27_resolve_operations_alert_canary`).
+  - Excluded from automatic health evaluator; general alert recording procedures cannot generate synthetic canaries.
 - **Deterministic Marker Tagging & Reconciliation**:
   - Non-sensitive tag format: `fc27-ops-{sha256[:16]}` (total 25 characters).
   - Pre-flight history search and send-and-fetch verification ensure zero duplicate messages during network retries or process restarts.

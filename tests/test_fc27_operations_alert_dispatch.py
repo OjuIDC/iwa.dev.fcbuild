@@ -678,8 +678,8 @@ def test_28_evaluator_reserves_delivery_on_new_alert(pg_db_migrated: Any, test_d
         "runtime": {
             "worker_heartbeat_age_seconds": 10,
             "bot_heartbeat_age_seconds": 10,
-            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
-            "grants_policy_version": 28,
+            "current_migration_version": "0028_fc27_operations_alert_canary.sql",
+            "grants_policy_version": 29,
             "active_backfill_request_count": 0,
         },
     }
@@ -740,8 +740,8 @@ def test_29_evaluator_reserves_delivery_on_resolution(pg_db_migrated: Any, test_
         "runtime": {
             "worker_heartbeat_age_seconds": 10,
             "bot_heartbeat_age_seconds": 10,
-            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
-            "grants_policy_version": 28,
+            "current_migration_version": "0028_fc27_operations_alert_canary.sql",
+            "grants_policy_version": 29,
             "active_backfill_request_count": 0,
         },
     }
@@ -1311,8 +1311,8 @@ def test_42_mock_evaluator_to_delivery_integration() -> None:
         "runtime": {
             "worker_heartbeat_age_seconds": 10,
             "bot_heartbeat_age_seconds": 10,
-            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
-            "grants_policy_version": 28,
+            "current_migration_version": "0028_fc27_operations_alert_canary.sql",
+            "grants_policy_version": 29,
             "active_backfill_request_count": 0,
         },
     }
@@ -1350,8 +1350,8 @@ def test_42_mock_evaluator_to_delivery_integration() -> None:
         "runtime": {
             "worker_heartbeat_age_seconds": 10,
             "bot_heartbeat_age_seconds": 10,
-            "current_migration_version": "0027_fc27_operations_alert_dispatch.sql",
-            "grants_policy_version": 28,
+            "current_migration_version": "0028_fc27_operations_alert_canary.sql",
+            "grants_policy_version": 29,
             "active_backfill_request_count": 0,
         },
     }

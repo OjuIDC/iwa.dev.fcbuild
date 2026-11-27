@@ -655,6 +655,15 @@ TEST_MODULE_MATRIX: Final[dict[str, TestModuleClassification]] = dict(
             "FC27 destination-aware Discord operations alert dispatch, lifecycle reservation, ambiguous send recovery, and least privilege.",
         ),
         _entry(
+            "tests/test_fc27_operations_alert_canary.py",
+            "POSTGRES_PARALLEL_SAFE",
+            ("postgres", "domain", "security", "offline", "network_forbidden"),
+            "postgres_parallel_safe",
+            "full-postgres",
+            (),
+            "FC27 controlled operations alert canary contract, narrow open/resolve API, evaluator isolation, and grants.",
+        ),
+        _entry(
             "tests/test_fc27_search_scout_graph.py",
             "POSTGRES_PARALLEL_SAFE",
             ("postgres", "domain", "offline", "network_forbidden"),

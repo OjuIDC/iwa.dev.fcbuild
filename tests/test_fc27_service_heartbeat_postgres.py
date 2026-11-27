@@ -59,7 +59,7 @@ def test_30_migration_and_policy_recorded(pg_db_migrated) -> None:
             "SELECT version FROM public.schema_policy_versions "
             "WHERE policy = 'grants' ORDER BY version DESC LIMIT 1"
         ).fetchone()
-        assert policy[0] == 28
+        assert policy[0] == 29
 
 
 def test_31_migration_rerun_idempotent(pg_db_migrated) -> None:
